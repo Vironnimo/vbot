@@ -135,6 +135,27 @@ def _import_cursor(
     )
 
 
+def _cost_snapshot(value: Any) -> dict[str, Any] | None:
+    """Keep validated catalog rates even while counters cannot support an amount."""
+    cost = project_cost(value)
+    if (
+        cost is not None
+        and cost["source"] == "unknown"
+        and isinstance(value, Mapping)
+        and (pricing := TokenPricing.from_dict(value.get("pricing")))
+    ):
+        cost["pricing"] = pricing.to_dict()
+    return cost
+
+
+def _price_with_snapshot(usage: Mapping[str, Any], pricing: TokenPricing) -> dict[str, Any]:
+    cost = price_usage(usage, pricing)
+    # Unknown amounts can be temporary when cumulative counter fields arrive
+    # separately. A future correction still belongs to this call's rates.
+    cost.setdefault("pricing", pricing.to_dict())
+    return cost
+
+
 def _usage_fields(value: Mapping[str, Any] | None) -> dict[str, Any]:
     """Only normalized accounting metadata crosses this persistence boundary."""
     source = value or {}
@@ -152,7 +173,7 @@ def _usage_fields(value: Mapping[str, Any] | None) -> dict[str, Any]:
     reported = nonnegative_amount(source.get("reported_cost_usd"))
     if reported is not None:
         result["reported_cost_usd"] = reported
-    cost = project_cost(source.get("cost"))
+    cost = _cost_snapshot(source.get("cost"))
     if cost is not None:
         result["cost"] = cost
     speed = _speed_fields(source.get("speed"))
@@ -214,8 +235,8 @@ def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[st
     if "speed" not in merged and "speed" in incoming:
         merged["speed"] = incoming["speed"]
 
-    old_cost = project_cost(previous.get("cost"))
-    new_cost = project_cost(incoming.get("cost"))
+    old_cost = _cost_snapshot(previous.get("cost"))
+    new_cost = _cost_snapshot(incoming.get("cost"))
     if "reported_cost_usd" in previous:
         merged["cost"] = price_usage(previous, None)
     elif old_cost is not None and old_cost["source"] == "provider":
@@ -233,9 +254,7 @@ def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[st
         if old_cost is not None and old_cost["source"] == "catalog" and unchanged:
             merged["cost"] = old_cost
         elif pricing is not None:
-            # Revalue changed counters at a retained historical rate, never at
-            # today's catalog price, when combining two partial snapshots.
-            merged["cost"] = price_usage(merged, pricing)
+            merged["cost"] = _price_with_snapshot(merged, pricing)
         elif new_cost is not None and all(merged.get(key) == incoming.get(key) for key in evidence):
             merged["cost"] = new_cost
         elif old_cost is not None and not unchanged:
@@ -474,7 +493,7 @@ class UsageRecorder:
             if row is None:
                 raise ValueError(f"Unknown Usage call: {call_id}")
             merged: dict[str, Any] = json.loads(row["usage_json"])
-            previous_cost = project_cost(merged.get("cost"))
+            previous_cost = _cost_snapshot(merged.get("cost"))
             for counter in ("input_tokens", "output_tokens"):
                 if counter in incoming and f"{counter}_estimated" not in incoming:
                     merged.pop(f"{counter}_estimated", None)
@@ -490,17 +509,16 @@ class UsageRecorder:
                 merged.pop("reported_cost_usd", None)
             if "reported_cost_usd" in merged:
                 merged["cost"] = price_usage(merged, None)
-            elif (
-                previous_cost is not None
-                and previous_cost["source"] == "provider"
-                and incoming_cost_source != "provider"
-            ):
-                merged["cost"] = previous_cost
-            elif "cost" not in incoming and (incoming or "cost" not in merged):
-                pricing = TokenPricing.from_dict((previous_cost or {}).get("pricing"))
-                if pricing is None and self._pricing_lookup is not None:
-                    pricing = self._pricing_lookup(row["model"])
-                merged["cost"] = price_usage(merged, pricing)
+            elif incoming_cost_source != "provider":
+                if previous_cost is not None and previous_cost["source"] == "provider":
+                    merged["cost"] = previous_cost
+                elif incoming and (
+                    pricing := TokenPricing.from_dict((previous_cost or {}).get("pricing"))
+                ):
+                    merged["cost"] = _price_with_snapshot(merged, pricing)
+                elif "cost" not in incoming and (incoming or "cost" not in merged):
+                    pricing = self._pricing_lookup(row["model"]) if self._pricing_lookup else None
+                    merged["cost"] = price_usage(merged, pricing)
             encoded = json.dumps(merged, ensure_ascii=False, allow_nan=False)
             new_status = status or row["status"]
             stored = (row["duration_ms"], row["failure_class"], row["http_status"])

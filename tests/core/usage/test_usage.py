@@ -180,7 +180,12 @@ async def test_unknown_attempts_and_estimate_enrichment_are_not_zero_usage(recor
 
 
 @pytest.mark.asyncio
-async def test_token_enrichment_keeps_snapshot_pricing_after_catalog_refresh(tmp_path):
+@pytest.mark.parametrize(
+    "temporarily_unpriced", [False, True], ids=["priced", "temporarily-unpriced"]
+)
+async def test_token_enrichment_keeps_snapshot_pricing_after_catalog_refresh(
+    tmp_path, temporarily_unpriced
+):
     write_bootstrap_marker(tmp_path)
     pricing = TokenPricing("original", TokenRates(input=2, output=4))
     owner = UsageRecorder(tmp_path / "model-usage.db", pricing_lookup=lambda _: pricing)
@@ -188,6 +193,11 @@ async def test_token_enrichment_keeps_snapshot_pricing_after_catalog_refresh(tmp
         identifier = await owner.start(model="p/m", kind="chat")
         original = await owner.finish(identifier, {"input_tokens": 12, "output_tokens": 3})
         pricing = TokenPricing("refreshed", TokenRates(input=20, output=40))
+        if temporarily_unpriced:
+            pending = await owner.update(identifier, {"reasoning_tokens": 4})
+            assert pending["cost"]["amount_usd"] is None
+            assert pending["cost"]["reason"] == "invalid_reasoning"
+            assert read_ledger(owner)[1][0].usage["cost"]["pricing"] == original["cost"]["pricing"]
 
         enriched = await owner.update(identifier, {"output_tokens": 4})
 
