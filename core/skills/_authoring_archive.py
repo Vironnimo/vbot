@@ -30,6 +30,7 @@ from core.skills._history import (
 )
 from core.skills._packages import is_redirect
 from core.skills._restore_journal import RestoreIntent, intent_path, read_intent, write_intent
+from core.skills._revert_journal import require_revert_idle
 from core.skills.skills import SKILL_FILENAME, SkillRegistry
 from core.utils.atomic import sync_directory
 from core.utils.file_status import exists_strict
@@ -150,6 +151,7 @@ class SkillArchives:
         with self._owner._write_lock:
             _check_writer(writer)
             root = self._owner._writable_root(target_root)
+            require_revert_idle(root)
             history = SkillHistory(root)
             intent = read_intent(root)
             if intent is not None and intent.archive_id != archive_id:
@@ -285,6 +287,7 @@ class SkillArchives:
         """Permanently delete one archived package; return what it was."""
         with self._owner._write_lock:
             root = self._owner._writable_root(target_root)
+            require_revert_idle(root)
             history = SkillHistory(root)
             intent = read_intent(root)
             if intent is not None and intent.archive_id == archive_id:

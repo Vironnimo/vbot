@@ -402,6 +402,9 @@ export default Object.freeze({
   'skills.revert.pass':
     'This takes back every change from this pass, including changes to shared Skills. If a later edit conflicts, nothing is reverted. Each revert is recorded in its history.',
   'skills.revert.passDone': 'Librarian pass reverted.',
+  'skills.revert.pendingTitle': 'Resume reverting revisions {revisions}?',
+  'skills.revert.pending':
+    'Continue the saved revert after resolving the reported error.',
   'skills.revert.action': 'Revert',
   'skills.revert.togetherAction': 'Revert together',
   'skills.revert.doneOne': 'Revision {revision} reverted.',

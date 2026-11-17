@@ -86,14 +86,17 @@ class SkillRevertConflictError(SkillAuthoringError):
 
 
 class SkillRevertIncompleteError(SkillAuthoringError):
-    """A revert failed while changing packages and could not undo every step.
+    """A revert stopped and can be resumed with the same revision set.
 
     ``skill_names`` names the Skills whose packages may be left part-way.
     """
 
-    def __init__(self, message: str, *, skill_names: Sequence[str]) -> None:
+    def __init__(
+        self, message: str, *, skill_names: Sequence[str], revision_ids: Sequence[int] = ()
+    ) -> None:
         super().__init__(message)
         self.skill_names = tuple(skill_names)
+        self.revision_ids = tuple(revision_ids)
 
 
 @dataclass(frozen=True)

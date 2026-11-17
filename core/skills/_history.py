@@ -156,6 +156,7 @@ class SkillRevision:
     reverts: tuple[int, ...] = ()
     followed: tuple[SkillReference, ...] = ()
     restore_transaction: str | None = None
+    revert_transaction: str | None = None
 
     @property
     def attended(self) -> bool:
@@ -424,13 +425,22 @@ class SkillHistory:
         reverts: Iterable[int] = (),
         followed: Iterable[SkillReference] = (),
         restore_transaction: str | None = None,
+        revert_transaction: str | None = None,
     ) -> SkillRevision:
         """Append one revision; ``texts`` maps a file path to its stored text after."""
         with self._lock():
             log = self._load()
-            if restore_transaction is not None:
+            reverted = tuple(reverts)
+            if restore_transaction is not None or revert_transaction is not None:
                 for revision in reversed(log.revisions):
-                    if revision.restore_transaction == restore_transaction:
+                    if (
+                        restore_transaction is not None
+                        and revision.restore_transaction == restore_transaction
+                    ) or (
+                        revert_transaction is not None
+                        and revision.revert_transaction == revert_transaction
+                        and revision.reverts == reverted
+                    ):
                         # A previous append can have reached the file despite a failed fsync.
                         with self.path.open("r+b") as handle:
                             os.fsync(handle.fileno())
@@ -453,9 +463,10 @@ class SkillHistory:
                 reason=reason,
                 absorbed_into=absorbed_into,
                 archive_id=archive_id,
-                reverts=tuple(reverts),
+                reverts=reverted,
                 followed=tuple(followed),
                 restore_transaction=restore_transaction,
+                revert_transaction=revert_transaction,
             )
 
     def changes(
@@ -539,6 +550,7 @@ class SkillHistory:
         reverts: tuple[int, ...] = (),
         followed: tuple[SkillReference, ...] = (),
         restore_transaction: str | None = None,
+        revert_transaction: str | None = None,
     ) -> SkillRevision:
         stored = tuple(
             SkillFileRecord(
@@ -571,6 +583,7 @@ class SkillHistory:
             reverts=reverts,
             followed=followed,
             restore_transaction=restore_transaction,
+            revert_transaction=revert_transaction,
         )
         line = json.dumps(_line(revision, texts), ensure_ascii=False, separators=(",", ":"))
         data = (line + "\n").encode("utf-8")
@@ -785,6 +798,7 @@ def _line(revision: SkillRevision, texts: Mapping[str, str]) -> dict[str, Any]:
         "run_kind",
         "subject_created_at",
         "restore_transaction",
+        "revert_transaction",
         "origin",
         "created_at",
         "pinned",
@@ -825,6 +839,7 @@ def _parse_revision(line: bytes) -> SkillRevision | None:
             run_kind=_optional_text(data.get("run_kind")),
             subject_created_at=_optional_text(data.get("subject_created_at")),
             restore_transaction=_optional_text(data.get("restore_transaction")),
+            revert_transaction=_optional_text(data.get("revert_transaction")),
             origin=_optional_member(data.get("origin"), frozenset(SKILL_ACTORS)),
             created_at=_optional_text(data.get("created_at")),
             pinned=_optional_bool(data.get("pinned")),

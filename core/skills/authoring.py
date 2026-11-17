@@ -73,6 +73,7 @@ from core.skills._history import (
 from core.skills._installation import SkillInstallResult, install_package
 from core.skills._packages import PackageError
 from core.skills._restore_journal import require_idle
+from core.skills._revert_journal import require_revert_idle
 from core.skills.requirements import RequirementParseError, parse_vbot_requirements
 from core.skills.skill_validator import (
     ValidationResult,
@@ -367,6 +368,7 @@ class SkillAuthoringService:
         with self._write_lock:
             _check_writer(writer)
             source_dir = self._resolved_skill_dir(source_root, skill_name)
+            require_revert_idle(source_dir.parent)
             require_idle(source_dir.parent, skill_name, source_dir.name)
             destination = self._skill_dir(target_root, skill_name)
             if destination.exists():
@@ -608,18 +610,7 @@ class SkillAuthoringService:
         writer: SkillWriter,
         related: Collection[int] = (),
     ) -> list[SkillRevision]:
-        """Undo the named revisions, all or none; return the recorded revisions.
-
-        Refused when a later revision outside the request changed the same file,
-        pin or presence of that Skill (``SkillRevertConflictError`` names it), when
-        an earlier text is not stored, or when an archived package was purged. A
-        later revision in *related* (an earlier revert of the same change) never
-        blocks. A failure while changing packages takes the steps back and
-        raises :class:`SkillAuthoringError`, or :class:`SkillRevertIncompleteError`
-        when a step cannot be taken back. Once every package changed, each named
-        revision records one ``revert`` revision; the list is shorter when the
-        history cannot record them all.
-        """
+        """Undo or resume the named revisions; return the complete recorded result."""
         return self._revisions.revert(target_root, revision_ids, writer=writer, related=related)
 
     def archived(self, target_root: Path) -> list[ArchivedSkill]:

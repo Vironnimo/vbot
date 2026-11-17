@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from core.skills import SkillPolicyError
+from core.skills._history import SkillHistory, SkillRevision
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
@@ -319,7 +320,9 @@ async def test_history_pins_archive_and_revert_go_through_the_scope(
 
 
 @pytest.mark.asyncio
-async def test_revert_conflict_names_the_later_revision(tmp_path: Path) -> None:
+async def test_skill_revert_reports_conflicts_and_resumes_the_pending_revisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state = _state(tmp_path)
     await rpc_result(state, "skill.create", scope="global", name="demo", content=_skill_md())
     first = await rpc_result(
@@ -338,6 +341,23 @@ async def test_revert_conflict_names_the_later_revision(tmp_path: Path) -> None:
         "skill": "demo",
     }
     assert "# Two" in (tmp_path / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    revisions = [first["revision"], later["revision"]]
+    append = SkillHistory.append
+
+    def fail_revert(history: SkillHistory, **fields: Any) -> SkillRevision:
+        if fields.get("kind") == "revert":
+            raise OSError("history temporarily unavailable")
+        return append(history, **fields)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SkillHistory, "append", fail_revert)
+        error = await rpc_error(state, "skill.revert", scope="global", revisions=revisions)
+    assert error["code"] == "skill_revert_pending"
+    assert error["data"] == {"revisions": list(reversed(revisions))}
+    changed = await rpc_result(state, "skill.revert", scope="global", revisions=revisions)
+    assert [revision["reverts"] for revision in changed["revisions"]] == [
+        [revision] for revision in reversed(revisions)
+    ]
 
 
 @pytest.mark.asyncio

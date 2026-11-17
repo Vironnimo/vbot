@@ -1187,6 +1187,7 @@ describe('Skills manager', () => {
       ]),
       revision(1, 'baseline', 'external'),
     ];
+    let interrupted = false;
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'skill.history') return { scope: params.scope, revisions };
       if (method === 'skill.revert' && params.revisions.length === 1)
@@ -1194,7 +1195,16 @@ describe('Skills manager', () => {
           code: 'domain_error',
           details: { data: { revision: 2, later: 3, skill: 'deploy' } },
         });
-      if (method === 'skill.revert') return { scope: params.scope };
+      if (method === 'skill.revert') {
+        if (!interrupted) {
+          interrupted = true;
+          throw Object.assign(new Error('History temporarily unavailable'), {
+            code: 'skill_revert_pending',
+            details: { data: { revisions: [3, 2] } },
+          });
+        }
+        return { scope: params.scope };
+      }
       return defaultRpc(method, params);
     });
     const tab = (label) =>
@@ -1253,17 +1263,25 @@ describe('Skills manager', () => {
     const historyReads = calls('skill.history').length;
     click(button('Revert together', dialog));
     await settle();
+    dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('skills.revert.pendingTitle', { revisions: '2, 3' }),
+    );
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'History temporarily unavailable',
+      variant: 'error',
+    });
+    click(button('Revert together', dialog));
+    await settle();
     expect(calls('skill.revert')).toEqual([
       { scope: 'agent:main', revisions: [2] },
+      { scope: 'agent:main', revisions: [2, 3] },
       { scope: 'agent:main', revisions: [2, 3] },
     ]);
     expect(onToast).toHaveBeenCalledWith({
       title: 'Revisions 2, 3 reverted.',
       variant: 'success',
     });
-    expect(onToast).not.toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'error' }),
-    );
     // The inventory reload after the revert reloads the history.
     expect(calls('skill.history').length).toBeGreaterThan(historyReads);
   });
