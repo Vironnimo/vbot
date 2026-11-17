@@ -82,6 +82,7 @@ Read these only when your task matches - not by default.
 - Changing Claude Agent SDK auth, sessions, Tool bridging or history framing -> `providers/claude-agent.md`
 - Changing native Anthropic Messages behavior -> `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`
+- Changing Google AI Studio discovery, quota/key errors or wire profile, or the shared native Gemini codec -> `providers/google.md`
 - Changing Kimi Coding Plan/Platform Connections, reasoning replay, media, or catalog behavior -> `providers/kimi.md`
 - Changing MiniMax wire, reasoning, catalog, or usage parsing -> `providers/minimax.md`
 - Changing Mistral request policy or catalog normalization -> `providers/mistral.md`

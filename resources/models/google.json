@@ -1,0 +1,1053 @@
+{
+  "fetched_at": "2026-11-17T12:06:37.721498+00:00",
+  "models": {
+    "gemini-2.5-computer-use-preview-10-2025": {
+      "canonical": "google/gemini-2.5-computer-use-preview-10-2025",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "family": "gemini-pro",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Computer Use Preview 10-2025",
+      "pricing": {
+        "rates": {
+          "input": 1.25,
+          "output": 10.0
+        },
+        "source": "models.dev:google/gemini-2.5-computer-use-preview-10-2025"
+      }
+    },
+    "gemini-2.5-flash": {
+      "canonical": "google/gemini-2.5-flash",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 2.5
+        },
+        "source": "models.dev:google/gemini-2.5-flash"
+      }
+    },
+    "gemini-2.5-flash-lite": {
+      "canonical": "google/gemini-2.5-flash-lite",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Flash-Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.4
+        },
+        "source": "models.dev:google/gemini-2.5-flash-lite"
+      }
+    },
+    "gemini-2.5-pro": {
+      "canonical": "google/gemini-2.5-pro",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "input": 1.25,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.25,
+              "input": 2.5,
+              "output": 15.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:google/gemini-2.5-pro"
+      }
+    },
+    "gemini-3-flash-preview": {
+      "canonical": "google/gemini-3-flash-preview",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3 Flash Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "input": 0.5,
+          "output": 3.0
+        },
+        "source": "models.dev:google/gemini-3-flash-preview"
+      }
+    },
+    "gemini-3.1-flash-lite": {
+      "canonical": "google/gemini-3.1-flash-lite",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.1 Flash Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 1.5
+        },
+        "source": "models.dev:google/gemini-3.1-flash-lite"
+      }
+    },
+    "gemini-3.1-flash-lite-preview": {
+      "canonical": "google/gemini-3.1-flash-lite-preview",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.1 Flash Lite Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 1.5
+        },
+        "source": "models.dev:google/gemini-3.1-flash-lite-preview"
+      }
+    },
+    "gemini-3.1-pro-preview": {
+      "canonical": "google/gemini-3.1-pro-preview",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.1 Pro Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:google/gemini-3.1-pro-preview"
+      }
+    },
+    "gemini-3.1-pro-preview-customtools": {
+      "canonical": "google/gemini-3.1-pro-preview-customtools",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.1 Pro Preview Custom Tools",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:google/gemini-3.1-pro-preview-customtools"
+      }
+    },
+    "gemini-3.5-flash": {
+      "canonical": "google/gemini-3.5-flash",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.5,
+          "output": 9.0
+        },
+        "source": "models.dev:google/gemini-3.5-flash"
+      }
+    },
+    "gemini-3.5-flash-lite": {
+      "canonical": "google/gemini-3.5-flash-lite",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.5 Flash Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 2.5
+        },
+        "source": "models.dev:google/gemini-3.5-flash-lite"
+      }
+    },
+    "gemini-3.5-transcribe": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": null
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 98304,
+      "max_output_tokens": 32768,
+      "name": "Gemini 3.5 Transcribe"
+    },
+    "gemini-3.6-flash": {
+      "canonical": "google/gemini-3.6-flash",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.6 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
+        },
+        "source": "models.dev:google/gemini-3.6-flash"
+      }
+    },
+    "gemini-3.7-flash": {
+      "canonical": "google/gemini-3.7-flash",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.7 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
+        },
+        "source": "models.dev:google/gemini-3.7-flash"
+      }
+    },
+    "gemini-3.8-flash": {
+      "canonical": "google/gemini-3.8-flash",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.8 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
+        },
+        "source": "models.dev:google/gemini-3.8-flash"
+      }
+    },
+    "gemini-4-argon": {
+      "canonical": "google/gemini-4-argon",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 32768,
+      "name": "Gemini 4 Argon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:google/gemini-4-argon"
+      }
+    },
+    "gemini-4-carbon": {
+      "canonical": "google/gemini-4-carbon",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 32768,
+      "name": "Gemini 4 Carbon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:google/gemini-4-carbon"
+      }
+    },
+    "gemini-4-hydrogen": {
+      "canonical": "google/gemini-4-hydrogen",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Hydrogen",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:google/gemini-4-hydrogen"
+      }
+    },
+    "gemini-flash-latest": {
+      "canonical": "google/gemini-flash-latest",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "max_output_tokens": 65536,
+      "name": "Gemini Flash Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 3.75
+        },
+        "source": "models.dev:google/gemini-flash-latest"
+      }
+    },
+    "gemini-flash-lite-latest": {
+      "canonical": "google/gemini-flash-lite-latest",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "max_output_tokens": 65536,
+      "name": "Gemini Flash-Lite Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 2.5
+        },
+        "source": "models.dev:google/gemini-flash-lite-latest"
+      }
+    },
+    "gemini-omni-1.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 65536,
+      "name": "Gemini Omni 1.1 Flash"
+    },
+    "gemini-omni-1.2-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 65536,
+      "name": "Gemini Omni 1.2 Flash"
+    },
+    "gemini-omni-flash-preview": {
+      "canonical": "google/gemini-omni-flash-preview",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "name": "Gemini Omni Flash Preview",
+      "pricing": {
+        "rates": {
+          "input": 1.5,
+          "output": 17.5
+        },
+        "source": "models.dev:google/gemini-omni-flash-preview"
+      }
+    },
+    "gemini-pro-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "max_output_tokens": 65536,
+      "name": "Gemini Pro Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:google/gemini-pro-latest"
+      }
+    },
+    "gemini-robotics-er-2-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 65536,
+      "name": "Gemini Robotics-ER 2 Preview"
+    },
+    "gemma-4-26b-a4b-it": {
+      "canonical": "google/gemma-4-26b-a4b-it",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "gemma",
+      "max_output_tokens": 32768,
+      "name": "Gemma 4 26B A4B IT",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:google/gemma-4-26b-a4b-it"
+      }
+    },
+    "gemma-4-31b-it": {
+      "canonical": "google/gemma-4-31b-it",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "gemma",
+      "max_output_tokens": 32768,
+      "name": "Gemma 4 31B IT",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:google/gemma-4-31b-it"
+      }
+    }
+  },
+  "provider_id": "google",
+  "source": "discovery"
+}
