@@ -37,6 +37,7 @@ from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
+    ChatSession,
     SessionAddress,
     SubagentLinkSnapshot,
 )
@@ -570,21 +571,23 @@ async def test_new_subagent_captures_the_running_parent_or_its_other_agent(
     assert await harness.resolver.session_overrides_async(child) == stored
 
 
-@pytest.mark.parametrize("failed_link_read", [None, 1, 2], ids=["available", "at-start", "at-end"])
+@pytest.mark.parametrize("failed_read", [None, "first-link", "last-link", "answer"])
 @pytest.mark.parametrize("continuation_kind", [RunKind.SYSTEM, RunKind.SESSION_MESSAGE])
 async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     harness: SubAgentHarness,
     monkeypatch: pytest.MonkeyPatch,
-    failed_link_read: int | None,
+    failed_read: str | None,
     continuation_kind: RunKind,
 ) -> None:
     read_link = forwarding_module.read_link
-    reads = 0
+    link_reads = 0
+    answer_reads = 0
+    load_run_messages = ChatSession.load_run_messages_async
 
     def unavailable_once(*args: Any, **kwargs: Any) -> Any:
-        nonlocal reads
-        reads += 1
-        if reads == failed_link_read:
+        nonlocal link_reads
+        link_reads += 1
+        if (link_reads, failed_read) in {(1, "first-link"), (2, "last-link")}:
 
             def unavailable(_address: SessionAddress) -> Any:
                 raise DatabaseUnavailableError("temporary metadata failure")
@@ -594,11 +597,19 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
             )
         return read_link(*args, **kwargs)
 
+    async def load_with_failure(session: ChatSession, run_id: str) -> list[ChatMessage]:
+        nonlocal answer_reads
+        answer_reads += 1
+        if failed_read == "answer" and answer_reads == 1:
+            raise DatabaseUnavailableError("temporary answer history failure")
+        return await load_run_messages(session, run_id)
+
     async def retry(_attempt: int) -> None:
         await asyncio.sleep(0)
 
     monkeypatch.setattr(forwarding_module, "read_link", unavailable_once)
     monkeypatch.setattr(forwarding_module, "sleep_for_retry", retry)
+    monkeypatch.setattr(ChatSession, "load_run_messages_async", load_with_failure)
     harness.loop.answers["review"] = "Found two bugs."
     data = await harness.spawn("review")
     await harness.settle()

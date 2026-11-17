@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +22,7 @@ from core.runs import (
     is_silent_answer,
 )
 from core.sessions import SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.storage.temp_files import artifact_owner
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
@@ -225,7 +226,12 @@ class SubAgentForwarding:
         activity = await self._activities.ensure(address, parent=link.parent)
         if activity is not None:
             activity.follow(run)
-        result = await _turn_outcome(self._runtime, run)
+        try:
+            result = await _read_for_forwarding(
+                address, "answer history", lambda: _turn_outcome(self._runtime, run)
+            )
+        except SessionNotFoundError:
+            return
         if result is None:
             return
         outcome, answer, answer_ids = result
@@ -279,33 +285,11 @@ class SubAgentForwarding:
     async def _read_link(self, address: SessionAddress) -> SubAgentLink | None:
         """A missing link is terminal; unavailable metadata gets bounded retries."""
         sessions = self._runtime.chat_sessions
-        for attempt in range(3):
-            try:
-                link = await sessions.run_async(read_link, sessions, address, strict=True)
-            except Exception:
-                if attempt == 2:
-                    # The watcher callback reports the terminal failure with its
-                    # traceback instead of silently treating this as a root Session.
-                    raise
-                _LOGGER.log(
-                    logging.WARNING if attempt == 0 else logging.DEBUG,
-                    "Sub-Agent forwarding metadata unavailable; retrying "
-                    "(agent=%s session=%s attempt=%d)",
-                    address.agent_id,
-                    address.session_id,
-                    attempt + 1,
-                    exc_info=True,
-                )
-                await sleep_for_retry(attempt)
-            else:
-                if attempt:
-                    _LOGGER.info(
-                        "Sub-Agent forwarding metadata recovered (agent=%s session=%s)",
-                        address.agent_id,
-                        address.session_id,
-                    )
-                return link
-        raise AssertionError("forwarding metadata retry did not settle")
+        return await _read_for_forwarding(
+            address,
+            "metadata",
+            lambda: sessions.run_async(read_link, sessions, address, strict=True),
+        )
 
     async def _siblings_text(self, link: SubAgentLink, run_id: str) -> str | None:
         """Name the Parent's other Sub-Agents whose answers are still to come, as of now.
@@ -355,6 +339,43 @@ class SubAgentForwarding:
             wake=False,
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, None))
+
+
+async def _read_for_forwarding[T](
+    address: SessionAddress,
+    source: str,
+    read: Callable[[], Awaitable[T]],
+) -> T:
+    """Retry a failed read without treating unavailable history as an absent answer."""
+    for attempt in range(3):
+        try:
+            result = await read()
+        except SessionNotFoundError:
+            raise
+        except Exception:
+            if attempt == 2:
+                # The watcher callback logs the final error.
+                raise
+            _LOGGER.log(
+                logging.WARNING if attempt == 0 else logging.DEBUG,
+                "Sub-Agent forwarding read unavailable (agent=%s session=%s source=%s attempt=%d)",
+                address.agent_id,
+                address.session_id,
+                source,
+                attempt + 1,
+                exc_info=True,
+            )
+            await sleep_for_retry(attempt)
+        else:
+            if attempt:
+                _LOGGER.info(
+                    "Sub-Agent forwarding read recovered (agent=%s session=%s source=%s)",
+                    address.agent_id,
+                    address.session_id,
+                    source,
+                )
+            return result
+    raise AssertionError("forwarding read retry did not settle")
 
 
 async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> list[RunningEntry]:
