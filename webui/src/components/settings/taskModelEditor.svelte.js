@@ -282,6 +282,12 @@ export function createTaskModelEditor({
     return true;
   }
 
+  function loadNewTargetSchema(taskType, target) {
+    schemasByType = { ...schemasByType, [taskType]: [] };
+    clearJsonEdits(taskType);
+    return loadSchema(taskType, target);
+  }
+
   async function saveBindings() {
     // Carrying compatible options is part of the user's target change. A
     // transition or autosave must include it even when the schema is slow.
@@ -322,7 +328,7 @@ export function createTaskModelEditor({
     for (const row of rows) {
       const target = next[row.taskType]?.target ?? '';
       if (target !== (previous[row.taskType]?.target ?? '')) {
-        loadSchema(row.taskType, target).catch((error) => {
+        loadNewTargetSchema(row.taskType, target).catch((error) => {
           onError(
             `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
           );
@@ -339,27 +345,26 @@ export function createTaskModelEditor({
   // The new target starts from its defaults plus the previous options it
   // accepts unchanged, so switching between similar Models keeps the choices.
   function setTarget(taskType, target) {
+    const previous = binding(taskType);
+    if (previous.target === target) return;
     onError('');
     markEdit();
-    const previousOptions = binding(taskType).options;
     writeBinding(taskType, {
-      ...binding(taskType),
+      ...previous,
       target,
       options: {},
-      ...(binding(taskType).fallbacks
+      ...(previous.fallbacks
         ? {
             fallbacks: target
-              ? binding(taskType).fallbacks.filter(
-                  (entry) => entry.target !== target,
-                )
+              ? previous.fallbacks.filter((entry) => entry.target !== target)
               : [],
           }
         : {}),
     });
 
-    const change = loadSchema(taskType, target)
+    const change = loadNewTargetSchema(taskType, target)
       .then((current) => {
-        if (current) carryOptions(taskType, target, previousOptions);
+        if (current) carryOptions(taskType, target, previous.options);
       })
       .catch((error) => {
         onError(
