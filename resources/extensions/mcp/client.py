@@ -771,8 +771,14 @@ class ConnectionRunner:
     async def _run_call(self, call: _Call) -> None:
         # Each task runs in its own context copy: this marks only this call.
         _CURRENT_CALL.set(call)
-        if call.context is not None and call.context.external_secret_values:
-            self._events.remember_argument_secrets(call.context.external_secret_values)
+        argument_secrets = (
+            call.context.external_secret_values if call.context is not None else frozenset()
+        )
+        # A connection Tool can substitute values before dispatching the remote Tool.
+        if call.canonical_context is not None:
+            argument_secrets |= call.canonical_context.external_secret_values
+        if argument_secrets:
+            self._events.remember_argument_secrets(argument_secrets)
         try:
             if call.resuming:
                 value = await self._protocol._resume_task(call)
