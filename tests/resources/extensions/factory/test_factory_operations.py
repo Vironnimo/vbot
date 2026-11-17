@@ -795,6 +795,7 @@ async def test_nested_workflows_stop_after_five_child_levels(
         "wait": True,
     }
     for depth in range(1, 6):
+        parent["runtime"]["steps"] = {child_step["id"]: {"passes": 0}}
         parent = await factory.service.create_child(parent, child_step, [])
         assert parent["runtime"]["depth"] == depth
     count = len(await factory.store.list_cards())

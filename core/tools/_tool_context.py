@@ -416,7 +416,7 @@ class ToolContext:
     # Exact values substituted for external arguments in this dispatch. The
     # transport can redact their echoes without changing the outbound request.
     external_secret_values: frozenset[str] = field(
-        default_factory=frozenset, repr=False, compare=False
+        default_factory=frozenset, init=False, repr=False, compare=False
     )
     prepared_secret_literals: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False

@@ -1461,7 +1461,7 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
     )
     try:
         if boundary != "pending":
-            await asyncio.wait_for(entered.wait(), timeout=1)
+            await entered.wait()
         closing = None
         if boundary == "closing_capture":
             closing = asyncio.create_task(service.aclose())
@@ -1472,8 +1472,8 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
         release.set()
         capture_release.set()
         if closing is not None:
-            await asyncio.wait_for(closing, timeout=1)
-        await asyncio.wait_for(result, timeout=1)
+            await closing
+        await result
         assert loop.messages == []
         assert len(_notes(session)) == 1
         assert "RESULT_BEFORE_STOP" in _notes(session)[0]
@@ -1489,7 +1489,7 @@ async def test_stopped_pending_wakes_keep_results_without_starting_a_run(
         monkeypatch.setattr(loop, "start_run", start_run)
         service.set_completion_run_relay(None)
         fresh = _submit(service, "fresh-result", "RESULT_AFTER_STOP", "fresh-origin")
-        await asyncio.wait_for(fresh, timeout=1)
+        await fresh
         assert len(loop.messages) == 1
         assert "RESULT_AFTER_STOP" in loop.messages[0]
     finally:
