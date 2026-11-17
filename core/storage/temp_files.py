@@ -126,6 +126,7 @@ class TemporaryFileManager:
         self._retention = policies
         self._sweep_interval_seconds = sweep_interval_seconds
         self._active: dict[Path, int] = {}
+        self._unwritten_completions: dict[Path, float] = {}
         self._lock = RLock()
         self._sweeper_task: asyncio.Task[None] | None = None
         # Set by ``stop`` so an in-flight background sweep ends between files.
@@ -244,6 +245,12 @@ class TemporaryFileManager:
         with self._lock:
             # Compared like ``Path`` equality: case-insensitive on Windows.
             active = {os.path.normcase(path) for path in self._active}
+            oldest_completion = cutoff_epoch - max(self._retention.values()).total_seconds()
+            self._unwritten_completions = {
+                path: finished
+                for path, finished in self._unwritten_completions.items()
+                if finished >= oldest_completion
+            }
 
         for category, retention in self._cleanup_retention().items():
             category_dir = self.root / category
@@ -308,14 +315,16 @@ class TemporaryFileManager:
         except OSError as error:
             _LOGGER.warning("Temporary-file folder unavailable path=%s: %s", folder, error)
             return
-        if not self._sweep_files(entries, active, expires_before, stopping):
-            return
         if terminal_owner:
             for entry in entries:
                 if stopping is not None and stopping.is_set():
                     return
                 if SCOPE_NAME.fullmatch(entry.name):
                     self._sweep_owner(Path(entry.path), active, expires_before, stopping)
+        if not self._sweep_files(
+            entries, active, expires_before, stopping, terminal_owner=terminal_owner
+        ):
+            return
         try:
             with self._lock:
                 if folder.stat(follow_symlinks=False).st_mtime < expires_before:
@@ -333,6 +342,8 @@ class TemporaryFileManager:
         active: set[str],
         expires_before: float,
         stopping: Event | None,
+        *,
+        terminal_owner: bool = False,
     ) -> bool:
         """Remove the expired inactive regular files listed; False once stopping."""
         for entry in entries:
@@ -362,6 +373,24 @@ class TemporaryFileManager:
                         and stat.S_ISREG(current.st_mode)
                         and current.st_mtime < expires_before
                     ):
+                        finished = self._unwritten_completions.get(candidate)
+                        if finished is not None and finished >= expires_before:
+                            timestamps = (current.st_atime, finished)
+                            if os.utime in os.supports_follow_symlinks:
+                                os.utime(candidate, timestamps, follow_symlinks=False)
+                            else:
+                                # Windows lacks no-follow utime. The regular file
+                                # was just checked under the manager's lock.
+                                os.utime(candidate, timestamps)
+                            del self._unwritten_completions[candidate]
+                            continue
+                        if (
+                            terminal_owner
+                            and candidate.suffix == SCOPE_SUFFIX
+                            and SCOPE_NAME.fullmatch(candidate.stem)
+                            and _scope_retains_files(candidate.with_suffix(""))
+                        ):
+                            continue
                         candidate.unlink()
             except OSError as error:
                 _LOGGER.warning(
@@ -384,9 +413,12 @@ class TemporaryFileManager:
                 try:
                     os.utime(path, None)
                 except OSError as error:
+                    self._unwritten_completions[path] = time.time()
                     _LOGGER.warning(
                         "Temporary-file completion timestamp failed path=%s: %s", path, error
                     )
+                else:
+                    self._unwritten_completions.pop(path, None)
                 finally:
                     del self._active[path]
 
@@ -399,6 +431,18 @@ class TemporaryFileManager:
                 await asyncio.sleep(self._sweep_interval_seconds)
         except asyncio.CancelledError:
             return
+
+
+def _scope_retains_files(directory: Path) -> bool:
+    """Keep launch provenance even after a crash drops all in-memory leases."""
+    try:
+        status = directory.stat(follow_symlinks=False)
+        if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+            return False
+        with os.scandir(directory) as entries:
+            return any(entry.is_file(follow_symlinks=False) for entry in entries)
+    except FileNotFoundError:
+        return False
 
 
 __all__ = [
