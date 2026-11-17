@@ -109,6 +109,7 @@ ReasoningDialect = Literal[
     "nous_reasoning",
     "thinking_toggle",
     "thinking_toggle_with_effort",
+    "chat_template_kwargs",
     "minimax_split",
     "minimax_thinking",
     "anthropic_thinking",
@@ -130,6 +131,11 @@ ReasoningDialect = Literal[
 - ``thinking_toggle_with_effort``: ``reasoning_effort: <level>`` for an effort,
   the toggle otherwise; ``reasoning.options.switch_with_effort`` sends the
   enabled toggle with the effort too.
+- ``chat_template_kwargs``: ``chat_template_kwargs: {<switch>: true|false}``
+  for servers that pass these keys to the Model's chat template (vLLM, SGLang,
+  NVIDIA NIM). ``reasoning.options.switch`` names the switch (default
+  ``enable_thinking``); ``reasoning.options.level_kwargs`` maps a ladder rung to
+  further keys sent with the enabled switch.
 - ``minimax_split``: ``reasoning_split: true``; no effort control.
 - ``minimax_thinking``: ``thinking: {type: adaptive|disabled}`` plus
   ``reasoning_split``.
@@ -154,6 +160,7 @@ REASONING_DIALECTS: tuple[ReasoningDialect, ...] = (
     "nous_reasoning",
     "thinking_toggle",
     "thinking_toggle_with_effort",
+    "chat_template_kwargs",
     "minimax_split",
     "minimax_thinking",
     "anthropic_thinking",

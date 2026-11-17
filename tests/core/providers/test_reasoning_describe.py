@@ -27,6 +27,7 @@ from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
+from core.providers.nvidia import NvidiaAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -206,6 +207,33 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
             "high",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
             id="stepfun-flash-sends-nothing",
+        ),
+        # NVIDIA's Nemotron switch is chat_template_kwargs.enable_thinking: the
+        # catalog's budget control still renders the plain switch.
+        pytest.param(
+            NvidiaAdapter,
+            "nvidia",
+            _model(
+                "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                control=REASONING_CONTROL_BUDGET,
+                budget_max=32_768,
+            ),
+            "high",
+            ReasoningIntent(REASONING_INTENT_ON),
+            id="nvidia-nemotron-template-switch-on",
+        ),
+        # Ultra's template keys name medium and high; a lower selection snaps up.
+        pytest.param(
+            NvidiaAdapter,
+            "nvidia",
+            _model(
+                "nvidia/nemotron-3-ultra-550b-a55b",
+                control=REASONING_CONTROL_LEVELS,
+                levels=("none", "medium", "high"),
+            ),
+            "low",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="medium"),
+            id="nvidia-nemotron-ultra-template-effort",
         ),
         # A native-budget wire reports the rendered token budget.
         pytest.param(
