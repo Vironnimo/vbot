@@ -169,6 +169,8 @@
   function refresh() {
     loadPeriod();
     if (query) requestStatisticsReport(query, { force: true });
+    if (extensionsQuery && extensionsQuery.key !== query?.key)
+      requestStatisticsReport(extensionsQuery, { force: true });
     if (activityQuery) {
       requestStatisticsReport(activityQuery, { force: true });
     }
