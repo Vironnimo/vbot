@@ -506,15 +506,18 @@ class LiveCallEntry:
         request_id = new_id("ui", claim=lambda candidate: candidate not in self._ui_requests)
         future: asyncio.Future[JsonObject] = asyncio.get_running_loop().create_future()
         self._ui_requests[request_id] = future
+        request = {"type": "ui_request", "request_id": request_id, "action": action, "args": args}
         try:
-            self._deliver(
-                {"type": "ui_request", "request_id": request_id, "action": action, "args": args}
-            )
+            self._deliver(request)
             return await asyncio.wait_for(future, self._limits.ui_request_timeout_seconds)
         except TimeoutError as exc:
             raise LiveUiError(UI_TIMEOUT, uncertain=True) from exc
         finally:
             self._ui_requests.pop(request_id, None)
+            if self._owner is not None:
+                self._owner.discard_update(request)
+            with suppress(ValueError):
+                self._buffer.remove(request)
 
     def resolve_ui_request(
         self, request_id: str, *, result: JsonObject | None, error: str | None

@@ -146,6 +146,14 @@ class LiveOwnerStream:
         self._wakeup.set()
         return True
 
+    def discard_update(self, update: JsonObject) -> None:
+        """Remove an update the socket has yet to take."""
+        try:
+            self._frames.remove(update)
+        except ValueError:
+            return
+        self._updates -= 1
+
     def take_undelivered(self) -> list[JsonObject]:
         """Remove and return the updates the socket has not taken yet; audio is dropped."""
         updates = [frame for frame in self._frames if not isinstance(frame, bytes)]
