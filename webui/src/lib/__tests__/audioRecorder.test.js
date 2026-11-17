@@ -18,7 +18,8 @@ class FakeMediaRecorder {
   }
 
   addEventListener(eventName, listener) {
-    this.listeners.set(eventName, listener);
+    const listeners = this.listeners.get(eventName) ?? [];
+    this.listeners.set(eventName, [...listeners, listener]);
   }
 
   start() {
@@ -30,7 +31,7 @@ class FakeMediaRecorder {
   }
 
   emit(eventName, event) {
-    this.listeners.get(eventName)?.(event);
+    for (const listener of this.listeners.get(eventName) ?? []) listener(event);
   }
 }
 
@@ -59,7 +60,14 @@ describe('audioRecorder', () => {
       MediaRecorder: UntypedRecorder,
     });
     expect(FakeMediaRecorder.lastInstance.options).toEqual({});
-    expect(untyped.filename()).toBe('recording.webm');
+    untyped.start();
+    const recorded = untyped.stop();
+    FakeMediaRecorder.lastInstance.emit('dataavailable', {
+      data: new Blob(['aac'], { type: 'audio/mp4' }),
+    });
+    FakeMediaRecorder.lastInstance.emit('stop', {});
+    expect((await recorded).type).toBe('audio/mp4');
+    expect(untyped.filename()).toBe('recording.m4a');
     ogg.cancel();
     untyped.cancel();
   });
@@ -92,6 +100,28 @@ describe('audioRecorder', () => {
     unsubscribe();
     expect(uses).toEqual([true, false]);
   });
+
+  it.each(['stop', 'error'])(
+    'releases the microphone when the browser sends %s on its own',
+    async (event) => {
+      const track = { stop: vi.fn() };
+      const recorder = await createAudioRecorder({
+        navigator: navigatorWithTrack(track),
+        MediaRecorder: FakeMediaRecorder,
+      });
+      recorder.start();
+      const native = FakeMediaRecorder.lastInstance;
+      native.state = 'inactive';
+      const error = new Error('Microphone disconnected');
+      native.emit(event, { error });
+
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(microphoneInUse()).toBe(false);
+      if (event === 'error') await expect(recorder.stop()).rejects.toBe(error);
+      else await expect(recorder.stop()).resolves.toBeInstanceOf(Blob);
+      expect(track.stop).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     [
