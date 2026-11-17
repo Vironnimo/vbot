@@ -72,6 +72,7 @@ def test_rejects_invalid_complete_questions(mutation):
     [
         {"type": "choice", "choice": "missing"},
         {"type": "choice", "choice": "bug", "confidence": True},
+        {"type": "choice", "choice": "bug", "confidence": 10**400},
         {"type": "choice", "choice": "bug", "probabilities": {"bug": 0.8}},
         {"type": "choice", "choice": "bug", "probabilities": {"bug": 0.8, "other": 0.8}},
     ],
@@ -79,6 +80,15 @@ def test_rejects_invalid_complete_questions(mutation):
 def test_rejects_incomplete_or_unusable_provider_answers(answer):
     payload = copy.deepcopy(RESULT)
     payload["answers"]["category"] = answer
+    with pytest.raises(DecisionError) as error:
+        validate_answers(payload, QUESTIONS)
+    assert error.value.code == "invalid_result"
+
+
+@pytest.mark.parametrize("key", ["cost", "input_tokens"])
+def test_rejects_provider_usage_outside_the_numeric_range(key):
+    payload = copy.deepcopy(RESULT)
+    payload["usage"][key] = 10**400
     with pytest.raises(DecisionError) as error:
         validate_answers(payload, QUESTIONS)
     assert error.value.code == "invalid_result"

@@ -27,9 +27,10 @@ def json_copy(value: Any) -> Any:
     """Detach finite JSON data, rejecting oversized requests before transport."""
     try:
         encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        input_size = len(encoded.encode("utf-8"))
     except (ValueError, TypeError, RecursionError) as exc:
         raise DecisionError("Supply finite JSON values.") from exc
-    if len(encoded.encode("utf-8")) > 1_000_000:
+    if input_size > 1_000_000:
         raise DecisionError("The decision input exceeds the 1 MB limit.", code="too_large")
     return json.loads(encoded)
 
@@ -97,12 +98,12 @@ def wire_questions(questions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
 
 
 def finite_number(value: Any, *, minimum: float = 0, maximum: float = math.inf) -> bool:
-    return (
-        isinstance(value, int | float)
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and minimum <= value <= maximum
-    )
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    try:
+        return minimum <= value <= maximum and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def validate_answers(payload: Any, questions: list[dict[str, Any]]) -> dict[str, Any]:

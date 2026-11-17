@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
 import respx
 
@@ -11,7 +12,11 @@ from core.model_tasks.constants import TASK_DECISION
 from core.model_tasks.decision_profile import DecisionProfile
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import ITEM_LIMIT, DecisionService
-from core.model_tasks.model_tasks import TaskModelService, TaskModelValidationError
+from core.model_tasks.model_tasks import (
+    TaskModelBinding,
+    TaskModelService,
+    TaskModelValidationError,
+)
 from core.models import ModelRegistry
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
@@ -149,6 +154,7 @@ class _Calibration:
     [
         pytest.param("word " * 2_000, "too_large", True, id="context-window"),
         pytest.param({"x": float("nan")}, "invalid_request", False, id="non-finite-json"),
+        pytest.param("\ud800", "invalid_request", False, id="invalid-unicode"),
         pytest.param("x" * 1_000_001, "too_large", False, id="input-byte-limit"),
     ],
 )
@@ -174,6 +180,42 @@ async def test_an_invalid_item_fails_alone_unsent(monkeypatch, window, item, cod
         assert isinstance(beyond, DecisionError) and beyond.code == code
         if needs_window:
             assert "at most 1000 tokens" in str(beyond)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_items_outside_primary_limits_use_a_larger_fallback(monkeypatch):
+    owner = service()
+    primary = "openrouter/first::api_key"
+    fallback = TaskModelBinding(TASK_DECISION, "openrouter/second::api_key", {})
+    monkeypatch.setattr(
+        owner._model_tasks,
+        "binding_for",
+        lambda _: TaskModelBinding(TASK_DECISION, primary, {}, (fallback,)),
+    )
+    monkeypatch.setattr(
+        owner._model_tasks,
+        "decision_profile",
+        lambda ref: DecisionProfile(
+            SYSTEM_ONE_WIRE, max_input_tokens=256 if ref.model_id == "first" else 16_384
+        ),
+    )
+
+    def answer(request):
+        return httpx.Response(
+            200,
+            json={
+                "model": json.loads(request.content)["model"],
+                "answers": {"q": {"type": "noul", "noul": 0.5}},
+            },
+        )
+
+    route = respx.post(DECISIONS_URL).mock(side_effect=answer)
+    small, large = await owner.classify(["small", "word " * 2_000], QUESTIONS)
+
+    assert small["model"] == "first"
+    assert large["model"] == "second"
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio
