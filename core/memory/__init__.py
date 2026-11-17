@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         MemoryScope,
         MemoryTextChange,
         MemoryWriter,
+        memory_file,
         validate_memory_prompt_mode,
     )
     from core.memory._file_backend import (
@@ -73,6 +74,7 @@ _EXPORT_MODULES = {
     "MemoryWriter": "core.memory._definitions",
     "match_memory_entries": "core.memory._file_backend",
     "memory_block_definition": "core.memory.memory",
+    "memory_file": "core.memory._definitions",
     "read_memory_files": "core.memory.memory",
     "validate_memory_prompt_mode": "core.memory._definitions",
 }
@@ -115,6 +117,7 @@ __all__ = [
     "MemoryWriter",
     "match_memory_entries",
     "memory_block_definition",
+    "memory_file",
     "read_memory_files",
     "validate_memory_prompt_mode",
 ]

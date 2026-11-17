@@ -1032,11 +1032,19 @@ class AgentSecrets:
         self, address: SessionAddress, *, passed_only: bool = False
     ) -> frozenset[str]:
         """Every name ``env_keys`` accepts for this Agent: Secret names and field variables."""
-        names: set[str] = set()
+        return frozenset(self.environment_targets(address, passed_only=passed_only))
+
+    def environment_targets(
+        self, address: SessionAddress, *, passed_only: bool = False
+    ) -> dict[str, tuple[str, ...]]:
+        """Variable names each ``env_keys`` Secret request can set, without reading values."""
+        targets: dict[str, tuple[str, ...]] = {}
         for secret in self.usable(address, passed_only=passed_only):
-            names.add(secret.name)
-            names.update(secret.environment_names().values())
-        return frozenset(names)
+            names = tuple(secret.environment_names().values())
+            targets.setdefault(secret.name, names)
+            for name in names:
+                targets.setdefault(name, (name,))
+        return targets
 
     def environment(
         self,

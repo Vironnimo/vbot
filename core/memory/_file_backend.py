@@ -23,7 +23,6 @@ from core.memory._definitions import (
     _PROMPT_CUT_LIST_HINT,
     _PROMPT_CUT_NOTICE,
     _WHITESPACE_PATTERN,
-    MEMORY_FILES,
     MEMORY_PROMPT_MODE_SCOPES,
     MEMORY_SCOPE_LABELS,
     PERSONAL_MEMORY_SCOPES,
@@ -39,6 +38,7 @@ from core.memory._definitions import (
     MemoryTextChange,
     MemoryWriter,
     _RevertPlan,
+    memory_file,
     validate_memory_prompt_mode,
     validate_memory_scope,
 )
@@ -559,8 +559,7 @@ class FilePinnedMemoryBackend:
         return f"{_format_scope(scope, used, shown, placeholder=False)}\n{notice}"
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
-        workspace_path = Path(workspace)
-        return workspace_path / MEMORY_FILES[scope]
+        return memory_file(workspace, scope)
 
     @contextmanager
     def _scope_locks(self, workspace: Path) -> Iterator[None]:

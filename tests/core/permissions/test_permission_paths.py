@@ -12,6 +12,7 @@ from core.permissions import (
     BoundaryContext,
     PathAccess,
     PermissionBoundary,
+    _paths,
     normalize_path,
     normalize_permission_rules,
 )
@@ -218,3 +219,46 @@ def test_short_names_compare_as_their_long_names(tmp_path: Path) -> None:
 
     assert refusal is not None and refusal.reason == "deny_rule"
     assert refusal.target.endswith("/Long Folder Name/a.txt")
+
+
+@windows_only
+def test_windows_rules_keep_distinct_unicode_names_separate(tmp_path: Path) -> None:
+    boundary = _boundary(
+        tmp_path,
+        {
+            "read": "work_area",
+            "allow": [
+                "Read({workdir}/../outside/strasse_dir)",
+                "Read({workdir}/../outside/kelvin)",
+            ],
+        },
+    )
+    outside = tmp_path / "outside"
+    for name in ("strasse_dir", "straße_dir", "kelvin", "Kelvin"):
+        (outside / name).mkdir()
+
+    assert boundary.check_path(outside / "STRASSE_DIR" / "file.txt", "read") is None
+    assert boundary.check_path(outside / "straße_dir" / "file.txt", "read") is not None
+    assert boundary.check_path(outside / "Kelvin" / "file.txt", "read") is not None
+
+
+def test_windows_expands_tilde_less_short_names_before_resolving_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _paths,
+        "_long_path_name",
+        lambda path: "C:/work/Long Name" if path == "C:/work/ALIAS" else None,
+    )
+    monkeypatch.setattr(
+        _paths.os.path,
+        "realpath",
+        lambda path: path.replace("C:/work/Long Name", "C:/other"),
+    )
+
+    normalized = _paths.normalize_access_path(
+        "ALIAS/new/file.txt", base="C:/work", home="C:/home", windows=True
+    )
+
+    assert normalized.lexical == "C:/work/Long Name/new/file.txt"
+    assert normalized.resolved == "C:/other/new/file.txt"

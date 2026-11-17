@@ -202,6 +202,24 @@ def host_shell_start(
     return HostShellStart([bash, "-c", command], complete)
 
 
+def _check_environment_names(variables: Mapping[str, str], opaque_names: set[str]) -> None:
+    from core.permissions.commands.commands import (
+        controls_command_analysis,
+        controls_command_execution,
+    )
+
+    blocked = sorted(
+        {name for name in variables if controls_command_execution(name)}
+        | {name for name in opaque_names if controls_command_analysis(name)}
+    )
+    if blocked:
+        names = ", ".join(blocked)
+        raise ToolContractError(
+            f"{SHELL_MODEL_NAME} was not run: Permission Rules block these environment "
+            f"overrides: {names}. Omit them from env and env_keys."
+        )
+
+
 def _shell_start(
     call: _ShellCall, environment: CommandEnvironment, protected: Iterable[str]
 ) -> HostShellStart:
@@ -277,6 +295,14 @@ class ShellTool:
         confined = context.permissions.restricted
         # A confined command gets a credential vBot knows only as a granted one.
         withheld = self._credential_names() if confined else frozenset[str]()
+        secret_targets = (
+            secrets.environment_targets(
+                SessionAddress(context.project_id, context.agent_id, context.session_id),
+                passed_only=context.subagent_session,
+            )
+            if secrets is not None
+            else {}
+        )
         call = await run_tool_worker(
             _parse_call,
             context,
@@ -284,19 +310,19 @@ class ShellTool:
             self._projects,
             terminal_available=names(TERMINAL_TOOL_NAME),
             withheld=withheld,
-            secret_names=(
-                secrets.environment_names(
-                    SessionAddress(context.project_id, context.agent_id, context.session_id),
-                    passed_only=context.subagent_session,
-                )
-                if secrets is not None
-                else frozenset()
-            ),
+            secret_names=frozenset(secret_targets),
         )
+        secret_names = {
+            *(name for key in call.secret_keys for name in secret_targets[key.upper()]),
+            *(name for name, _ in call.secret_variables),
+        }
+        opaque_names = secret_names.union(call.credential_names)
+        if confined:
+            _check_environment_names(call.variables, opaque_names)
         scratch = await self._scratch(context)
         if confined:
             # Before any Agent Secret is used and before the handoff token exists.
-            await self._check_permissions(context, call, scratch, withheld, arguments)
+            await self._check_permissions(context, call, scratch, withheld, arguments, opaque_names)
         await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         if self._review_shell is not None:
             reviewed_cwd = await run_tool_worker(call.workdir.resolve)
@@ -328,6 +354,11 @@ class ShellTool:
             secret_environment, secret_uses = await self._secret_environment(context, call)
         except SecretUseError as error:
             return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
+        if confined and secret_environment.keys() - secret_names:
+            raise ToolContractError(
+                f"{SHELL_MODEL_NAME} was not run: the Secret's environment variables changed "
+                "while the call was prepared. Call it again."
+            )
         await context.revalidate_permissions()
         if context.permissions.restricted != confined:
             raise ToolContractError(
@@ -381,6 +412,7 @@ class ShellTool:
         scratch: ScratchFolder | None,
         withheld: Container[str],
         arguments: JsonObject,
+        opaque_names: set[str],
     ) -> None:
         """Authorize the whole command before secrets or launch."""
         boundary = context.permissions
@@ -405,6 +437,15 @@ class ShellTool:
                 credential_names=withheld,
             )
         )
+        # Unknown in the analysis, even when a call replaces an inherited value.
+        opaque_keys = (
+            {name.upper() for name in opaque_names} if sys.platform == "win32" else opaque_names
+        )
+        visible_env = {
+            name: value
+            for name, value in environment.complete().items()
+            if (name.upper() if sys.platform == "win32" else name) not in opaque_keys
+        }
         await authorize_command(
             context,
             self._checker,
@@ -412,7 +453,7 @@ class ShellTool:
             command=call.command,
             shell=HOST_SHELL_KIND,
             cwd=call.workdir,
-            env=environment.complete(),
+            env=visible_env,
             workdir_parameter=True,
         )
 

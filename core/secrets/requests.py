@@ -208,6 +208,7 @@ class SecretRequests:
         *,
         lifetime: Lifetime | None = None,
         expires_at: datetime | None = None,
+        actor: str = "user",
     ) -> AgentSecret:
         """Store the user's answer; :class:`SecretRecordError` leaves the request pending.
 
@@ -230,7 +231,7 @@ class SecretRequests:
 
         async def store_and_finish() -> AgentSecret:
             secret, replaced = await asyncio.to_thread(
-                self._store, pending, dict(values), chosen, expires_at
+                self._store, pending, dict(values), chosen, expires_at, actor
             )
             self._finish(pending, SecretRequestOutcome("stored", secret, replaced))
             return secret
@@ -256,12 +257,13 @@ class SecretRequests:
         values: dict[str, str],
         lifetime: Lifetime | None,
         expires_at: datetime | None,
+        actor: str,
     ) -> tuple[AgentSecret, bool]:
         current = self._secrets.get(pending.replaces) if pending.replaces else None
         if current is not None and current.source is None:
             return self._secrets.update(
                 current.id,
-                actor="user",
+                actor=actor,
                 values=values,
                 lifetime=lifetime,
                 given_to=pending.address if lifetime is not None else None,
@@ -272,7 +274,7 @@ class SecretRequests:
                 name=pending.name,
                 kind=pending.kind,
                 values=values,
-                actor="user",
+                actor=actor,
                 lifetime=lifetime or pending.lifetime,
                 session_id=pending.session_id,
                 expires_at=expires_at,

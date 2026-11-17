@@ -39,6 +39,11 @@ MEMORY_FILES: dict[MemoryScope, str] = {
 }
 
 
+def memory_file(workspace: Path, scope: MemoryScope) -> Path:
+    """Path of the file that stores the scope in its owner's Workspace or Anchor."""
+    return Path(workspace) / MEMORY_FILES[scope]
+
+
 MEMORY_PROMPT_MODE_OFF: Literal["off"] = "off"
 
 

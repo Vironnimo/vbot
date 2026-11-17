@@ -141,6 +141,7 @@ def _invalidate_provider(
         context.assigned.add("env:" + name.lower())
         context.invalid_values.add("env:" + name.lower())
         analysis.environment_dynamic.add(environment_key(name))
+        analysis.check_environment_assignment(name, "")
 
 
 def resolve_mutations(analysis: Analysis, context: Context, script: Script) -> bool:

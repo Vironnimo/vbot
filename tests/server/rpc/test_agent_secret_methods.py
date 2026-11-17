@@ -13,10 +13,12 @@ from typing import Any
 
 import pytest
 
+from core.access.devices import Device
 from core.secrets._agent_secret_model import SecretRecordError
 from core.secrets.agent_secrets import AgentSecrets, Lifetime
 from core.secrets.requests import SecretRequests
 from core.sessions import SessionAddress
+from server.access import Principal, bound_principal
 from server.app import _publish_secret_changes
 from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.secrets.test_agent_secrets import Clock, FakeSource
@@ -66,11 +68,15 @@ async def test_secrets_are_managed_and_only_reveal_returns_a_concealed_value(
     updated = await rpc_result(
         state, "agent_secrets.update", id=secret_id, sinks=["terminal"], agents=["main", "coder"]
     )
-    revealed = await rpc_result(state, "agent_secrets.reveal", id=secret_id, field="password")
+    now = datetime(2026, 11, 17, tzinfo=UTC)
+    device = Device("device-test", "Browser", "browser", "test-hash", now, now, None, "host")
+    with bound_principal(Principal("device", device)):
+        revealed = await rpc_result(state, "agent_secrets.reveal", id=secret_id, field="password")
     invalid = await rpc_error(
         state, "agent_secrets.create", name="other", kind="token", values={"value": [PASSWORD]}
     )
-    deleted = await rpc_result(state, "agent_secrets.delete", id=secret_id)
+    with bound_principal(Principal("device", device)):
+        deleted = await rpc_result(state, "agent_secrets.delete", id=secret_id)
 
     [secret] = listed["secrets"]
     assert secret["name"] == "GITHUB"
@@ -93,6 +99,12 @@ async def test_secrets_are_managed_and_only_reveal_returns_a_concealed_value(
     outside_reveal = json.dumps([created, listed, updated, invalid, deleted])
     assert PASSWORD not in outside_reveal
     assert PASSWORD not in caplog.text
+    assert ("Agent Secret %s.%s revealed (actor=%s)", ("GITHUB", "password", device.id)) in [
+        (record.msg, record.args) for record in caplog.records
+    ]
+    assert ("Agent Secret %s deleted (actor=%s)", ("GITHUB", device.id)) in [
+        (record.msg, record.args) for record in caplog.records
+    ]
 
 
 @pytest.mark.asyncio

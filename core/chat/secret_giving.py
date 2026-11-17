@@ -60,6 +60,7 @@ async def give_secret(
     expires_at: datetime | None = None,
     description: str = "",
     value: str | None = None,
+    actor: str = "user",
 ) -> GivenSecret:
     """Store the values; :class:`SecretRecordError` when nothing was stored.
 
@@ -80,6 +81,7 @@ async def give_secret(
             _with_value(values, value, current, pending.kind),
             lifetime=lifetime,
             expires_at=expires_at,
+            actor=actor,
         )
         return GivenSecret(
             secret,
@@ -95,7 +97,7 @@ async def give_secret(
         secret = await asyncio.to_thread(
             secrets.update,
             existing.id,
-            actor="user",
+            actor=actor,
             values=_with_value(values, value, existing, kind),
             lifetime=lifetime,
             given_to=address if lifetime is not None else None,
@@ -113,7 +115,7 @@ async def give_secret(
             name=secret_name,
             kind=kind,
             values=_with_value(values, value, None, kind),
-            actor="user",
+            actor=actor,
             lifetime=lifetime or "session",
             session_id=address.session_id,
             expires_at=expires_at,

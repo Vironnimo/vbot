@@ -13,6 +13,7 @@ Model-facing editing of pinned personal and shared Project Memory entries (stora
 - `entry_id` is an unadvertised parameter: positional ids copied from older results are refused with the entry currently at that position and the corrected `old_text` call, unless `old_text` names the same entry. The RPC surface still uses positional ids (`memory.md`).
 - `parallel_safe=False`: same-turn memory calls apply in written order, so "free space, then add" works in one message and text matching never races a sibling change.
 - The whole handler uses `offload_tool_handler`, so shared dispatch checks run again at worker admission before Memory reads or mutations (`tools/registry-dispatch.md`).
+- The Tool checks each scope's Memory file before reading or changing it. An unscoped call that reads both personal files needs read access to both. A mutation also needs write access to its explicit or matched scope. These checks cover entries shown in refusals. A restricted Run cannot use the Tool on the protected Project Anchor. Prompt Memory activation and Accessor editing follow their own contracts (`memory.md`).
 - Changes to the description, `scope` or `project_id` are announced through Chat's existing Tool-change mechanism so an existing prompt epoch can use the Project scope without waiting for Compaction.
 
 ## Argument Repair

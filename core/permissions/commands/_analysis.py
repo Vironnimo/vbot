@@ -29,6 +29,7 @@ from core.permissions.commands._directories import (
     cmd_directory,
     switch_drive,
 )
+from core.permissions.commands._environment import controls_command_execution
 from core.permissions.commands._handlers import (
     HANDLERS,
     PYTHONS,
@@ -250,9 +251,13 @@ class Analysis:
         """Variables and environment the script itself changes, before it is read."""
         for name in script.assigned:
             if context.shell == "bash":
-                self.environment_dynamic.add(environment_key(name))
+                variable = name.partition("=")[0]
             elif name.startswith("env:"):
-                self.environment_dynamic.add(environment_key(name[4:]))
+                variable = name[4:]
+            else:
+                continue
+            self.environment_dynamic.add(environment_key(variable))
+            self.check_environment_assignment(variable, "")
         if context.shell == "powershell":
             _cmdlets.prepare(self, context, script)
             self._constant_values(context, script)
@@ -1059,6 +1064,14 @@ class Analysis:
             return self.env_folded.get(name.upper())
         return self.env.get(name)
 
+    def check_environment_assignment(self, name: str, source: str) -> None:
+        if controls_command_execution(name):
+            self.unresolve(
+                "environment",
+                source,
+                f"the command sets the reserved environment variable {name.upper()}",
+            )
+
     def environment_value(self, context: Context, name: str) -> Word | None:
         """A program's environment value: absent, literal, or changed by the script."""
         if context.environment_changed or environment_key(name) in self.environment_dynamic:
@@ -1286,24 +1299,12 @@ class Analysis:
             words.append(
                 CommandWord(value.text if value.text is not None else word.source, value.static)
             )
-        executable = None
-        python_path = None
-        if re.fullmatch(r"(?:python[\d.]*w?|py|pythonw|uv)", name, re.IGNORECASE):
-            executable = self.value(context, raw.words[0], location).text if raw.words else None
-            environment = self.environment_value(context, "PYTHONPATH")
-            if environment is not None:
-                value = self.value(context, environment, location)
-                python_path = CommandWord(
-                    value.text if value.text is not None else environment.source, value.static
-                )
         self._commands.append(
             SimpleCommand(
                 name,
                 tuple(words),
                 raw.source[:SOURCE_LIMIT] or name,
                 context.shell,
-                executable,
-                python_path,
             )
         )
 

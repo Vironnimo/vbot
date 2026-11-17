@@ -67,7 +67,9 @@ def unwrap(
             rest = rest[1:]
             break
         if wrapper == "env" and _ASSIGNMENT.match(text):
-            analysis.environment_dynamic.add(environment_key(text.split("=", 1)[0]))
+            name = text.split("=", 1)[0]
+            analysis.environment_dynamic.add(environment_key(name))
+            analysis.check_environment_assignment(name, raw.source)
             rest = rest[1:]
             continue
         if not text.startswith("-") or text == "-":
@@ -115,6 +117,7 @@ def unwrap_runner(
     texts = [analysis.value(context, word, location).text for word in arguments]
     index = 0
     matched = not spec.subcommands
+    uv_module = False
     while index < len(arguments):
         text = texts[index]
         if text is None:
@@ -128,6 +131,8 @@ def unwrap_runner(
             continue
         if text.startswith("-") and text != "-":
             option, equals, attached = text.partition("=")
+            if runner == "uv" and matched and option in ("-m", "--module"):
+                uv_module = True
             if option in spec.directories:
                 target = (
                     arguments[index].part(attached)
@@ -156,6 +161,8 @@ def unwrap_runner(
     if not matched:
         return []
     rest = list(arguments[index:])
+    if uv_module and rest:
+        return [Word.literal("python"), Word.literal("-m"), *rest]
     if spec.environment_prefix and rest:
         # hatch run test:pytest: the environment before the colon.
         first = analysis.value(context, rest[0], location).text
