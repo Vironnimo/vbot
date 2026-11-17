@@ -43,6 +43,7 @@ from core.json_documents import (
     write_json_document,
 )
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
+from core.utils.atomic import read_replaced_text
 from core.utils.errors import VBotError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
@@ -538,13 +539,13 @@ class SkillPolicyService:
     def _read_policy(self) -> tuple[SkillPolicy, list[str]]:
         """Return the effective policy and the diagnostics of the file."""
         path = self.policy_path
-        if not path.is_file():
-            self._log_policy_usable(path)
-            return SkillPolicy(), []
         state = _file_state(path)
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
+            data = json.loads(read_replaced_text(path))
+        except FileNotFoundError:
+            self._log_policy_usable(path)
+            return SkillPolicy(), []
+        except (OSError, ValueError, RecursionError) as error:
             if self._conditions.started(path, state):
                 _LOGGER.warning("Ignored unreadable skill policy (path=%s): %s", path, error)
             return SkillPolicy(), [f"Cannot read skill policy {path}: {error}"]
@@ -569,11 +570,11 @@ class SkillPolicyService:
     def _read_stored(self) -> _StoredPolicy:
         """Return the stored policy for a mutation; refuse a file that fails to load."""
         path = self.policy_path
-        if not path.is_file():
-            return _StoredPolicy()
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
+            data = json.loads(read_replaced_text(path))
+        except FileNotFoundError:
+            return _StoredPolicy()
+        except (OSError, ValueError, RecursionError) as error:
             raise SkillPolicyError(f"Cannot read skill policy {path}: {error}") from error
         errors = [
             f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"

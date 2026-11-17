@@ -191,7 +191,13 @@ class TestLoad:
 class TestMutations:
     @pytest.mark.parametrize("operation", ["disable", "share", "rename", "references"])
     @pytest.mark.parametrize(
-        "original", [b"{broken", b'{"format_version": 999}', b'{"format_version":"\xff"}']
+        "original",
+        [
+            pytest.param(b"{broken", id="malformed-json"),
+            pytest.param(b'{"format_version": 999}', id="unsupported-version"),
+            pytest.param(b'{"format_version":"\xff"}', id="invalid-encoding"),
+            pytest.param(b"[" * 20000 + b"0" + b"]" * 20000, id="decoder-depth"),
+        ],
     )
     def test_mutation_preserves_invalid_existing_policy(
         self, storage: StorageManager, operation: str, original: bytes
@@ -210,6 +216,28 @@ class TestMutations:
             else:
                 service.references_agent("renamed")
         assert path.read_bytes() == original
+
+    def test_unavailable_policy_does_not_hide_agent_references(
+        self, storage: StorageManager, monkeypatch: pytest.MonkeyPatch, deny_access
+    ) -> None:
+        path = write_policy(
+            storage, {"format_version": 1, "shared": {"owner": {"deploy": ["two"]}}}
+        )
+        service = SkillPolicyService(storage)
+        assert service.references_agent("two")
+        deny_access(path)
+        monkeypatch.setattr("core.utils.atomic._sleep", lambda _delay: None)
+
+        assert service.load() == SkillPolicy()
+        assert service.validation_diagnostics()
+        with pytest.raises(SkillPolicyError):
+            service.references_agent("two")
+        with pytest.raises(SkillPolicyError):
+            service.set_package_disabled(DEPLOY, disabled=True)
+
+        monkeypatch.undo()
+        assert service.references_agent("two")
+        assert DEPLOY not in service.load().disabled_packages
 
     @pytest.mark.parametrize("name", ["bad name", "deploy\n", "x" * 65])
     def test_mutation_rejects_skill_names_that_cannot_round_trip(
