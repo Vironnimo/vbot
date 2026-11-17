@@ -320,6 +320,41 @@ describe('Factory native work', () => {
     expect(calls(operation, 'workflow.save')).toHaveLength(0);
     expect(document.getElementById('native-title').value).toBe('Ship feature');
   });
+
+  it('creates a new Leader with the Model selected through search', async () => {
+    const { bridge, operation } = nativeBridge({ established: false });
+    await render(bridge, '');
+    await choose('native-project', 'Project A');
+    button(t('factory.native.setup')).click();
+    await tick();
+    for (const id of ['native-leader', 'native-setup-remit']) {
+      expect(
+        document.querySelector(`label[for="${id}"] button[data-help-text]`),
+      ).not.toBeNull();
+    }
+    fill('native-leader-name', 'Coordinator');
+
+    document.getElementById('native-new-model').click();
+    await tick();
+    const search = document.querySelector('input[role="combobox"]');
+    expect(search).not.toBeNull();
+    search.value = 'reviewer';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    const options = document.querySelectorAll('[role="option"]');
+    expect(options).toHaveLength(1);
+    options[0].click();
+    await tick();
+    await saveModal(t('factory.native.setup'));
+
+    expect(calls(operation, 'factory.create').at(-1)[1]).toMatchObject({
+      project_id: 'project-a',
+      leader_name: 'Coordinator',
+      leader_model: 'demo/reviewer',
+      request_id: expect.any(String),
+    });
+  });
+
   it('creates a child with its own owner and dependency, pauses, reassigns and records completion evidence', async () => {
     const { bridge, operation, data } = nativeBridge();
     data.tasks.push(

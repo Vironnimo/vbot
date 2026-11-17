@@ -150,6 +150,8 @@ The default route `''` selects a native Project Factory. `/factory/<id>` contain
 
 Invalidation resource `workflows` reloads the list and the open Workflow, and a Workflow deleted elsewhere returns to `/workflows`. The page uses shared navigation, controls, autosave and its `factory.*` catalog (English only). A saved Workflow autosaves; a new one, from a blank start, a template or a copy, is created with an explicit button. The Workflow editor and Card progress share `WorkflowDiagram.svelte`: columns follow dependencies, dashed arrows show return targets, approval badges mark gated steps. Reordering/removing dependencies repairs invalid return targets, including downstream ones.
 
+The Factory setup and new-member dialogs use the shared searchable Model picker with unpinned Model IDs from the Extension catalog. A new Leader requires an explicit Model; a new member can inherit.
+
 Card detail shows each waiting step with its own Accept/Answer/Retry, Card-level actions, the step diagram with live statuses, Outputs (earlier documents fold), child and parent Cards, the trigger event, events, usage, per-step limits, participant History/Run streams (group `<card>.<step>`) and permission links.
 
 ## Agent-facing text

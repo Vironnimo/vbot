@@ -3,18 +3,26 @@
   import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import FormField from '@vbot/extension-sdk/ui/FormField.svelte';
+  import InfoHint from '@vbot/extension-sdk/ui/InfoHint.svelte';
   import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
   import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
+  import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
   import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import Toggle from '@vbot/extension-sdk/ui/Toggle.svelte';
-  import { isChatModel } from '@vbot/extension-sdk/lib/modelSelection.js';
+  import {
+    buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
+  } from '@vbot/extension-sdk/lib/modelSelection.js';
   import LimitsEditor from './LimitsEditor.svelte';
   import { normalizeLimits, limitsProblem } from './limits.js';
   let { model, native, currentProject, onNavigate } = $props();
   let modal = $state(''),
     form = $state({}),
-    formError = $state('');
+    formError = $state(''),
+    showAllModels = $state(false);
   const task = $derived(native.detail?.task);
   const topic = $derived(native.topic?.topic);
   const memberName = (id) =>
@@ -32,7 +40,20 @@
       label: item.role || item.agent_id,
     })),
   ]);
-  const chatModels = $derived((model.catalog.models || []).filter(isChatModel));
+  const allModelOptions = $derived(
+    buildModelSelectOptions({
+      models: model.catalog.models ?? [],
+      modelOnly: true,
+      selectedModelValue: form.model,
+      emptyLabel: t('factory.native.inheritedModel'),
+    }).filter((option) => form.new || option.value),
+  );
+  const modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: form.model,
+    }),
+  );
   const agents = $derived(
     (model.catalog.agents || []).map((item) => ({
       value: item.id,
@@ -42,6 +63,7 @@
   export function open(kind, values = {}) {
     modal = kind;
     formError = '';
+    showAllModels = false;
     form = {
       request_id: crypto.randomUUID(),
       agent_id: '',
@@ -244,17 +266,24 @@
     closeDisabled={Boolean(native.pending)}
     >{#snippet body()}<div class="modal-body factory-form">
         {#if modal === 'setup'}
-          <label for="native-leader">{t('factory.native.existingAgent')}</label
-          ><Dropdown
-            id="native-leader"
-            ariaLabel={t('factory.native.existingAgent')}
-            value={form.leader_agent_id}
-            options={[
-              { value: '', label: t('factory.native.newLeader') },
-              ...agents,
-            ]}
-            onValueChange={(value) => (form.leader_agent_id = value)}
-          />
+          <FormField controlId="native-leader">
+            {#snippet labelContent()}
+              {t('factory.native.leader')}
+              <InfoHint text={t('factory.native.leaderHelp')} />
+            {/snippet}
+            {#snippet children(field)}
+              <Dropdown
+                id={field.controlId}
+                ariaLabelledby={field.labelId}
+                value={form.leader_agent_id}
+                options={[
+                  { value: '', label: t('factory.native.newLeader') },
+                  ...agents,
+                ]}
+                onValueChange={(value) => (form.leader_agent_id = value)}
+              />
+            {/snippet}
+          </FormField>
           {#if !form.leader_agent_id}<label for="native-leader-name"
               >{t('factory.native.agentName')}</label
             ><TextField
@@ -262,12 +291,17 @@
               value={form.leader_name}
               onInput={(value) => (form.leader_name = value)}
             />{@render modelField()}{/if}
-          <label for="native-setup-remit">{t('factory.native.remit')}</label
-          ><TextArea
-            id="native-setup-remit"
-            value={form.instructions}
-            onInput={(value) => (form.instructions = value)}
-          />
+          <FormField controlId="native-setup-remit">
+            {#snippet labelContent()}
+              {t('factory.native.remit')}
+              <InfoHint text={t('factory.native.remitHelp')} />
+            {/snippet}
+            <TextArea
+              id="native-setup-remit"
+              value={form.instructions}
+              onInput={(value) => (form.instructions = value)}
+            />
+          </FormField>
         {:else if modal === 'member'}
           <label class="native-check"
             >{t('factory.native.newAgent')}<Toggle
@@ -470,19 +504,22 @@
     onValueChange={(value) => (form.assignee_id = value)}
   />{/snippet}
 {#snippet modelField()}<label for="native-new-model">{t('factory.model')}</label
-  ><Dropdown
+  ><SearchableDropdown
     id="native-new-model"
     ariaLabel={t('factory.model')}
     value={form.model}
-    options={[
-      ...(form.new
-        ? [{ value: '', label: t('factory.native.inheritedModel') }]
-        : []),
-      ...chatModels.map((item) => ({
-        value: item.id,
-        label: item.name || item.id,
-      })),
-    ]}
+    options={modelOptions}
+    placeholder={form.new
+      ? t('factory.native.inheritedModel')
+      : t('factory.native.selectModel')}
+    searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+    emptyLabel={t('agents.form.modelSearchEmpty')}
+    footerActionLabel={modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
+    })}
+    onFooterAction={() => (showAllModels = !showAllModels)}
+    onOpenChange={model.pickerOpen}
     onValueChange={(value) => (form.model = value)}
   />{/snippet}
 

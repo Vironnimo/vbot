@@ -34,12 +34,16 @@ export default {
   'factory.native.selectProject': 'Select a Project',
   'factory.native.setup': 'Establish Factory',
   'factory.native.leader': 'Leader',
+  'factory.native.leaderHelp':
+    'The Leader coordinates the team and can assign tasks to its members. Choose an existing Agent or create a new one.',
   'factory.native.existingAgent': 'Existing Agent',
   'factory.native.newAgent': 'New Agent',
   'factory.native.agentName': 'Agent name',
   'factory.native.role': 'Role',
   'factory.native.instructions': 'Instructions and remit',
   'factory.native.remit': 'Factory remit',
+  'factory.native.remitHelp':
+    'Optional standing instructions for the whole Factory. Describe what the team is responsible for, for example: “Maintain the importer and ask before changing its public API.”',
   'factory.native.capacity': 'Capacity',
   'factory.native.addMember': 'Add member',
   'factory.native.retire': 'Retire member',
@@ -92,7 +96,8 @@ export default {
   'factory.native.retired': 'Retired',
   'factory.native.newLeader': 'Create a new Leader',
   'factory.native.leaderRequired':
-    'Choose an existing Leader or name a new Agent.',
+    'Choose an existing Leader, or enter a name and select a Model for a new one.',
+  'factory.native.selectModel': 'Select a Model',
   'factory.native.dependencyHelp':
     'Select prerequisite tasks. Cycles and cross-Factory dependencies are refused.',
   'factory.native.resultRequired':
