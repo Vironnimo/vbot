@@ -675,20 +675,45 @@ def test_imap_mailbox_reads_without_changing_the_mailbox(monkeypatch: pytest.Mon
     assert fetched == ["(RFC822.SIZE)", "(BODY.PEEK[])", "(RFC822.SIZE)", "(BODY.PEEK[HEADER])"]
     assert not any("STORE" in command for command in commands)
 
-    # A refused size lookup cannot authorize a potentially oversized body fetch.
+
+@pytest.mark.usefixtures("imap_client")
+@pytest.mark.parametrize(
+    ("size_reply", "body_reply"),
+    [
+        pytest.param(("NO", [b"temporary lookup failure"]), None, id="size-refused"),
+        pytest.param(("OK", [b"7 (UID 7)"]), None, id="size-missing"),
+        pytest.param(("OK", [None]), None, id="message-gone"),
+        pytest.param(
+            ("OK", [b"7 (UID 7 RFC822.SIZE 5)"]), ("NO", [(b"meta", b"mail!")]), id="body-refused"
+        ),
+    ],
+)
+def test_imap_checks_size_and_requires_a_successful_body_response(
+    monkeypatch: pytest.MonkeyPatch,
+    size_reply: tuple[str, list[Any]],
+    body_reply: tuple[str, list[Any]] | None,
+) -> None:
+    mailbox = ImapMailbox(_SETTINGS, "secret")
     calls: list[tuple[str, ...]] = []
 
-    def refuse_size(command: str, *args: str) -> tuple[str, list[Any]]:
+    def fetch(command: str, *args: str) -> tuple[str, list[Any]]:
         calls.append((command, *args))
         if args[1] == "(RFC822.SIZE)":
-            return "NO", [b"temporary lookup failure"]
-        return "OK", [(b"7 (UID 7 BODY[] {5}", b"mail!"), b")"]
+            return size_reply
+        assert body_reply is not None
+        return body_reply
 
-    monkeypatch.setattr(FakeImapClient.last, "uid", refuse_size)
-    with pytest.raises(ChannelError) as raised:
-        mailbox.fetch(7)
-    assert raised.value.retryable
-    assert calls == [("FETCH", "7", "(RFC822.SIZE)")]
+    monkeypatch.setattr(FakeImapClient.last, "uid", fetch)
+    if size_reply == ("OK", [None]):
+        assert mailbox.fetch(7) == (b"", False)
+    else:
+        with pytest.raises(ChannelError) as raised:
+            mailbox.fetch(7)
+        assert raised.value.retryable
+    attempted = [("FETCH", "7", "(RFC822.SIZE)")]
+    if body_reply is not None:
+        attempted.append(("FETCH", "7", "(BODY.PEEK[])"))
+    assert calls == attempted
 
 
 @pytest.mark.usefixtures("imap_client")
