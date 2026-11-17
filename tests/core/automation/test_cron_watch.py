@@ -274,6 +274,36 @@ async def test_a_new_watch_is_checked_at_once_and_its_failure_counts_toward_no_s
 
 
 @pytest.mark.asyncio
+async def test_pausing_discards_a_failed_first_check_still_in_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    checks = FakeChecks([])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def late_failure(*args: Any, **kwargs: Any) -> str:
+        entered.set()
+        await release.wait()
+        raise WatchCheckError("Temporary failure")
+
+    monkeypatch.setattr(checks, "run_command", late_failure)
+    service.start()
+    try:
+        job_id = await _watching_job(service, checks)
+        await entered.wait()
+        await service.disable_job(job_id)
+        release.set()
+        assert await service.await_first_check(job_id)
+        job = service.get_job(job_id)
+        assert job.status == "paused"
+        assert job.last_checked_at is None
+        assert job.last_check_error is None
+        trigger.trigger_run.assert_not_awaited()
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["check", "admission"])
 async def test_retargeting_a_watch_discards_output_from_its_earlier_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
