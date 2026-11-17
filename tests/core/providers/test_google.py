@@ -59,19 +59,42 @@ def test_catalog_entry_becomes_a_chat_model_with_listed_limits() -> None:
 
 
 @pytest.mark.parametrize(
+    ("model_id", "methods", "task"),
+    [
+        ("gemini-embedding-2", ("embedContent", "countTokens"), "text_embedding"),
+        ("gemini-decision-1", ("createDecision",), "decision"),
+        ("gemini-3.8-live", ("bidiGenerateContent",), "live_voice"),
+        ("gemini-2.5-flash-native-audio-latest", ("bidiGenerateContent",), "live_voice"),
+        ("gemini-3.8-flash-tts", ("generateContent",), "text_to_speech"),
+        ("gemini-3.5-transcribe", ("generateContent",), "speech_to_text"),
+        ("gemini-3.1-flash-image", ("generateContent",), "image_generation"),
+        ("nano-banana-pro-preview", ("generateContent",), "image_generation"),
+        ("lyria-3.5", ("generateContent",), "music_generation"),
+        ("gemini-omni-1.2-flash", ("generateContent",), "video_generation"),
+    ],
+)
+def test_catalog_classifies_task_models_by_method_and_family(
+    model_id: str, methods: tuple[str, ...], task: str
+) -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry(model_id, methods))
+
+    assert task in model.capabilities.task_types
+    assert "chat" not in model.capabilities.task_types
+
+
+@pytest.mark.parametrize(
     ("model_id", "methods"),
     [
-        ("gemini-embedding-2", ("embedContent",)),
-        ("gemini-3.8-live", ("bidiGenerateContent",)),
-        ("gemini-3.8-flash-tts", ("generateContent",)),
-        ("gemini-3.1-flash-image", ("generateContent",)),
-        ("nano-banana-pro-preview", ("generateContent",)),
-        ("lyria-3.5", ("generateContent",)),
+        ("aqa", ("generateAnswer",)),
+        ("lyria-realtime-exp", ("bidiGenerateMusic",)),
+        ("gemini-3.5-transcribe-live", ("bidiGenerateContent",)),
+        ("gemini-3.5-live-translate-preview", ("bidiGenerateContent",)),
+        ("gemini-robotics-er-2-streaming-preview", ("bidiGenerateContent",)),
         ("antigravity-preview-latest", ("generateContent",)),
         ("deep-research-preview-04-2026", ("generateContent",)),
     ],
 )
-def test_catalog_skips_entries_that_cannot_chat(model_id: str, methods: tuple[str, ...]) -> None:
+def test_catalog_skips_entries_without_a_vbot_task(model_id: str, methods: tuple[str, ...]) -> None:
     with pytest.raises(CatalogEntrySkipped):
         GoogleAdapter.normalize_catalog_entry(_entry(model_id, methods))
 
