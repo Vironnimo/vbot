@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T13:33:52.462318+00:00",
+  "fetched_at": "2026-11-17T19:51:08.053780+00:00",
   "models": {
     "gemini-2.5-computer-use-preview-10-2025": {
       "canonical": "google/gemini-2.5-computer-use-preview-10-2025",
@@ -92,6 +92,30 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 3
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -169,6 +193,56 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -198,6 +272,56 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -227,6 +351,56 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -252,8 +426,51 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
-        "supported_voices": [],
+        "supported_parameters": [
+          "voice"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "voice": {
+                "default": "kore",
+                "type": "string"
+              }
+            }
+          }
+        },
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -338,8 +555,51 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
-        "supported_voices": [],
+        "supported_parameters": [
+          "voice"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "voice": {
+                "default": "kore",
+                "type": "string"
+              }
+            }
+          }
+        },
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -418,6 +678,38 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -455,6 +747,38 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -487,6 +811,50 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9",
+                  "1:4",
+                  "4:1",
+                  "1:8",
+                  "8:1"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "512",
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              "thinking_level": {
+                "type": "enum",
+                "values": [
+                  "minimal",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -524,6 +892,50 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9",
+                  "1:4",
+                  "4:1",
+                  "1:8",
+                  "8:1"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "512",
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              "thinking_level": {
+                "type": "enum",
+                "values": [
+                  "minimal",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -593,6 +1005,34 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "thinking_level": {
+                "type": "enum",
+                "values": [
+                  "minimal",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -672,6 +1112,66 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "thinking_level": {
+                "default": "minimal",
+                "type": "enum",
+                "values": [
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -706,8 +1206,51 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
-        "supported_voices": [],
+        "supported_parameters": [
+          "voice"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "voice": {
+                "default": "kore",
+                "type": "string"
+              }
+            }
+          }
+        },
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -920,8 +1463,129 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "mode",
+          "word_timestamps"
+        ],
         "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "af-ZA",
+                  "am-ET",
+                  "ar-EG",
+                  "hy-AM",
+                  "as-IN",
+                  "az-AZ",
+                  "be-BY",
+                  "bn-BD",
+                  "bn-IN",
+                  "bs-BA",
+                  "bg-BG",
+                  "rup-BG",
+                  "my-MM",
+                  "yue-Hant-HK",
+                  "ca-ES",
+                  "ceb",
+                  "km-KH",
+                  "hr-HR",
+                  "cs-CZ",
+                  "da-DK",
+                  "nl-NL",
+                  "en-GB",
+                  "en-IN",
+                  "en-US",
+                  "et-EE",
+                  "fa-IR",
+                  "fil-PH",
+                  "fi-FI",
+                  "fr-FR",
+                  "gl-ES",
+                  "ka-GE",
+                  "de-DE",
+                  "el-GR",
+                  "gu-IN",
+                  "ha-NG",
+                  "he-IL",
+                  "hi-IN",
+                  "hu-HU",
+                  "is-IS",
+                  "id-ID",
+                  "it-IT",
+                  "ja-JP",
+                  "jv-ID",
+                  "kea-CV",
+                  "kn-IN",
+                  "kk-KZ",
+                  "ko-KR",
+                  "ky-KG",
+                  "lv-LV",
+                  "ln-CD",
+                  "lt-LT",
+                  "mk-MK",
+                  "ms-MY",
+                  "ml-IN",
+                  "mt-MT",
+                  "cmn-Hans-CN",
+                  "mr-IN",
+                  "mn-MN",
+                  "ne-NP",
+                  "nb-NO",
+                  "or-IN",
+                  "pl-PL",
+                  "pt-BR",
+                  "pt-PT",
+                  "pa-IN",
+                  "pa-Guru-IN",
+                  "ro-RO",
+                  "ru-RU",
+                  "sr-RS",
+                  "sd-Arab-IN",
+                  "sk-SK",
+                  "sl-SI",
+                  "es-419",
+                  "es-US",
+                  "sw-KE",
+                  "sv-SE",
+                  "tg-TJ",
+                  "te-IN",
+                  "th-TH",
+                  "tr-TR",
+                  "uk-UA",
+                  "uz-UZ",
+                  "vi-VN"
+                ]
+              },
+              "mode": {
+                "default": "verbatim",
+                "type": "enum",
+                "values": [
+                  "verbatim",
+                  "smart"
+                ]
+              },
+              "word_timestamps": {
+                "default": false,
+                "type": "boolean"
+              }
+            }
+          }
+        },
         "task_types": [
           "text_output",
           "audio_input",
@@ -1066,8 +1730,55 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
-        "supported_voices": [],
+        "supported_parameters": [
+          "style",
+          "voice"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "style": {
+                "type": "string"
+              },
+              "voice": {
+                "default": "kore",
+                "type": "string"
+              }
+            }
+          }
+        },
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -1094,8 +1805,55 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
-        "supported_voices": [],
+        "supported_parameters": [
+          "style",
+          "voice"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "style": {
+                "type": "string"
+              },
+              "voice": {
+                "default": "kore",
+                "type": "string"
+              }
+            }
+          }
+        },
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -1126,6 +1884,56 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -1155,6 +1963,66 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "backend": {
+                "default": "none",
+                "type": "enum",
+                "values": [
+                  "none",
+                  "vbot"
+                ]
+              },
+              "thinking_level": {
+                "default": "low",
+                "type": "enum",
+                "values": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "voice": {
+                "default": "kore",
+                "type": "enum",
+                "values": [
+                  "zephyr",
+                  "puck",
+                  "charon",
+                  "kore",
+                  "fenrir",
+                  "leda",
+                  "orus",
+                  "aoede",
+                  "callirrhoe",
+                  "autonoe",
+                  "enceladus",
+                  "iapetus",
+                  "umbriel",
+                  "algieba",
+                  "despina",
+                  "erinome",
+                  "algenib",
+                  "rasalgethi",
+                  "laomedeia",
+                  "achernar",
+                  "alnilam",
+                  "schedar",
+                  "gacrux",
+                  "pulcherrima",
+                  "achird",
+                  "zubenelgenubi",
+                  "vindemiatrix",
+                  "sadachbia",
+                  "sadaltager",
+                  "sulafat"
+                ]
+              }
+            },
+            "tool_calls": "non_blocking"
+          }
+        },
         "task_types": [
           "live_voice"
         ],
@@ -1299,6 +2167,23 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "decision": {
+            "limits": {
+              "max_choices": 255,
+              "max_input_tokens": 262144,
+              "max_levels": 255,
+              "max_questions": 1000
+            },
+            "pricing": {
+              "rates": {
+                "input": 0.1,
+                "output": 0
+              },
+              "source": "google:decision"
+            }
+          }
+        },
         "task_types": [
           "decision"
         ],
@@ -1325,7 +2210,9 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "dimensions"
+        ],
         "supported_voices": [],
         "task_types": [
           "text_embedding"
@@ -1365,7 +2252,9 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "dimensions"
+        ],
         "supported_voices": [],
         "task_types": [
           "text_embedding"
@@ -1400,7 +2289,9 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "dimensions"
+        ],
         "supported_voices": [],
         "task_types": [
           "text_embedding"
@@ -1509,6 +2400,50 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9",
+                  "1:4",
+                  "4:1",
+                  "1:8",
+                  "8:1"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              },
+              "thinking_level": {
+                "type": "enum",
+                "values": [
+                  "minimal",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
@@ -1526,7 +2461,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1538,6 +2474,45 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "360p",
+                  "720p",
+                  "1080p",
+                  "4k"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "video_generation"
         ],
@@ -1555,7 +2530,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1567,6 +2543,50 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "360p",
+                  "720p",
+                  "1080p",
+                  "4k"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "video_generation"
         ],
@@ -1598,6 +2618,45 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame",
+              "last_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "16:9",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "360p",
+                  "720p",
+                  "1080p",
+                  "4k"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "video_generation"
         ],
@@ -1869,6 +2928,19 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "music_generation": {
+            "parameters": {
+              "response_format": {
+                "type": "enum",
+                "values": [
+                  "mp3",
+                  "wav"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "music_generation",
           "audio_generation"
@@ -1899,6 +2971,38 @@
         },
         "supported_parameters": [],
         "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "21:9"
+                ]
+              },
+              "input_references": {
+                "max": 14
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            }
+          }
+        },
         "task_types": [
           "image_generation"
         ],
