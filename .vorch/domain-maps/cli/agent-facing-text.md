@@ -30,6 +30,7 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Archive purge pending result: `deletion of N archive entries is pending; vBot retries them automatically, or run ... to continue them now` | The concrete retries name only IDs returned as pending, even after `--all`. A fresh bulk selection could permanently delete entries created after the initial operation. Each CLI command fits the server limit of 100 IDs. |
 | Email `--trusted-authserv-id` help, saved-state output and `references/channels.md` example | Makes the receiving trust boundary explicit instead of trusting an arbitrary Authentication-Results header; shows the saved trust list and how to clear it. |
 | `references/channels.md`: `Set the account's hosts and addresses instead of the example values.` | Prevents copying the illustrative account or authentication-server names into an actual setup. |
 | `references/channels.md`: `Set --trusted-authserv-id to the receiving server's Authentication-Results names confirmed by its administrator; that server needs to strip forged results claiming those names.` | RFC 8601 requires an established receiver trust boundary; matching an authserv-id alone cannot establish who added the header. |

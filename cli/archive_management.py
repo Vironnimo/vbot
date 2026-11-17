@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from itertools import batched
 from typing import Any
 
 from cli._recovery import format_command, target_options
@@ -19,6 +20,7 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 DEFAULT_LIST_LIMIT = 50
+_PURGE_IDS_MAX = 100  # archive.purge's limit for an explicit list
 _NEW_ID_PLACEHOLDERS = {
     "agent": "<new-agent-id>",
     "project": "<new-project-id>",
@@ -265,13 +267,16 @@ def archive_purge(
                 pending_purge_attention(instance, pending_ids[0], str(pending[0].get("reason")))
             )
         else:
-            retry = selection if all_matching else tuple(pending_ids)
-            command = format_command(
-                ("vbot", "archive", "purge", *retry, "--yes", *target_options(instance))
-            )
+            commands: list[str] = []
+            for batch in batched(pending_ids, _PURGE_IDS_MAX, strict=False):
+                command = format_command(
+                    ("vbot", "archive", "purge", *batch, "--yes", *target_options(instance))
+                )
+                commands.append(f"'{command}'")
+            retry = " and ".join(commands)
             attention.append(
                 f"deletion of {len(pending)} archive entries is pending; vBot retries them "
-                f"automatically, or run '{command}' to continue them now"
+                f"automatically, or run {retry} to continue them now"
             )
     attention.extend(
         skipped_purge_attention(
