@@ -259,8 +259,17 @@ def test_posix_terminal_gives_a_shell_its_controlling_terminal(tmp_path: Path) -
         other_thread.join()
     assert [str(item.message) for item in caught if item.category is DeprecationWarning] == []
     try:
+        # Check the controlling terminal directly, with test-owned output;
+        # host tty utilities differ in whether they append a newline.
+        probe = (
+            "import os; fd = os.open('/dev/tty', os.O_RDWR); "
+            "assert os.tcgetpgrp(fd) == os.tcgetpgrp(0); "
+            "print(os.ttyname(0), flush=True); os.close(fd)"
+        )
         # The echoed input differs from the output: '<'1'>' prints <1>.
-        adapter.write("tty; stty size; echo '<'1'>'\n")
+        adapter.write(
+            shlex.join([sys.executable, "-S", "-c", probe]) + "; stty size; echo '<'1'>'\n"
+        )
         assert re.search(r"/dev/pts/\d+\r\n24 80\r\n<1>", read_until(adapter, "<1>"))
         adapter.resize(30, 100)
         adapter.write("stty size; echo '<'2'>'\n")
