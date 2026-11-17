@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -228,6 +228,7 @@ class Turn:
     content: str
     parent_agent_input: bool
     run: Run | None = None
+    input_persisted: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class ScriptedLoop:
@@ -264,6 +265,7 @@ class ScriptedLoop:
                 "parent" if parent_agent_input else "user" if run.run_kind == RunKind.USER else None
             )
             await session.append_many_async([], subagent_reply_target=target)
+            turn.input_persisted.set()
             gate = self.gates.get(content)
             if gate is not None:
                 await gate.wait()

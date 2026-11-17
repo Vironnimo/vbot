@@ -1752,6 +1752,7 @@ async def test_message_parent_reaches_the_parent_while_the_subagent_works(
     harness.loop.hold("review")
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
+    await harness.loop.turns[0].input_persisted.wait()
 
     await harness.sessions.get(child).append_many_async([], subagent_reply_target="user")
     result = await harness.message_parent("Which branch?", child)
@@ -1797,12 +1798,14 @@ async def test_user_reply_notice_stops_if_parent_replies_resumed(
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
     session = harness.sessions.get(child)
-    entered, release = asyncio.Event(), asyncio.Event()
+    await harness.loop.turns[0].input_persisted.wait()
+    entered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    release = asyncio.Event()
     run_async = harness.sessions.run_async
 
     async def hold_parent_check(check, *args, **kwargs):
-        if check == harness.sessions.exists and not entered.is_set():
-            entered.set()
+        if check == harness.sessions.exists and not entered.done():
+            entered.set_result(None)
             await release.wait()
         return await run_async(check, *args, **kwargs)
 
@@ -1815,7 +1818,8 @@ async def test_user_reply_notice_stops_if_parent_replies_resumed(
         )
     )
     try:
-        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.wait((entered, notice), return_when=asyncio.FIRST_COMPLETED)
+        assert entered.done(), "notice returned before checking the Parent Session"
         result = await harness.message_parent("Resolved the issue", child)
         assert result["ok"]
     finally:
