@@ -9,3 +9,5 @@ The WebUI keeps a bounded window. `logsView.js` holds at most `LOGS_WINDOW_MAX_E
 ## Reconnect
 
 A WebUI log-stream reconnect reloads the catalog before re-reading and re-subscribing, preserving a still-valid selection and discovering files created while disconnected. A catalog or file-read failure during that recovery keeps the view in `reconnecting` and schedules the next bounded-backoff attempt; only selection change, teardown, or a successful replacement stream ends that retry chain.
+
+A socket silent for 60 seconds reconnects through the same recovery. Heartbeats reset the deadline without changing entries. Selecting another file supersedes any pending reconnect catalog read.

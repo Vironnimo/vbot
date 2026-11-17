@@ -52,6 +52,7 @@
 
   const RECONNECT_INITIAL_DELAY_MS = 1000;
   const RECONNECT_MAX_DELAY_MS = 10000;
+  const STREAM_SILENCE_TIMEOUT_MS = 60_000;
   // On phone widths search stays visible while file, level, and order fold
   // behind a Filters disclosure, so the first log entries fit the first screen.
   // The layout switch happens in markup (not only CSS) so the DOM and focus
@@ -123,6 +124,7 @@
   let currentStream = null;
   let reconnectTimer = null;
   let destroyed = false;
+  let activeCatalogRequest = 0;
   let activeReadRequest = 0;
 
   onMount(() => {
@@ -191,13 +193,19 @@
   }
 
   async function loadCatalogAndMaybeFile(options = {}) {
+    const requestId = ++activeCatalogRequest;
+    const readRequest = activeReadRequest;
+    const isCurrent = () =>
+      !destroyed &&
+      requestId === activeCatalogRequest &&
+      (!options.reconnecting || readRequest === activeReadRequest);
     const previousSelection = viewState.selectedFile;
     viewState.loadingCatalog = options.silent !== true;
     viewState.catalogError = '';
 
     try {
       const result = await listLogs();
-      if (destroyed) {
+      if (!isCurrent()) {
         return;
       }
 
@@ -224,17 +232,18 @@
         });
       }
     } catch (error) {
+      if (!isCurrent()) return;
       viewState.catalogError = `${t('logs.catalogLoadError')} ${errorMessageText(error, t('common.unknown'))}`;
       if (
         options.reconnecting === true &&
-        !destroyed &&
         viewState.selectedFile === previousSelection
       ) {
         viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
         scheduleReconnect(previousSelection);
       }
     } finally {
-      viewState.loadingCatalog = false;
+      if (!destroyed && requestId === activeCatalogRequest)
+        viewState.loadingCatalog = false;
     }
   }
 
@@ -283,8 +292,8 @@
   function connectLogStream(file, cursor) {
     const stream = {
       file,
-      shouldReconnect: true,
       connection: null,
+      watchdog: null,
     };
 
     const connection = subscribeLogEvents(
@@ -296,6 +305,7 @@
           }
 
           reconnectAttempt = 0;
+          armStreamWatchdog(stream);
           viewState.streamError = '';
           viewState.streamStatus = LOGS_STREAM_STATUS_CONNECTED;
         },
@@ -304,6 +314,7 @@
             return;
           }
 
+          armStreamWatchdog(stream);
           handleLogStreamEvent(event);
         },
         onError: (error) => {
@@ -320,22 +331,14 @@
           }
 
           currentStream = null;
+          clearTimeout(stream.watchdog);
           // A refused credential or client stays refused: the access gate
           // takes over instead of a reconnect.
           if (accessLossFromClose(event)) {
             viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
             return;
           }
-          if (
-            !stream.shouldReconnect ||
-            destroyed ||
-            viewState.selectedFile !== file
-          ) {
-            return;
-          }
-
-          viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
-          scheduleReconnect(file);
+          reconnectStream(file);
         },
       },
       { cursor },
@@ -343,6 +346,22 @@
 
     stream.connection = connection;
     currentStream = stream;
+    armStreamWatchdog(stream);
+  }
+
+  function armStreamWatchdog(stream) {
+    clearTimeout(stream.watchdog);
+    stream.watchdog = setTimeout(() => {
+      if (currentStream !== stream) return;
+      closeCurrentStream();
+      reconnectStream(stream.file);
+    }, STREAM_SILENCE_TIMEOUT_MS);
+  }
+
+  function reconnectStream(file) {
+    if (destroyed || viewState.selectedFile !== file) return;
+    viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
+    scheduleReconnect(file);
   }
 
   function scheduleReconnect(file) {
@@ -401,9 +420,10 @@
       return;
     }
 
-    currentStream.shouldReconnect = false;
-    currentStream.connection.close(1000, 'logs-view-close');
+    const stream = currentStream;
     currentStream = null;
+    clearTimeout(stream.watchdog);
+    stream.connection.close(1000, 'logs-view-close');
   }
 
   // Choosing another file is a step; the place effect loads it.
