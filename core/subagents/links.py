@@ -39,6 +39,7 @@ class SubAgentLink:
     title: str
     reply_target: str
     parent_generation_id: str | None = None
+    generation_id: str | None = None
 
 
 def read_link(
@@ -60,7 +61,10 @@ def read_link(
     if snapshot is None:
         return None
     return _link_from_metadata(
-        address, snapshot.metadata, parent_generation_id=snapshot.parent_generation_id
+        address,
+        snapshot.metadata,
+        parent_generation_id=snapshot.parent_generation_id,
+        generation_id=snapshot.generation_id,
     )
 
 
@@ -166,6 +170,7 @@ def _link_from_metadata(
     metadata: dict[str, Any],
     *,
     parent_generation_id: str | None = None,
+    generation_id: str | None = None,
 ) -> SubAgentLink | None:
     raw = metadata.get(SUBAGENT_PARENT_META_KEY)
     if not isinstance(raw, dict):
@@ -193,6 +198,7 @@ def _link_from_metadata(
         ),
         reply_target="user" if metadata.get(SUBAGENT_REPLY_TARGET_META_KEY) == "user" else "parent",
         parent_generation_id=parent_generation_id,
+        generation_id=generation_id,
     )
 
 

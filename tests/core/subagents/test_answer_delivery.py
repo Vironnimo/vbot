@@ -178,10 +178,16 @@ async def test_parent_replacement_after_link_read_never_receives_child_delivery(
             )
             await run.wait()
         else:
-            coordinator.subagent_reply_to_user(child.address, "user-message")
-        delivery = await asyncio.wait_for(submitted.get(), timeout=2)
-        with pytest.raises(SessionNotFoundError):
-            await asyncio.wait_for(delivery, timeout=2)
+            await coordinator._forwarding._notify_user_reply(  # noqa: SLF001
+                child.address, "user-message", child.generation_id
+            )
+        if delivery_kind == "reply_notice":
+            # The target check at submission already sees the stale Parent link.
+            assert submitted.empty()
+        else:
+            delivery = await asyncio.wait_for(submitted.get(), timeout=2)
+            with pytest.raises(SessionNotFoundError):
+                await asyncio.wait_for(delivery, timeout=2)
         assert replaced
         assert sessions.get(parent.address).load() == []
     finally:

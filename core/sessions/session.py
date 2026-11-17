@@ -544,7 +544,13 @@ class ChatSession:
         return self._store.reflection_runs(self.address)
 
     async def load_run_messages_async(self, run_id: str) -> list[ChatMessage]:
-        return await self._store.run_async(self._store.run_messages, self.address, run_id)
+        """Load one Run's messages from this Session generation."""
+        return await self._store.run_async(
+            self._store.run_messages,
+            self.address,
+            run_id,
+            expected_generation_id=self.generation_id,
+        )
 
     def find_run_summary(
         self,

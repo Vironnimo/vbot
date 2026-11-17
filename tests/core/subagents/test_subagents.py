@@ -41,11 +41,13 @@ from core.sessions import (
     SessionAddress,
     SubagentLinkSnapshot,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
 )
+from core.subagents.links import link_session
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalManager,
@@ -655,6 +657,69 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
 
 
 @pytest.mark.parametrize(
+    "before_history_read", [True, False], ids=["before-history", "after-history"]
+)
+async def test_child_replacement_does_not_forward_the_old_answer(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, before_history_read: bool
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    read_for_forwarding = forwarding_module._read_for_forwarding
+
+    async def hold_answer(address, source, read):
+        if source != "answer history":
+            return await read_for_forwarding(address, source, read)
+        result = None if before_history_read else await read_for_forwarding(address, source, read)
+        entered.set()
+        await release.wait()
+        return await read_for_forwarding(address, source, read) if before_history_read else result
+
+    monkeypatch.setattr(forwarding_module, "_read_for_forwarding", hold_answer)
+    data = await harness.spawn("older work")
+    child = harness.subagent_session(data["id"])
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await harness.until(lambda: not harness.manager.active_runs())
+        [old_state] = await harness.coordinator.subagents(harness.parent)
+        assert old_state.activity_file is not None
+        original_session = harness.sessions.get(child)
+        old_generation = original_session.generation_id
+        other_parent = harness.sessions.create("parent").address
+        async with harness.manager.session_admission_guard(child):
+            await harness.sessions.archive(child)
+            harness.sessions.create(child.agent_id, session_id=child.session_id)
+            link_session(
+                harness.sessions,
+                child,
+                subagent_id="replacement",
+                parent=other_parent,
+                run_id="replacement-start",
+                tool_call_id=None,
+                tool_call_index=None,
+            )
+    finally:
+        release.set()
+    await harness.settle()
+
+    assert harness.triggers.notices == []
+    original_run = harness.loop.turns[0].run
+    assert original_run is not None
+    with pytest.raises(SessionNotFoundError):
+        await original_session.load_run_messages_async(original_run.id)
+    [unstarted] = await harness.coordinator.subagents(other_parent)
+    assert unstarted.activity_file is None
+    await harness.sessions.get(child).append_many_async([], subagent_reply_target="user")
+    await harness.coordinator._forwarding._notify_user_reply(  # noqa: SLF001
+        child, "old-user-input", old_generation
+    )
+    assert harness.triggers.notices == []
+    result = await harness.message_parent("Replacement activity", child)
+    assert result["ok"]
+    [replacement] = await harness.coordinator.subagents(other_parent)
+    assert replacement.activity_file is not None
+    assert replacement.activity_file != old_state.activity_file
+
+
+@pytest.mark.parametrize(
     ("progression", "outcome"),
     [
         ("answer", "Its turn completed."),
@@ -1125,16 +1190,42 @@ async def test_a_tree_stop_silences_a_terminal_run_still_forwarding(
         await asyncio.wait_for(entered.wait(), timeout=1)
         assert not harness.manager.active_runs()
         assert forwarding.pending(harness.subagent_session(child["id"]))
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": True,
+        }
         if user_stop:
             assert await harness.coordinator.stop_tree(harness.parent) == 1
         else:
             result = await harness.background_tasks({"action": "stop", "id": child["id"]})
             assert result["data"]["status"] == "stopped"
         assert not forwarding.pending(harness.subagent_session(child["id"]))
+        assert not (await harness.coordinator.work_snapshot(harness.parent))[
+            "background_work_running"
+        ]
     finally:
         release.set()
     await harness.settle()
     assert harness.triggers.to(harness.parent) == []
+
+
+async def test_stop_does_not_retain_a_forwarding_signal_for_an_unfollowed_run(
+    harness: SubAgentHarness,
+) -> None:
+    data = await harness.spawn("review")
+    await harness.settle()
+    child = harness.subagent_session(data["id"])
+    entered = asyncio.Event()
+
+    async def cron(_run: Run) -> None:
+        entered.set()
+        await asyncio.Future()
+
+    run = await harness.manager.start(child, cron, admission=RunAdmission(run_kind=RunKind.CRON))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    assert await harness.coordinator.stop_tree(harness.parent) == 1
+    assert run.status == RunStatus.CANCELLED
+    assert run.id not in harness.coordinator._forwarding._silenced  # noqa: SLF001
 
 
 @pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
@@ -1179,7 +1270,9 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
     assert commands.sink.cancellations == [f"command:{ended}"]
 
 
-@pytest.mark.parametrize("work_kind", ["run", "queued", "terminal", "pending-terminal"])
+@pytest.mark.parametrize(
+    "work_kind", ["run", "queued", "terminal", "pending-terminal", "wake-root", "wake-descendant"]
+)
 async def test_work_snapshot_finds_live_descendants_without_loading_history(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, work_kind: str
 ) -> None:
@@ -1204,6 +1297,11 @@ async def test_work_snapshot_finds_live_descendants_without_loading_history(
                 if SessionAddress(project_id, agent_id, session_id) == deep_session
                 else real_queued(agent_id, session_id, project_id=project_id)
             ),
+        )
+    elif work_kind.startswith("wake-"):
+        waking = harness.parent if work_kind == "wake-root" else deep_session
+        monkeypatch.setattr(
+            harness.triggers, "pending_completion_wakes", lambda address: int(address == waking)
         )
     else:
         owner = TerminalOwner(
@@ -1428,10 +1526,10 @@ async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     admission_lock = harness.coordinator._admission_lock  # noqa: SLF001
     acquire = admission_lock.acquire
 
-    async def held_activity(address, *, parent):
+    async def held_activity(address, generation_id, *, parent):
         admission_entered.set()
         await release_admission.wait()
-        return await ensure_activity(address, parent=parent)
+        return await ensure_activity(address, generation_id, parent=parent)
 
     async def observed_acquire():
         if admission_lock.locked():
@@ -1690,6 +1788,44 @@ async def test_message_parent_reaches_the_parent_while_the_subagent_works(
     assert refused["error"]["code"] == "delivery_unavailable"
     assert harness.sessions.metadata_value(child, SUBAGENT_REPLY_TARGET_META_KEY) == "user"
     assert len(harness.triggers.to(harness.parent)) == 1
+
+
+async def test_user_reply_notice_stops_if_parent_replies_resumed(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.loop.hold("review")
+    data = await harness.spawn("review")
+    child = harness.subagent_session(data["id"])
+    session = harness.sessions.get(child)
+    entered, release = asyncio.Event(), asyncio.Event()
+    run_async = harness.sessions.run_async
+
+    async def hold_parent_check(check, *args, **kwargs):
+        if check == harness.sessions.exists and not entered.is_set():
+            entered.set()
+            await release.wait()
+        return await run_async(check, *args, **kwargs)
+
+    async with harness.sessions.write_lock(child):
+        await session.append_many_async([], subagent_reply_target="user")
+    monkeypatch.setattr(harness.sessions, "run_async", hold_parent_check)
+    notice = asyncio.create_task(
+        harness.coordinator._forwarding._notify_user_reply(  # noqa: SLF001
+            child, "user-input", session.generation_id
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        result = await harness.message_parent("Resolved the issue", child)
+        assert result["ok"]
+    finally:
+        release.set()
+        await notice
+
+    assert harness.sessions.metadata_value(child, SUBAGENT_REPLY_TARGET_META_KEY) == "parent"
+    assert [notice.notice_id for notice in harness.triggers.notices] == [
+        result["data"]["delivery_id"]
+    ]
 
 
 async def test_activity_file_follows_every_turn_of_a_subagent(

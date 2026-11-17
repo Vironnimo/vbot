@@ -104,6 +104,9 @@ class RecordingTriggerService:
     def to(self, target: SessionAddress) -> list[Notice]:
         return [notice for notice in self.notices if notice.target == target]
 
+    def pending_completion_wakes(self, _address: SessionAddress) -> int:
+        return 0
+
     async def suppress_completion_wakes(self, addresses, **_options) -> int:
         # This double commits submissions immediately, so no pending wake remains.
         return 0

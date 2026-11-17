@@ -134,7 +134,7 @@ async def persist_steering_input(
     ):
         context.direct_user_input = True
     if reply_to_user:
-        report_subagent_user_input(dependencies, session.address, message.id)
+        report_subagent_user_input(dependencies, session, message.id)
     context.run.emit(
         USER_MESSAGE_EVENT,
         {

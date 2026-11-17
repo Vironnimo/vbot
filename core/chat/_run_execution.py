@@ -430,9 +430,7 @@ class RunExecution:
                     if not persisted_messages:
                         await context.session_snapshot.refresh(session)
                     if reply_to_user:
-                        report_subagent_user_input(
-                            self._dependencies, session_address, user_message.id
-                        )
+                        report_subagent_user_input(self._dependencies, session, user_message.id)
                     _emit_display_records(run, persisted_messages)
                     if not internal and not request.input_already_persisted:
                         # A Stop during speech-to-text still persisted the input.

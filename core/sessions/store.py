@@ -859,9 +859,13 @@ class SessionStore:
     def reflection_runs(self, address: SessionAddress) -> list[JsonObject]:
         return self._read(lambda connection: _store_history.reflection_runs(connection, address))
 
-    def run_messages(self, address: SessionAddress, run_id: str) -> list[ChatMessage]:
+    def run_messages(
+        self, address: SessionAddress, run_id: str, *, expected_generation_id: str | None = None
+    ) -> list[ChatMessage]:
         return self._read_decoded(
-            lambda connection: _store_history.run_messages(connection, address, run_id)
+            lambda connection: _store_history.run_messages(
+                connection, address, run_id, expected_generation_id=expected_generation_id
+            )
         )
 
     def run_summary(
