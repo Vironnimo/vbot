@@ -441,8 +441,8 @@ def _run_desktop(
     # Continues a window sign-in: ticket first, then the WebUI.
     window.events.loaded += controller.page_loaded
     window.events.loaded += permissions.page_loaded
-    # A count belongs to the page that sent it.
-    window.events.loaded += taskbar_badge.clear
+    # Clear the old page's count before pywebview exposes the bridge to the new page.
+    window.events.before_load += taskbar_badge.clear
     page_events.attach_window(window)
     instance.listen(
         desktop_window.activation_handler(
