@@ -57,7 +57,7 @@ An empty fallback `model` is accepted only with a Profile (`repository_profile` 
 `TemporaryAgentConfig.identity_agent` plus `identity_incarnation` selects actual
 Identity execution, exclusive with both Profiles. `model` may be empty; the
 identity's live configuration resolves it; actual identity execution and managed
-Model changes reject Models without Chat capability. The incarnation is the persisted
+Model changes reject Models without Chat capability. Owned admission validates every fallback Model for Chat capability too. The incarnation is the persisted
 creation timestamp returned by `host.identity_agents.get`; `AgentStore.identify`
 establishes a missing legacy timestamp once under its lifecycle guard. Replaced
 or missing identities fail closed. Existing `identity_profile` keeps snapshot

@@ -261,6 +261,7 @@ class AgentResolver:
         unavailable Models and returns an empty Model when exhausted. Run
         admission keeps the default availability checks.
         """
+        _require_one_override_source(session_id, new_session_overrides)
         if session_id is not None and self._temporary_agents is not None:
             owned_address = _session_address(project_id, agent_id, session_id)
             binding = self._temporary_agents.identity_binding(owned_address)
@@ -268,7 +269,6 @@ class AgentResolver:
                 return self.resolve_temporary_agent(
                     owned_address, generation_id=binding.generation_id, session=owned_address
                 )
-        _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
         overrides = (
             self.session_overrides(address)
@@ -327,6 +327,7 @@ class AgentResolver:
         Session database's pool; their Model is checked on the
         ``agent-resolution`` pool.
         """
+        _require_one_override_source(session_id, new_session_overrides)
         if session_id is not None and self._temporary_agents is not None:
             owned_address = _session_address(project_id, agent_id, session_id)
             binding = await self._temporary_agents.identity_binding_async(owned_address)
@@ -334,7 +335,6 @@ class AgentResolver:
                 return await self.resolve_temporary_agent_async(
                     owned_address, generation_id=binding.generation_id, session=owned_address
                 )
-        _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
         if address is not None:
             overrides = await self.session_overrides_async(address)

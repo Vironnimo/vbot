@@ -70,6 +70,7 @@ from core.tools.availability import (
     BASH_TOOL_SETTINGS_KEY,
     SUBAGENT_ALLOWED_AGENTS_KEY,
     SUBAGENT_TOOL_SETTINGS_KEY,
+    activation_sources,
     normalize_tool_access,
 )
 from core.tools.command_manager import CommandManager
@@ -615,7 +616,10 @@ class ExtensionHostFactory:
         else:
             self.agent_resolver.require_model_configured(resolved.model)
         for fallback in resolved.fallback_models:
-            self.agent_resolver.require_model_configured(fallback)
+            if config.identity_agent:
+                self.agent_resolver.require_chat_model_configured(fallback)
+            else:
+                self.agent_resolver.require_model_configured(fallback)
 
         catalog = self.tools.list_tools(include_internal=False)
         ordinary_tools = {tool.name: tool for tool in catalog if not tool.session_scoped}
@@ -1132,6 +1136,11 @@ class ExtensionHostFactory:
                 if tool.catalog_visible and not tool.session_scoped
             ],
             "skills": skill_choices,
+            "tool_activations": [
+                {"name": tool.name, "sources": list(activation_sources(tool))}
+                for tool in self.tools.list_tools()
+                if not tool.session_scoped and tool.activation == "follows"
+            ],
             "tool_settings": {
                 BASH_TOOL_SETTINGS_KEY: {
                     "type": "object",

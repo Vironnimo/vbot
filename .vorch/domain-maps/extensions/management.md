@@ -22,6 +22,8 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 
 ## API versions
 
+- v33: the owner catalog adds `tool_activations`, the complete ordinary follower graph, including catalog-hidden Tools, independently of public selection metadata (`extensions/host.md`).
+
 - v32: actual Identity Agent Sessions through owned execution, plus owner-scoped identity creation and configuration (`extensions/host.md`, `agent/temporary-agents.md`). Existing temporary Profiles keep their snapshot semantics.
 
 What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) added:

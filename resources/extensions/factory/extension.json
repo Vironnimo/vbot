@@ -2,7 +2,7 @@
   "name": "Software Factory",
   "description": "Permanent Project teams, Kanban tasks and shared discussions, with optional global Workflows.",
   "version": "1.0.0",
-  "api_version": 32,
+  "api_version": 33,
   "documentation": [
     {
       "path": "docs/usage.md",

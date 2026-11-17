@@ -438,6 +438,10 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     read = runtime.tools.get("read")
     assert (tools["read"]["family"], tools["read"]["activation"]) == (read.family, read.activation)
     assert not set(SWARM_PRIVATE_TOOLS) & tools.keys()
+    activations = {item["name"]: item["sources"] for item in catalog["tool_activations"]}
+    assert set(activations["background_tasks"]) == {"bash", "subagent"}
+    assert "background_tasks" not in tools
+    assert not set(SWARM_PRIVATE_TOOLS) & activations.keys()
     assert catalog["tool_settings"] == {
         "bash": {
             "type": "object",
@@ -575,6 +579,7 @@ async def test_cached_owner_host_stops_admitting_service_calls(
 async def test_temporary_group_preflight_validates_participants_before_opening(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-owned-key")
     runtime = Runtime(config)
     runtime.start()
     try:
@@ -619,6 +624,26 @@ async def test_temporary_group_preflight_validates_participants_before_opening(
             project_id="narrow",
         )
         await groups.open_group("in-project")
+
+        identity = runtime.agents.create(
+            "preflight-identity",
+            model="openai/gpt-5.2",
+            fallback_models=["openai/text-embedding-3-small"],
+            librarian_enabled=False,
+        )
+        await groups.create(
+            "nonchat-fallback",
+            "peer",
+            replace(
+                _participant(valid_cwd),
+                model="",
+                identity_agent=identity.id,
+                identity_incarnation=identity.created_at,
+            ),
+        )
+        with pytest.raises(RuntimeError):
+            await groups.open_group("nonchat-fallback")
+        assert groups._groups["nonchat-fallback"].open is False  # noqa: SLF001
 
         # The owner is rechecked after the blocking validation on its worker.
         await groups.create("retired", "peer", _participant(valid_cwd))

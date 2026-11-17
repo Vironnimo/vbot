@@ -8,12 +8,16 @@ export default {
   'factory.native.factories': 'Factories',
   'factory.native.waitDependencies': 'Waiting for prerequisite tasks',
   'factory.native.waitInput': 'Waiting for information',
+  'factory.native.waitReview':
+    'Reviewer finished without a decision; resume the review',
   'factory.native.waitWorkflow': 'Waiting for Workflow results',
   'factory.native.waitCapacity': 'Waiting for capacity',
   'factory.native.factoryPaused': 'Factory paused',
   'factory.native.changesRequested': 'Changes requested',
   'factory.native.reviewerRetired': 'Reviewer is unavailable',
   'factory.native.workflowFailed': 'Workflow failed',
+  'factory.native.workflowMissing':
+    'Workflow Card is missing; resume to start the Workflow again',
   'factory.native.runningTasks': '{running} of {limit} tasks running',
   'factory.native.boundaries': 'Configuration boundaries',
   'factory.native.boundaryHelp':

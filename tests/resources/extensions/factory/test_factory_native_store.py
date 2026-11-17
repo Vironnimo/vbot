@@ -251,6 +251,10 @@ async def test_task_graph_completion_and_stale_execution_are_atomic(
     )
     paused = await native.change_task(paused["id"], {"state": "paused", "reason": "operator"})
     await native.change_task(first["id"], {"state": "ready"})
+    grandchild = await native.create_task(
+        factory["id"], "More", "Extend reopened work", parent_id=first["id"]
+    )
+    assert grandchild["parent_id"] == first["id"]
     after = await native.get_task(paused["id"])
     assert after["state"] == "paused" and after["reason"] == "operator"
     assert after["epoch"] > paused["epoch"]

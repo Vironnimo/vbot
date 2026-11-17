@@ -42,6 +42,8 @@ The optional API 27 `before_model_request(context)` admission callback runs afte
 
 `await host.execution_usage(group_id, run_ids=None)` reads settled canonical Model consumption at recorded prices for this owner and group. Omit Run ids for the whole group, including group-level requests; an empty list selects none. It returns calls, input/output tokens, USD cost, and unreported/unpriced call counts. Running requests enter the next read after settlement, including failures and cancellations. Missing usage is explicit; estimates remain included. Both sides of the await check registration. Budgets use this read rather than the disposable Statistics projection (`usage.md`).
 
+API 33 adds `catalog().tool_activations`: `{name, sources}` for every non-Session-scoped follower, including catalog-hidden Tools. Capability ceilings expand this graph; `catalog().tools` remains the public selection list and keeps hidden/private Tools out.
+
 ## Native Decisions
 
 `host.review_context(context)` returns bounded canonical human requests, separate delegated evidence and a Permission summary for a prepared-shell review. It uses Session sender provenance and stamped Sub-Agent reply targets, includes live ancestors' human requests and masks known Agent Secrets. Full bounds and truncation behavior: `extensions/shell-review.md` -> Execution integration.

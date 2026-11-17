@@ -102,6 +102,8 @@
         return t('factory.native.waitDependencies');
       case 'input':
         return t('factory.native.waitInput');
+      case 'review_input':
+        return t('factory.native.waitReview');
       case 'workflow':
         return t('factory.native.waitWorkflow');
       case 'capacity':
@@ -114,6 +116,8 @@
         return t('factory.native.reviewerRetired');
       case 'workflow_failed':
         return t('factory.native.workflowFailed');
+      case 'workflow_missing':
+        return t('factory.native.workflowMissing');
       case 'review':
         return t('factory.native.review');
       default:
@@ -153,10 +157,12 @@
   }
   async function chooseProject(value) {
     project = value;
+    native.selectProject(value);
     const found = native.factories.find(
       (item) => item.project_id === value && item.state !== 'archived',
     );
     await onNavigate(found ? `/factory/${encodeURIComponent(found.id)}` : '');
+    if (!found) await native.refresh();
   }
   async function submit() {
     formError = '';

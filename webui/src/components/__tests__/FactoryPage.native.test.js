@@ -237,6 +237,49 @@ const taskRecord = (id, title, extra = {}) => ({
 });
 
 describe('Factory native work', () => {
+  it('selects an active Factory on the default route and isolates native invalidations', async () => {
+    const { bridge, operation } = nativeBridge();
+    await render(bridge, '');
+    await settle();
+    expect(button(t('factory.native.newTask'))?.disabled).toBe(false);
+    const count = (name) => calls(operation, name).length;
+    const boards = count('board.get'),
+      workflows = count('workflow.list');
+    bridge.invalidate({ resource: 'tasks', ids: ['task-new'], revision: 2 });
+    await settle();
+    expect(count('board.get')).toBe(boards);
+    expect(count('workflow.list')).toBe(workflows);
+    const factories = count('factory.list');
+    bridge.invalidate({ resource: 'cards', ids: ['card-new'], revision: 2 });
+    await settle();
+    expect(count('factory.list')).toBe(factories);
+    bridge.invalidate({ resource: 'page_badges', ids: ['board'], revision: 2 });
+    await settle();
+    expect(count('factory.list')).toBe(factories);
+    expect(count('board.get')).toBe(boards + 1);
+    await choose('native-project', 'Project B');
+    await settle();
+    expect(button(t('factory.native.setup'))?.disabled).toBe(false);
+    expect(button(t('factory.native.newTask'))).toBeUndefined();
+  });
+
+  it('repairs unknown native destinations and deleted record routes', async () => {
+    const { bridge, state } = nativeBridge();
+    await render(bridge, '/factory/fac-one/typo');
+    await settle();
+    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+    for (const resource of ['task', 'topic', 'factory']) {
+      state.handlers[`${resource}.get`] = () => {
+        throw Object.assign(new Error('test-owned-missing'), {
+          code: `${resource}_not_found`,
+        });
+      };
+      await bridge.goTo(`/${resource}/missing`);
+      await settle();
+      expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+    }
+  });
+
   it('establishes a permanent team with an existing Leader and creates an assigned task with no Workflows', async () => {
     const { bridge, operation, data } = nativeBridge({ established: false });
     await render(bridge, '');

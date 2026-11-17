@@ -63,6 +63,17 @@ async def repair_tasks(native: Any) -> None:
             )
             patch.update(state="blocked", reason=failure or "input")
         if (
+            task["state"] == "review"
+            and not (task.get("submission") or {}).get("reviewer_approved")
+            and any(
+                item["kind"] == "review"
+                and item["state"] == "idle"
+                and not item["runtime"].get("pending")
+                for item in current
+            )
+        ):
+            patch.update(state="blocked", reason="review_input")
+        if (
             task.get("reviewer_id")
             and task["state"] == "review"
             and (await native.store.get_member(task["reviewer_id"]))["state"] == "retired"
@@ -124,8 +135,8 @@ async def recover_results(native: Any) -> None:
             and task["state"] == "blocked"
             and task["reason"] == "workflow"
         ):
-            card = await native.service.records().get_card(task["workflow_card_id"])
-            if card["state"] in {"done", "discarded"}:
+            card = await native.workflows.linked_card(task)
+            if card is not None and card["state"] in {"done", "discarded"}:
                 await native.workflow_finished(card)
     for card in await native.service.records().list_cards():
         scope = await native.workflows.scope(card)

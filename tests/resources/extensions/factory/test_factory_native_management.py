@@ -307,3 +307,156 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
     assert inspected[-1] == (None, None)
 
     await harness.service.close()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("state", "archived"),
+        ("state", "paused"),
+        ("limits", {}),
+        ("config", {}),
+        ("capacity", 2),
+        ("remit", "new remit"),
+        ("clear_fields", []),
+        ("archive", None),
+    ],
+)
+async def test_leader_cannot_change_operator_boundaries(
+    factory_store: FactoryStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: Any,
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    monkeypatch.setattr(harness.service, "request_schedule", lambda: None)
+    native = factory_store.native
+    factory = await native.create_factory("project", leader_agent_id="leader")
+    leader = await native.get_member(factory["leader_member_id"])
+    actor = {"factory": factory, "member": leader, "task": {}, "topic": {}}
+    try:
+        with pytest.raises(FactoryError) as refused:
+            await harness.service.native_management.operation(
+                "factory.archive" if field == "archive" else "factory.update",
+                {"id": factory["id"], "expected_revision": factory["revision"]}
+                | ({} if field == "archive" else {field: value}),
+                actor,
+            )
+        assert refused.value.code == "operator_boundary"
+        assert await native.get_factory(factory["id"]) == factory
+    finally:
+        await harness.service.close()
+
+
+async def test_member_creation_validates_before_identity_and_reconciles_membership(
+    factory_store: FactoryStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    monkeypatch.setattr(harness.service, "request_schedule", lambda: None)
+    created: dict[str, Json] = {}
+
+    async def create(agent_id: str, **config: Any) -> Json:
+        assert agent_id not in created
+        created[agent_id] = {
+            "agent_id": agent_id,
+            "incarnation": "proof",
+            "name": config["name"],
+            "model": config["model"],
+        }
+        return created[agent_id]
+
+    async def get(agent_id: str) -> Json:
+        return created[agent_id]
+
+    cast(Any, harness.host).identity_agents = SimpleNamespace(create=create, get=get)
+    factory = await factory_store.native.create_factory(
+        "project", leader_agent_id="leader", config={"allowed_models": ["allowed"]}
+    )
+    args = {
+        "factory_id": factory["id"],
+        "request_id": "member-create",
+        "name": "Specialist",
+        "model": "outside",
+    }
+    try:
+        with pytest.raises(FactoryError) as refused:
+            await harness.operation("member.create", **args)
+        assert refused.value.code == "configuration_boundary"
+        assert created == {}
+        assert await factory_store.native.identity_reservation(args["request_id"]) is None
+        finish = factory_store.native.complete_identity_reservation
+        interrupted = True
+
+        async def complete(request_id: str, resource_id: str) -> Json:
+            nonlocal interrupted
+            if interrupted:
+                interrupted = False
+                raise FactoryError("interrupted", "test-owned-interruption")
+            return await finish(request_id, resource_id)
+
+        monkeypatch.setattr(factory_store.native, "complete_identity_reservation", complete)
+        args["model"] = "allowed"
+        with pytest.raises(FactoryError) as failure:
+            await harness.operation("member.create", **args)
+        assert failure.value.code == "interrupted"
+        member = (await harness.operation("member.create", **args))["member"]
+        assert len(created) == 1
+        assert len(await factory_store.native.list_members(factory["id"])) == 2
+        assert (await harness.operation("member.create", **args))["member"] == member
+    finally:
+        await harness.service.close()
+
+
+@pytest.mark.parametrize(
+    "operation,fields,code",
+    [
+        ("factory.update", {"name": "Changed"}, "leader_required"),
+        ("member.add", {"agent_id": "other"}, "leader_required"),
+        ("task.update", {"conditions": "Weaker"}, "agreement_boundary"),
+        ("task.create", {"parent_id": "parent"}, "outside_remit"),
+        ("task.complete", {"outcome": "Done", "evidence": "Evidence"}, "owner_required"),
+        ("task.review", {"approve": True}, "reviewer_required"),
+        ("task.get", {"outside": True}, "outside_factory"),
+    ],
+)
+async def test_native_authority_refusals_leave_records_unchanged(
+    factory_store: FactoryStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    fields: Json,
+    code: str,
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    monkeypatch.setattr(harness.service, "request_schedule", lambda: None)
+    native = factory_store.native
+    factory = await native.create_factory("project", leader_agent_id="leader")
+    worker = await native.add_member(factory["id"], "worker")
+    task = await native.create_task(
+        factory["id"], "Owned", "Agreed", assignee_id=factory["leader_member_id"]
+    )
+    other = await native.create_factory("other", leader_agent_id="other-leader")
+    outside = await native.create_task(other["id"], "Other", "Other scope")
+    args = {
+        "id": factory["id"] if operation.startswith("factory.") else task["id"],
+        "factory_id": factory["id"],
+        "expected_revision": 1,
+        **fields,
+    }
+    if args.pop("outside", False):
+        args["id"] = outside["id"]
+    if args.get("parent_id") == "parent":
+        args["parent_id"] = task["id"]
+    actor = {"factory": factory, "member": worker, "task": {}, "topic": {}}
+    try:
+        with pytest.raises(FactoryError) as refused:
+            await harness.service.native_management.operation(operation, args, actor)
+        assert refused.value.code == code
+        assert await native.get_factory(factory["id"]) == factory
+        assert await native.get_task(task["id"]) == task
+        assert len(await native.list_members(factory["id"])) == 2
+    finally:
+        await harness.service.close()

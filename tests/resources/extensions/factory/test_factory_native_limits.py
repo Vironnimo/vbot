@@ -188,3 +188,21 @@ async def test_linked_workflow_descendants_charge_task_and_factory_budgets() -> 
     assert await limits.workflow_check(native.cards[-1], resources=False)
     assert native.tasks[-1]["reason"] == "budget_exhausted"
     assert native.tasks[-1]["limit_hit"]["scope"] == "task:parent"
+
+
+async def test_unlimited_admission_reads_only_its_ancestor_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = Native()
+    native.tasks[0]["limits"] = {}
+
+    async def unexpected_scan(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Uncapped admission enumerated the Factory")
+
+    monkeypatch.setattr(native, "all_tasks", unexpected_scan)
+    monkeypatch.setattr(native, "all_executions", unexpected_scan)
+    monkeypatch.setattr(native, "list_cards", unexpected_scan)
+    limits = NativeLimits(native)
+    assert not await limits.check(native.executions[-1])
+    assert not await limits.check(native.executions[-1], resources=False)
+    assert native.reads == []

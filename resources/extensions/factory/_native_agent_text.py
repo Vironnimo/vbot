@@ -23,14 +23,14 @@ def _definition(resource: str, actions: tuple[str, ...], description: str) -> tu
                 "config",
                 "identity_config",
             }:
-                if resource == "factory" and key not in {"id", "name", "state"}:
+                if resource == "factory" and key not in {"id", "name"}:
                     continue
                 if resource == "task" and key == "limits":
                     continue
                 properties[key] = deepcopy(value)
-    properties["action"]["description"] = "update changes only supplied fields. " + " ".join(
-        OPERATION_DESCRIPTIONS.get(f"{resource}.{action}", "") for action in actions
-    )
+    properties["action"]["description"] = (
+        "update changes only supplied fields. " if "update" in actions else ""
+    ) + " ".join(OPERATION_DESCRIPTIONS.get(f"{resource}.{action}", "") for action in actions)
     properties["id"] = {
         "type": "string",
         "description": "The exact record id returned by this Tool; omit for list and create.",
@@ -41,7 +41,8 @@ def _definition(resource: str, actions: tuple[str, ...], description: str) -> tu
             "create to allocate an identity."
         )
         properties["model"]["description"] = (
-            "For create or update: Model id from catalog; omitted creation uses the Leader's Model."
+            "For create or update: Model id from catalog. "
+            "For create: omit to use the Factory's default Model, otherwise the Leader's Model."
         )
     if resource == "member":
         properties["clear_fields"]["description"] = (

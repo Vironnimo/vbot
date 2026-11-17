@@ -850,6 +850,7 @@ describe('Factory record editors', () => {
     const id = created.workflow.id;
     expect(state.workflows.map((entry) => entry.id)).toContain(id);
     expect(bridge.replaceRoute).toHaveBeenLastCalledWith(`/workflows/${id}`);
+    fill('factory-workflow-name', '');
     button(t('factory.deleteWorkflow')).click();
     await tick();
     button(t('factory.deleteWorkflow'), dialog()).click();

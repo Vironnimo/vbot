@@ -273,6 +273,7 @@
   });
 
   async function deleteWorkflow() {
+    editor.reset();
     if (!(await editor.flush())) return;
     if (await model.mutate('workflow.delete', { id: workflow.id }))
       deleteOpen = false;
