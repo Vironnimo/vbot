@@ -357,7 +357,7 @@ async def test_bodies_reach_the_run_rendered_and_cut(tmp_path: Path) -> None:
     service, trigger_service = make_service(tmp_path, tz="UTC")
     service.set_webhook_secrets(secret_store(tmp_path))
     job_id, secret = await _webhook_job(service)
-    scripted_runs(trigger_service, *[(RunStatus.COMPLETED, "[SILENT]")] * 3)
+    scripted_runs(trigger_service, *[(RunStatus.COMPLETED, "[SILENT]")] * 6)
 
     async def run_with(content_type: str, body: bytes) -> list[Any]:
         headers = _bearer(secret, **{"content-type": content_type})
@@ -372,6 +372,10 @@ async def test_bodies_reach_the_run_rendered_and_cut(tmp_path: Path) -> None:
     assert (await run_with("text/plain", b"line one\nline two"))[0]["body"] == (
         "line one\nline two"
     )
+    for invalid_json in (b'{"count":NaN}', b'{"count":1e999}', b'{"label":"\\ud800"}'):
+        assert (await run_with("application/json", invalid_json))[0][
+            "body"
+        ] == invalid_json.decode()
     long_body = json.dumps({"items": [{"n": number} for number in range(2000)]}).encode()
     record = (await run_with("application/json", long_body))[0]
     note = _webhook_note(trigger_service)
@@ -457,6 +461,98 @@ async def test_webhook_retries_remain_bounded_through_a_long_storage_outage(
         assert delays[:3] == [60, 120, 240]
         assert delays[-1] == max(delays) == 3600
         assert _records(_webhook_note(trigger))[0]["body"] == "waiting"
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_reactivation_cannot_reuse_waiting_requests_from_a_discarded_webhook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    store = secret_store(tmp_path)
+    service.set_webhook_secrets(store)
+    try:
+        job_id, secret = await _webhook_job(service)
+        assert await service.receive_webhook(job_id, _bearer(secret), b"old") == "accepted"
+        path = state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id)
+        original_unlink = Path.unlink
+
+        def deny_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+            if self == path:
+                raise PermissionError("temporarily unavailable")
+            original_unlink(self, *args, **kwargs)
+
+        with monkeypatch.context() as denied:
+            denied.setattr(Path, "unlink", deny_unlink)
+            await service.update_job(job_id, schedule_type="cron", cron_expression="0 9 * * *")
+            assert path.is_file()
+            with pytest.raises(CronStorageError):
+                await service.update_job(job_id, schedule_type="webhook", cron_expression=None)
+            assert service.get_job(job_id).schedule_type == "cron"
+            assert store.entry(WEBHOOK_SECRETS, job_id) is None
+
+        await service.update_job(job_id, schedule_type="webhook", cron_expression=None)
+        renewed = await service.webhook_secret(job_id)
+        assert renewed != secret
+        assert await service.receive_webhook(job_id, _bearer(renewed), b"new") == "accepted"
+        assert [item["body"] for item in _state(service, job_id)["requests"]] == ["new"]
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["prepare", "save"])
+async def test_webhook_activation_settles_secret_with_the_job_on_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    store = secret_store(tmp_path)
+    service.set_webhook_secrets(store)
+    try:
+        job = await service.create_job(
+            agent_id="agent-one",
+            prompt="Record arrivals",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+        )
+        reached, proceed = asyncio.Event(), asyncio.Event()
+        if phase == "prepare":
+            issue = service._webhooks.issue_secret
+
+            async def issue_then_wait(job_id: str) -> str:
+                secret = await issue(job_id)
+                reached.set()
+                await proceed.wait()
+                return secret
+
+            monkeypatch.setattr(service._webhooks, "issue_secret", issue_then_wait)
+        else:
+            save = service._save_jobs_async
+
+            async def wait_then_save() -> None:
+                reached.set()
+                await proceed.wait()
+                await save()
+
+            monkeypatch.setattr(service, "_save_jobs_async", wait_then_save)
+        activation = asyncio.create_task(
+            service.update_job(job.id, schedule_type="webhook", cron_expression=None)
+        )
+        await reached.wait()
+        activation.cancel()
+        proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await activation
+
+        if phase == "prepare":
+            assert service.get_job(job.id).schedule_type == "cron"
+            assert store.entry(WEBHOOK_SECRETS, job.id) is None
+        else:
+            assert service.get_job(job.id).schedule_type == "webhook"
+            secret = await service.webhook_secret(job.id)
+            assert secret == store.entry(WEBHOOK_SECRETS, job.id)
+            assert await service.receive_webhook(job.id, _bearer(secret), b"new") == "accepted"
     finally:
         await service.aclose()
 

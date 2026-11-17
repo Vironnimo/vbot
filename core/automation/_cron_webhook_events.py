@@ -301,9 +301,12 @@ def _form_value(text: str) -> Any:
 
 def _json_value(text: str, fallback: Any) -> Any:
     try:
-        return json.loads(text)
+        value = json.loads(text)
+        # Python reads some values that cannot be written as finite UTF-8 JSON.
+        json.dumps(value, allow_nan=False, ensure_ascii=False).encode("utf-8")
     except ValueError, RecursionError:
         return fallback
+    return value
 
 
 def _pretty(value: Any) -> str:

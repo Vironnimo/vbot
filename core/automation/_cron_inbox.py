@@ -285,15 +285,21 @@ class CronInbox[Item: InboxItem]:
             )
             self.wake(job_id).set()
 
-    async def discard(self, job_id: str) -> None:
-        """Forget the job's waiting arrivals and the keys it took. A failed removal is logged."""
+    async def discard(self, job_id: str, *, require_removal: bool = False) -> None:
+        """Forget the job's waiting arrivals and the keys it took."""
         async with self._lock(job_id):
+            await self._owner._writer.call_async(
+                partial(
+                    remove_state,
+                    self._kind,
+                    self.state_dir,
+                    job_id,
+                    require_removal=require_removal,
+                )
+            )
             self._states.pop(job_id, None)
             self._state_errors.pop(job_id, None)
             self._taken.pop(job_id, None)
-            await self._owner._writer.call_async(
-                partial(remove_state, self._kind, self.state_dir, job_id)
-            )
         self._wakes.pop(job_id, None)
         self._locks.pop(job_id, None)
 
@@ -476,11 +482,17 @@ def write_state(directory: Path, job_id: str, payload: dict[str, Any]) -> None:
         raise CronStorageError(f"Cannot write {path}: {error}") from error
 
 
-def remove_state(kind: InboxKind[Any], directory: Path, job_id: str) -> None:
+def remove_state(
+    kind: InboxKind[Any], directory: Path, job_id: str, *, require_removal: bool = False
+) -> None:
     path = state_path(directory, job_id)
     try:
         path.unlink(missing_ok=True)
     except OSError as error:
+        if require_removal:
+            raise CronStorageError(
+                f"Previous {kind.label} could not be cleared. Retry when storage is writable."
+            ) from error
         _LOGGER.warning("Cannot remove Cron %s for job=%s: %s", kind.label, job_id, error)
 
 
