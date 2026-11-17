@@ -20,6 +20,57 @@ type Json = dict[str, Any]
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("state", ["working", "review"])
+async def test_task_edits_only_fence_an_actual_agreement_change(
+    factory_store: FactoryStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    harness = await build_factory(tmp_path, factory_store)
+    monkeypatch.setattr(harness.service, "request_schedule", lambda: None)
+    native = factory_store.native
+    factory = await native.create_factory(
+        "project", leader_agent_id="leader", leader_agent_proof="proof"
+    )
+    task = await native.create_task(
+        factory["id"],
+        "Original title",
+        "Original objective",
+        assignee_id=factory["leader_member_id"],
+        conditions="Checks pass",
+        user_approval=True,
+    )
+    task = await native.change_task(task["id"], {"state": "working"})
+    if state == "review":
+        task = await native.submit_task(task["id"], "Finished", "Checks ran", actor="user")
+
+    renamed = (
+        await harness.operation(
+            "task.update",
+            id=task["id"],
+            expected_revision=task["revision"],
+            title="New title",
+            objective=task["objective"],
+            conditions=" Checks pass ",
+        )
+    )["task"]
+    assert renamed["title"] == "New title"
+    assert renamed["state"] == state
+    assert renamed["epoch"] == task["epoch"]
+    assert renamed.get("submission") == task.get("submission")
+
+    revised = (
+        await harness.operation(
+            "task.update",
+            id=task["id"],
+            expected_revision=renamed["revision"],
+            conditions="Checks and preview pass",
+        )
+    )["task"]
+    current = await native.get_task(task["id"])
+    assert current["state"] == "ready"
+    assert revised["epoch"] == task["epoch"] + 1
+    assert current["submission"] is None
+
+
 async def test_native_operation_revision_review_and_task_bound_hand_in(
     factory_store: FactoryStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
