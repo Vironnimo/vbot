@@ -30,6 +30,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
+from core.secrets.agent_secrets import AgentSecrets
 from core.utils.timestamps import parse_canonical_timestamp
 from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import _tasks
@@ -40,9 +41,11 @@ from resources.extensions.mcp._network import DestinationGuard
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import INPUT_REQUEST_TTL_SECONDS, InputRequests
+from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.resources.extensions.mcp.mcp_test_support import (
     StreamServer,
     context,
+    dispatch,
     runner_for,
     start_service,
 )
@@ -928,6 +931,113 @@ async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatc
     assert levels == [None, "debug"]
     # Each notification is recorded once, as its own kind of event.
     assert sorted(_notified(runner)) == ["log", "progress", "progress"]
+
+
+@pytest.mark.asyncio
+async def test_inspector_redacts_substituted_argument_values_in_live_and_retained_events(
+    host, monkeypatch, tmp_path
+):
+    long_value, short_value = r'test-owned-"phrase\with\escapes', "Q7!"
+    credential = "test-owned-connection-credential"
+    host.set_credential("SYNTHETIC_TOKEN", credential)
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    for name, value in (("phrase", long_value), ("short", short_value)):
+        secrets.create(
+            name=name,
+            kind="token",
+            values={"value": value},
+            actor="user",
+            agents=["alice"],
+            sinks=["external_tools"],
+        )
+    calls = []
+
+    async def call(server_context, params):
+        if params.arguments.get("report"):
+            [previous] = calls
+            phrase, short = previous["nested"]["examples"]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", MCPDeprecationWarning)
+                await server_context.session.send_log_message(
+                    "info",
+                    {phrase.removeprefix("prefix:"): [{"text": f"prefix:{short}"}, credential]},
+                )
+        else:
+            calls.append(params.arguments)
+        return types.CallToolResult(content=[types.TextContent(type="text", text="received")])
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="inspect",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"nested": {"type": "object"}, "report": {"type": "boolean"}},
+                    },
+                )
+            ]
+        )
+
+    stream = StreamServer(Server("inspector", on_call_tool=call, on_list_tools=list_tools))
+    service, registry = await start_service(host)
+    registry.set_secrets(secrets)
+    try:
+        await service.management.manage(
+            "save",
+            {
+                "connection": {
+                    "id": "example",
+                    "transport": "stdio",
+                    "command": "unused",
+                    "enabled": False,
+                    "credential_environment": {"TOKEN": "SYNTHETIC_TOKEN"},
+                }
+            },
+        )
+        runner = service.runners["example"]
+
+        async def open_in_memory(stack):
+            return stream
+
+        monkeypatch.setattr(runner._transport, "open", open_in_memory)
+        # Connecting through management enables the genuine published remote Tool.
+        await service.management.manage("enable", {"id": "example"})
+        await runner.invoke("catalog", {})
+        cursor = runner.events()["cursor"]
+        result = await dispatch(
+            registry,
+            host,
+            {
+                "action": "call",
+                "target": "inspect",
+                "arguments": {
+                    "nested": {"examples": ["prefix:{{secret:PHRASE}}", "{{secret:SHORT}}"]}
+                },
+            },
+        )
+        assert result["ok"], result
+        assert calls == [{"nested": {"examples": [f"prefix:{long_value}", short_value]}}]
+        # The server reports the previous call's arguments after it has finished.
+        await runner.invoke("logging/setLevel", {"level": "debug"})
+        await runner.invoke("tools/call", {"name": "inspect", "arguments": {"report": True}})
+        async with asyncio.timeout(3):
+            while not any(event["kind"] == "log" for event in runner.events(cursor)["events"]):
+                await asyncio.sleep(0)
+
+        live = await service.management.manage("events", {"id": "example", "after": cursor})
+        retained = await service.management.manage("events", {"id": "example"})
+        [event] = [event for event in live["events"] if event["kind"] == "log"]
+        assert event in retained["events"]
+        assert event["payload"]["data"] == {
+            "[redacted]": [{"text": "prefix:[redacted]"}, "[redacted]"]
+        }
+        for events in (live, retained):
+            assert all(value not in repr(events) for value in (long_value, short_value, credential))
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

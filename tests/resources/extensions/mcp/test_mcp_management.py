@@ -216,6 +216,32 @@ async def test_save_compares_its_base_atomically_before_any_change(host, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_save_refuses_plaintext_credentials_without_changing_the_connection(host):
+    service, _registry = await start_service(host)
+    register_management(service.api, service.management.manage)
+    invoke = service.api.operations.invoke
+    original = {**_CONNECTION, "enabled": False, "environment": {"LOG_LEVEL": "info"}}
+    try:
+        await invoke("save", {"connection": original, "base": None})
+        persisted = service.store.path.read_bytes()
+        runner = service.runners["example"]
+        for name, value in (
+            ("ACCESS_TOKEN", "test-owned-value"),
+            ("OPTION", "sk-TestOnly1234567890123456"),
+        ):
+            with pytest.raises(ValueError, match="credential_environment") as refused:
+                await invoke("save", {"connection": {**original, "environment": {name: value}}})
+            assert value not in str(refused.value)
+        assert service.store.path.read_bytes() == persisted
+        assert service.runners["example"] is runner
+        assert (await invoke("status", {"id": "example"}))["configuration"] == (
+            validate_connection(original)
+        )
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["connect", "tool"])
 async def test_save_serializes_runner_access_until_replacement_is_ready(host, monkeypatch, access):
     service, registry = await start_service(host)

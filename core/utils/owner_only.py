@@ -14,8 +14,11 @@ the rename that publishes the file keeps its access list.
 from __future__ import annotations
 
 import os
+import stat
 import sys
 from pathlib import Path
+
+from core.utils.file_status import is_link_status
 
 OWNER_ONLY_MODE = 0o600
 
@@ -33,8 +36,38 @@ def restrict_to_owner(path: Path) -> None:
         os.chmod(path, OWNER_ONLY_MODE)
 
 
+def read_owner_only_text(path: Path) -> str:
+    """Protect and read the same ordinary file, without changing a linked target."""
+    expected = path.lstat()
+    _require_private_file(expected)
+    if sys.platform == "win32":
+        descriptor = _open_windows_descriptor(path)
+    else:
+        # Do not follow a replacement symlink or block on a replacement FIFO.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        _require_private_file(opened)
+        if not os.path.samestat(expected, opened):
+            raise OSError("Configuration file changed while opening")
+        if sys.platform == "win32":
+            _restrict_windows(descriptor)
+        elif stat.S_IMODE(opened.st_mode) != OWNER_ONLY_MODE:
+            os.fchmod(descriptor, OWNER_ONLY_MODE)
+        with os.fdopen(descriptor, encoding="utf-8", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
+
+
+def _require_private_file(status: os.stat_result) -> None:
+    if is_link_status(status) or not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+        raise OSError("Expected a regular configuration file without links")
+
+
 if sys.platform == "win32":
     import ctypes
+    import msvcrt
     from ctypes import wintypes
 
     _SE_FILE_OBJECT = 1
@@ -43,8 +76,45 @@ if sys.platform == "win32":
     _SDDL_REVISION_1 = 1
     _TOKEN_QUERY = 0x0008
     _TOKEN_USER = 1
+    _GENERIC_READ = 0x80000000
+    _WRITE_DAC = 0x00040000
+    _SHARE_READ_WRITE_DELETE = 0x7
+    _OPEN_EXISTING = 3
+    _OPEN_REPARSE_POINT = 0x00200000
+    _INVALID_HANDLE = ctypes.c_void_p(-1).value
 
-    def _restrict_windows(path: Path) -> None:
+    def _open_windows_descriptor(path: Path) -> int:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.CreateFileW(
+            str(path),
+            _GENERIC_READ | _WRITE_DAC,
+            _SHARE_READ_WRITE_DELETE,
+            None,
+            _OPEN_EXISTING,
+            _OPEN_REPARSE_POINT,
+            None,
+        )
+        if handle == _INVALID_HANDLE:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            kernel.CloseHandle(handle)
+            raise
+
+    def _restrict_windows(target: Path | int) -> None:
         advapi = ctypes.WinDLL("advapi32", use_last_error=True)
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.LocalFree.argtypes = (ctypes.c_void_p,)
@@ -63,8 +133,7 @@ if sys.platform == "win32":
             ctypes.POINTER(wintypes.BOOL),
         )
         advapi.GetSecurityDescriptorDacl.restype = wintypes.BOOL
-        advapi.SetNamedSecurityInfoW.argtypes = (
-            wintypes.LPWSTR,
+        security_args = (
             wintypes.DWORD,
             wintypes.DWORD,
             ctypes.c_void_p,
@@ -72,7 +141,10 @@ if sys.platform == "win32":
             ctypes.c_void_p,
             ctypes.c_void_p,
         )
+        advapi.SetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, *security_args)
         advapi.SetNamedSecurityInfoW.restype = wintypes.DWORD
+        advapi.SetSecurityInfo.argtypes = (wintypes.HANDLE, *security_args)
+        advapi.SetSecurityInfo.restype = wintypes.DWORD
 
         # "P" protects the list from inheritance; "FA" is full file access.
         sddl = f"D:P(A;;FA;;;{_current_user_sid(advapi, kernel)})(A;;FA;;;SY)"
@@ -87,15 +159,15 @@ if sys.platform == "win32":
                 descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
-            error = advapi.SetNamedSecurityInfoW(
-                str(path),
-                _SE_FILE_OBJECT,
-                _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
-                None,
-                None,
-                dacl,
-                None,
-            )
+            options = _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION
+            if isinstance(target, Path):
+                error = advapi.SetNamedSecurityInfoW(
+                    str(target), _SE_FILE_OBJECT, options, None, None, dacl, None
+                )
+            else:
+                error = advapi.SetSecurityInfo(
+                    msvcrt.get_osfhandle(target), _SE_FILE_OBJECT, options, None, None, dacl, None
+                )
             if error:
                 raise ctypes.WinError(error)
         finally:

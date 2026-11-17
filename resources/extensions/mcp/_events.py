@@ -2,8 +2,8 @@
 
 Events are bounded and numbered, so a reader that polls with a cursor learns how
 many it missed. Every retained string passes credential redaction first: the
-credentials the connection references and its stored OAuth tokens never enter
-an event, an error message or the captured stderr of a local server.
+connection credentials, OAuth tokens and Agent Secret values sent in arguments
+are redacted before retaining diagnostics.
 
 A failed connection also keeps a diagnosis for the people setting it up: the
 last lines a local server wrote to stderr and, when the failure has a known
@@ -99,6 +99,7 @@ class ConnectionEvents:
     ) -> None:
         self._host = host
         self._config = config
+        self._argument_secrets: frozenset[str] = frozenset()
         self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_HISTORY_LIMIT)
         self._sequence = 0
         self._on_stderr = on_stderr
@@ -109,6 +110,11 @@ class ConnectionEvents:
         self._problem: dict[str, Any] | None = None
         # The status of the latest HTTP response, while it is an error.
         self._http_status: int | None = None
+
+    def remember_argument_secrets(self, values: frozenset[str]) -> None:
+        # Notifications can arrive after the call ends and in a different task.
+        # Publish an immutable snapshot for the stderr drain thread as well.
+        self._argument_secrets |= values - {""}
 
     def record(self, kind: str, payload: Any) -> None:
         """Keep one event; its strings and keys are redacted after JSON decoding."""
@@ -226,7 +232,7 @@ class ConnectionEvents:
             keys.add(config["oauth_client_secret"])
         secrets = [self._host.resolve_credential(key) for key in keys]
         secrets.extend(oauth_secrets(self._host, config["id"]))
-        return [value for value in secrets if value]
+        return [*self._argument_secrets, *(value for value in secrets if value)]
 
 
 def _bounded(line: str) -> str:

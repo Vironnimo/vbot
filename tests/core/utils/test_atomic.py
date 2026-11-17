@@ -367,6 +367,26 @@ def test_atomic_write_owner_only_restricts_the_file_to_the_current_user(tmp_path
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize(("mode", "expected"), [(0o400, 0o400), (0o644, 0o600)])
+def test_owner_only_writer_publishes_its_final_mode(tmp_path, monkeypatch, mode, expected):
+    target = tmp_path / "private"
+    real_replace = atomic.replace_path
+
+    def check_mode(path):
+        bits = stat.S_IWUSR if sys.platform == "win32" else 0o777
+        assert stat.S_IMODE(path.stat().st_mode) & bits == expected & bits
+
+    def replace(source, destination):
+        check_mode(source)
+        real_replace(source, destination)
+
+    monkeypatch.setattr(atomic, "replace_path", replace)
+    atomic_write_text(target, "private contents", owner_only=True, mode=mode)
+
+    assert target.read_text() == "private contents"
+    check_mode(target)
+
+
 if sys.platform == "win32":
 
     def _windows_dacl(path: Path) -> str:

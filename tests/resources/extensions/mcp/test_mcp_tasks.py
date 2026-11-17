@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import mcp.types as types
@@ -427,11 +428,14 @@ async def test_restart_reads_the_persisted_task_without_repeating_its_mutation(h
     await first.open()
     runner = runner_for(host, tasks.server, monkeypatch)
     runner._recovery = first
-    call = asyncio.create_task(runner.invoke("tools/call", {"name": "long"}, original))
+    arguments = {"name": "long", "arguments": {"value": "test-owned-input"}}
+    call = asyncio.create_task(runner.invoke("tools/call", arguments, original))
     second = None
     resumed = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
+        row = connection.execute("SELECT arguments_json FROM pending_tasks").fetchone()
+        assert json.loads(row["arguments_json"]) == {"name": "long"}
         await first.resume({"example": runner})
         assert not first._workers
         assert not delivered

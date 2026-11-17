@@ -80,12 +80,16 @@ def read_json_file(
     validator: JsonValidator,
     *,
     missing_ok: bool,
+    owner_only: bool = False,
 ) -> tuple[JsonValidationReport, Any]:
     """Decode and validate one JSON file, returning its report and decoded value.
 
     The value is ``None`` when the file is missing or cannot be decoded.
+    With ``owner_only``, protect the actual file handle and reject linked entries.
     """
-    document = _load_and_validate_json_file(Path(file_path), validator, missing_ok=missing_ok)
+    document = _load_and_validate_json_file(
+        Path(file_path), validator, missing_ok=missing_ok, owner_only=owner_only
+    )
     return document.report, document.data
 
 
@@ -313,11 +317,12 @@ def _load_and_validate_json_file(
     validator: JsonValidator,
     *,
     missing_ok: bool,
+    owner_only: bool = False,
 ) -> _ValidatedDocument:
     # A file that cannot even be checked exists as far as callers are concerned:
     # reporting it missing would let a writer replace it unread.
     try:
-        present = exists_strict(file_path)
+        present = exists_strict(file_path, follow_symlinks=not owner_only)
     except OSError as exc:
         return _unreadable_document(file_path, exc)
     if not present:
@@ -329,7 +334,7 @@ def _load_and_validate_json_file(
         )
 
     try:
-        data = json.loads(read_replaced_text(file_path))
+        data = json.loads(read_replaced_text(file_path, owner_only=owner_only))
     except UnicodeError:
         return _ValidatedDocument(
             report=JsonValidationReport(

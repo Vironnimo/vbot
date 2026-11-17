@@ -66,7 +66,10 @@ _DESCRIPTIONS = {
         "then reconnect an enabled connection, which starts a new sign-in."
     ),
     "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
-    "save": "Create or replace a complete connection; read status before replacing one.",
+    "save": (
+        "Create or replace a complete connection; read status before replacing one. "
+        "Put environment secrets in named credentials referenced by credential_environment."
+    ),
     "import": (
         "Preview connections from another client's MCP setup, a command line or a URL; "
         "apply saves the selected ones."
@@ -641,7 +644,7 @@ class ConnectionManagement:
             }
             for credential in draft.credentials
         ]
-        conflict = draft.id in self._service.connections
+        conflict = draft.id in self._service._occupied_ids()
         complete = all(item["state"] != "missing" for item in credentials)
         return {
             "name": draft.name,
@@ -662,15 +665,9 @@ class ConnectionManagement:
 
     async def _add_from_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Save a catalog entry as a new enabled connection; never replaces a saved one."""
-        # A rejected record keeps its id too: saving under it would overwrite the record.
-        rejected = {
-            issue["connection_id"]
-            for issue in (self._service.store.issues if self._service.store else [])
-            if "connection_id" in issue
-        }
         connection = self._service.connectors.connection(
             arguments["entry"],
             read_only=arguments.get("read_only", False),
-            taken=set(self._service.connections) | rejected,
+            taken=self._service._occupied_ids(),
         )
         return await self._service._save(connection, replace=False)

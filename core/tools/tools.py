@@ -910,25 +910,30 @@ class ToolRegistry:
         if secrets is None or not sinks:
             return arguments, None
 
+        external_literals: dict[str, str] = {}
+
         def substitute() -> tuple[JsonObject, list[SecretUse], JsonObject | None]:
             changed = dict(arguments)
             uses: list[SecretUse] = []
             for name, sink in sinks.items():
+                literals = None
+                if sink == "external_tools":
+                    literals = external_literals
+                elif tool.defer_secret_consumption:
+                    literals = context.prepared_secret_literals
+                elif sink == "files":
+                    literals = context.secret_literals
                 changed[name], found = secrets.substitute(
                     SessionAddress(context.project_id, context.agent_id, context.session_id),
                     arguments[name],
                     sink,
                     passed_only=context.subagent_session,
                     consume=False,
-                    literals=(
-                        context.prepared_secret_literals
-                        if tool.defer_secret_consumption
-                        else context.secret_literals
-                        if sink == "files"
-                        else None
-                    ),
+                    literals=literals,
                 )
                 uses.extend(use for use in found if use not in uses)
+            if tool.defer_secret_consumption:
+                context.prepared_secret_literals.update(external_literals)
             # Refused preparation must not spend a one-time grant.
             if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):
                 return changed, [], unavailable
@@ -941,6 +946,11 @@ class ToolRegistry:
             return changed, uses, None
 
         changed, uses, unavailable = await run_tool_worker(substitute)
+        if unavailable is None and external_literals:
+            # Dispatch adapters may have substituted references before resolving
+            # the final external Tool. Keep those values on the descended call.
+            values = context.external_secret_values | frozenset(external_literals)
+            object.__setattr__(context, "external_secret_values", values)
         if uses and tool.defer_secret_consumption:
 
             async def commit() -> None:

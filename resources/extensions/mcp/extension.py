@@ -892,7 +892,7 @@ class MCPService:
             previous = self.connections.get(identifier)
             if base is not ... and previous != base:
                 raise SettingsConflictError((f"MCP connection {identifier}",))
-            if previous is not None and not replace:
+            if not replace and identifier in self._occupied_ids():
                 raise ValueError(f"MCP connection {identifier} already exists")
             # Import credentials belong to the admitted connection save.
             # A competing import that loses this id must leave them alone.
@@ -932,6 +932,10 @@ class MCPService:
             await self.recovery.resume(self.runners)
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
         return self.management._status(identifier)
+
+    def _occupied_ids(self) -> set[str]:
+        rejected = self.store.rejected_ids if self.store is not None else set()
+        return self.connections.keys() | rejected
 
     def _check_import_credentials(self, names: Iterable[str]) -> None:
         """Refuse generated names that would share another connection's credential."""

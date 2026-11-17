@@ -18,7 +18,9 @@ Configure OAuth with `oauth: true`; vBot registers itself with the server's auth
 
 `sampling` lets the server ask the invoking Agent's Model for replies: `off` (default), `ask` (the user approves each request), or `allow`. `roots: workspace` tells the server the invoking Agent's work directory; the default is `off`. Turn either on only when the server's setup instructions need it.
 
-`environment` holds non-secret values. `credential_environment` and `credential_headers` map subprocess variables or HTTP headers to named vBot credentials. Set a referenced credential, including an `oauth_client_secret`, using `credential --stdin` with `id`, `key`, and `value`; an empty value clears it. Never put secrets in arguments, plain environment configuration, URLs, shell history, or reports.
+`environment` holds non-secret values. `save` rejects values that look like credentials. Use `credential_environment` and `credential_headers` to map subprocess variables or HTTP headers to named vBot credentials. Set a referenced credential, including an `oauth_client_secret`, using `credential --stdin` with `id`, `key`, and `value`. An empty value clears it. Never put secrets in arguments, plain environment configuration, URLs, shell history, or reports.
+
+If `list` reports a legacy connection with a credential in `environment`, save a disabled replacement under the same id with `base: null`. Put each such variable in `credential_environment`, set its named credential, then enable the connection.
 
 Enable `mcp_<id>` in the intended Agent or Swarm Tool settings. This is the only access switch; the connection has no separate Agent list. MCP Tools require explicit opt-in, even in All Tools mode. Through configuration APIs, include the connection Tool in `tool_access.granted` and, for selected mode, also in `tool_access.allowed`; preserve other entries. Explicit denials, None mode, and Project ceilings still win. A Project ceiling alone does not enable the Tool for its Agents.
 

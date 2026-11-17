@@ -104,7 +104,12 @@ class BackgroundCalls:
                 lambda connection: connection.execute(
                     "INSERT INTO pending_calls(receipt_id,connection_id,configuration_hash,"
                     "arguments_json) VALUES(?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING",
-                    (receipt, runner.id, configuration_hash(runner.config), json.dumps(arguments)),
+                    (
+                        receipt,
+                        runner.id,
+                        configuration_hash(runner.config),
+                        json.dumps({"name": arguments["name"]}),
+                    ),
                 )
             )
             persisted = asyncio.Event()

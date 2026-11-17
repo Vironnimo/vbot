@@ -18,10 +18,11 @@ import re
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from ._credential_fields import SECRET_VALUE, is_absolute, is_plain_value, looks_like_credential
 from ._setup_syntax import (
     _URL,
     _command_entries,
@@ -73,67 +74,6 @@ _TRANSPORTS = {
     "streamable_http": "http",
     "sse": "sse",
 }
-# Words of a variable or header name that mark its value as a secret.
-_SECRET_WORDS = frozenset(
-    {
-        "TOKEN",
-        "TOKENS",
-        "SECRET",
-        "SECRETS",
-        "PASSWORD",
-        "PASSWD",
-        "PASS",
-        "PASSPHRASE",
-        "APIKEY",
-        "KEY",
-        "AUTH",
-        "AUTHORIZATION",
-        "CREDENTIAL",
-        "CREDENTIALS",
-        "COOKIE",
-        "PAT",
-        "PRIVATE",
-        "SESSION",
-        "SIGNATURE",
-    }
-)
-# A last word that names something about a secret rather than the secret itself.
-_SECRET_DESCRIPTORS = frozenset(
-    {
-        "PATH",
-        "FILE",
-        "DIR",
-        "URL",
-        "URI",
-        "HOST",
-        "ID",
-        "NAME",
-        "TYPE",
-        "MODE",
-        "REGION",
-        "ENDPOINT",
-        "PORT",
-        "HEADER",
-        "ENABLED",
-        "EXPIRY",
-    }
-)
-_SECRET_VALUE = re.compile(
-    r"""^(?:
-        sk-[A-Za-z0-9_-]{16,}
-      | (?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}
-      | gh[pousr]_[A-Za-z0-9]{20,}
-      | github_pat_\w{20,}
-      | glpat-[\w-]{20,}
-      | xox[abposr]-[\w-]{10,}
-      | AKIA[0-9A-Z]{16}
-      | AIza[\w-]{30,}
-      | ya29\.[\w-]{20,}
-      | eyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]{8,}
-      | (?:Bearer|Basic|Token)\s+\S{8,}
-    )$""",
-    re.VERBOSE,
-)
 # Text that stands in for a value the reader must supply.
 _PLACEHOLDER_VALUE = re.compile(
     r"""^(?:
@@ -459,7 +399,7 @@ def _complete(draft: ImportDraft) -> None:
         _check_bridge(draft, connection["args"])
         if server["cwd"]:
             directory = _with_editor_values(server["cwd"])
-            if _REFERENCE.search(directory) or not _absolute(directory):
+            if _REFERENCE.search(directory) or not is_absolute(directory):
                 draft.warn(
                     "directory_ignored",
                     f"Working directory {server['cwd']} is not an absolute path; "
@@ -535,8 +475,7 @@ def _credential(
             credential = ImportedCredential(variable, kind, target, "reference")
             draft.credentials.append(credential)
             return credential
-    secret = required or _secret_name(target) or bool(_SECRET_VALUE.match(value))
-    if not secret or (not required and _plain_value(value)):
+    if not required and not looks_like_credential(target, value):
         return None
     if _REFERENCE.search(value):
         description = f"The complete value, of the form {value}"
@@ -573,28 +512,6 @@ def _credential_name(identifier: str, target: str) -> str:
     return f"MCP_{prefix}_{key}"
 
 
-def _secret_name(name: str) -> bool:
-    words = [word.upper() for word in re.split(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])", name) if word]
-    if not words or words[-1] in _SECRET_DESCRIPTORS:
-        return False
-    joined = "_".join(words)
-    return bool(_SECRET_WORDS & set(words)) or any(
-        part in joined for part in ("API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
-    )
-
-
-def _plain_value(value: str) -> bool:
-    """A value no secret looks like: a switch, a number or a path."""
-    text = value.strip()
-    if not text:
-        return False
-    return (
-        text.lower() in {"true", "false", "yes", "no", "on", "off"}
-        or bool(re.fullmatch(r"-?\d+(?:\.\d+)?", text))
-        or _absolute(text)
-    )
-
-
 def _with_editor_values(value: str) -> str:
     """*value* with the editor variables vBot can resolve on its host replaced."""
     return (
@@ -623,7 +540,7 @@ def _check_arguments(draft: ImportDraft, arguments: list[str]) -> None:
         previous = arguments[index - 1] if index else ""
         if inline and _ARGUMENT_SECRET_FLAG.match(flag):
             value = inline
-        elif _SECRET_VALUE.match(argument) or (
+        elif SECRET_VALUE.match(argument) or (
             _ARGUMENT_SECRET_FLAG.match(previous) and not argument.startswith("-")
         ):
             value = argument
@@ -635,7 +552,7 @@ def _check_arguments(draft: ImportDraft, arguments: list[str]) -> None:
                 "placeholder_argument",
                 f"Argument {index + 1} is a placeholder; edit the connection after importing.",
             )
-        elif not _plain_value(value):
+        elif not is_plain_value(value):
             draft.exposes_secret = True
             draft.warn(
                 "secret_in_arguments",
@@ -667,10 +584,6 @@ def _check_url(draft: ImportDraft, url: str) -> None:
             "The URL carries a key or token, and URLs are saved as plain configuration. "
             "Prefer a credential header if the server supports one.",
         )
-
-
-def _absolute(path: str) -> bool:
-    return PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
 
 
 def _launched_name(command: str, arguments: list[str]) -> str:
