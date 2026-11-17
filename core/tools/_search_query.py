@@ -829,12 +829,12 @@ def interpret(
                 f"Context was ignored because {_MODE_NAMES[query.mode]} output shows no lines."
             )
             context_requested = False
-        elif query.only_matching and context_requested:
+        elif query.only_matching and not query.inverted and context_requested:
             query.notes.append("Context was ignored because -o shows only the matched text.")
             context_requested = False
         if context_requested:
             query.before, query.after = before, after
-        if query.only_matching and query.mode == "content":
+        if query.only_matching and not query.inverted and query.mode == "content":
             query.count_matches = True
     return query
 
@@ -888,7 +888,7 @@ def _list_glob_shaped_pattern(
 ) -> None:
     """Run a file name glob sent as the pattern as the file listing it asks for.
 
-    A regex that matches every line also lists the files for file-list output:
+    A regex that matches every non-empty line also lists the files for file-list output:
     ripgrep would leave out empty and binary files and count lines nobody asked for.
     """
     pattern = query.patterns[0]
@@ -903,8 +903,7 @@ def _list_glob_shaped_pattern(
         query.patterns = []
         query.mode = "list_files"
         query.notes.append(
-            f'pattern "{pattern}" matches every line, so files were listed, empty and binary '
-            "ones included."
+            f'pattern "{pattern}" was read as a file listing, including empty and binary files.'
         )
         return
     if not glob_shaped(pattern):

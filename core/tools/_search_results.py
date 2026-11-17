@@ -177,12 +177,19 @@ def _excerpt(raw: bytes, position: int | None) -> str:
     return prefix + text[start:end].replace("\r", r"\r") + suffix
 
 
-def _event_lines(event: dict[str, Any]) -> list[_Line]:
+def _event_lines(event: dict[str, Any], *, only_matching: bool) -> list[_Line]:
     data = event["data"]
     raw = decode_event_text(data["lines"])
     first = data.get("line_number") or 1
     match = event["type"] == "match"
     submatches = data.get("submatches") or []
+    if only_matching and not match and submatches:
+        # With -vo the result is a non-matching line. A context event can
+        # contain several matched fragments on that same line.
+        return [
+            _Line(first, False, _excerpt(decode_event_text(sub["match"]), None))
+            for sub in submatches
+        ]
     position = submatches[0]["start"] if submatches else None
     # ripgrep counts LF boundaries; bytes.splitlines also splits lone CRs.
     pieces = raw.split(b"\n")
@@ -267,7 +274,7 @@ def _file_lines(
     by_line = not query.multiline or query.inverted
     for event in file_events:
         start = len(lines)
-        lines.extend(_event_lines(event))
+        lines.extend(_event_lines(event, only_matching=query.only_matching))
         if event["type"] != "match":
             continue
         if by_line:
@@ -333,7 +340,11 @@ class _Block:
         rendered: list[str] = []
         previous = self.previous
         for line in lines:
-            if self.separate and previous is not None and line.number != previous + 1:
+            if (
+                self.separate
+                and previous is not None
+                and line.number not in (previous, previous + 1)
+            ):
                 rendered.append("--")
             rendered.append(f"{line.number}{':' if line.match else '-'}{line.text}")
             previous = line.number

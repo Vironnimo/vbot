@@ -162,7 +162,11 @@ _CONTENT_CASES = [
     ({"pattern": "needle$"}, [], ["needle$"]),
     ({"pattern": "needle hidden", "args": ["-x"]}, ["-x"], ["needle hidden"]),
     ({"pattern": "needle", "path": "src", "args": ["-v"]}, ["-v"], ["needle", "src"]),
-    ({"pattern": "needle", "path": "src", "args": ["-vo"]}, ["-vo"], ["needle", "src"]),
+    (
+        {"pattern": "needle", "path": "src", "args": ["-vo"], "context": 1},
+        ["-vo", "-C1"],
+        ["needle", "src"],
+    ),
     (
         {"pattern": r"needle\nspans", "path": "docs", "args": ["-Uv"]},
         ["-Uv"],

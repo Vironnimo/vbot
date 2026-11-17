@@ -150,7 +150,7 @@ Modes:
   in the October 21-23 Tool-call audit searched contents instead of listing
   files; current dispatch coverage is in `test_search_files_arguments.py`.
 - With file-list output (`output: "files"`, `-l`), a single non-literal regex
-  that matches every line (`.`, `.*`, `^(.*)$`, `^`, ...) lists every file
+  that matches every non-empty line (`.`, `.*`, `^(.*)$`, `^`, ...) lists every file
   instead, with a `note`, unless `-v`, `-x` or `-w` narrows it: ripgrep would
   leave out empty and binary files and count lines nobody asked for. Swarm
   Agents sent `pattern: "."` with `output: "files"` to list files (Sessions,
@@ -270,7 +270,8 @@ names from other search Tools and command-line habits when their meaning is exac
   `output` supplies those exact roots. Empty, broken or conflicting roots fail
   before traversal. An echoed `output` or `context` mode with a pattern, a
   positive context size and no rg arguments asks for matching lines.
-  Other prefixes and chained modes stay invalid.
+  An empty list sent as JSON text leaves the format unspecified, just like an
+  empty list. Other prefixes and chained modes stay invalid.
 - **Flag fields:** `-i`, `ignore_case`, `literal`, `-C`, `type`, `exclude`,
   `recursive: false` (becomes `-d 1`), Hermes-style `target: "files"`, and others.
 
@@ -486,6 +487,7 @@ Result units:
   per page.
 - With `-o`, one result is one match.
 - With `-v`, each result is a whole non-matching line, including with `-o` or `-U`.
+  With `-vo`, context shows the matched fragments ripgrep reports on each surrounding line.
 
 Documented deviations from plain `rg`, all deliberate:
 
@@ -788,6 +790,7 @@ blank placeholders, so no sentence has to warn about them.
 | `Nothing was searched. For surrounding lines, set output to "content" and context to the number of lines on each side.` | A context request without a size needs a correction the Agent can apply. |
 | `Send the complete list of files or directories in path.` | A damaged list can omit roots. An invalid-character diagnostic led an Agent to change its scope on retry. |
 | `non-matching lines` for inverted counts and pages, and `pattern "*.ts" with -v was applied as glob "!*.ts".` | Names the unit ripgrep returns with inversion and identifies the excluded file-name glob (F3, F4). |
+| `pattern "." was read as a file listing, including empty and binary files.` | Explains why the search can return a file without any matching lines. |
 | `--column was ignored: results show line numbers without column numbers.` (also `--byte-offset` and `--vimgrep`) and `--max-columns was ignored: long lines use a fixed excerpt around the match.` | Names the coordinates or width the output uses when a requested display flag cannot change them (F4). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
 | glob: `Case-insensitive name filters such as *.py; a leading ! excludes.` | Without "Case-insensitive", Agents asked to ignore extension case wrote `*.[pP][yY]`, `--iglob`, several globs or a shell command (first-use probe, 2026-10). Exclusion is the one other glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |

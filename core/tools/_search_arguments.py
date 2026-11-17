@@ -221,6 +221,8 @@ _TARGET_VALUES = {
 
 
 def _normalize_output(value: Any) -> Any:
+    if isinstance(value, str) and re.fullmatch(r"\s*\[\s*\]\s*", value):
+        return None
     if isinstance(value, str) and (
         wrapped := re.fullmatch(
             r"\s*output\s*(?:>|</arg_key>)\s*(content|files|count)\s*", value, re.IGNORECASE
