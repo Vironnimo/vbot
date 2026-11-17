@@ -71,25 +71,27 @@ class _WireAdapter(StubAdapter):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("programmatic", [False, True])
+@pytest.mark.parametrize("history_case", ["native", "programmatic", "reused-id"])
 async def test_continuation_counts_new_content_as_the_active_request_sends_it(
-    programmatic: bool,
+    history_case: str,
 ) -> None:
     later = [user("u2", "later request " * 50), assistant("a2", "later answer " * 50)]
+    if history_case == "reused-id":
+        later.insert(1, assistant("a2", "earlier answer"))
     messages = [user("u1", "old request"), checkpoint([], count=1_000), *later]
     request = provider_request(later)
-    if programmatic:
+    if history_case == "programmatic":
         messages[-1:-1] = tool_step(
             "child", "intermediate " * 5_000, parent_tool_call_id="call-code"
         )
     # Replayed reasoning costs its reported tokens, never its text or opaque state.
-    request[2].update(
+    request[-1].update(
         reasoning="long thought " * 2_000,
         reasoning_meta={"signature": "sealed" * 500},
         reported_reasoning_tokens=7_000,
     )
-    # Two request messages (20) and the reported reasoning with its framing, doubled.
-    later_tokens = (20 + 7_000 + REPLAYED_REASONING_FRAMING_TOKENS) * 2
+    # Price each native entry once and add Reasoning only to its own entry.
+    later_tokens = (10 * len(later) + 7_000 + REPLAYED_REASONING_FRAMING_TOKENS) * 2
     active = _WireAdapter("NEXT CHECKPOINT")
     options: dict[str, Any] = {
         "request_messages": request,

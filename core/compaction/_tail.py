@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from core.chat import note_request_messages
 from core.chat.messages import (
@@ -13,6 +11,7 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
 )
+from core.chat.wire_shaping import history_request_positions
 from core.compaction._cycles import ToolCycleSuffix
 from core.compaction._tail_types import (
     COMPACTION_USER_QUOTE_PREFIX,
@@ -75,14 +74,14 @@ def _plan_working_tail(
         raise CompactionError("Cannot find a provider-safe tail boundary")
 
     request_indices = (
-        {message.get("id"): index for index, message in enumerate(request_messages)}
+        history_request_positions(messages, request_messages)
         if request_messages is not None
         else {}
     )
     candidates: list[_TailCandidate] = []
     for boundary_index in reversed(safe_boundaries):
         start_index, request_start = _tail_step_start(
-            messages, boundary_index, request_messages, request_indices
+            messages, boundary_index, request_messages, request_indices.get(boundary_index)
         )
         if request_messages is None or request_start is None:
             candidate = [message.to_dict() for message in messages[start_index:]]
@@ -134,7 +133,7 @@ def _tail_step_start(
     messages: list[ChatMessage],
     boundary_index: int,
     request_messages: tuple[JsonObject, ...] | None,
-    request_indices: Mapping[Any, int],
+    request_index: int | None,
 ) -> tuple[int, int | None]:
     """Return the canonical and request start of the step at ``boundary_index``.
 
@@ -150,7 +149,6 @@ def _tail_step_start(
         lead_in_start -= 1
     if request_messages is None:
         return lead_in_start, None
-    request_index = request_indices.get(messages[boundary_index].id)
     if request_index is None:
         raise CompactionError("Tail boundary was not found in the active request Context")
     if lead_in_start == boundary_index:

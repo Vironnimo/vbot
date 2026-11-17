@@ -236,6 +236,34 @@ def test_a_systemd_unit_owns_the_normal_server_but_never_verification(
     assert commands == []
 
 
+def test_systemd_server_start_timeout_reports_failed_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    commands: list[list[str]] = []
+    _record_server(monkeypatch, tmp_path, recorded=lambda: False)
+    monkeypatch.setattr(processes, "probe_health_patiently", lambda _instance: _CLOSED)
+    monkeypatch.setattr(processes, "owned_unit", lambda _install: tmp_path / "vbot.service")
+
+    def run(command: list[str]) -> SimpleNamespace:
+        commands.append(command)
+        if command[-2] == "stop":
+            return SimpleNamespace(returncode=1, stdout="", stderr="user manager unavailable")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(processes, "run_command", run)
+
+    result = processes.start(install, timeout=0)
+
+    assert result.ok is False
+    assert "user manager unavailable" in result.message
+    assert "service can still restart" in result.message
+    assert commands == [
+        ["systemctl", "--user", "start", "vbot.service"],
+        ["systemctl", "--user", "stop", "vbot.service"],
+    ]
+
+
 _CONFINED = ForeignJob("codex.exe", 4711, confines_children=True)
 
 

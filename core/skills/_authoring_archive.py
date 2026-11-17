@@ -148,7 +148,10 @@ class SkillArchives:
             root = self._owner._writable_root(target_root)
             history = SkillHistory(root)
             package = self._archived_package(history, archive_id)
-            info = self._archive_infos(history).get(archive_id)
+            try:
+                info = history.archive(archive_id)
+            except OSError as error:
+                raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
             name = info.skill if info is not None else _declared_name(package)
             destination = self._owner._skill_dir(root, name)
             if destination.exists() or any(

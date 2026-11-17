@@ -33,6 +33,7 @@ from core.skills.skill_validator import (
     split_skill_document,
 )
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_status import exists_strict
 
 if TYPE_CHECKING:
     from core.skills.authoring import SkillAuthoringService, SkillWriter
@@ -176,7 +177,7 @@ def install_package(
         )
     with authoring._write_lock:
         destination = authoring._skill_dir(target_root, name)
-        exists = destination.exists()
+        exists = exists_strict(destination, follow_symlinks=False)
         same = exists and destination.is_dir() and _digest(read_directory(destination)) == sha256
         operation = "unchanged" if same else "replaced" if exists else "installed"
         result = SkillInstallResult(
@@ -240,7 +241,9 @@ def install_package(
             try:
                 staged.rename(destination)
             except OSError:
-                if backup.exists():
+                if exists:
+                    # The successful move is evidence that a backup was made.
+                    # A failing status check must not make cleanup discard it.
                     try:
                         backup.rename(destination)
                     except OSError as restore_error:

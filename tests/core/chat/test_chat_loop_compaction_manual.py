@@ -123,20 +123,33 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("automatic", [False, True], ids=["manual", "automatic"])
-async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, automatic: bool
+@pytest.mark.parametrize("phase", ["summary", "stored-commit", "refused-commit"])
+async def test_stop_during_compaction_settles_the_attempt_without_a_new_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, automatic: bool, phase: str
 ) -> None:
     runtime = compaction_runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
-    writing, release = threading.Event(), threading.Event()
+    reached, release = threading.Event(), threading.Event()
     commit = ChatSession.commit_compaction
+    commit_attempts = 0
 
     def slow_commit(self: ChatSession, *args: Any, **kwargs: Any) -> Any:
-        writing.set()
+        nonlocal commit_attempts
+        commit_attempts += 1
+        reached.set()
         assert release.wait(5)
+        if phase == "refused-commit" and commit_attempts == 1:
+            return None
         return commit(self, *args, **kwargs)
 
+    async def blocked_summary(*_args: Any, **_kwargs: Any) -> ChatMessage:
+        reached.set()
+        await asyncio.Future()
+        raise AssertionError("Stop should cancel the summary")
+
+    if phase == "summary":
+        monkeypatch.setattr(service, "compact", blocked_summary)
     monkeypatch.setattr(ChatSession, "commit_compaction", slow_commit)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
@@ -145,21 +158,30 @@ async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
         run = await loop.start_run("coder", "Continue", session_id=session.id)
     else:
         reply = asyncio.create_task(loop.compact_session("coder", session.id))
-    assert await asyncio.to_thread(writing.wait, 5)
+    assert await asyncio.to_thread(reached.wait, 5)
     run = runtime.chat_runs.active_run(agent_id="coder", session_id=session.id, project_id=None)
     assert run is not None
     # Do not wait for terminal state before releasing the write it must finish.
     run.request_cancel(reason="user")
     release.set()
 
+    stored = phase == "stored-commit"
     if reply is not None:
-        assert await reply == "Context compacted."
+        assert await reply == ("Context compacted." if stored else "Compaction cancelled.")
     with pytest.raises(RunCancelledError):
         await run.wait()
-    assert "compaction_checkpoint" in persisted_roles(session.load())
-    events = [event.type for event in await runtime.timelines.events(run)]
-    assert COMPACTION_COMPLETED_EVENT in events
-    assert COMPACTION_ABORTED_EVENT not in events
+    assert ("compaction_checkpoint" in persisted_roles(session.load())) is stored
+    assert commit_attempts == (0 if phase == "summary" else 1)
+    events = [
+        (event.type, event.payload.get("reason"))
+        for event in await runtime.timelines.events(run)
+        if event.type in {COMPACTION_COMPLETED_EVENT, COMPACTION_ABORTED_EVENT}
+    ]
+    assert events == (
+        [(COMPACTION_COMPLETED_EVENT, None)]
+        if stored
+        else [(COMPACTION_ABORTED_EVENT, "cancelled")]
+    )
 
 
 @pytest.mark.asyncio

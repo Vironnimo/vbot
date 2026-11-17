@@ -461,12 +461,17 @@ async def test_checkpoint_carries_only_plain_notes_appended_after_its_snapshot(
         ("continuation", ["n-late"]),
     ],
 )
+@pytest.mark.parametrize("reused_id", [False, True], ids=["unique-ids", "reused-id"])
 async def test_checkpoint_keeps_notes_its_summarized_request_never_showed(
-    strategy: str, kept_ids: list[str]
+    strategy: str, kept_ids: list[str], reused_id: bool
 ) -> None:
     # Another writer appended n-late after the live request was built: the
     # summary cannot cover it, so only the rendered note leaves active Context.
-    head = [user("u1", "old request " * 100), _plain_note("n-shown"), assistant("a1", "old")]
+    head = [
+        user("u1", "old request " * 100),
+        _plain_note("n-shown"),
+        assistant("a2" if reused_id else "a1", "old"),
+    ]
     late = _plain_note("n-late")
     tail = [user("u2", "recent request"), assistant("a2", "recent response")]
     request = [

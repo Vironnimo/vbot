@@ -14,6 +14,8 @@ One validated, versioned control-plane file at `<data_dir>/skills/policy.json`: 
 
 Policy mutations strictly load the existing document and reject malformed files (including a missing or other `format_version`) without replacing them with the tolerant read fallback; the RPC edge reports that refusal as a `domain_error` carrying the file diagnostics, not as an unexpected failure. A pre-Generation-1 `version` 2 document has no `format_version` and is refused like any other. Writes validate trigger-safe Skill names, canonical Agent ids and a package source with its location (none for `home`/`bundled`, required for the others) before persistence; sharing requires at least one receiver other than the owner.
 
+An unavailable policy produces read diagnostics and blocks mutations and Agent-reference checks. Only a missing file supplies an empty stored policy. Reads share the bounded Windows retry for atomic replacements.
+
 ## Surfaces
 
 Identity Agent rename retargets private-package disables, share owners and share receivers together in one atomic policy write (`SkillPolicyService.retarget_agent`; Runtime orchestration and recovery in `runtime/agent-rename.md`). It reads the stored policy strictly, preserves unknown fields and unusable entries, and writes nothing when the source id is absent. Stored references to the destination id, including stale entries, refuse the rename so a rollback cannot take another Agent's policy; a late collision also refuses the policy write. Repeating either direction is idempotent. Package enable/disable takes the Agent reference lock before the Skill mutation lock, like sharing, so an admitted toggle cannot persist an old Agent id after rename.

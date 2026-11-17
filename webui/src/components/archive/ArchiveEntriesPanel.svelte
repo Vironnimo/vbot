@@ -96,7 +96,9 @@
   let restoreAs = $state(null);
 
   let listRequest = 0;
+  let moreRequest = null;
   let detailRequest = 0;
+  let detailVisit = 0;
   let disposed = false;
   let lastArchiveToken = null;
   let lastScopeTokens = null;
@@ -221,6 +223,7 @@
 
   async function loadList({ keepCount = false } = {}) {
     const request = ++listRequest;
+    resetPagination();
     const limit = keepCount
       ? Math.min(LIST_LIMIT_MAX, Math.max(ARCHIVE_PAGE_SIZE, entries.length))
       : ARCHIVE_PAGE_SIZE;
@@ -231,6 +234,7 @@
         limit,
       });
       if (disposed || request !== listRequest) return;
+      resetPagination();
       entries = Array.isArray(result?.entries) ? result.entries : [];
       nextCursor = result?.next_cursor ?? null;
       adoptRetention(result);
@@ -254,7 +258,8 @@
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
-    const request = listRequest;
+    const request = {};
+    moreRequest = request;
     loadingMore = true;
     try {
       const result = await listArchiveEntries({
@@ -262,7 +267,7 @@
         cursor: nextCursor,
         limit: ARCHIVE_PAGE_SIZE,
       });
-      if (disposed || request !== listRequest) return;
+      if (disposed || request !== moreRequest) return;
       const known = new Set(entries.map((entry) => entry.entry_id));
       entries = [
         ...entries,
@@ -272,14 +277,20 @@
       ];
       nextCursor = result?.next_cursor ?? null;
       adoptRetention(result);
+      listError = '';
     } catch (error) {
-      if (disposed || request !== listRequest) return;
+      if (disposed || request !== moreRequest) return;
       listError = [t('archive.loadError'), errorText(error)]
         .filter(Boolean)
         .join(' ');
     } finally {
-      loadingMore = false;
+      if (request === moreRequest) resetPagination();
     }
+  }
+
+  function resetPagination() {
+    moreRequest = null;
+    loadingMore = false;
   }
 
   function setFilter(field, value) {
@@ -293,6 +304,10 @@
 
   async function loadDetail(entryId, { quiet = false } = {}) {
     const request = ++detailRequest;
+    if (detailEntryId !== entryId) {
+      detailVisit += 1;
+      restoreAs = null;
+    }
     detailEntryId = entryId;
     if (!quiet) {
       detail = null;
@@ -322,6 +337,7 @@
 
   async function closeDetail(previousId) {
     detailRequest += 1;
+    detailVisit += 1;
     detailEntryId = '';
     detail = null;
     detailLoading = false;
@@ -360,16 +376,12 @@
     const entry = detail?.entry;
     if (!entry || busy) return;
     busy = true;
-    const request = detailRequest;
+    const visit = detailVisit;
     try {
       const result = await restoreArchiveEntry(entry.entry_id);
       await finishRestore(entry, result);
     } catch (error) {
-      if (
-        disposed ||
-        shownEntryId !== entry.entry_id ||
-        request !== detailRequest
-      )
+      if (disposed || shownEntryId !== entry.entry_id || visit !== detailVisit)
         return;
       if (
         error?.code === 'archive_restore_conflict' &&
@@ -403,12 +415,19 @@
     const entry = restoreAs?.entry;
     if (!entry || busy) return;
     busy = true;
+    const visit = detailVisit;
     restoreAs = { ...restoreAs, error: '' };
     try {
       const result = await restoreArchiveEntry(entry.entry_id, { targetId });
       await finishRestore(entry, result);
     } catch (error) {
-      if (!restoreAs) return;
+      if (
+        disposed ||
+        visit !== detailVisit ||
+        shownEntryId !== entry.entry_id ||
+        !restoreAs
+      )
+        return;
       restoreAs = {
         ...restoreAs,
         conflictText: '',

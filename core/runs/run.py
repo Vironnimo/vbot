@@ -770,10 +770,9 @@ class Run:
         After cancellation is requested, only terminal events are forwarded. This
         keeps late provider/tool results from becoming visible. The one deliberate
         escape is ``allow_after_cancel``: an executor may still publish an event
-        that *finalizes output the user has already seen* (the chat loop's
-        preserved partial answer on cancel) or reports a result the cancel could
-        no longer stop from being stored (a committed Compaction checkpoint) —
-        never new or late results.
+        that settles already published output or activity (a partial answer or
+        an announced Compaction) or reports a result the cancel could no longer
+        stop from being stored (a committed Compaction checkpoint).
         """
         if self.status != RunStatus.RUNNING and event_type not in TERMINAL_EVENT_TYPES:
             return None

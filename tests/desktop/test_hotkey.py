@@ -293,8 +293,12 @@ def test_a_message_loop_that_fails_unregisters_and_stops_harmlessly_later(
     assert created[0].unregistered.wait(timeout=2)
     for thread in _hotkey_threads():
         thread.join(timeout=2)
+    assert controller.status()["enabled"] is True
+    assert controller.status()["error_code"] == hotkey.HOTKEY_ERROR_FAILED
     controller.stop()
-    assert [name for name, _ in created[0].calls].count("unregister") == 1
+    calls = [name for name, _ in created[0].calls]
+    assert calls.count("unregister") == 1
+    assert "post" not in calls
 
 
 def _hotkey_threads() -> list[threading.Thread]:

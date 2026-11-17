@@ -524,6 +524,9 @@
     if (options.notifySelection !== false && selectedAgentId === nextAgent.id) {
       onAgentSelected?.(nextAgent);
     }
+    // A roster captured before this write may still be in flight.
+    if (rosterLoading && !destroyed)
+      void loadAgents({ notify: false, showLoading: false });
   }
 
   function handleAgentRenamed(nextAgent, { oldId, newId }) {

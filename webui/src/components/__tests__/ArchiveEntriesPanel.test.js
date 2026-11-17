@@ -227,6 +227,7 @@ describe('ArchiveEntriesPanel', () => {
       .mockResolvedValueOnce(
         page([CODER, NOTES, LEGACY], { next_cursor: cursor }),
       )
+      .mockRejectedValueOnce(new Error('could not load this page'))
       .mockResolvedValueOnce(page([entry({ ...NOTES, entry_id: 'e-old' })]))
       .mockResolvedValue(page([]));
     mountView();
@@ -250,7 +251,12 @@ describe('ArchiveEntriesPanel', () => {
     );
 
     button(t('archive.loadMore')).click();
+    await waitForCondition(() =>
+      document.body.textContent.includes('could not load this page'),
+    );
+    button(t('archive.loadMore')).click();
     await waitForCondition(() => rowIds().length === 4);
+    expect(document.body.textContent).not.toContain('could not load this page');
     expect(listMock).toHaveBeenLastCalledWith({
       ...NO_FILTERS,
       cursor,
@@ -274,6 +280,49 @@ describe('ArchiveEntriesPanel', () => {
       limit: 50,
     });
   });
+
+  it.each(['filter change', 'archive refresh'])(
+    'pages the current Archive list while an older page still waits after a %s',
+    async (change) => {
+      const oldPage = Promise.withResolvers();
+      const newPage = Promise.withResolvers();
+      const cursor = (entryId) => ({
+        archived_at: CODER.archived_at,
+        entry_id: entryId,
+      });
+      listMock
+        .mockResolvedValueOnce(
+          page([CODER], { next_cursor: cursor('e-coder') }),
+        )
+        .mockReturnValueOnce(oldPage.promise)
+        .mockResolvedValueOnce(
+          page([NOTES], { next_cursor: cursor('e-notes') }),
+        )
+        .mockReturnValueOnce(newPage.promise);
+      const props = reactiveProps({ archiveRefreshToken: 0 });
+      mountView(props);
+      await waitForCondition(() => rowIds()[0] === CODER.entry_id);
+      button(t('archive.loadMore')).click();
+      if (change === 'filter change') {
+        chooseFilter(t('archive.filter.kind'), t('archive.filter.sessions'));
+      } else {
+        props.archiveRefreshToken += 1;
+        flushSync();
+      }
+      await waitForCondition(() => rowIds()[0] === NOTES.entry_id);
+      button(t('archive.loadMore')).click();
+      expect(listMock).toHaveBeenCalledTimes(4);
+      oldPage.resolve(page([CODER]));
+      await oldPage.promise;
+      flushSync();
+      expect(rowIds()).toEqual([NOTES.entry_id]);
+      expect(button(t('archive.loadMore')).disabled).toBe(true);
+      const appended = entry({ ...NOTES, entry_id: 'e-older-notes' });
+      newPage.resolve(page([appended]));
+      await waitForCondition(() => rowIds().length === 2);
+      expect(rowIds()).toEqual([NOTES.entry_id, appended.entry_id]);
+    },
+  );
 
   it('adopts that automatic deletion is paused while vBot cannot read the period', async () => {
     // Settings still report the default period; only the list knows vBot cannot read it.
@@ -390,46 +439,27 @@ describe('ArchiveEntriesPanel', () => {
 
   it('opens Restore as when a restore meets a taken ID and restores under the new ID', async () => {
     const navigation = dialogAwareNavigation();
+    const refused = Promise.withResolvers();
     listMock.mockResolvedValue(page([CODER]));
     showMock.mockResolvedValue(detailOf(CODER));
-    restoreMock
-      .mockRejectedValueOnce(
-        Object.assign(new Error('an Agent with id coder exists'), {
-          code: 'archive_restore_conflict',
-          details: {
-            data: {
-              entry_id: 'e-coder',
-              kind: 'agent',
-              conflicts: [
-                {
-                  code: 'agent_id_taken',
-                  id: 'coder',
-                  message: 'an Agent with id coder exists',
-                  agent_id: 'coder',
-                },
-              ],
-              fix: 'target_id',
-            },
-          },
-        }),
-      )
-      .mockResolvedValueOnce({
-        entry_id: 'e-coder',
-        kind: 'agent',
-        subject_id: 'coder',
-        restored: { agent_id: 'coder-2' },
-        session_count: 2,
-        grant_agent_ids: [],
-        warnings: [
-          {
-            code: 'grant_target_missing',
-            message: 'Agent manager no longer exists',
-            agent_id: 'manager',
-          },
-        ],
-      });
+    restoreMock.mockReturnValueOnce(refused.promise).mockResolvedValueOnce({
+      entry_id: 'e-coder',
+      kind: 'agent',
+      subject_id: 'coder',
+      restored: { agent_id: 'coder-2' },
+      session_count: 2,
+      grant_agent_ids: [],
+      warnings: [
+        {
+          code: 'grant_target_missing',
+          message: 'Agent manager no longer exists',
+          agent_id: 'manager',
+        },
+      ],
+    });
     const onToast = vi.fn();
-    mountView({ navigation, onToast });
+    const props = reactiveProps({ navigation, onToast, agentsRefreshToken: 0 });
+    mountView(props);
     await waitForCondition(() => rowIds().length === 1);
 
     row('e-coder').querySelector('.archive-row__main').click();
@@ -440,6 +470,29 @@ describe('ArchiveEntriesPanel', () => {
     expect(showMock).toHaveBeenCalledWith('e-coder');
 
     button(t('archive.action.restore')).click();
+    props.agentsRefreshToken += 1;
+    flushSync();
+    expect(showMock).toHaveBeenCalledTimes(2);
+    refused.reject(
+      Object.assign(new Error('an Agent with id coder exists'), {
+        code: 'archive_restore_conflict',
+        details: {
+          data: {
+            entry_id: 'e-coder',
+            kind: 'agent',
+            conflicts: [
+              {
+                code: 'agent_id_taken',
+                id: 'coder',
+                message: 'an Agent with id coder exists',
+                agent_id: 'coder',
+              },
+            ],
+            fix: 'target_id',
+          },
+        },
+      }),
+    );
     await waitForCondition(() =>
       document.getElementById('archive-restore-as-id'),
     );

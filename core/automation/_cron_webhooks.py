@@ -140,14 +140,18 @@ class CronWebhooks(CronInbox[WebhookRequest]):
         return secret
 
     @override
-    async def discard(self, job_id: str, *, keep_secret: bool = False) -> None:
+    async def discard(self, job_id: str, *, require_removal: bool = False) -> None:
         """Forget what the job kept as a webhook: its waiting requests and its secret.
 
         Failures are logged; a secret left behind belongs to no job and opens nothing.
         """
-        await super().discard(job_id)
-        if not keep_secret:
-            await self.discard_secret(job_id)
+        await super().discard(job_id, require_removal=require_removal)
+        await self.discard_secret(job_id)
+
+    async def prepare(self, job_id: str) -> None:
+        """Give a newly enabled webhook schedule a fresh secret and empty inbox."""
+        await super().discard(job_id, require_removal=True)
+        await self.issue_secret(job_id)
 
     async def discard_secret(self, job_id: str) -> None:
         self._secrets.pop(job_id, None)

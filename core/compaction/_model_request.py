@@ -150,12 +150,20 @@ async def _send_streaming_model_request(
                             if original_estimate is not None
                             else estimate(original_messages)
                         )
+                        capacity = _reported_input_capacity(adapter, model_id, request_options)
+                        target = round(initial * OVERFLOW_TARGET_RATIO)
+
+                        def within_target(request: Sequence[dict[str, Any]]) -> bool:
+                            tokens = estimate(request)
+                            return tokens <= target and (
+                                capacity is None or round(tokens * estimate_factor) <= capacity
+                            )
+
                         projected = smaller_compaction_request(
                             original_messages,
                             tool_characters=characters,
-                            target_tokens=round(initial * OVERFLOW_TARGET_RATIO),
                             omit_old_exchanges=omit_old_exchanges,
-                            estimate=estimate,
+                            within_target=within_target,
                         )
                         counted = _model_request_input_budget(
                             adapter,
@@ -167,9 +175,7 @@ async def _send_streaming_model_request(
                         return (
                             projected,
                             counted,
-                            _fits_reported_capacity(
-                                adapter, model_id, request_options, counted.budget
-                            ),
+                            capacity is None or counted.budget.tokens <= capacity,
                         )
 
                     while reduction < len(OVERFLOW_TOOL_CHARACTERS):
@@ -229,30 +235,23 @@ async def _send_streaming_model_request(
         raise CompactionLimitError(_TIME_LIMIT_MESSAGE) from error
 
 
-def _fits_reported_capacity(
-    adapter: Any, model_id: str, options: dict[str, Any], request_input: RequestInput
-) -> bool:
-    """Skip a rescue view that a known Provider limit already makes impossible.
-
-    Called only after a confirmed remote overflow. The Adapter remains the
-    authority for its output allowance; this admission check does not invent a
-    window when none was reported, or enable recovery for a local-only failure.
-    """
+def _reported_input_capacity(adapter: Any, model_id: str, options: dict[str, Any]) -> int | None:
+    """Input room reported by the Provider, after reserving the original output allowance."""
     input_limit = getattr(adapter, "input_token_limit", None)
-    limit = input_limit(model_id) if callable(input_limit) else None
-    if isinstance(limit, int) and limit > 0 and request_input.tokens > limit:
-        return False
+    reported_limit = input_limit(model_id) if callable(input_limit) else None
+    limit = reported_limit if isinstance(reported_limit, int) and reported_limit > 0 else None
     reported = getattr(adapter, "reported_context_window", None)
     window = reported(model_id) if callable(reported) else None
     if not isinstance(window, int) or window <= 0:
-        return True
+        return limit
     minimum = getattr(adapter, "minimum_output_tokens", None)
     reserve = (
         minimum(model_id, options.get("thinking_effort"), explicit_limit=options.get("max_tokens"))
         if callable(minimum)
         else 0
     )
-    return request_input.tokens + max(1, reserve) <= window
+    window_limit = window - max(1, reserve)
+    return window_limit if limit is None else min(limit, window_limit)
 
 
 async def _stream_attempt(

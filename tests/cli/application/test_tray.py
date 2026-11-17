@@ -552,18 +552,27 @@ def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_r
     assert actions.calls == ["start_server"]
 
 
-def test_update_request_disables_duplicate_clicks_until_facade_reports_completion():
-    actions = Actions(TrayState("running", "server", available_update="0.4.3"))
+@pytest.mark.parametrize("previous_phase", [None, "completed"])
+def test_update_request_disables_duplicate_clicks_until_facade_reports_completion(previous_phase):
+    actions = Actions(
+        TrayState("running", "server", update_phase=previous_phase, available_update="0.4.3")
+    )
     controller = TrayController(actions)
     controller._poll_state()
 
     controller.invoke("start_update")
+    controller._poll_state()  # can only see the previous update before dispatch
+    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
     _run_queued(controller)
     # The request returned, but the facade has not reported the update yet.
     assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update"]
+
+    actions.current = replace(actions.current, update_phase="preparing")
+    controller._poll_state()
+    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
 
     actions.current = replace(actions.current, update_phase="completed")
     controller._poll_state()

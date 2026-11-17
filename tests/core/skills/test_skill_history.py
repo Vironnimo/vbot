@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -201,6 +202,21 @@ def test_unreadable_history_lines_are_skipped(
     assert any("unreadable Skill history lines" in record.message for record in caplog.records)
 
 
+def test_history_sees_a_replacement_that_kept_the_old_file_metadata(
+    service: SkillAuthoringService, root: Path
+) -> None:
+    service.create(root, "demo", skill_document(), writer=HUMAN_WRITER)
+    assert service.recorded_revisions(root)[0].actor == "human"
+    log = root.parent / "skill-history.jsonl"
+    original = log.stat()
+    replacement = log.with_suffix(".replacement")
+    replacement.write_bytes(log.read_bytes().replace(b'"actor":"human"', b'"actor":"agent"'))
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    replacement.replace(log)
+
+    assert service.recorded_revisions(root)[0].actor == "agent"
+
+
 def test_a_failing_history_never_fails_an_attended_write(
     service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -367,6 +383,28 @@ def test_archived_skills_are_restored_with_their_provenance_or_purged(
     with pytest.raises(SkillAuthoringError, match="not found"):
         service.purge(root, f"{root.drive or 'C:'}..")
     assert (root / "demo" / "SKILL.md").is_file()
+
+
+def test_restore_keeps_the_archive_while_its_history_cannot_be_read(
+    service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch, deny_access
+) -> None:
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
+    deleted = service.delete(root, "demo", writer=HUMAN_WRITER)
+    archive_id = str(deleted.archive_id)
+    original = history_lines(root)
+    deny_access(root.parent / "skill-history.jsonl")
+
+    with pytest.raises(SkillAuthoringError):
+        service.restore(root, archive_id, writer=HUMAN_WRITER)
+    assert deleted.path.is_dir()
+    assert not (root / "demo").exists()
+
+    monkeypatch.undo()
+    assert history_lines(root) == original
+    service.restore(root, archive_id, writer=HUMAN_WRITER)
+    record = service.record(root, "demo")
+    assert record is not None and (record.origin, record.pinned) == ("agent", True)
 
 
 def test_publish_moves_a_skill_into_another_home_with_its_provenance(

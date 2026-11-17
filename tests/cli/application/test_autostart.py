@@ -69,6 +69,27 @@ def test_windows_autostart_refuses_foreign_registration_before_disable(tmp_path:
         autostart(install, "disable", platform="win32", runner=runner)
 
 
+def test_windows_autostart_can_remove_its_task_after_losing_the_launcher(tmp_path: Path) -> None:
+    install = _install(tmp_path / "app")
+    launcher = install.root / "vBot.exe"
+    launcher.unlink()
+    operations: list[object] = []
+
+    def runner(command: list[str]) -> CommandRun:
+        operation = _operation(command)["operation"]
+        operations.append(operation)
+        if operation == "inspect":
+            return CommandRun(0, json.dumps({"launcher": str(launcher), "arguments": ""}), "")
+        assert operation == "delete"
+        return CommandRun(0, "", "")
+
+    with pytest.raises(ApplicationError, match="bootstrap is missing"):
+        autostart(install, "enable", platform="win32", runner=runner)
+    assert autostart(install, "status", platform="win32", runner=runner)["enabled"] is True
+    assert autostart(install, "disable", platform="win32", runner=runner)["changed"] is True
+    assert operations == ["inspect", "inspect", "delete"]
+
+
 @pytest.mark.parametrize("timeouts", [1, 2], ids=["one-timeout", "repeated-timeouts"])
 def test_windows_autostart_asks_a_timed_out_query_once_more_before_refusing(
     tmp_path: Path, timeouts: int
@@ -108,6 +129,8 @@ def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_serv
 
     def runner(command: list[str]) -> CommandRun:
         commands.append(command)
+        if command[-2:] == ["is-enabled", UNIT_NAME]:
+            return CommandRun(0, "enabled", "")
         if command[0] == "loginctl" and not lingering:
             return CommandRun(1, "", "Access denied")
         return CommandRun(0, "", "")
@@ -160,9 +183,57 @@ def test_linux_autostart_never_changes_another_installations_unit(tmp_path: Path
     def runner(command: list[str]) -> CommandRun:
         raise AssertionError(f"unexpected command {command}")
 
-    for action in ("enable", "disable"):
+    for action in ("status", "enable", "disable"):
         with pytest.raises(ApplicationError, match="belongs to another"):
             autostart(install, action, platform="linux", runner=runner, unit_dir=units)
 
     assert owned_unit(install, unit_dir=units) is None
     assert (units / UNIT_NAME).read_text(encoding="utf-8") == foreign
+
+
+def test_linux_autostart_removal_can_retry_a_failed_unit_reload(tmp_path: Path) -> None:
+    install = _install(tmp_path / "app")
+    units = tmp_path / "units"
+
+    def success(_command: list[str]) -> CommandRun:
+        return CommandRun(0, "", "")
+
+    autostart(install, "enable", platform="linux", runner=success, unit_dir=units)
+    unit_path = units / UNIT_NAME
+    original = unit_path.read_text(encoding="utf-8")
+
+    def fail_reload(command: list[str]) -> CommandRun:
+        if command[-1] == "daemon-reload":
+            assert not unit_path.exists()
+            return CommandRun(1, "", "user manager unavailable")
+        if command[-2:] == ["is-enabled", UNIT_NAME]:
+            return CommandRun(1, "disabled", "")
+        assert command == ["systemctl", "--user", "disable", UNIT_NAME]
+        return success(command)
+
+    with pytest.raises(ApplicationError, match="user manager unavailable"):
+        autostart(install, "disable", platform="linux", runner=fail_reload, unit_dir=units)
+    assert unit_path.read_text(encoding="utf-8") == original
+    assert owned_unit(install, unit_dir=units) == unit_path
+    assert (
+        autostart(install, "status", platform="linux", runner=fail_reload, unit_dir=units)[
+            "enabled"
+        ]
+        is False
+    )
+
+    def offline(command: list[str]) -> CommandRun:
+        assert command == ["systemctl", "--user", "is-enabled", UNIT_NAME]
+        return CommandRun(1, "", "user manager unavailable")
+
+    with pytest.raises(ApplicationError, match="Could not verify .*user manager unavailable"):
+        autostart(install, "status", platform="linux", runner=offline, unit_dir=units)
+    assert (
+        autostart(install, "disable", platform="linux", runner=success, unit_dir=units)["changed"]
+        is True
+    )
+    assert not unit_path.exists()
+    assert (
+        autostart(install, "status", platform="linux", runner=offline, unit_dir=units)["enabled"]
+        is False
+    )

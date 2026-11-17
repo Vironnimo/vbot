@@ -657,14 +657,25 @@ async def test_compaction_omits_only_old_complete_exchanges_after_context_reject
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
-@pytest.mark.parametrize("context_window", [4096, 1024, 128])
+@pytest.mark.parametrize(
+    ("context_window", "older_exchanges"),
+    [(4096, False), (1024, False), (128, False), (1024, True)],
+)
 async def test_compaction_recovers_remote_overflow_after_the_adapter_learns_a_smaller_window(
     strategy,
     context_window,
+    older_exchanges,
 ):
     adapter = compatible.make_adapter(model=compatible.catalog_model(reasoning=False))
     text = "".join(random.Random(0).choices("abcdefghijklmnopqrstuvwxyz", k=30_000))
     messages = [user("u1", "REQUEST"), *tool_step("large", text), assistant("a1", "answer")]
+    if older_exchanges:
+        messages[:0] = [
+            user("oldest", "oldest evidence " * 6_000),
+            assistant("answer-oldest", "First answer"),
+            user("older", "older evidence " * 1_000),
+            assistant("answer-older", "Second answer"),
+        ]
     try:
         with respx.mock:
             route = respx.post(compatible.OPENAI_URL).mock(
@@ -719,7 +730,12 @@ async def test_compaction_recovers_remote_overflow_after_the_adapter_learns_a_sm
         [original] = [item["content"] for item in first["messages"] if item["role"] == "tool"]
         [reduced] = [item["content"] for item in second["messages"] if item["role"] == "tool"]
         assert len(reduced) < len(original)
-        assert messages[2].content == text
+        assert messages[-2].content == text
+        if older_exchanges:
+            assert not any(
+                "older evidence" in str(item.get("content")) for item in second["messages"]
+            )
+            assert any(item.get("content") == "REQUEST" for item in second["messages"])
     finally:
         await adapter.aclose()
 

@@ -470,7 +470,12 @@ class _HotkeyThread:
             logger.warning("%s registration did not finish in time", self._label)
             self.stop()
             return HOTKEY_ERROR_FAILED
-        return self._error_code
+        return self.error_code
+
+    @property
+    def error_code(self) -> str | None:
+        with self._lock:
+            return self._error_code
 
     def stop(self) -> None:
         """End the loop, which unregisters on its own thread; idempotent."""
@@ -530,7 +535,13 @@ class _HotkeyThread:
         try:
             self._set_escape(self._escape_wanted)
             self._loop(self._spec.held_keys(virtual_key))
+        except Exception:
+            logger.warning("%s message loop failed", self._label, exc_info=True)
         finally:
+            with self._lock:
+                self._registered = False
+                if not self._cancelled:
+                    self._error_code = HOTKEY_ERROR_FAILED
             self._set_escape(False)
             self._api.unregister(HOTKEY_ID)
             logger.info("%s unregistered: %s", self._label, describe_hotkey(self._spec))
@@ -636,7 +647,8 @@ class HotkeyController:
         """Return ``{supported, enabled, hotkey, error_code}`` for the WebUI."""
 
         with self._lock:
-            return self._status(self._read(), self._error_code)
+            error = self._thread.error_code if self._thread is not None else self._error_code
+            return self._status(self._read(), error)
 
     def update(self, changes: Any) -> dict[str, Any]:
         """Merge a partial preference, persist it when valid, and re-register.

@@ -160,8 +160,12 @@ class _Harness:
 
     def capture_creation_identity(self, agent_id: str) -> str:
         # An admission snapshot is distinct from a legacy loader's read-time fallback.
-        self.agents[agent_id].created_at = "2026-09-02T00:00:00.000000Z"
-        return str(self.agents[agent_id].created_at)
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        if agent.created_at == "2026-09-01T00:00:00.000000Z":
+            agent.created_at = "2026-09-02T00:00:00.000000Z"
+        return str(agent.created_at)
 
     @staticmethod
     def agent(*, name: str = "Main", librarian_enabled: bool = True) -> Any:
@@ -876,6 +880,53 @@ async def test_pass_never_changes_a_replacement_agent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [False, True])
+async def test_admission_never_curates_a_replacement_agent(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, scheduled: bool
+) -> None:
+    root = harness.home("main")
+    harness.settings["consolidate"] = False
+    harness.authoring.create(root, "old", _document("old"), writer=_HUMAN)
+    if scheduled:
+        harness.write_state(
+            "main",
+            {"first_seen_at": format_canonical_timestamp(harness.now - timedelta(days=8))},
+        )
+    resolving, proceed = asyncio.Event(), asyncio.Event()
+    resolver = harness.service._runtime.agent_resolver
+    resolve_agent = resolver.resolve_agent_async
+
+    async def resolve_before_replacement(*args: Any, **kwargs: Any) -> Any:
+        original = await resolve_agent(*args, **kwargs)
+        if not resolving.is_set():
+            resolving.set()
+            await proceed.wait()
+        return original
+
+    monkeypatch.setattr(resolver, "resolve_agent_async", resolve_before_replacement)
+    pending = asyncio.create_task(
+        harness.service._check() if scheduled else harness.service.run("main")
+    )
+    try:
+        await asyncio.wait_for(resolving.wait(), timeout=2)
+        root.parent.rename(root.parent.with_name("archived-main"))
+        replacement = harness.agent(name="Replacement")
+        replacement.created_at = "2026-10-22T00:00:00.000000Z"
+        harness.agents["main"] = replacement
+        harness.authoring.create(root, "new", _document("new"), writer=_HUMAN)
+    finally:
+        proceed.set()
+    if scheduled:
+        await pending
+    else:
+        with pytest.raises(AgentNotFoundError):
+            await pending
+    await harness.service.aclose()
+    assert (root / "new" / "SKILL.md").is_file()
+    assert not (root.parent / "librarian.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_keeps_aging_changes_in_the_interrupted_pass(
     harness: _Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -911,6 +962,58 @@ async def test_shutdown_keeps_aging_changes_in_the_interrupted_pass(
     assert status["last_pass"]["archived_revisions"] == [status["changes"][0]["id"]]
     assert harness.changed == ["main"]
     assert harness.started == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("known_to_schedule", "manual_agent"),
+    [
+        pytest.param(False, "main", id="first-check"),
+        pytest.param(True, "main", id="due"),
+        pytest.param(True, "other", id="unrelated-manual-pass"),
+    ],
+)
+async def test_scheduled_check_keeps_a_concurrent_manual_pass(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, known_to_schedule: bool, manual_agent: str
+) -> None:
+    harness.settings["consolidate"] = False
+    harness.authoring.create(harness.home("main"), "guide", _document("guide"), writer=_HUMAN)
+    if known_to_schedule:
+        harness.write_state(
+            "main",
+            {"first_seen_at": format_canonical_timestamp(harness.now - timedelta(days=8))},
+        )
+    selected, proceed = asyncio.Event(), asyncio.Event()
+    workers = librarian_module._LIBRARIAN_WORKERS
+
+    async def hold_first_state_read(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        if fn == harness.service._read_state and not selected.is_set():
+            state = await workers.run(fn, *args, **kwargs)
+            selected.set()
+            await proceed.wait()
+            return state
+        return await workers.run(fn, *args, **kwargs)
+
+    monkeypatch.setattr(
+        librarian_module, "_LIBRARIAN_WORKERS", SimpleNamespace(run=hold_first_state_read)
+    )
+    scheduled = asyncio.create_task(harness.service._check())
+    try:
+        await asyncio.wait_for(selected.wait(), timeout=2)
+        if manual_agent == "other":
+            harness.agents["other"] = harness.agent(name="Other")
+            harness.authoring.create(
+                harness.home("other"), "guide", _document("guide"), writer=_HUMAN
+            )
+        manual = await harness.run_pass(manual_agent)
+        assert manual["last_pass"]["outcome"] == "completed"
+    finally:
+        proceed.set()
+        await scheduled
+
+    assert (await harness.service.status(manual_agent))["passes"] == manual["passes"]
+    if manual_agent == "other":
+        assert harness.state("main")["last_pass"]["trigger"] == "schedule"
 
 
 @pytest.mark.asyncio

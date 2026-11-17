@@ -334,7 +334,7 @@ class CronWatcher:
         target: str | None,
     ) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or not watch.same_check(job.watch) or target != watch_execution_target(job):
+        if job is None or not self._still_watching(job_id, watch, target):
             return
         job.last_checked_at = checked_at
         if job.last_check_error is not None:
@@ -355,7 +355,7 @@ class CronWatcher:
         target: str | None,
     ) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or not watch.same_check(job.watch) or target != watch_execution_target(job):
+        if job is None or not self._still_watching(job_id, watch, target):
             return
         baseline = self._owner._execution._failure_baseline(job_id)
         job.last_checked_at = checked_at

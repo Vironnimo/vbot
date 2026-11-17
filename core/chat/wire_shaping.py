@@ -851,6 +851,41 @@ def request_tail_notes(
     return [message for message in history[start:] if message.role == "note"]
 
 
+def history_request_positions(
+    history: Sequence[ChatMessage], request_messages: Sequence[JsonObject]
+) -> dict[int, int]:
+    """Match canonical positions with their native request positions, newest first.
+
+    Public IDs can recur in a Session. Match each occurrence once, and keep
+    optional reasoning-only turns separate since the selected replay policy
+    may omit them. Notes render separately and can span several stored entries.
+    """
+    request_indices: dict[tuple[str, str, str | None, bool], list[int]] = {}
+    for index, wire_message in enumerate(request_messages):
+        role, message_id = wire_message.get("role"), wire_message.get("id")
+        if role not in {"user", "assistant", "tool"} or not isinstance(message_id, str):
+            continue
+        reasoning_only = (
+            role == "assistant"
+            and wire_message.get("content") is None
+            and not wire_message.get("tool_calls")
+        )
+        key = (role, message_id, wire_message.get("timestamp"), reasoning_only)
+        request_indices.setdefault(key, []).append(index)
+    positions: dict[int, int] = {}
+    for index in range(len(history) - 1, -1, -1):
+        message = history[index]
+        if message.programmatic or message.role not in {"user", "assistant", "tool"}:
+            continue
+        reasoning_only = (
+            message.role == "assistant" and message.content is None and not message.tool_calls
+        )
+        indices = request_indices.get((message.role, message.id, message.timestamp, reasoning_only))
+        if indices:
+            positions[index] = indices.pop()
+    return positions
+
+
 def notes_missing_from_request(
     history: Sequence[ChatMessage],
     request_messages: Sequence[JsonObject],
@@ -869,11 +904,10 @@ def notes_missing_from_request(
     are the request's own, which decide what replay sends.
     """
     request_indices = {
-        message_id: index
-        for index, message in enumerate(request_messages)
-        if (message_id := message.get("id")) is not None
+        id(history[index]): request_index
+        for index, request_index in history_request_positions(history, request_messages).items()
     }
-    canonical_ids = {message.id for message in history}
+    canonical_notes = {id(message) for message in history if message.role == "note"}
     missing: list[ChatMessage] = []
     group: list[ChatMessage] = []
     rendered: list[JsonObject] = []
@@ -882,9 +916,7 @@ def notes_missing_from_request(
         start = request_end - len(rendered)
         if group and (start < 0 or list(request_messages[start:request_end]) != rendered):
             # Request-only notes (such as portable Reasoning) are not history.
-            missing.extend(
-                note for note in group if note.role == "note" and note.id in canonical_ids
-            )
+            missing.extend(note for note in group if id(note) in canonical_notes)
         group.clear()
         rendered.clear()
 
@@ -895,7 +927,7 @@ def notes_missing_from_request(
             group.extend(part)
             rendered.extend(note_request_messages(list(part)))
             continue
-        request_index = request_indices.get(part.id)
+        request_index = request_indices.get(id(part))
         if request_index is not None:
             settle(request_index)
     settle(len(request_messages))
@@ -905,32 +937,35 @@ def notes_missing_from_request(
 def history_request_messages(
     history: Sequence[ChatMessage],
     request_messages: Sequence[JsonObject] = (),
+    *,
+    canonical_history: Sequence[ChatMessage] | None = None,
 ) -> list[JsonObject]:
     """Return the request messages that send *history*, to count its share of a request.
 
-    A message that the live *request_messages* sends counts as sent there, with
-    its replayed reasoning, resolved media and request-only Tool content. Other
-    messages and every note render as a request without replay renders them.
-    Every message appears once, but the result is not a sendable request.
+    An original message that the live request sends counts as sent there, with
+    its replayed reasoning, resolved media and request-only Tool content. When
+    counting a subset or a projection, *canonical_history* supplies the original
+    entries for matching. New or rewritten entries and notes render without
+    replay. Every message appears once, but the result is not a sendable request.
     """
+    canonical = history if canonical_history is None else canonical_history
     live = {
-        message_id: message
-        for message in request_messages
-        if isinstance(message_id := message.get("id"), str)
+        id(canonical[index]): request_messages[request_index]
+        for index, request_index in history_request_positions(canonical, request_messages).items()
     }
     rendered: list[JsonObject] = []
-    sent: set[str] = set()
+    sent: set[int] = set()
     for part in _history_request_parts(
         history, replay_policy=DEFAULT_REASONING_REPLAY_POLICY, agent_model=None
     ):
         if isinstance(part, tuple):
             rendered.extend(note_request_messages(list(part)))
             continue
-        sent.add(part.id)
-        rendered.append(live.get(part.id) or _message_to_request_dict(part))
+        sent.add(id(part))
+        rendered.append(live.get(id(part)) or _message_to_request_dict(part))
     # A turn sent only for its replayed reasoning is no history part without replay.
     rendered.extend(
-        live[message.id] for message in history if message.id in live and message.id not in sent
+        live[id(message)] for message in history if id(message) in live and id(message) not in sent
     )
     return rendered
 

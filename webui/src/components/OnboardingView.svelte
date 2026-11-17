@@ -58,6 +58,7 @@
   const catalog = createModelCatalogLoader({ listModels, listConnections });
   let disposed = false;
   let settingsRequest = 0;
+  let setupRevision = 0;
   let modelRequest = 0;
   let lastModelsRefreshToken = null;
   let settings = $state(null);
@@ -155,7 +156,8 @@
   );
 
   onMount(() => {
-    void initialize();
+    void loadSettings();
+    if (!initialSetup) void loadInitialSetup();
     return () => {
       disposed = true;
       settingsRequest += 1;
@@ -168,6 +170,7 @@
     const shared = initialSetup;
     if (!shared || shared === observedSetup) return;
     observedSetup = shared;
+    setupRevision += 1;
     untrack(() => {
       pendingSharedSetup = shared;
     });
@@ -213,18 +216,16 @@
     }
   });
 
-  async function initialize() {
-    const settingsRead = loadSettings();
+  async function loadInitialSetup() {
+    const request = setupRevision;
+    const isCurrent = () =>
+      !disposed && !initialSetup && request === setupRevision;
     try {
-      const state = initialSetup ?? (await getSetup());
-      if (disposed) return;
-      activeAgentId = state.agent_id || targetAgentId;
-      if (stepIds.includes(state.step)) step = state.step;
+      const state = await getSetup();
+      if (isCurrent()) pendingSharedSetup = state;
     } catch (error) {
-      if (!disposed) setupError = error.message;
+      if (isCurrent()) setupError = error.message;
     }
-    await settingsRead;
-    if (!disposed && step === 'model') void loadModels();
   }
 
   function stepLabel(id) {
@@ -258,6 +259,9 @@
           return false;
         const result = await updateSetup(next);
         if (disposed) return false;
+        setupRevision += 1;
+        pendingSharedSetup = null;
+        activeAgentId = result.agent_id || targetAgentId;
         onSetupChange(result);
         step = next;
         if (next === 'model') void loadModels();
@@ -286,8 +290,11 @@
         )
           return false;
         const result = await finishSetup();
-        if (!disposed) onSetupChange(result);
-        if (!disposed) callback();
+        if (disposed) return false;
+        setupRevision += 1;
+        pendingSharedSetup = null;
+        onSetupChange(result);
+        callback();
         return true;
       } catch (error) {
         if (!disposed) setupError = error.message;

@@ -95,6 +95,22 @@ describe('Session client state', () => {
     });
   });
 
+  it.each([
+    ['cancelled', false],
+    ['failed', true],
+  ])('reports actionable Compaction outcomes for %s', (reason, showError) => {
+    const session = ensureSessionState(createChatState(), 'alpha', 'session');
+    startRun(session, { run_id: 'one', status: 'running' });
+    appendRunEvent(session, {
+      run_id: 'one',
+      sequence: 1,
+      type: 'compaction_aborted',
+      payload: { reason, requested_by_user: true },
+    });
+
+    expect(Boolean(session.actionError)).toBe(showError);
+  });
+
   it('keeps live Run controls authoritative across stale snapshots and other Runs', () => {
     const session = ensureSessionState(
       createChatState(),

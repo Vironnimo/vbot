@@ -414,9 +414,6 @@ class TrayController:
 
             self._open_work.put(run)
             return
-        if action == "start_update":
-            with self._state_lock:
-                self._update_requested = True
         self._queue(action, getattr(self._actions, action))
 
     def invoke_default(self) -> None:
@@ -456,6 +453,10 @@ class TrayController:
 
     def _enqueue(self, action: str, work: Callable[[], object]) -> None:
         with self._state_lock:
+            if action == "start_update":
+                if self._update_requested:
+                    return
+                self._update_requested = True
             self._pending.append(action)
 
         def run() -> None:
@@ -492,6 +493,10 @@ class TrayController:
             self._closed.wait(self._availability_interval)
 
     def _poll_state(self) -> None:
+        with self._state_lock:
+            # Only a read begun after dispatch returned can see its durable
+            # operation. A poll during dispatch may still see an older update.
+            update_dispatched = self._update_requested and "start_update" not in self._pending
         try:
             state = self._actions.state()
             if not isinstance(state, TrayState):
@@ -501,7 +506,7 @@ class TrayController:
             return
         with self._state_lock:
             self._state = state
-            if state.update_phase in _FINISHED_UPDATE_PHASES:
+            if update_dispatched:
                 self._update_requested = False
             quit_pending = "quit" in self._pending
         if (request := state.server_request) is not None:
@@ -553,9 +558,6 @@ class TrayController:
         try:
             callback()
         except Exception as error:  # no facade exception may leave the worker unusable
-            if action == "start_update":
-                with self._state_lock:
-                    self._update_requested = False
             self._record_error(f"Could not {action.replace('_', ' ')}", error)
             return False
         if not clears_error:

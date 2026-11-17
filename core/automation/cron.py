@@ -1079,8 +1079,8 @@ class CronService:
                     if "delivery" in fields:
                         fields = {**fields, "delivery": candidate.delivery}
                     if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
-                        await settle_before_cancelling(self._prepare_webhook(job_id))
                         issued = True
+                        await settle_before_cancelling(self._webhooks.prepare(job_id))
                     # A fire may have changed the job while its references were checked.
                     job, candidate, changed_fields, restart_task = self._stage_update(
                         job_id, fields, validate_references=False, rename=rename, actor=actor
@@ -1097,7 +1097,7 @@ class CronService:
                         actor=actor,
                     )
             except BaseException:
-                if issued:
+                if issued and self._jobs[job_id].schedule_type != "webhook":
                     await settle_before_cancelling(self._webhooks.discard_secret(job_id))
                 raise
         return self._clone_job(job), self._clone_job(candidate), changed_fields
@@ -1161,11 +1161,6 @@ class CronService:
         if _new_check(job, candidate, rename=rename):
             await self._renew_watch(candidate)
         return job, candidate, changed_fields
-
-    async def _prepare_webhook(self, job_id: str) -> None:
-        """Give a job that gets a webhook schedule a new secret and no stale requests."""
-        await self._webhooks.discard(job_id, keep_secret=True)
-        await self._webhooks.issue_secret(job_id)
 
     async def _renew_watch(self, job: CronJob) -> None:
         """After a saved watch change: forget the baseline, and check a new watch at once.

@@ -221,10 +221,12 @@ class CompactionContext:
         A message the Projection rewrites, such as a digested Skill Result, is
         not what the request sends under its id, so it counts as rendered.
         """
-        sent = {message.id: message for message in self.messages}
-        rewritten = {message.id for message in messages if sent.get(message.id, message) != message}
-        request = tuple(item for item in self.request_messages if item.get("id") not in rewritten)
-        return _history_tokens(messages, request, self.estimate_request_tokens)
+        return _history_tokens(
+            messages,
+            self.request_messages,
+            self.estimate_request_tokens,
+            canonical_history=self.messages,
+        )
 
 
 @dataclass(frozen=True)
@@ -819,11 +821,11 @@ def _summarized_messages(
     messages: list[ChatMessage], uncovered: tuple[ChatMessage, ...]
 ) -> list[ChatMessage]:
     """Return the newly summarized part of *messages*, without checkpoint or carried notes."""
-    carried = {note.id for note in uncovered}
+    carried = {id(note) for note in uncovered}
     return [
         message
         for message in messages
-        if message.id not in carried and not _is_compaction_checkpoint_note(message)
+        if id(message) not in carried and not _is_compaction_checkpoint_note(message)
     ]
 
 

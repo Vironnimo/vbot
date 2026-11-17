@@ -237,11 +237,8 @@
       options.workspaceCopyChoice === undefined
     ) {
       workspaceDecisionOpen = true;
-      if (source !== 'transition') {
-        return false;
-      }
-      // Leaving the editor saves the Workspace change once the user decides
-      // about its files; Cancel keeps the draft and fails the save.
+      // The same tracked save waits for the Workspace decision, so a
+      // transition can wait through both the confirmation and its write.
       const copyFiles = await new Promise((resolve) => {
         resolveWorkspaceDecision = resolve;
       });
@@ -356,13 +353,7 @@
 
   function chooseWorkspaceCopy(copyFiles) {
     workspaceDecisionOpen = false;
-    if (settleWorkspaceDecision(copyFiles)) {
-      return;
-    }
-    void persistAgent(null, {
-      source: 'manual',
-      workspaceCopyChoice: copyFiles,
-    });
+    settleWorkspaceDecision(copyFiles);
   }
 
   function cancelWorkspaceDecision() {
@@ -370,12 +361,11 @@
     settleWorkspaceDecision(null);
   }
 
-  // Answers a save that waits for the Workspace decision; false when none waits.
+  // Answers the tracked save that waits for the Workspace decision.
   function settleWorkspaceDecision(copyFiles) {
     const resolve = resolveWorkspaceDecision;
     resolveWorkspaceDecision = null;
     resolve?.(copyFiles);
-    return resolve !== null;
   }
 
   function clearAgentAutoSaveTimer() {
@@ -421,9 +411,11 @@
 
     editBaselineValues = createAgentFormValues(nextAgent);
 
-    if (formValuesMatch(formValues, draftValues)) {
-      formValues = createAgentFormValues(nextAgent);
-    }
+    formValues = rebaseAgentFormValues(
+      formValues,
+      draftValues,
+      createAgentFormValues(nextAgent),
+    );
   }
 
   function adoptSavedAgent(savedAgent) {

@@ -1181,7 +1181,15 @@ describe('AgentsView', () => {
   ])(
     'on %s, saves a Workspace change only after the "%s" decision',
     async (trigger, decision, copyIdentityFiles) => {
-      rpcMock.mockImplementation(createAgentsRpcMock());
+      const write = Promise.withResolvers();
+      rpcMock.mockImplementation(
+        createAgentsRpcMock({
+          agentUpdate: async (params) => {
+            await write.promise;
+            return { ...baseAgent(), ...params };
+          },
+        }),
+      );
       const mounted = mountUnderCoordinator();
       mountedComponent = mounted.component;
       await waitForCondition(
@@ -1215,9 +1223,11 @@ describe('AgentsView', () => {
         workspace: 'D:/agents/moved',
         copy_workspace_identity_files: copyIdentityFiles,
       });
-      if (leaving) {
-        await expect(leaving).resolves.toBe(true);
-      }
+      // Leaving after a manual confirmation must await its admitted write.
+      leaving ??= mounted.coordinator.flushPending();
+      write.resolve();
+      await expect(leaving).resolves.toBe(true);
+      expect(getAgentUpdateCalls()).toHaveLength(1);
     },
   );
 
@@ -1413,6 +1423,68 @@ describe('AgentsView', () => {
     await flushAsyncUpdates();
 
     expect(getAgentUpdateCalls()).toHaveLength(1);
+  });
+
+  it('rebases a newer draft on the saved Agent response field by field', async () => {
+    const write = Promise.withResolvers();
+    const current = { ...baseAgent(), workspace: 'D:/other-writer' };
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agentUpdate: async (params) => {
+          await write.promise;
+          return { ...current, name: 'Alpha edited', ...params };
+        },
+      }),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha');
+    setTextInputValue('agent-name', 'Alpha edited');
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1);
+
+    setTextInputValue('agent-description', 'A newer edit');
+    write.resolve();
+    await waitForCondition(
+      () => textInputValue('agent-workspace') === 'D:/other-writer',
+    );
+    expect(textInputValue('agent-description')).toBe('A newer edit');
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 2);
+    expect(getAgentUpdateCalls()[1][1]).toEqual({
+      id: 'alpha',
+      description: 'A newer edit',
+    });
+  });
+
+  it('supersedes a pending roster response when its Agent saves', async () => {
+    const stale = Promise.withResolvers();
+    const current = Promise.withResolvers();
+    const saved = { ...baseAgent(), name: 'Alpha saved' };
+    const roster = vi
+      .fn()
+      .mockResolvedValueOnce({ agents: [baseAgent()] })
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(current.promise);
+    const fallback = createAgentsRpcMock({ agentUpdate: () => saved });
+    rpcMock.mockImplementation((method, params) =>
+      method === 'agent.list' ? roster() : fallback(method, params),
+    );
+    const props = reactiveProps({ agentsRefreshToken: 0 });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha');
+    props.agentsRefreshToken += 1;
+    flushSync();
+    expect(roster).toHaveBeenCalledTimes(2);
+
+    setTextInputValue('agent-name', saved.name);
+    submitAgentForm();
+    await waitForCondition(() => roster.mock.calls.length === 3);
+    stale.resolve({ agents: [baseAgent()] });
+    await flushAsyncUpdates();
+    expect(textInputValue('agent-name')).toBe(saved.name);
+    current.resolve({ agents: [saved] });
+    await flushAsyncUpdates();
+    expect(textInputValue('agent-name')).toBe(saved.name);
   });
 
   it('does not apply an in-flight autosave to a newly selected agent', async () => {

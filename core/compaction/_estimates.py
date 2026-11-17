@@ -40,11 +40,15 @@ def _history_tokens(
     history: Sequence[ChatMessage],
     request_messages: Sequence[JsonObject],
     estimate: RequestTokenEstimator,
+    *,
+    canonical_history: Sequence[ChatMessage] | None = None,
 ) -> int:
     """Count *history* as the live request sends it (``history_request_messages``)."""
     if not history:
         return 0
-    return estimate(history_request_messages(history, request_messages))
+    return estimate(
+        history_request_messages(history, request_messages, canonical_history=canonical_history)
+    )
 
 
 class _ModelRequestInput(NamedTuple):

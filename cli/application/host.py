@@ -117,9 +117,11 @@ class ApplicationFacade:
         )
 
     def state(self) -> TrayState:
-        # One stat per poll: another process handed an update worker or a server
-        # start to this tray.
-        if (self._install.root / operations.DISPATCH_REQUEST).exists():
+        # Hand the controller any already accepted request before taking another.
+        if (
+            self._server_request is None
+            and (self._install.root / operations.DISPATCH_REQUEST).exists()
+        ):
             self._dispatch_requested()
         try:
             operation = self._observer.latest()
@@ -130,9 +132,7 @@ class ApplicationFacade:
         self._observe_update(operation)
         server_state, server_url = self._server()
         version = self._version()
-        # Handed to the controller exactly once; a failure above keeps it for the next poll.
-        server_request, self._server_request = self._server_request, None
-        return TrayState(
+        state = TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
             update_phase=operation.phase if operation else None,
@@ -145,9 +145,12 @@ class ApplicationFacade:
             running_since=self._activity.running_since(),
             details=self._details(server_url),
             restart_pending=update_idle and self._activation_changed(),
-            server_request=server_request,
+            server_request=self._server_request,
             available_update=self._available_label(),
         )
+        # A failed status read must leave an accepted request for the next poll.
+        self._server_request = None
+        return state
 
     def record_tray_start(self, *, successor: bool) -> None:
         """Note in the activity history that this tray started."""

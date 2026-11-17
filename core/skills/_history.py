@@ -265,7 +265,7 @@ class _Lineage:
 
 @dataclass
 class _Log:
-    signature: tuple[int, int] | None
+    signature: tuple[int, int, int, int] | None
     revisions: list[SkillRevision] = field(default_factory=list)
     by_id: dict[int, SkillRevision] = field(default_factory=dict)
     # Byte span of each revision's line, for reading its stored texts back.
@@ -911,14 +911,14 @@ def _redirect(path: Path) -> bool:
         return True
 
 
-def _signature(path: Path) -> tuple[int, int] | None:
+def _signature(path: Path) -> tuple[int, int, int, int] | None:
     try:
         stat = path.stat()
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise SkillHistoryError(f"failed to read Skill history {path}: {exc}") from exc
-    return stat.st_size, stat.st_mtime_ns
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
 
 
 def _modified_at(package: Path) -> str:

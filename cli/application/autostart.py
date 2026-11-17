@@ -277,7 +277,7 @@ def _task_lookup(run: Runner, name: str) -> tuple[bool, str, str]:
 def _task_autostart(install: Installation, action: str, run: Runner) -> dict[str, Any]:
     name = task_name(install)
     launcher = install.root / "vBot.exe"
-    if not launcher.is_file():
+    if action == "enable" and not launcher.is_file():
         raise ApplicationError("Application bootstrap is missing")
     exists, registered_launcher, arguments = _task_lookup(run, name)
     owned = exists and same_path(registered_launcher, launcher) and arguments == ""
@@ -432,6 +432,26 @@ def _systemctl(run: Runner, *arguments: str) -> CommandRun:
     return run(["systemctl", "--user", *arguments])
 
 
+def _unit_enabled(run: Runner) -> bool:
+    result = _systemctl(run, "is-enabled", UNIT_NAME)
+    state = result.stdout
+    if result.returncode == 0 and state in {"enabled", "enabled-runtime"}:
+        return True
+    # Some non-enabled states (such as static) also exit successfully.
+    if state in {
+        "disabled",
+        "linked",
+        "linked-runtime",
+        "masked",
+        "masked-runtime",
+        "static",
+        "indirect",
+    }:
+        return False
+    detail = result.stderr or state or f"exit code {result.returncode}"
+    raise ApplicationError(f"Could not verify application Autostart for {UNIT_NAME} ({detail})")
+
+
 def _unit_autostart(install: Installation, action: str, run: Runner, units: Path) -> dict[str, Any]:
     path = units / UNIT_NAME
     exists = path.exists()
@@ -441,17 +461,31 @@ def _unit_autostart(install: Installation, action: str, run: Runner, units: Path
             f"The systemd user unit {UNIT_NAME} belongs to another vBot installation"
         )
     if action == "status":
-        return {"ok": True, "enabled": owned, "unit": UNIT_NAME, "launcher": str(install.bootstrap)}
+        return {
+            "ok": True,
+            "enabled": owned and _unit_enabled(run),
+            "unit": UNIT_NAME,
+            "launcher": str(install.bootstrap),
+        }
     if action == "disable":
         if not exists:
             return {"ok": True, "enabled": False, "unit": UNIT_NAME, "changed": False}
+        removed_unit = path.read_text(encoding="utf-8")
         disabled = _systemctl(run, "disable", UNIT_NAME)
         if disabled.returncode != 0:
             raise ApplicationError(
                 f"Could not disable application Autostart: {disabled.stderr or disabled.stdout}"
             )
         path.unlink()
-        _systemctl(run, "daemon-reload")
+        result = _systemctl(run, "daemon-reload")
+        if result.returncode != 0:
+            atomic_write_text(path, removed_unit)
+            detail = result.stderr or result.stdout or f"exit code {result.returncode}"
+            raise ApplicationError(
+                f"Systemd disabled {UNIT_NAME} at logon but could not reload the unit: {detail}\n"
+                "The unit file was restored so the removal can be retried.\n"
+                "Next: vbot autostart disable"
+            )
         _LOGGER.info("Application Autostart disabled (mode=systemd)")
         return {"ok": True, "enabled": False, "unit": UNIT_NAME, "changed": True}
     if not install.bootstrap.is_file():
