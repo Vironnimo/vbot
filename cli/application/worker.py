@@ -233,6 +233,8 @@ def roll_back_data(
     data_dir = _data_dir(install)
     running = _live_servers(data_dir)
     if running is not None:
+        if operation.data_restore_started:
+            raise _safety_restore_conflict(snapshot_id, running)
         _log_data_kept(operation, snapshot_id, running)
         return not_restored.format(reason=running)
     try:
@@ -263,10 +265,7 @@ def roll_back_data(
                     before_recovery, data_stamp(data_dir)
                 )
                 if refusal is not None:
-                    raise ApplicationError(
-                        f"The safety snapshot {snapshot_id} was not restored: {refusal}. "
-                        "The preserved data needs inspection before starting vBot"
-                    )
+                    raise _safety_restore_conflict(snapshot_id, refusal)
 
             restore_data_snapshot(
                 data_dir,
@@ -294,6 +293,13 @@ def roll_back_data(
         snapshot_id,
     )
     return f"The data was restored from snapshot {snapshot_id}, taken before the update."
+
+
+def _safety_restore_conflict(snapshot_id: str, reason: str) -> ApplicationError:
+    return ApplicationError(
+        f"The safety snapshot {snapshot_id} was not restored: {reason}. "
+        "The preserved data needs inspection before starting vBot"
+    )
 
 
 def _log_data_kept(operation: Operation, snapshot_id: str, reason: str) -> None:

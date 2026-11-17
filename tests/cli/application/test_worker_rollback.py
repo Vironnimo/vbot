@@ -260,9 +260,12 @@ def test_restore_rechecks_writers_after_validating_the_selected_snapshot(
     assert stored_bodies(notes_spec(data_dir)) == ["before the update", "written during preflight"]
 
 
-@pytest.mark.parametrize("writer_still_live", [True, False])
-def test_safety_restore_also_refuses_changes_during_its_planning(
-    switched, monkeypatch, writer_still_live
+@pytest.mark.parametrize(
+    ("writer_start", "writer_still_live"),
+    [("early", True), ("planning", True), ("planning", False)],
+)
+def test_safety_restore_refuses_concurrent_writers_before_or_during_planning(
+    switched, monkeypatch, writer_start, writer_still_live
 ):
     from core.database import recovery
 
@@ -270,22 +273,30 @@ def test_safety_restore_also_refuses_changes_during_its_planning(
     _newer_data(data_dir, monkeypatch)
     restore = recovery.restore_data_snapshot
     changed = False
+    starts: list[str | None] = []
+
+    def change_data():
+        nonlocal changed
+        database = open_database(notes_spec(data_dir))
+        add_note(database, "written during recovery")
+        database.close()
+        changed = True
 
     def preflight(*args, **kwargs):
-        nonlocal changed
-        if kwargs.get("cause") == "failed user-selected application rollback":
-            database = open_database(notes_spec(data_dir))
-            add_note(database, "written during recovery")
-            database.close()
-            changed = True
+        if writer_start == "planning" and kwargs.get("cause") == (
+            "failed user-selected application rollback"
+        ):
+            change_data()
         return restore(*args, **kwargs)
 
+    def start(_install, *, version_id=None, **_kwargs):
+        starts.append(version_id)
+        if version_id == "rel_old" and writer_start == "early":
+            change_data()
+        return SimpleNamespace(ok=False, message="candidate failed")
+
     monkeypatch.setattr(recovery, "restore_data_snapshot", preflight)
-    monkeypatch.setattr(
-        worker.processes,
-        "start",
-        lambda *_a, **_kw: SimpleNamespace(ok=False, message="candidate failed"),
-    )
+    monkeypatch.setattr(worker.processes, "start", start)
     monkeypatch.setattr(
         worker,
         "_live_servers",
@@ -295,6 +306,7 @@ def test_safety_restore_also_refuses_changes_during_its_planning(
     worker.run(install, operation.id)
     result = load_operation(install, operation.id)
     assert result.phase == "needs_attention"
+    assert starts == ["rel_old"]
     assert f"safety snapshot {result.data_snapshot} was not restored" in result.error
     assert install.version().name == "rel_new"
     assert stored_bodies(notes_spec(data_dir)) == ["before the update", "written during recovery"]
