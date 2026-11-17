@@ -58,6 +58,10 @@ WEBSOCKET_PRIVATE = 4401
 _UPSTREAM_ORIGIN = "http://localhost"
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _POOL_TIMEOUT_SECONDS = 10.0
+# Keep the pool wait bounded while reads and writes may legitimately stream.
+_UPSTREAM_TIMEOUT = httpx.Timeout(
+    None, connect=_CONNECT_TIMEOUT_SECONDS, pool=_POOL_TIMEOUT_SECONDS
+)
 # How long closing all Portals waits for their requests to end before cancelling.
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _WAITING_REFRESH_SECONDS = 2
@@ -108,21 +112,18 @@ class PortalServer:
         self._tls = tls
         self.own_ports = frozenset({own_port})
         self._listeners: dict[str, _Listener] = {}
-        self._client = httpx.AsyncClient(
-            # A finite pool wait: with every connection busy, a request fails
-            # instead of waiting for good.
-            timeout=httpx.Timeout(
-                None, connect=_CONNECT_TIMEOUT_SECONDS, pool=_POOL_TIMEOUT_SECONDS
-            ),
-            follow_redirects=False,
-            trust_env=False,
-            # The app is always plain HTTP on this computer: a context without CA
-            # parsing, which a bare client would do on the Event Loop.
-            verify=ssl_context_for(_UPSTREAM_ORIGIN),
-            transport=transport,
+        # Keep connection pooling without a client cookie jar. Only cookies
+        # carried by this browser and scoped to this Portal reach the app.
+        self._transport = (
+            transport
+            if transport is not None
+            else httpx.AsyncHTTPTransport(
+                trust_env=False,
+                # The app is always plain HTTP on this computer: a context without CA
+                # parsing, which a bare client would do on the Event Loop.
+                verify=ssl_context_for(_UPSTREAM_ORIGIN),
+            )
         )
-        # The browser's headers go through as they are; no client defaults.
-        self._client.headers.clear()
         # Per Portal, the kind of failure its requests last logged: a failing app
         # logs once, not once per request, and once more when it answers again.
         self._request_failures = LoggedConditions()
@@ -149,7 +150,7 @@ class PortalServer:
             _done, stuck = await asyncio.wait(tasks, timeout=_CLOSE_TIMEOUT_SECONDS)
             for task in stuck:
                 task.cancel()
-        await self._client.aclose()
+        await self._transport.aclose()
 
 
 class _Listener:
@@ -440,16 +441,17 @@ class _PortalApp:
         return f"{scheme}://localhost:{self._target_port}{path}" + (f"?{query}" if query else "")
 
     async def _forward_http(self, scope: Scope, receive: Receive, send: Send, query: str) -> None:
-        client = self._server._client
+        transport = self._server._transport
         has_body = bool(_header_values(scope, b"transfer-encoding")) or any(
             value.strip() not in {b"", b"0"} for value in _header_values(scope, b"content-length")
         )
         browser = _BrowserChannel(receive)
-        request = client.build_request(
+        request = httpx.Request(
             str(scope.get("method") or "GET"),
             self._upstream_url(scope, query),
             headers=self._upstream_headers(scope),
             content=browser.body() if has_body else None,
+            extensions={"timeout": _UPSTREAM_TIMEOUT.as_dict()},
         )
         # uvicorn ignores what is sent after the browser left, so without this
         # watch an endless answer (an event stream) would hold its app connection
@@ -461,7 +463,8 @@ class _PortalApp:
             nonlocal response
             # The enclosing request owns the response as soon as it exists,
             # even when it is cancelled while the connection is being made.
-            response = await client.send(request, stream=True)
+            response = await transport.handle_async_request(request)
+            response.request = request
 
         try:
             try:

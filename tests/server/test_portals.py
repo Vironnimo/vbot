@@ -357,6 +357,47 @@ async def test_signed_in_access_needs_a_capability_bound_to_a_live_principal(
 
 
 @pytest.mark.asyncio
+async def test_only_the_browsers_own_portal_cookie_reaches_the_app() -> None:
+    def app(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/sign-in":
+            return httpx.Response(
+                200,
+                headers={"set-cookie": "sid=first-browser; Domain=localhost; Path=/; HttpOnly"},
+                stream=httpx.ByteStream(b"signed in"),
+            )
+        sid = request.headers.get("cookie", "anonymous")
+        return httpx.Response(200, stream=httpx.ByteStream(sid.encode()))
+
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(app))
+    shop = _PortalApp(server, "shop", 5173)
+    shop.listen_port = 7000
+    other = _PortalApp(server, "other", 5174)
+    other.listen_port = 7001
+
+    def browser(portal: _PortalApp, portal_id: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=portal),
+            base_url=f"http://127.0.0.1:{portal.listen_port}",
+            cookies={f"vbot_portal_{portal.listen_port}": delivery.portal_token(portal_id)},
+        )
+
+    try:
+        async with browser(shop, "shop") as first:
+            signed_in = await first.get("/sign-in")
+            assert signed_in.headers["set-cookie"] == "vp_shop_sid=first-browser; Path=/; HttpOnly"
+            assert (await first.get("/")).text == "sid=first-browser"
+        async with browser(shop, "shop") as second:
+            assert (await second.get("/")).text == "anonymous"
+        async with browser(other, "other") as separate_portal:
+            assert (await separate_portal.get("/")).text == "anonymous"
+    finally:
+        await registry.aclose()
+        await server.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["pending_http", "streaming_http", "fixed_http", "websocket"])
 async def test_device_revocation_ends_open_portal_requests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
