@@ -80,7 +80,8 @@ def _tts_voice_field(model: Model | None, provider_id: str) -> TaskModelOptionFi
 
     * ``model.capabilities.supported_voices`` non-empty → ``select`` with
       those voices (the only authoritative list — published by the
-      provider per model).
+      provider per model). Its default is the catalog's ``voice`` default
+      when that voice is listed.
     * Otherwise, ``provider_id == "openai"`` → ``select`` with the OpenAI
       canonical voice list (kokoro, gemini-tts, voxtral, … may also
       accept these names, but we do not invent them as a default).
@@ -93,6 +94,12 @@ def _tts_voice_field(model: Model | None, provider_id: str) -> TaskModelOptionFi
     """
 
     if model is not None and model.capabilities.supported_voices:
+        catalog_voice = _task_options(model, TASK_TEXT_TO_SPEECH).get("parameters")
+        catalog_default = (
+            catalog_voice.get("voice", {}).get("default")
+            if isinstance(catalog_voice, Mapping)
+            else None
+        )
         choices = tuple(
             TaskModelOptionChoice(value=voice_id, label=voice_id)
             for voice_id in model.capabilities.supported_voices
@@ -103,7 +110,9 @@ def _tts_voice_field(model: Model | None, provider_id: str) -> TaskModelOptionFi
             label="Voice",
             required=True,
             default=(
-                "gb_jane_neutral"
+                catalog_default
+                if catalog_default in model.capabilities.supported_voices
+                else "gb_jane_neutral"
                 if provider_id == "mistral"
                 and "gb_jane_neutral" in model.capabilities.supported_voices
                 else None
@@ -192,15 +201,25 @@ def _speech_catalog_fields(
         "voice": "Voice",
         "response_format": "Format",
         "instructions": "Instructions",
+        "style": "Style",
         "language": "Language",
+        "mode": "Transcription mode",
         "temperature": "Temperature",
         "context_bias": "Vocabulary and context",
         "timestamp_granularities": "Timestamps",
+        "word_timestamps": "Word timestamps",
         "diarize": "Identify speakers",
     }
     descriptions = {
+        "style": "How the voice should sound, for example calm and warm.",
+        "mode": "Verbatim keeps every spoken word; smart removes fillers and formats the text.",
         "context_bias": "Names or terms to recognize, one entry per line.",
-        "diarize": "Add speaker labels using segment timestamps, overriding the timestamp choice.",
+        "word_timestamps": "Return times for each word; uses verbatim mode without vocabulary.",
+        "diarize": (
+            "Add speaker labels; uses verbatim mode without vocabulary."
+            if provider_id == "google"
+            else "Add speaker labels using segment timestamps, overriding the timestamp choice."
+        ),
     }
     fields: list[TaskModelOptionField] = []
     for name in labels:
@@ -242,7 +261,10 @@ def _speech_catalog_fields(
         elif spec.get("type") == "string":
             fields.append(
                 replace(
-                    field, type="textarea" if name in {"context_bias", "instructions"} else "text"
+                    field,
+                    type="textarea"
+                    if name in {"context_bias", "instructions", "style"}
+                    else "text",
                 )
             )
     return tuple(fields)

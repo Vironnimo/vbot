@@ -2,6 +2,7 @@
 
 Speech-to-text sends base64 JSON to OpenRouter and multipart form data to
 OpenAI-compatible Providers; text-to-speech sends the same JSON body to both.
+Mistral and Google have native routes of their own.
 """
 
 from __future__ import annotations
@@ -25,12 +26,17 @@ import respx
 from core.model_tasks.speech_input import SpeechInputError
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
 from core.model_tasks.speech_types import SpeechAudioChunk
-from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.providers.errors import (
+    ProviderContentRefusedError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
 MISTRAL_BASE = "https://api.mistral.ai/v1"
+GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def test_audio_format_from_prefers_browser_mime_type() -> None:
@@ -45,6 +51,7 @@ def test_audio_format_from_prefers_browser_mime_type() -> None:
         ("openrouter", {"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}, 36_000_000),
         ("custom", {"wav", "flac"}, None),
         ("mistral", {"wav", "flac"}, None),
+        ("google", {"wav", "mp3", "flac", "ogg", "webm", "aac", "m4a"}, None),
     ],
 )
 def test_transcription_policy_preserves_only_the_targets_supported_formats(
@@ -251,6 +258,7 @@ async def test_mistral_transcription_sends_repeated_fields_and_normalizes_speake
         pytest.param("mistral", "voxtral-mini-latest", "model", id="mistral-model"),
         pytest.param("mistral", "voxtral-mini-latest", "file_url", id="mistral-input"),
         pytest.param("mistral", "voxtral-mini-latest", "stream", id="mistral-stream"),
+        pytest.param("google", "gemini-3.5-transcribe", "contents", id="google-contents"),
     ],
 )
 @pytest.mark.asyncio
@@ -572,6 +580,268 @@ async def test_streamed_tts_plays_before_provider_completion_and_closes_without_
         )
 
 
+@pytest.mark.parametrize(
+    ("options", "config", "parts", "text", "segments"),
+    [
+        pytest.param(
+            {
+                "language": "de-DE",
+                "mode": "smart",
+                "context_bias": " vBot \n\nGemini ",
+                "word_timestamps": False,
+                "diarize": False,
+            },
+            {"languageCodes": ["de-DE"], "mode": "SMART", "customVocabulary": ["vBot", "Gemini"]},
+            [{"audioTranscription": {"text": "Hallo vBot."}}],
+            "Hallo vBot.",
+            [],
+            id="smart-vocabulary",
+        ),
+        # Google rejects smart mode and vocabulary with speaker labels or word times.
+        pytest.param(
+            {
+                "language": "auto",
+                "mode": "smart",
+                "context_bias": "vBot",
+                "word_timestamps": True,
+                "diarize": True,
+            },
+            {"wordTimestamp": True, "diarization": True},
+            [
+                {
+                    "text": "Hello, vBot.",
+                    "audioTranscription": {
+                        "text": "Hello, vBot.",
+                        "speakerLabel": "spk:0",
+                        "words": [
+                            {"word": "Hello,", "startOffset": "0.300s", "endOffset": "0.800s"},
+                            {"word": "vBot.", "startOffset": "1s", "endOffset": "2.300s"},
+                        ],
+                    },
+                },
+                {"audioTranscription": {"text": "Hi.", "speakerLabel": "spk:1"}},
+            ],
+            "Hello, vBot.\nHi.",
+            [
+                {
+                    "text": "Hello, vBot.",
+                    "start": 0.3,
+                    "end": 2.3,
+                    "speaker": "spk:0",
+                    "words": [
+                        {"word": "Hello,", "start": 0.3, "end": 0.8},
+                        {"word": "vBot.", "start": 1.0, "end": 2.3},
+                    ],
+                },
+                {"text": "Hi.", "speaker": "spk:1"},
+            ],
+            id="diarized-word-times",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_transcription_sends_inline_audio_and_reads_transcription_parts(
+    options: dict[str, Any],
+    config: dict[str, Any],
+    parts: list[dict[str, Any]],
+    text: str,
+    segments: list[dict[str, Any]],
+) -> None:
+    route = respx.post(f"{GOOGLE_BASE}/models/gemini-3.5-transcribe:generateContent").respond(
+        200,
+        json={
+            "candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 130, "candidatesTokenCount": 12},
+        },
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "test-call"
+
+    result = await _client("google", "gemini-3.5-transcribe", usage_observer=observer).transcribe(
+        b"recording", filename="clip.webm", media_type="audio/webm", options=options
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"inlineData": {"mimeType": "audio/webm", "data": "cmVjb3JkaW5n"}}],
+            }
+        ],
+        "generationConfig": {"audioTranscriptionConfig": config},
+    }
+    assert (result.text, list(result.segments)) == (text, segments)
+    usage = {"input_tokens": 130, "output_tokens": 12, "cache_read_tokens": 0}
+    assert result.usage == usage
+    assert observer.finish.await_args.kwargs["usage"] == usage
+
+
+@pytest.mark.parametrize(
+    ("model_id", "options", "inline", "rate"),
+    [
+        # 3.8 Models answer a WAV and take the style as speech metadata.
+        pytest.param(
+            "gemini-3.8-flash-tts",
+            {"voice": "Puck", "style": " calm and warm "},
+            {"mimeType": "audio/wav", "pcm": "wav"},
+            24000,
+            id="wav",
+        ),
+        # Older Models answer headerless little-endian L16 PCM.
+        pytest.param(
+            "gemini-2.5-flash-preview-tts",
+            {"voice": "Puck"},
+            {"mimeType": "audio/L16;codec=pcm;rate=16000", "pcm": "raw"},
+            16000,
+            id="l16",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_tts_returns_a_wav_from_inline_audio(
+    model_id: str, options: dict[str, Any], inline: dict[str, str], rate: int
+) -> None:
+    pcm = b"\x01\x00\xff\xff" * 128
+    audio = _wav_audio(pcm, rate) if inline["pcm"] == "wav" else pcm
+    route = respx.post(f"{GOOGLE_BASE}/models/{model_id}:generateContent").respond(
+        200, json=_google_audio_answer(audio, inline["mimeType"], finish="STOP")
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "test-call"
+
+    result = await _client("google", model_id, usage_observer=observer).synthesize(
+        "Hello", options={**options, "extra_options": {"cachedContent": "cachedContents/test"}}
+    )
+
+    part: dict[str, Any] = {"text": "Hello"}
+    if "style" in options:
+        part["speech_metadata"] = {"style": "calm and warm"}
+    assert json.loads(route.calls.last.request.content) == {
+        "contents": [{"role": "user", "parts": [part]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+        },
+        "cachedContent": "cachedContents/test",
+    }
+    assert (result.media_type, result.format) == ("audio/wav", "wav")
+    with wave.open(io.BytesIO(result.audio), "rb") as wav:
+        assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (rate, 1, 2)
+        assert wav.readframes(wav.getnframes()) == pcm
+    assert observer.finish.await_args.kwargs["usage"] == {
+        "input_tokens": 13,
+        "output_tokens": 129,
+        "cache_read_tokens": 0,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_streamed_tts_plays_l16_chunks_and_keeps_the_latest_usage() -> None:
+    first, last = b"\x01\x00" * 64, b"\xfe\xff" * 32
+    mime_type = "audio/l16; rate=24000; channels=1"
+    events = [
+        _google_audio_answer(first, mime_type),
+        _google_audio_answer(last, mime_type),
+        {
+            "candidates": [{"content": {"parts": [{"text": ""}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 111},
+        },
+    ]
+    route = respx.post(
+        f"{GOOGLE_BASE}/models/gemini-3.8-flash-tts:streamGenerateContent?alt=sse"
+    ).respond(
+        200,
+        content="".join(f"data: {json.dumps(event)}\n\n" for event in events).encode(),
+        headers={"content-type": "text/event-stream"},
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "test-call"
+    chunks: list[SpeechAudioChunk] = []
+
+    async def on_audio(chunk: SpeechAudioChunk) -> None:
+        chunks.append(chunk)
+
+    result = await _client("google", "gemini-3.8-flash-tts", usage_observer=observer).synthesize(
+        "Hello", options={"voice": "Kore"}, on_audio=on_audio
+    )
+
+    assert route.call_count == 1
+    assert b"".join(chunk.audio for chunk in chunks) == first + last
+    assert all(chunk.sample_rate_hz == 24000 for chunk in chunks)
+    with wave.open(io.BytesIO(result.audio), "rb") as wav:
+        assert wav.readframes(wav.getnframes()) == first + last
+    observer.update_latest.assert_awaited_with(
+        {"input_tokens": 13, "output_tokens": 111, "cache_read_tokens": 0}
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        pytest.param(
+            {"candidates": [{"finishReason": "STOP"}]}, ProviderOutcomeUnknownError, id="no-audio"
+        ),
+        pytest.param(
+            {"candidates": [{"finishReason": "MAX_TOKENS"}]},
+            ProviderOutcomeUnknownError,
+            id="truncated",
+        ),
+        pytest.param(
+            {"candidates": [{"finishReason": "SAFETY"}]},
+            ProviderContentRefusedError,
+            id="safety",
+        ),
+        pytest.param(
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+            ProviderContentRefusedError,
+            id="blocked-prompt",
+        ),
+        pytest.param(
+            'data: {"candidates": [{"content": {"parts": [{"inlineData": '
+            '{"mimeType": "audio/l16; rate=24000", "data": "AQA="}}]}}]}\n\n',
+            ProviderOutcomeUnknownError,
+            id="unfinished-stream",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_tts_reports_refusals_and_unusable_results_without_replay(
+    body: Any, error: type[ProviderError]
+) -> None:
+    streaming = isinstance(body, str)
+    route = respx.post(url__regex=r".*/models/gemini-3\.8-flash-tts:.*").mock(
+        return_value=httpx.Response(200, text=body) if streaming else httpx.Response(200, json=body)
+    )
+    with pytest.raises(error) as raised:
+        await _client("google", "gemini-3.8-flash-tts").synthesize(
+            "Hello", options={}, on_audio=AsyncMock() if streaming else None
+        )
+    assert not raised.value.retryable
+    assert route.call_count == 1
+
+
+def _google_audio_answer(audio: bytes, mime_type: str, finish: str | None = None) -> dict[str, Any]:
+    candidate: dict[str, Any] = {
+        "content": {
+            "role": "model",
+            "parts": [
+                {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(audio).decode()}}
+            ],
+        }
+    }
+    if finish is not None:
+        candidate["finishReason"] = finish
+    return {
+        "candidates": [candidate],
+        "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 129},
+    }
+
+
 def _form_parts(request: httpx.Request) -> dict[str, object]:
     message = BytesParser(policy=default_policy).parsebytes(
         f"Content-Type: {request.headers['content-type']}\r\n\r\n".encode() + request.content
@@ -605,10 +875,10 @@ def _speech_done() -> bytes:
     )
 
 
-def _wav_audio(pcm: bytes) -> bytes:
+def _wav_audio(pcm: bytes, rate: int = 24000) -> bytes:
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
-        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        wav.setparams((1, 2, rate, 0, "NONE", "not compressed"))
         wav.writeframes(pcm)
     return output.getvalue()
 
@@ -618,9 +888,11 @@ def _client(provider_id: str, model_id: str, **kwargs: Any) -> ProviderSpeechCli
         id=provider_id,
         name=provider_id,
         adapter=provider_id,
-        base_url={"openrouter": OPENROUTER_BASE, "mistral": MISTRAL_BASE}.get(
-            provider_id, OPENAI_BASE
-        ),
+        base_url={
+            "openrouter": OPENROUTER_BASE,
+            "mistral": MISTRAL_BASE,
+            "google": GOOGLE_BASE,
+        }.get(provider_id, OPENAI_BASE),
         connections=[],
     )
     connection = ConnectionConfig(
