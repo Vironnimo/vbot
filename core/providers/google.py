@@ -169,7 +169,7 @@ def _family_capabilities(
     if _MUSIC.search(model_id):
         return _music_capabilities(model_id)
     if _VIDEO.search(model_id):
-        return _video_capabilities()
+        return _video_capabilities(model_id)
     return _chat_capabilities(raw)
 
 
@@ -411,8 +411,38 @@ def _music_capabilities(model_id: str) -> Capabilities:
     )
 
 
-def _video_capabilities() -> Capabilities:
-    return _task_capabilities(("text", "image"), ("text", "video"), ("video_generation",))
+# Omni generations limited to 10-second clips: 1.1 Flash and the shut-down
+# preview, which Google now serves as 1.1 Flash (its quota errors name
+# ``gemini-omni-1.1-flash``, live 2026-11-17).
+_VIDEO_TEN_SECONDS = re.compile(r"^gemini-omni-(?:1\.1-|flash-preview)")
+
+
+def _video_capabilities(model_id: str) -> Capabilities:
+    """Gemini Omni Flash on the Interactions API, with its ``response_format`` controls.
+
+    Durations are whole seconds from 3 to 15 (1.1 Flash: 3 to 10), aspect
+    ratios 16:9 and 9:16, resolutions 360p to 4k; up to two images become the
+    first and last frame (Omni guide and Model page, read 2026-11-17). Omni
+    also edits uploaded videos, which vBot does not send.
+    """
+
+    longest = 10 if _VIDEO_TEN_SECONDS.search(model_id) else 15
+    return replace(
+        _task_capabilities(("text", "image", "video"), ("text", "video"), ("video_generation",)),
+        task_options={
+            "video_generation": {
+                "parameters": {
+                    "duration": {
+                        "type": "enum",
+                        "values": [str(seconds) for seconds in range(3, longest + 1)],
+                    },
+                    "aspect_ratio": {"type": "enum", "values": ["16:9", "9:16"]},
+                    "resolution": {"type": "enum", "values": ["360p", "720p", "1080p", "4k"]},
+                },
+                "frame_images": ["first_frame", "last_frame"],
+            }
+        },
+    )
 
 
 def _classify_google_status(

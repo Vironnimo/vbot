@@ -51,6 +51,10 @@ VIDEO_CALL_OPTIONS = ("duration", "aspect_ratio", "resolution")
 FRAME_IMAGE_TYPES = ("first_frame", "last_frame")
 
 
+#: Providers with a Video wire route in ``ProviderVideoClient``.
+VIDEO_PROVIDERS = frozenset({"openrouter", "google"})
+
+
 class VideoError(TaskError):
     """Base class for expected Video generation errors."""
 
@@ -69,7 +73,7 @@ class VideoOptionError(VideoError):
 
 
 class VideoExecutionError(VideoError):
-    """Raised when an OpenRouter Video request fails."""
+    """Raised when a Provider Video request fails."""
 
     code = "provider_error"
 
@@ -205,7 +209,7 @@ class VideoService:
             _binding, _options, target_ref = self._resolver.resolve(TASK_VIDEO_GENERATION)
         except VideoConfigurationError:
             return VideoProfile()
-        if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
+        if target_ref.kind != "provider" or target_ref.provider_id not in VIDEO_PROVIDERS:
             return VideoProfile()
         return build_video_profile(self._model_tasks.model_for_target(target_ref))
 
@@ -334,7 +338,7 @@ class VideoService:
         )
 
     def _validated_model(self, target_ref: TaskModelTargetRef) -> Any:
-        if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
+        if target_ref.kind != "provider" or target_ref.provider_id not in VIDEO_PROVIDERS:
             raise VideoConfigurationError("the chosen provider does not offer Video generation")
         model = self._model_tasks.model_for_target(target_ref)
         if model is None:
@@ -372,9 +376,10 @@ async def _settle_cancelled_job(
 ) -> None:
     """Follow a cancelled generation's job until the provider reports its cost.
 
-    The job cannot be cancelled at the provider and is billed when it finishes;
-    its final status carries the cost, which the poll records on the create
-    call's Usage. When that cannot happen, the job id is logged so the charge
+    An OpenRouter job cannot be cancelled and is billed when it finishes; a
+    Google interaction was asked to cancel and is billed for what it generated.
+    Either way its final status carries the cost, which the poll records on the
+    create call's Usage. When that cannot happen, the job id is logged so the charge
     can still be traced.
     """
 

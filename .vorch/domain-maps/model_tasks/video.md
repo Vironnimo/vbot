@@ -1,16 +1,16 @@
 # Video Generation
 
-Task-gated reference for the `video_generation` Task Model and OpenRouter Video execution path.
+Task-gated reference for the `video_generation` Task Model and its OpenRouter and Google execution paths.
 
 ## Boundary
 
-`core/model_tasks/video.py` owns binding resolution, exact configured-Model capability validation, local frame-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/video_providers.py` owns OpenRouter's asynchronous `POST /videos` -> same-origin job polling -> authenticated content download wire. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
+`core/model_tasks/video.py` owns binding resolution, exact configured-Model capability validation, local frame-image loading, provider-error normalization, and caller-owned artifact persistence. `core/model_tasks/video_providers.py` owns both wires behind one job contract (submit once, poll, collect, never resubmit): OpenRouter's asynchronous `POST /videos` -> same-origin job polling -> authenticated content download, and Google's Interactions API (-> Google route). `VIDEO_PROVIDERS` (`video.py`) lists the Providers with a route. `core/tools/media_generation.py` owns only the Agent Tool schema, effective-cwd path resolution, caller-owned default directory, and result projection.
 
 A Connection or Account that disappears during client preparation is a `VideoConfigurationError`, preserving the Tool's unavailable-Model guidance before any create request is sent.
 
 ## Discovery and Options
 
-OpenRouter's ordinary `output_modalities=video` catalog supplies the coarse `video_generation` task tag. The dedicated `/videos/models` catalog is an independent fail-soft enrichment source for exact resolutions, aspect ratios, sizes, durations, frame-image positions, audio generation, seed support, and passthrough keys. Dedicated-catalog-only entries become minimal non-chat Models. Targets need a published `duration` choice and exclude router Models. `VideoProfile` decides the per-call Tool fields and validates their values (`model_tasks/media-profiles.md`); the service rejects unsupported values with the offered choices (`VideoOptionError`, `invalid_arguments`). A requested aspect ratio or resolution drops the Settings `size`.
+OpenRouter's ordinary `output_modalities=video` catalog supplies the coarse `video_generation` task tag. The dedicated `/videos/models` catalog is an independent fail-soft enrichment source for exact resolutions, aspect ratios, sizes, durations, frame-image positions, audio generation, seed support, and passthrough keys. Dedicated-catalog-only entries become minimal non-chat Models. Targets need a published `duration` choice and exclude router Models. `VideoProfile` decides the per-call Tool fields and validates their values (`model_tasks/media-profiles.md`); the service rejects unsupported values with the offered choices (`VideoOptionError`, `invalid_arguments`). A requested aspect ratio or resolution drops the Settings `size`. Google publishes no catalog parameters; `_video_capabilities` (`core/providers/google.py`) writes the Omni facts (-> Google route).
 
 ## Execution Contract
 
@@ -26,6 +26,12 @@ Durable `video_generation` accounting starts at each create POST attempt. Poll r
 
 Shutdown cancels the owned status polls directly and drains their cost watchers, including a watcher that has not started yet. Caller cancellation cannot finish service shutdown while an adopted poll still runs.
 
+## Google route
+
+Gemini Omni (`gemini-omni-*`) is not a Chat Model and has no Veo-style `predictLongRunning`; Google documents it on the Interactions API only (Omni and Interactions API guides, read 2026-11-17; Veo 3.1 Preview was shut down on the Gemini API on 2026-10-22). One `POST /interactions` sends `background: true, store: true`, the prompt as `input` (with frames: image items first, last, then the text, plus `generation_config.video_config.task = image_to_video`), and `response_format {type: video, aspect_ratio, resolution, duration: "<n>s"}`. Published choices: `16:9 9:16`, `360p 720p 1080p 4k`, durations 3-15 s on 1.2 and 3-10 s on 1.1 and the preview; frames are a first frame, or first and last for at most 10 s. A last frame alone or a longer frame pair is rejected before the request. Only 503 is replayed (`TaskRequestRetryPolicy`, as for image and music).
+
+`GET /interactions/{id}` polls with the shared loop. `completed` and `incomplete` end the job; the video is the first `video` item of a `model_output` step, inline base64 (no download; `raw` drops the data). `failed`, `cancelled` and the `requires_*` states fail with the first `errors[]` entry: `RESOURCE_EXHAUSTED` is `ProviderUsageLimitError` (fallback switch), a refusal code or phrase is `ProviderContentRefusedError`, anything else a non-retryable `ProviderError`. A finished interaction with only text is a refusal; a video without inline data or undecodable data is `VideoJobUnfinishedError`. Usage (`total_input/cached/output/thought_tokens`) is normalized like `generateContent`: output includes thoughts. A caller cancel during polling first POSTs `/interactions/{id}/cancel` once (best effort, no Model call recorded) and hands over a task that then follows the poll like OpenRouter's. Stored interactions are not deleted after collection (Google's retention applies). Live (2026-11-17, free-tier key): all three Omni Models accepted the background interaction, which then failed with `RESOURCE_EXHAUSTED` (-> `ProviderUsageLimitError`); a generated video, safety outcomes, Usage and the cancel endpoint are verified from docs and mocked tests only.
+
 ## Tests
 
-Discovery/filter coverage lives in `tests/core/providers/test_openrouter_catalog.py`; wire payload, polling, same-origin download, and content decoding live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.
+Discovery/filter coverage lives in `tests/core/providers/test_openrouter_catalog.py`; wire payload, polling, same-origin download, content decoding and the Google interaction route live in `tests/core/model_tasks/test_generated_media_providers.py`; Omni catalog facts in `tests/core/providers/test_google.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.

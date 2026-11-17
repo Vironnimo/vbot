@@ -485,7 +485,10 @@ class ProviderTaskClient:
                 except httpx.TransportError as exc:
                     raise wrap_network_error(exc) from exc
                 if self._usage_observer is not None:
-                    await self._usage_observer.update_latest(_response_usage(response))
+                    # A status poll may report the Usage of the job its POST created.
+                    await self._usage_observer.update_latest(
+                        await self._observe_response_usage(response)
+                    )
                 auth_recovery.record_response(
                     response.status_code,
                     request_headers,

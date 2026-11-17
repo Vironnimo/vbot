@@ -1,4 +1,4 @@
-"""Wire-contract tests for OpenRouter Video and Music and Google Music generation."""
+"""Wire-contract tests for OpenRouter and Google Video and Music generation."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from core.providers.errors import (
     ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
+    ProviderUsageLimitError,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -510,20 +511,241 @@ async def test_google_music_outcomes_never_replay_a_possibly_billed_track(
     assert route.call_count == calls
 
 
+@pytest.mark.parametrize("medium", ["music", "video"])
 @pytest.mark.asyncio
 @respx.mock
-async def test_google_music_retries_documented_overload() -> None:
-    route = respx.post(GOOGLE_MUSIC_URL).mock(
-        side_effect=[
-            httpx.Response(503, json={"error": {"code": 503, "status": "UNAVAILABLE"}}),
-            httpx.Response(200, json=_google_music_answer(_google_audio(b"ID3track"))),
-        ]
-    )
+async def test_google_media_retries_documented_overload(medium: str) -> None:
+    overloaded = httpx.Response(503, json={"error": {"code": 503, "status": "UNAVAILABLE"}})
+    client: ProviderMusicClient | ProviderVideoClient
+    if medium == "music":
+        route = respx.post(GOOGLE_MUSIC_URL).mock(
+            side_effect=[
+                overloaded,
+                httpx.Response(200, json=_google_music_answer(_google_audio(b"ID3track"))),
+            ]
+        )
+        client = _google_music_client()
+    else:
+        route = respx.post(GOOGLE_INTERACTIONS_URL).mock(
+            side_effect=[overloaded, httpx.Response(200, json=_interaction(MP4))]
+        )
+        client = _google_video_client()
 
     with patch("core.utils.retry._sleep", new=AsyncMock()):
-        result = await _google_music_client().generate("A song", options={})
+        result = await client.generate("A song", options={})
 
-    assert (result.data, route.call_count) == (b"ID3track", 2)
+    assert (result.data, route.call_count) == (b"ID3track" if medium == "music" else MP4, 2)
+
+
+GOOGLE_INTERACTIONS_URL = f"{GOOGLE_BASE}/interactions"
+MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+
+
+def _interaction(*content: bytes | dict, status: str = "completed", **fields: object) -> dict:
+    items = [
+        {
+            "type": "video",
+            "mime_type": "video/mp4",
+            "data": base64.b64encode(item).decode("ascii"),
+        }
+        if isinstance(item, bytes)
+        else item
+        for item in content
+    ]
+    steps = [{"type": "model_output", "content": items}] if items else []
+    return {"id": "int-1", "status": status, "steps": steps, **fields}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_video_runs_a_background_interaction_and_reads_its_inline_video() -> None:
+    create = respx.post(GOOGLE_INTERACTIONS_URL).respond(
+        200, json={"id": "int-1", "status": "in_progress"}
+    )
+    poll = respx.get(f"{GOOGLE_INTERACTIONS_URL}/int-1").respond(
+        200,
+        json=_interaction(
+            {"type": "thought", "summary": []},
+            MP4,
+            usage={
+                "total_input_tokens": 1200,
+                "total_cached_tokens": 200,
+                "total_output_tokens": 5000,
+                "total_thought_tokens": 300,
+                "total_tokens": 6500,
+            },
+        ),
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "call"
+    start = ImageInput("start.png", "image/png", b"start")
+    end = ImageInput("end.png", "image/png", b"end")
+
+    result = await _google_video_client(usage_observer=observer).generate(
+        "A river at dawn",
+        options={
+            "duration": "8",
+            "aspect_ratio": "9:16",
+            "resolution": "",
+            "extra_options": {"labels": {"team": "video"}},
+        },
+        # Google takes the frames in first, last order whatever order they come in.
+        frame_images=(("last_frame", end), ("first_frame", start)),
+        poll_interval=0,
+    )
+
+    request = create.calls.last.request
+    assert request.headers["x-goog-api-key"] == "google-test-key"
+    assert json.loads(request.content) == {
+        "model": "gemini-omni-1.2-flash",
+        "input": [
+            {"type": "image", "data": "c3RhcnQ=", "mime_type": "image/png"},
+            {"type": "image", "data": "ZW5k", "mime_type": "image/png"},
+            {"type": "text", "text": "A river at dawn"},
+        ],
+        "response_format": {"type": "video", "aspect_ratio": "9:16", "duration": "8s"},
+        "generation_config": {"video_config": {"task": "image_to_video"}},
+        "background": True,
+        "store": True,
+        "labels": {"team": "video"},
+    }
+    assert (create.call_count, poll.call_count) == (1, 1)
+    assert (result.data, result.media_type, result.job_id) == (MP4, "video/mp4", "int-1")
+    canonical = {
+        "input_tokens": 1200,
+        "cache_read_tokens": 200,
+        "output_tokens": 5300,
+        "reasoning_tokens": 300,
+    }
+    # The poll that finds the finished interaction records its Usage on the create call.
+    observer.update_latest.assert_awaited_with(canonical)
+    assert result.usage == canonical
+    assert result.raw is not None
+    assert "data" not in result.raw["steps"][0]["content"][1]
+
+
+@pytest.mark.parametrize(
+    ("finished", "outcome"),
+    [
+        pytest.param(
+            {
+                "status": "failed",
+                "errors": [
+                    {"code": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota."}
+                ],
+            },
+            ProviderUsageLimitError,
+            id="quota",
+        ),
+        pytest.param(
+            {"status": "failed", "errors": [{"code": "PROHIBITED_CONTENT", "message": "Blocked."}]},
+            "Blocked.",
+            id="blocked",
+        ),
+        pytest.param(
+            _interaction({"type": "text", "text": "I can't film that."}),
+            "I can't film that.",
+            id="text-instead-of-video",
+        ),
+        pytest.param(
+            {"status": "failed", "errors": [{"code": "INTERNAL", "message": "Try later."}]},
+            "INTERNAL: Try later.",
+            id="failed",
+        ),
+        pytest.param({"status": "requires_action"}, "requires_action", id="awaits-input"),
+        pytest.param(_interaction(), "without a video", id="no-video"),
+        # A video vBot cannot read is still stored at Google under the job id.
+        pytest.param(
+            _interaction({"type": "video", "uri": "https://example.invalid/v.mp4"}),
+            VideoJobUnfinishedError,
+            id="video-without-data",
+        ),
+        pytest.param(
+            _interaction({"type": "video", "data": "!"}),
+            VideoJobUnfinishedError,
+            id="undecodable-video",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_video_outcomes_never_resubmit_the_interaction(
+    finished: dict[str, object], outcome: str | type[Exception]
+) -> None:
+    create = respx.post(GOOGLE_INTERACTIONS_URL).respond(
+        200, json={"id": "int-1", "status": "in_progress"}
+    )
+    respx.get(f"{GOOGLE_INTERACTIONS_URL}/int-1").respond(200, json=finished)
+
+    with pytest.raises(ProviderError) as caught:
+        await _google_video_client().generate("A river", options={}, poll_interval=0)
+
+    if isinstance(outcome, type):
+        assert isinstance(caught.value, outcome)
+    elif isinstance(caught.value, ProviderContentRefusedError):
+        assert caught.value.reason == outcome
+    else:
+        assert outcome in str(caught.value) and not caught.value.retryable
+    assert create.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("options", "frames"),
+    [
+        pytest.param({}, ("last_frame",), id="last-frame-alone"),
+        pytest.param({"duration": "12"}, ("first_frame", "last_frame"), id="long-interpolation"),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_google_video_rejects_frames_omni_cannot_place_before_sending(
+    options: dict[str, object], frames: tuple[str, ...]
+) -> None:
+    route = respx.post(GOOGLE_INTERACTIONS_URL).respond(200, json={"id": "int-1"})
+    image = ImageInput("frame.png", "image/png", b"frame")
+
+    with pytest.raises(ProviderError) as caught:
+        await _google_video_client().generate(
+            "A river", options=options, frame_images=tuple((name, image) for name in frames)
+        )
+
+    assert not caught.value.retryable
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_cancelled_google_video_cancels_the_interaction_and_follows_it() -> None:
+    respx.post(GOOGLE_INTERACTIONS_URL).respond(200, json={"id": "int-1", "status": "in_progress"})
+    cancel = respx.post(f"{GOOGLE_INTERACTIONS_URL}/int-1/cancel").respond(
+        200, json={"id": "int-1", "status": "cancelled"}
+    )
+    polled = asyncio.Event()
+
+    def status(_request: httpx.Request) -> httpx.Response:
+        polled.set()
+        state = "cancelled" if cancel.called else "in_progress"
+        return httpx.Response(200, json={"id": "int-1", "status": state})
+
+    respx.get(f"{GOOGLE_INTERACTIONS_URL}/int-1").mock(side_effect=status)
+    handed: list[tuple[str, asyncio.Task]] = []
+    generation = asyncio.create_task(
+        _google_video_client().generate(
+            "A river",
+            options={},
+            poll_interval=0.01,
+            on_cancelled_job=lambda job_id, task: handed.append((job_id, task)),
+        )
+    )
+    await asyncio.wait_for(polled.wait(), timeout=1)
+    generation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await generation
+
+    [(job_id, follower)] = handed
+    with pytest.raises(ProviderError, match="cancelled"):
+        await asyncio.wait_for(follower, timeout=1)
+    assert (job_id, cancel.call_count) == ("int-1", 1)
 
 
 def _sse(payload: dict) -> str:
@@ -591,5 +813,28 @@ def _google_music_client(*, usage_observer: object = None) -> ProviderMusicClien
         connection=connection,
         credential="google-test-key",
         model_id="lyria-3.5",
+        usage_observer=usage_observer,  # type: ignore[arg-type]
+    )
+
+
+def _google_video_client(*, usage_observer: object = None) -> ProviderVideoClient:
+    provider = ProviderConfig(
+        id="google",
+        name="Google AI Studio",
+        adapter="google",
+        base_url=GOOGLE_BASE,
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="x-goog-api-key", prefix="", credential_key="GEMINI_API_KEY"),
+    )
+    return ProviderVideoClient(
+        provider=provider,
+        connection=connection,
+        credential="google-test-key",
+        model_id="gemini-omni-1.2-flash",
         usage_observer=usage_observer,  # type: ignore[arg-type]
     )
