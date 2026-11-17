@@ -244,13 +244,20 @@ def _start_unit(install: Installation, instance: ServerInstance, timeout: float)
             )
         time.sleep(0.25)
     # A server that never became ready must not keep restarting in the background.
-    run_command(["systemctl", "--user", "stop", UNIT_NAME])
+    stopped = run_command(["systemctl", "--user", "stop", UNIT_NAME])
+    message = (
+        "The vBot server did not become ready; inspect "
+        f"`journalctl --user -u {UNIT_NAME}` and {instance.data_dir / 'logs'}"
+    )
+    if stopped.returncode != 0:
+        detail = stopped.stderr or stopped.stdout or f"exit code {stopped.returncode}"
+        message = (
+            f"{message}. Systemd could not stop {UNIT_NAME} ({detail}). "
+            "The service can still restart."
+        )
     return CommandResult(
         ok=False,
-        message=(
-            "The vBot server did not become ready; inspect "
-            f"`journalctl --user -u {UNIT_NAME}` and {instance.data_dir / 'logs'}"
-        ),
+        message=message,
         instance=instance,
     )
 

@@ -129,6 +129,8 @@ def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_serv
 
     def runner(command: list[str]) -> CommandRun:
         commands.append(command)
+        if command[-2:] == ["is-enabled", UNIT_NAME]:
+            return CommandRun(0, "enabled", "")
         if command[0] == "loginctl" and not lingering:
             return CommandRun(1, "", "Access denied")
         return CommandRun(0, "", "")
@@ -181,7 +183,7 @@ def test_linux_autostart_never_changes_another_installations_unit(tmp_path: Path
     def runner(command: list[str]) -> CommandRun:
         raise AssertionError(f"unexpected command {command}")
 
-    for action in ("enable", "disable"):
+    for action in ("status", "enable", "disable"):
         with pytest.raises(ApplicationError, match="belongs to another"):
             autostart(install, action, platform="linux", runner=runner, unit_dir=units)
 
@@ -204,14 +206,34 @@ def test_linux_autostart_removal_can_retry_a_failed_unit_reload(tmp_path: Path) 
         if command[-1] == "daemon-reload":
             assert not unit_path.exists()
             return CommandRun(1, "", "user manager unavailable")
+        if command[-2:] == ["is-enabled", UNIT_NAME]:
+            return CommandRun(1, "disabled", "")
         assert command == ["systemctl", "--user", "disable", UNIT_NAME]
         return success(command)
 
     with pytest.raises(ApplicationError, match="user manager unavailable"):
         autostart(install, "disable", platform="linux", runner=fail_reload, unit_dir=units)
     assert unit_path.read_text(encoding="utf-8") == original
+    assert owned_unit(install, unit_dir=units) == unit_path
+    assert (
+        autostart(install, "status", platform="linux", runner=fail_reload, unit_dir=units)[
+            "enabled"
+        ]
+        is False
+    )
+
+    def offline(command: list[str]) -> CommandRun:
+        assert command == ["systemctl", "--user", "is-enabled", UNIT_NAME]
+        return CommandRun(1, "", "user manager unavailable")
+
+    with pytest.raises(ApplicationError, match="Could not verify .*user manager unavailable"):
+        autostart(install, "status", platform="linux", runner=offline, unit_dir=units)
     assert (
         autostart(install, "disable", platform="linux", runner=success, unit_dir=units)["changed"]
         is True
     )
     assert not unit_path.exists()
+    assert (
+        autostart(install, "status", platform="linux", runner=offline, unit_dir=units)["enabled"]
+        is False
+    )

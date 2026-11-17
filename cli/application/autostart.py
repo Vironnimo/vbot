@@ -432,6 +432,26 @@ def _systemctl(run: Runner, *arguments: str) -> CommandRun:
     return run(["systemctl", "--user", *arguments])
 
 
+def _unit_enabled(run: Runner) -> bool:
+    result = _systemctl(run, "is-enabled", UNIT_NAME)
+    state = result.stdout
+    if result.returncode == 0 and state in {"enabled", "enabled-runtime"}:
+        return True
+    # Some non-enabled states (such as static) also exit successfully.
+    if state in {
+        "disabled",
+        "linked",
+        "linked-runtime",
+        "masked",
+        "masked-runtime",
+        "static",
+        "indirect",
+    }:
+        return False
+    detail = result.stderr or state or f"exit code {result.returncode}"
+    raise ApplicationError(f"Could not verify application Autostart for {UNIT_NAME} ({detail})")
+
+
 def _unit_autostart(install: Installation, action: str, run: Runner, units: Path) -> dict[str, Any]:
     path = units / UNIT_NAME
     exists = path.exists()
@@ -441,7 +461,12 @@ def _unit_autostart(install: Installation, action: str, run: Runner, units: Path
             f"The systemd user unit {UNIT_NAME} belongs to another vBot installation"
         )
     if action == "status":
-        return {"ok": True, "enabled": owned, "unit": UNIT_NAME, "launcher": str(install.bootstrap)}
+        return {
+            "ok": True,
+            "enabled": owned and _unit_enabled(run),
+            "unit": UNIT_NAME,
+            "launcher": str(install.bootstrap),
+        }
     if action == "disable":
         if not exists:
             return {"ok": True, "enabled": False, "unit": UNIT_NAME, "changed": False}
