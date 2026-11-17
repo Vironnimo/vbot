@@ -477,6 +477,17 @@ def test_import_creates_history_atomically_and_reuses_the_same_snapshot(manager)
     assert saved[0].external_history["raw"] == {"name": "old_shell"}
     assert saved[0].tool_calls is None
     assert saved[0].role == "assistant"
+
+    other_owner = asyncio.run(manager.fork(first.address, target_agent_id="other"))
+    other_owner.append(ChatMessage.user("independent work"))
+    other_import = manager.create("other", initial_messages=source.messages(), metadata=metadata)
+    assert other_import.address != other_owner.address
+    assert len(other_import.load_active()) == len(saved)
+    assert (
+        manager.create("other", initial_messages=source.messages(), metadata=metadata).address
+        == other_import.address
+    )
+
     from core.chat.imported_history import import_transition_note
     from core.sessions import PromptEpoch
 
