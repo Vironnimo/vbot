@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from core.skills._authoring_documents import _change_text, _declared_name, _reject_redirect
 from core.skills._authoring_history import _check_writer
@@ -28,7 +29,10 @@ from core.skills._history import (
     document_fields,
 )
 from core.skills._packages import is_redirect
+from core.skills._restore_journal import RestoreIntent, intent_path, read_intent, write_intent
 from core.skills.skills import SKILL_FILENAME, SkillRegistry
+from core.utils.atomic import sync_directory
+from core.utils.file_status import exists_strict
 from core.utils.ids import has_id_entry, new_id
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
@@ -141,47 +145,33 @@ class SkillArchives:
     ) -> SkillWriteResult:
         """Move an archived package back into the home under its Skill name.
 
-        Refused while a Skill with that name exists in the home.
+        Repeating the same restore finishes an interrupted operation.
         """
         with self._owner._write_lock:
             _check_writer(writer)
             root = self._owner._writable_root(target_root)
             history = SkillHistory(root)
-            package = self._archived_package(history, archive_id)
-            try:
-                info = history.archive(archive_id)
-            except OSError as error:
-                raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
-            name = info.skill if info is not None else _declared_name(package)
-            destination = self._owner._skill_dir(root, name)
-            if destination.exists() or any(
-                skill.name == name for skill in SkillRegistry.load(root).list_all()
-            ):
+            intent = read_intent(root)
+            if intent is not None and intent.archive_id != archive_id:
                 raise SkillAuthoringError(
-                    f"A Skill named '{name}' already exists. Delete or rename it first, "
-                    "then restore this one."
+                    f"Retry restoring archive '{intent.archive_id}' before restoring another Skill."
                 )
-            self._owner._revisions._observe(history, name, None, writer)
-            package.rename(destination)
-            revision = self._owner._revisions._commit(
-                history,
-                name,
-                destination,
-                writer,
-                "restore",
-                live=True,
-                archive_id=archive_id,
-                origin=info.origin if info is not None else declared_origin(destination),
-                created_at=info.created_at if info is not None else None,
-                pinned=info.pinned if info is not None else False,
-            )
+            try:
+                if intent is None:
+                    intent = self._begin_restore(history, archive_id, writer)
+                destination, revision = self._finish_restore(history, intent)
+            except OSError as error:
+                raise SkillAuthoringError(
+                    f"Could not complete the Skill restore. Retry restoring archive "
+                    f"'{archive_id}' when storage is available: {error}"
+                ) from error
             files = sorted(
                 base / file_name
                 for base, _, file_names in destination.walk()
                 for file_name in file_names
             )
             return SkillWriteResult(
-                name=name,
+                name=intent.name,
                 operation="restore",
                 path=destination,
                 changes=tuple(
@@ -198,11 +188,109 @@ class SkillArchives:
                 archive_id=archive_id,
             )
 
+    def _begin_restore(
+        self, history: SkillHistory, archive_id: str, writer: SkillWriter
+    ) -> RestoreIntent:
+        package = self._archived_package(history, archive_id)
+        try:
+            info = history.archive(archive_id)
+        except OSError as error:
+            raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+        name = info.skill if info is not None else _declared_name(package)
+        destination = self._owner._skill_dir(history.home, name)
+        self._check_restore_destination(destination)
+        history.observe(name, None)
+        status = package.lstat()
+        intent = RestoreIntent(
+            transaction=uuid4().hex,
+            archive_id=archive_id,
+            name=name,
+            device=status.st_dev,
+            inode=status.st_ino,
+            origin=info.origin if info is not None else declared_origin(package),
+            created_at=info.created_at if info is not None else None,
+            pinned=info.pinned if info is not None else False,
+            writer=writer,
+        )
+        write_intent(history.home, intent)
+        return intent
+
+    def _finish_restore(self, history: SkillHistory, intent: RestoreIntent) -> tuple[Path, int]:
+        package = self._archive_path(history, intent.archive_id)
+        destination = self._owner._skill_dir(history.home, intent.name)
+        source_exists = exists_strict(package, follow_symlinks=False)
+        if source_exists:
+            self._check_restore_destination(destination, archive_id=intent.archive_id)
+        current = package if source_exists else destination
+        if not intent.matches(current):
+            raise SkillAuthoringError(
+                f"The package for archive '{intent.archive_id}' changed or is missing. "
+                "Inspect the archive and the Skill folder before retrying the restore."
+            )
+
+        # The intent and the restore revision must be durable before the package
+        # becomes visible in the home. A retry flushes a previously written line.
+        journal = intent_path(history.home)
+        sync_directory(journal.parent)
+        files, texts = history.changes(intent.name, current)
+        revision = history.append(
+            skill=intent.name,
+            kind="restore",
+            actor=intent.writer.actor,
+            session_id=intent.writer.session_id,
+            run_id=intent.writer.run_id,
+            run_kind=intent.writer.run_kind,
+            subject_created_at=intent.writer.subject_created_at,
+            files=files,
+            texts=texts,
+            live=True,
+            archive_id=intent.archive_id,
+            origin=intent.origin,
+            created_at=intent.created_at,
+            pinned=intent.pinned,
+            restore_transaction=intent.transaction,
+        )
+        sync_directory(journal.parent)
+        if source_exists:
+            destination.parent.mkdir(exist_ok=True)
+            self._check_restore_destination(destination, archive_id=intent.archive_id)
+            if not intent.matches(package):
+                raise SkillAuthoringError(
+                    f"The package for archive '{intent.archive_id}' changed while restoring it."
+                )
+            package.rename(destination)
+        sync_directory(destination.parent)
+        sync_directory(package.parent)
+        sync_directory(journal.parent)
+        journal.unlink()
+        return destination, revision.id
+
+    @staticmethod
+    def _check_restore_destination(destination: Path, *, archive_id: str | None = None) -> None:
+        name = destination.name
+        if exists_strict(destination, follow_symlinks=False) or any(
+            skill.name == name for skill in SkillRegistry.load(destination.parent).list_all()
+        ):
+            if archive_id is not None:
+                raise SkillAuthoringError(
+                    f"A Skill named '{name}' appeared during the restore. Move the conflicting "
+                    f"package out of this Skill home before retrying archive '{archive_id}'."
+                )
+            raise SkillAuthoringError(
+                f"A Skill named '{name}' already exists. Delete or rename it first, "
+                "then restore this one."
+            )
+
     def purge(self, target_root: Path, archive_id: str) -> ArchivedSkill:
         """Permanently delete one archived package; return what it was."""
         with self._owner._write_lock:
             root = self._owner._writable_root(target_root)
             history = SkillHistory(root)
+            intent = read_intent(root)
+            if intent is not None and intent.archive_id == archive_id:
+                raise SkillAuthoringError(
+                    f"Retry restoring archive '{archive_id}' before purging it."
+                )
             package = self._archived_package(history, archive_id)
             entry = _archived_entry(package, self._archive_infos(history).get(archive_id))
             shutil.rmtree(package)
@@ -235,7 +323,8 @@ class SkillArchives:
         archive_root.mkdir(exist_ok=True)
         return archive_root
 
-    def _archived_package(self, history: SkillHistory, archive_id: str) -> Path:
+    @staticmethod
+    def _archive_path(history: SkillHistory, archive_id: str) -> Path:
         if (
             not isinstance(archive_id, str)
             or not archive_id
@@ -246,14 +335,17 @@ class SkillArchives:
         archive_root = history.archive_root
         _reject_redirect(archive_root)
         package = archive_root / archive_id
+        if package.name != archive_id or package.parent != archive_root:
+            raise SkillAuthoringError(f"Archived Skill '{archive_id}' not found.")
+        return package
+
+    def _archived_package(self, history: SkillHistory, archive_id: str) -> Path:
+        package = self._archive_path(history, archive_id)
+        archive_root = history.archive_root
         # Only an archive entry spelled exactly like the id names a package. On
         # Windows a drive-relative id ("C:..") joins as the archive's parent, and
         # a case variant opens the real entry under a spelling no history knows.
-        if (
-            package.name != archive_id
-            or package.parent != archive_root
-            or not has_id_entry(archive_root, archive_id)
-        ):
+        if not has_id_entry(archive_root, archive_id):
             raise SkillAuthoringError(f"Archived Skill '{archive_id}' not found.")
         _reject_redirect(package)
         if not package.is_dir():
@@ -282,6 +374,12 @@ class SkillArchives:
         except OSError:
             return []
         entries = [_archived_entry(package, infos.get(package.name)) for package in packages]
+        intent = read_intent(history.home)
+        if intent is not None and all(entry.archive_id != intent.archive_id for entry in entries):
+            destination = self._owner._skill_dir(history.home, intent.name)
+            if intent.matches(destination):
+                entry = _archived_entry(destination, infos.get(intent.archive_id))
+                entries.append(replace(entry, archive_id=intent.archive_id))
         return sorted(entries, key=lambda entry: entry.archived_at, reverse=True)
 
     def _purged_absorbed(
