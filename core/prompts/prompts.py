@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from core.json_documents import document_change
 from core.memory import (
     MemoryService,
     memory_block_definition,
@@ -205,6 +206,9 @@ class SystemPromptManager:
         )
         # An edit can span both the layout and its text overrides.
         self._edit_lock = Lock()
+        # This document directory admits a change for the entire data root,
+        # including edits to an Agent's separate prompt directory.
+        self._prompt_documents = Path(data_root) / "prompts"
 
     @property
     def vbot_root(self) -> Path:
@@ -915,12 +919,12 @@ class SystemPromptManager:
 
     def update_block(self, block_id: str, content: str, scope: Any = None) -> JsonObject:
         """Write a block's text override and return its new state (T6 autosave)."""
-        with self._edit_lock:
+        with document_change(self._prompt_documents), self._edit_lock:
             return self._catalog.update_block(block_id, content, scope)
 
     def reset_block(self, block_id: str, scope: Any = None) -> JsonObject:
         """Reset a block to its inherited/default text (T5 "reset → inherited")."""
-        with self._edit_lock:
+        with document_change(self._prompt_documents), self._edit_lock:
             return self._catalog.reset_block(block_id, scope)
 
     def set_layout(self, layout: Sequence[Mapping[str, Any]], scope: Any = None) -> JsonObject:
@@ -937,12 +941,12 @@ class SystemPromptManager:
         position: int | None = None,
     ) -> JsonObject:
         """Create a custom ``user:<slug>`` text block (T1): override file + layout entry."""
-        with self._edit_lock:
+        with document_change(self._prompt_documents), self._edit_lock:
             return self._catalog.create_block(slug, content, scope, position=position)
 
     def remove_block(self, block_id: str, scope: Any = None) -> JsonObject:
         """Delete a custom ``user:`` block: drop the override file + the layout entry."""
-        with self._edit_lock:
+        with document_change(self._prompt_documents), self._edit_lock:
             return self._catalog.remove_block(block_id, scope)
 
     def reset_layout(self, scope: Any = None) -> JsonObject:

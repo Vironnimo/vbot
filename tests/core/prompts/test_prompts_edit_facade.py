@@ -2,11 +2,15 @@
 
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, override
 
 import pytest
 
+from core.database import DatabaseUnavailableError, capture_config_backup
+from core.database.snapshot_barrier import capture_members
 from core.prompts.blocks import LayoutEntry
 from core.prompts.prompts import PromptError, SystemPromptManager
 from core.runtime._prompt_blocks import _StorageManagerBlockStore
@@ -306,6 +310,43 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     assert [entry["id"] for entry in result["layout"]] == expected_ids
     note = next(block for block in manager.list_blocks() if block["id"] == "user:note")
     assert note["text"] == "my note"
+
+
+def test_configuration_backup_cannot_capture_half_a_custom_block(tmp_path: Path) -> None:
+    storage = StorageManager(data_dir=tmp_path / "data")
+    body_written = Event()
+    finish_create = Event()
+
+    class StoreWithDelayedLayout(_StorageManagerBlockStore):
+        @override
+        def write_block_override(self, scope_key: str, block_id: str, content: str) -> None:
+            super().write_block_override(scope_key, block_id, content)
+            body_written.set()
+            assert finish_create.wait(5)
+
+    manager = _facade_manager(tmp_path, store=StoreWithDelayedLayout(storage))
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        create = worker.submit(manager.create_block, "note", "my note")
+        try:
+            assert body_written.wait(5)
+            with pytest.raises(
+                DatabaseUnavailableError, match="a data change was still in progress"
+            ):
+                capture_members(
+                    storage.data_dir,
+                    {},
+                    copy_database=lambda _name: None,
+                    copy_documents=lambda: None,
+                    discard_copies=lambda: None,
+                    drain_seconds=0,
+                )
+        finally:
+            finish_create.set()
+        create.result(timeout=5)
+
+    backup = capture_config_backup(storage.data_dir, reason="test custom block")
+    assert backup is not None
+    assert {"prompts/layout.json", "prompts/blocks/user/note.md"} <= backup.files.keys()
 
 
 @pytest.mark.parametrize(
