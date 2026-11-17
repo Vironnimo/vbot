@@ -150,10 +150,9 @@ class FilePinnedMemoryBackend:
             if source_document is not None:
                 source_name, original = source_document
                 source_path = memory_source_path(workspace, source_name, original)
-                source_path.parent.mkdir(parents=True, exist_ok=True)
                 # Keep the original before committing the selected facts. If the
                 # Memory write fails, this inert source copy remains recoverable.
-                atomic_write_bytes(source_path, original.encode("utf-8"))
+                _write_memory_file(source_path, original)
             revision = (
                 self._commit(path, validated_scope, "added", before, after, writer)
                 if after != before
@@ -704,7 +703,10 @@ def _strip_entry_bullet(line: str) -> str:
 
 def _write_entries(path: Path, entries: list[str]) -> None:
     # LF on every platform: the file is vBot-owned data, and reading accepts any line ending.
-    text = _render_entries_file(entries)
+    _write_memory_file(path, _render_entries_file(entries))
+
+
+def _write_memory_file(path: Path, text: str) -> None:
     try:
         atomic_write_bytes(path, text.encode("utf-8"))
     except OSError as exc:

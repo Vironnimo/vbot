@@ -68,3 +68,32 @@ async def test_memory_import_preserves_original_deduplicates_and_refuses_over_bu
     )
     assert error["code"]
     assert await rpc_result(state, "memory.list", agent_id="coder") == before
+
+
+@pytest.mark.asyncio
+async def test_memory_import_preserves_facts_when_the_source_copy_cannot_be_saved(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    workspace = tmp_path / "workspace"
+    state.runtime.agents.update("coder", workspace=str(workspace))
+    workspace.mkdir(exist_ok=True)
+    blocked = workspace / "memory-sources"
+    blocked.write_text("existing file", encoding="utf-8")
+    path = tmp_path / "source.md"
+    path.write_text("Original source.", encoding="utf-8")
+    before = await rpc_result(state, "memory.list", agent_id="coder")
+
+    error = await rpc_error(
+        state,
+        "memory.import",
+        source="claude-code",
+        path=str(path),
+        agent_id="coder",
+        scope="agent",
+        entries=["New fact."],
+    )
+
+    assert error["code"] == "domain_error"
+    assert await rpc_result(state, "memory.list", agent_id="coder") == before
+    assert blocked.read_text(encoding="utf-8") == "existing file"
