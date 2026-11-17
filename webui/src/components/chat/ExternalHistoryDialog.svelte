@@ -119,7 +119,7 @@
       // Only seed complete documents. A long source stays fully preserved;
       // the user selects facts from its paged preview instead of a silent cut.
       facts =
-        item.char_offset === 0 && item.content.length === item.characters
+        item.char_offset === 0 && [...item.content].length === item.characters
           ? item.content
           : '';
       preview = null;

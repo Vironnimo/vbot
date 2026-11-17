@@ -226,7 +226,7 @@ def _opencode(result: ExternalSession, data: Any) -> None:
         )
     info = data.get("info", {})
     result.id = str(info.get("id", result.id))
-    result.title = str(info.get("title", result.id))
+    result.title = str(info.get("title") or result.title)
     result.cwd = str(info.get("directory", ""))
     for row in data["messages"]:
         if not isinstance(row, dict):

@@ -10,7 +10,6 @@ import {
   LOGS_WINDOW_MAX_ENTRIES,
   applyLogCatalog,
   changedFilterSelectionCount,
-  clearLogEntries,
   createLogsViewState,
   deriveLevelOptions,
   deriveSortOptions,
@@ -154,7 +153,7 @@ describe('logsView state', () => {
     });
     expect(messages(state)).toEqual(['Reset']);
 
-    clearLogEntries(state);
+    selectLogFile(state, '');
     expect(logEntryCount(state)).toBe(0);
   });
 
@@ -184,7 +183,7 @@ describe('logsView state', () => {
     expect(state.levelFilter).toBe('all');
   });
 
-  it('offers all plus the distinct loaded levels in sorted order', () => {
+  it('offers distinct loaded levels and keeps the active filter visible', () => {
     const state = createLogsViewState();
     replaceLogEntries(state, {
       file: FILE,
@@ -211,6 +210,28 @@ describe('logsView state', () => {
     expect(deriveLevelOptions(state)).toEqual([
       levelOptionValue(),
       'error',
+      'info',
+      'warn',
+    ]);
+
+    setLevelFilter(state, 'error');
+    mergeLogStreamEvent(state, {
+      type: 'append',
+      file: FILE,
+      from_offset: 50,
+      entries: [entry(50, { level: 'info' })],
+    });
+    expect(renderedLogEntries(state)).toEqual([]);
+    expect(deriveLevelOptions(state)).toEqual([
+      levelOptionValue(),
+      'error',
+      'info',
+      'warn',
+    ]);
+
+    setLevelFilter(state, levelOptionValue());
+    expect(deriveLevelOptions(state)).toEqual([
+      levelOptionValue(),
       'info',
       'warn',
     ]);

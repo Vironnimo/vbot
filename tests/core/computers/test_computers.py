@@ -6,7 +6,7 @@ import asyncio
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -111,7 +111,46 @@ async def test_selection_requires_exact_identity_grant_capability_and_connection
     with pytest.raises(ComputerError) as refused:
         registry.resolve(selected, None, "terminal")
     assert refused.value.code == "computer_offline"
+    await registry.forget("pc_laptop")
+    await registry.connect(hello("pc_workstation", name="pc_laptop"), actor="host")
+    selected = context(
+        tmp_path, computer_id="pc_laptop", allowed_computer_ids=["pc_laptop", "pc_workstation"]
+    )
+    with pytest.raises(ComputerError) as refused:
+        registry.resolve(selected, None, "terminal")
+    assert refused.value.code == "computer_not_found"
+    assert registry.resolve(selected, "pc_laptop", "terminal").id == "pc_workstation"
     registry.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_can_resolve_a_name_during_registration_removal(tmp_path: Path) -> None:
+    entered = threading.Event()
+    resume = threading.Event()
+
+    class PausedName(str):
+        @override
+        def casefold(self) -> str:
+            entered.set()
+            assert resume.wait(2)
+            return super().casefold()
+
+    registry = ComputerRegistry()
+    await registry.connect(hello(name=PausedName("Laptop")), actor="host")
+    other = await registry.connect(hello("pc_other", name="Workstation"), actor="host")
+    registry.disconnect(other)
+    selected = context(tmp_path, computer_id="pc_laptop", allowed_computer_ids=["pc_laptop"])
+    selecting = asyncio.create_task(
+        asyncio.to_thread(registry.resolve, selected, "Laptop", "terminal")
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        await registry.forget("pc_other")
+    finally:
+        resume.set()
+        info = await selecting
+        registry.close()
+    assert info.id == "pc_laptop"
 
 
 @pytest.mark.asyncio

@@ -277,16 +277,18 @@ describe('App controller', () => {
       waiting_for: { subagents: 0, commands: 0, results: 0 },
       ...extra,
     });
-    const hello = (rows) =>
+    const hello = (rows, lastSequence) =>
       controller.handleServerEvent({
         type: 'connection_ready',
         active_runs: [],
         session_activity: rows,
+        last_sequence: lastSequence,
       });
-    const changed = (payload) =>
+    const changed = (payload, sequence) =>
       controller.handleServerEvent({
         type: 'session_activity_changed',
         payload,
+        sequence,
       });
 
     expect(state.sessionActivity).toBeNull();
@@ -326,8 +328,12 @@ describe('App controller', () => {
     expect(Object.keys(state.sessionActivity)).toEqual(['builder@web::two']);
 
     // Every hello replaces what the previous connection reported.
-    await hello([row('gamma', null, 'three', 'waiting')]);
+    await hello([row('gamma', null, 'three', 'waiting')], 20);
+    await changed(row('gamma', null, 'three', 'idle'), 20);
+    await changed(row('alpha', null, 'one', 'working'), 19);
     expect(Object.keys(state.sessionActivity)).toEqual(['gamma::three']);
+    await changed(row('gamma', null, 'three', 'working'), 21);
+    expect(state.sessionActivity['gamma::three'].state).toBe('working');
     await hello(undefined);
     expect(state.sessionActivity).toEqual({});
   });

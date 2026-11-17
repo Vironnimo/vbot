@@ -308,6 +308,19 @@ async def test_store_async_keeps_the_event_loop_responsive_during_the_blob_write
     assert store.get(record.id).media_type == "image/jpeg"
 
 
+def test_failed_sidecar_publication_releases_the_new_blob_and_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_sidecar(_path: Path, _text: str) -> None:
+        raise UnicodeError
+
+    monkeypatch.setattr(attachments_module, "atomic_write_text", reject_sidecar)
+    with pytest.raises(UnicodeError):
+        AttachmentStore(tmp_path).store("notes.txt", b"notes")
+
+    assert list(DataDirectoryLayout(tmp_path).attachments.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("filename", "data", "expected_filename", "blob_suffix"),
     [
@@ -316,6 +329,7 @@ async def test_store_async_keeps_the_event_loop_responsive_during_the_blob_write
         ("document", b"%PDF-1.7\n1 0 obj\n", "document.pdf", ".pdf"),
         ("notes", b"line one\nline two\n", "notes.txt", ".txt"),
         ("...", b"\xff\xd8\xff\x00\x10", "attachment.jpg", ".jpg"),
+        ("field-\udcff.txt", b"notes", "field-\ufffd.txt", ".txt"),
         # An existing extension is kept; the blob still uses the canonical one.
         ("original.jpeg", b"\xff\xd8\xff\x00\x10", "original.jpeg", ".jpg"),
     ],
@@ -332,6 +346,7 @@ def test_store_names_the_attachment_and_its_blob(
     record = store.store(filename, data)
 
     assert record.filename == expected_filename
+    assert store.get(record.id).filename == expected_filename
     assert Path(record.file_path).suffix == blob_suffix
 
 
@@ -367,7 +382,13 @@ def test_store_accepts_audio_and_video_files(
     assert record.transcription is None
 
 
-def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("transcription", "expected"),
+    [("hello world", "hello world"), ("hello \ud800world", "hello \ufffdworld")],
+)
+def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(
+    tmp_path: Path, transcription: str, expected: str
+) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
     sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
@@ -375,12 +396,12 @@ def test_set_transcription_persists_and_keeps_unknown_sidecar_fields(tmp_path: P
     payload["duration_ms"] = 1200
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    updated = store.set_transcription(record.id, "hello world")
+    updated = store.set_transcription(record.id, transcription)
 
-    assert updated.transcription == "hello world"
-    assert store.get(record.id).transcription == "hello world"
+    assert updated.transcription == expected
+    assert store.get(record.id).transcription == expected
     stored = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    assert stored == {**payload, "transcription": "hello world"}
+    assert stored == {**payload, "transcription": expected}
     report = validate_attachment_metadata_file(sidecar_path)
     assert [(item.severity, item.path) for item in report.diagnostics] == [
         ("warning", "$.duration_ms")
@@ -517,7 +538,9 @@ def test_get_refuses_a_corrupt_sidecar(tmp_path: Path, corrupt: Callable[[bytes]
         store.get(record.id)
 
 
-@pytest.mark.parametrize("failure", ["missing", "unreadable", "linked-blob", "linked-sidecar"])
+@pytest.mark.parametrize(
+    "failure", ["missing", "unreadable", "truncated", "linked-blob", "linked-sidecar"]
+)
 def test_get_rejects_unavailable_blob_with_existing_sidecar(
     tmp_path: Path, failure: str, deny_access
 ) -> None:
@@ -528,6 +551,8 @@ def test_get_rejects_unavailable_blob_with_existing_sidecar(
         deny_access(Path(record.file_path))
     elif failure == "missing":
         Path(record.file_path).unlink()
+    elif failure == "truncated":
+        Path(record.file_path).write_bytes(b"missing")
     else:
         path = Path(record.file_path)
         if failure == "linked-sidecar":

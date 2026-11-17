@@ -256,12 +256,15 @@ def _write_summary(directory: Path, recording_id: str, day: int) -> Path:
     return path
 
 
-def test_listing_returns_newest_first_and_skips_invalid_summaries(
+def test_listing_returns_complete_recordings_newest_first(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     _write_summary(tmp_path, "perf_000000000001", 1)
     _write_summary(tmp_path, "perf_000000000002", 2)
+    for recording_id in ("perf_000000000001", "perf_000000000002", "perf_000000000003"):
+        (tmp_path / f"{recording_id}{TRACE_SUFFIX}").write_text("{}", encoding="utf-8")
     (tmp_path / f"perf_000000000003{SUMMARY_SUFFIX}").write_text("{broken", encoding="utf-8")
+    _write_summary(tmp_path, "perf_000000000004", 4)
 
     with caplog.at_level(logging.WARNING, logger="vbot.performance"):
         entries = list_recordings(tmp_path, limit=10)

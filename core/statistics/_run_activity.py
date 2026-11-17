@@ -23,11 +23,14 @@ def load_run_activity(
 ) -> tuple[int, list[RunActivity]]:
     """Return the overlap count and the latest-started listed Runs overlapping the interval.
 
-    A Run executes from its start to its end; a Run still running has no end and
-    overlaps every interval ending after its start. Requests are the Run's own
+    The interval is half-open. A zero-duration Run appears at its start. A Run
+    still running has no end and overlaps every nonempty interval ending after
+    its start. Requests are the Run's own
     (``agg_runs``), across the whole Run rather than only the interval.
     """
     low, high = datetime_instant(since), datetime_instant(until)
+    if low >= high:
+        return 0, []
     connection.execute("DROP TABLE IF EXISTS temp.activity_sessions")
     connection.execute("CREATE TEMP TABLE activity_sessions (session_key INTEGER PRIMARY KEY)")
     try:
@@ -36,7 +39,9 @@ def load_run_activity(
         )
         overlapping = """
             FROM agg_runs r JOIN temp.activity_sessions l ON l.session_key = r.session_key
-            WHERE r.start_instant <= :high AND (r.end_instant IS NULL OR r.end_instant >= :low)
+            WHERE r.start_instant < :high AND (
+                r.start_instant >= :low OR r.end_instant IS NULL OR r.end_instant > :low
+            )
         """
         params = {"low": low, "high": high, "limit": limit}
         total = int(connection.execute(f"SELECT COUNT(*) {overlapping}", params).fetchone()[0])

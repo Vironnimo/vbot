@@ -628,6 +628,12 @@ def _reconcile(
                 (owner_name, int(summary.get("is_subagent_session") is True)),
             )
     versions = _source(sessions.list_history_versions, [entry.address for entry in listed.values()])
+    versions = {
+        entry.address: version
+        for entry in listed.values()
+        if (version := versions.get(entry.address)) is not None
+        and entry.summary.get("generation_id", version[0]) == version[0]
+    }
     _follow_history(connection, _source(lambda: sessions.history_id), changes)
     stored = _stored_sessions(
         connection,
@@ -793,7 +799,7 @@ def _refresh(
                 last_message_id=row.last_message_id,
             ),
         )
-        if batch is not None:
+        if batch is not None and batch.cursor.generation_id == version[0]:
             tools = _source(
                 session.tool_invocations_since,
                 row.tool_revision,
@@ -803,8 +809,8 @@ def _refresh(
             _append(connection, key, entry, row, batch, runs, tools, changes)
             return IndexedSession(row.session_key, batch.cursor.generation_id, entry.summary)
     batch = _source(session.load_since)
-    if batch is None:
-        raise SessionNotFoundError(f"Session {key[2]} has no readable history")
+    if batch is None or batch.cursor.generation_id != version[0]:
+        raise SessionNotFoundError(f"Session {key[2]} changed before its history could be read")
     tools = _source(
         session.tool_invocations_since, expected_generation_id=batch.cursor.generation_id
     )

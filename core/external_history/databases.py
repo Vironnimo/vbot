@@ -49,7 +49,7 @@ def _table(source: str, names: set[str]) -> str:
         "openclaw": ("session_windows",),
     }
     for table in choices.get(source, ()):
-        if table in names:
+        if table in names and (table != "session" or {"message", "part"} <= names):
             return table
     raise ExternalHistoryError(
         f"Unsupported {source} database schema. Use a JSON/JSONL conversation export; no "
@@ -60,7 +60,7 @@ def _table(source: str, names: set[str]) -> str:
 def list_database(source: str, path: Path) -> list[dict[str, Any]]:
     with opened(path) as db:
         table = _table(source, tables(db))
-        result = []
+        result: list[dict[str, Any]] = []
         for item in db.execute(f'SELECT {_columns(db, table)} FROM "{table}"'):
             row = dict(item)
             identity = str(row.get("id", row.get("session_id", "")))
@@ -72,8 +72,8 @@ def list_database(source: str, path: Path) -> list[dict[str, Any]]:
                     "source": source,
                     "id": identity,
                     "path": path.as_posix(),
-                    "title": row.get("title") or row.get("display_name") or identity,
-                    "cwd": row.get("directory", ""),
+                    "title": str(row.get("title") or row.get("display_name") or identity),
+                    "cwd": str(row.get("directory") or ""),
                     "updated_at": timestamp(
                         updated, timestamp(path.stat().st_mtime, "1970-01-01T00:00:00.000000Z")
                     ),
@@ -106,9 +106,9 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
             source,
             session_id,
             path.as_posix(),
-            str(info.get("title") or session_id),
+            str(info.get("title") or info.get("display_name") or session_id),
             fallback,
-            str(info.get("directory", "")),
+            str(info.get("directory") or ""),
         )
         if source == "hermes":
             for row in _hermes_display_rows(db, info):
@@ -175,19 +175,20 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
             records = []
             # The active path keeps original pre-Compaction entries, but excludes
             # abandoned branches. Never replace missing cold payloads with a summary.
-            query = (
-                f"SELECT {_columns(db, 'transcript_events', alias='event')} "
-                "FROM transcript_events AS event "
-            )
-            if "session_transcript_active_events" in names:
+            query = f"SELECT {_columns(db, 'transcript_events', alias='event')} "
+            has_active_path = "session_transcript_active_events" in names
+            if has_active_path:
                 query += (
-                    "JOIN session_transcript_active_events AS active ON "
+                    "FROM session_transcript_active_events AS active "
+                    "LEFT JOIN transcript_events AS event ON "
                     "active.session_id = event.session_id AND active.event_seq = "
-                    "event.seq WHERE event.session_id = ? ORDER BY "
+                    "event.seq WHERE active.session_id = ? ORDER BY "
                     "active.active_position"
                 )
             else:
-                query += "WHERE event.session_id = ? ORDER BY event.seq"
+                query += (
+                    "FROM transcript_events AS event WHERE event.session_id = ? ORDER BY event.seq"
+                )
             for row in db.execute(query, (session_id,)):
                 raw = dict(row)
                 payload = raw.get("event_json")
@@ -197,12 +198,12 @@ def read_database(source: str, path: Path, session_id: str) -> ExternalSession:
                     payload = zstd.decompress(raw["event_zstd"]).decode("utf-8")
                 if payload is None:
                     raise ExternalHistoryError(
-                        "OpenClaw moved part of this transcript into cold storage. Export "
+                        "Part of this OpenClaw transcript is unavailable. Export "
                         "the complete transcript with OpenClaw, then import that file. "
                         "Nothing was imported."
                     )
                 records.append(json.loads(payload))
-            if "session_transcript_active_events" not in names:
+            if not has_active_path:
                 _require_linear_openclaw(records)
             _lines(result, records)
         if not result.entries:

@@ -156,8 +156,8 @@ def read_history(
         if since_day is not None and day < since_day:
             break
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError, UnicodeDecodeError:
+            lines = path.read_bytes().split(b"\n")
+        except OSError:
             _LOGGER.warning("Skipped an unreadable performance history file (day=%s)", day)
             continue
         for line in reversed(lines):
@@ -191,9 +191,9 @@ def _day_files(directory: Path) -> list[tuple[date, Path]]:
     return files
 
 
-def _parse_window(line: str) -> tuple[datetime, datetime, dict[str, Any]] | None:
+def _parse_window(line: bytes) -> tuple[datetime, datetime, dict[str, Any]] | None:
     try:
-        record = json.loads(line)
+        record = json.loads(line.decode("utf-8"))
         started_at = datetime.fromisoformat(record["started_at"])
         ended_at = datetime.fromisoformat(record["ended_at"])
     except ValueError, TypeError, KeyError:

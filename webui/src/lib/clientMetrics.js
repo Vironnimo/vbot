@@ -38,9 +38,8 @@ export function bucketIndex(ms) {
   );
 }
 
-// Start measuring and reporting through `report(payload)`; returns the stop
-// function. A failed report drops its batch: measurements stay bounded and
-// best-effort.
+// Start measuring and reporting through `report(payload, { signal })`; returns
+// the stop function. Failed or stalled reports drop their batch.
 export function startClientMetrics({
   report,
   intervalMs = REPORT_INTERVAL_MS,
@@ -53,6 +52,7 @@ export function startClientMetrics({
     histograms: new Map(),
     counters: new Map(),
     lastInvalidation: null,
+    reporting: null,
     stop: null,
   };
   const observers = [
@@ -67,6 +67,7 @@ export function startClientMetrics({
   const timer = setInterval(() => flush(collector, report), intervalMs);
   collector.stop = () => {
     clearInterval(timer);
+    collector.reporting?.abort();
     for (const observer of observers) observer.disconnect();
     if (active === collector) active = null;
   };
@@ -144,7 +145,8 @@ function addDuration(collector, name, ms) {
   histogram.buckets[index] = (histogram.buckets[index] ?? 0) + 1;
 }
 
-function flush(collector, report) {
+async function flush(collector, report) {
+  collector.reporting?.abort();
   if (collector.histograms.size === 0 && collector.counters.size === 0) return;
   const payload = {
     histograms: Object.fromEntries(
@@ -163,9 +165,15 @@ function flush(collector, report) {
   };
   collector.histograms = new Map();
   collector.counters = new Map();
-  Promise.resolve()
-    .then(() => report(payload))
-    .catch(() => {});
+  const request = new AbortController();
+  collector.reporting = request;
+  try {
+    await report(payload, { signal: request.signal });
+  } catch {
+    // A later interval sends only its own batch.
+  } finally {
+    if (collector.reporting === request) collector.reporting = null;
+  }
 }
 
 function noop() {}

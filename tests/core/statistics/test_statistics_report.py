@@ -14,6 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -268,6 +269,27 @@ async def test_window_is_hour_aligned_half_open_and_compared_with_the_span_befor
     assert open_ended["window"]["until"] is None
     assert open_ended["overview"]["totals"]["cost_usd"] == 28.0
     assert open_ended["overview"]["previous"]["cost_usd"] == 12.0
+
+
+@pytest.mark.asyncio
+async def test_report_window_uses_actual_instants_in_the_repeated_hour(
+    statistics: StatisticsFactory, ledger: UsageRecorder
+) -> None:
+    berlin = ZoneInfo("Europe/Berlin")
+    # The second 02:00 follows the first 02:30 despite the wall-clock order.
+    since = datetime(2026, 10, 25, 2, 30, tzinfo=berlin, fold=0)
+    until = datetime(2026, 10, 25, 2, 0, tzinfo=berlin, fold=1)
+    await _call(ledger, {"reported_cost_usd": 1.0}, at=since)
+    await _call(ledger, {"reported_cost_usd": 2.0}, at=until)
+    service = statistics(usage_recorder=ledger)
+
+    report = service.report(since=since, until=until, sections=["overview"])
+
+    assert report["window"]["since"] == "2026-10-25T00:00:00.000000Z"
+    assert report["window"]["until"] == "2026-10-25T01:00:00.000000Z"
+    assert report["overview"]["totals"]["cost_usd"] == 1.0
+    with pytest.raises(ValueError, match="since must not be after until"):
+        service.report(since=until, until=since, sections=["overview"])
 
 
 @pytest.mark.asyncio
@@ -1166,13 +1188,24 @@ def test_run_activity_returns_overlapping_runs_with_local_usage(
         ],
     )
 
-    report = statistics().run_activity(
-        since=BASE + timedelta(minutes=5), until=BASE + timedelta(minutes=6)
+    since, until = BASE + timedelta(minutes=5), BASE + timedelta(minutes=6)
+    _write_session(
+        manager,
+        "main",
+        [
+            _run_summary(status="completed", at=BASE, duration_ms=300_000, run_id="ends-at-start"),
+            _run_summary(status="completed", at=since, duration_ms=0, run_id="instant"),
+            _run_summary(status="completed", at=until, duration_ms=1_000, run_id="starts-at-end"),
+        ],
     )
+    service = statistics()
+    report = service.run_activity(since=since, until=until)
 
-    assert report.total_runs == 1
+    assert report.total_runs == 2
     assert report.truncated is False
-    run = report.runs[0]
+    assert [row.run_id for row in report.runs] == ["instant", "r1"]
+    assert service.run_activity(since=since, until=since).total_runs == 0
+    run = report.runs[1]
     assert run.session_id == session_id
     assert run.run_id == "r1"
     assert run.models == ["openai/gpt-5", "summary/m"]

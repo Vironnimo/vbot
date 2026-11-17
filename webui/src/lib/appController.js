@@ -437,6 +437,14 @@ export function createAppController({
       return;
     }
     if (event.type === 'session_activity_changed') {
+      if (
+        Array.isArray(state.connectionSnapshot?.session_activity) &&
+        Number.isSafeInteger(state.connectionSnapshot.last_sequence) &&
+        Number.isSafeInteger(event.sequence) &&
+        event.sequence <= state.connectionSnapshot.last_sequence
+      ) {
+        return;
+      }
       state.sessionActivity = applySessionActivityChange(
         state.sessionActivity,
         event.payload,

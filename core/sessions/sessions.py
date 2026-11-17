@@ -742,9 +742,11 @@ class ChatSessionManager:
             filters=filters or SessionListFilters(),
         )
 
-    def summary(self, address: SessionAddress) -> JsonObject | None:
+    def summary(
+        self, address: SessionAddress, *, metadata_keys: Sequence[str] = ()
+    ) -> JsonObject | None:
         """Read one live Session's list row by exact address; ``None`` if absent."""
-        return self._store.summary(address)
+        return self._store.summary(address, metadata_keys=metadata_keys)
 
     def change_stats(
         self, address: SessionAddress, *, merged: Sequence[SessionAddress] = ()

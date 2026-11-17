@@ -377,8 +377,10 @@ def list_recordings(directory: Path, *, limit: int) -> list[dict[str, Any]]:
         if len(entries) == limit:
             break
         if entry is not None:
-            entry["trace_path"] = _public_path(directory / f"{recording_id}{TRACE_SUFFIX}")
-            entries.append(entry)
+            trace_path = directory / f"{recording_id}{TRACE_SUFFIX}"
+            if trace_path.is_file():
+                entry["trace_path"] = _public_path(trace_path)
+                entries.append(entry)
     return entries
 
 

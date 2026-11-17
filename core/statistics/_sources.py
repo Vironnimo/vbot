@@ -87,7 +87,9 @@ class SessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
-    def summary(self, address: SessionAddress) -> JsonObject | None: ...
+    def summary(
+        self, address: SessionAddress, *, metadata_keys: Sequence[str] = ()
+    ) -> JsonObject | None: ...
 
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]

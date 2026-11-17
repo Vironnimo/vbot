@@ -57,7 +57,7 @@ public address or Run-id reuse never proves historical ownership.
   Assistant Message. Token-only or estimated-cost updates keep an existing
   Provider-reported cost snapshot. A newer Provider-reported cost replaces it
   across scalar and structured reports. Catalog-valued enrichment uses the rates
-  already stored for that call. Completion without new Usage retains earlier measurements.
+  already stored for that call, including after a cumulative update leaves the amount temporarily unknown. Completion without new Usage retains earlier measurements.
 - `input_estimate_factor(model)` and `record_input_estimate(model, *, measured,
   estimated)` are the input estimate calibration (`_calibration.py`). vBot counts
   every Model with one local encoding (`providers/request-policy.md`), while

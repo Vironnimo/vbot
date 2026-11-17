@@ -250,6 +250,26 @@ async def test_disconnect_marks_computer_offline_and_does_not_replay_uncertain_i
 
 
 @pytest.mark.asyncio
+async def test_replaced_link_closes_even_if_its_send_is_blocked() -> None:
+    registry = ComputerRegistry()
+    try:
+        async with _connected(registry) as (old, serving):
+            old.call_send_gate.clear()
+            call = asyncio.create_task(registry.call("pc_laptop", "terminal", "status", {}))
+            await old.send_started.get()
+            async with _connected(registry):
+                with pytest.raises(ComputerError) as failure:
+                    await call
+                assert failure.value.code == "computer_connection_lost"
+                await asyncio.wait_for(serving, timeout=2)
+                assert old.close_codes == [1000]
+                assert [message["type"] for message in old.sent] == ["welcome"]
+                assert registry.get("pc_laptop").online
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_queued_request_is_not_sent_after_an_earlier_write_unblocks() -> None:
     registry = ComputerRegistry()
     try:

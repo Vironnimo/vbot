@@ -173,6 +173,31 @@ async def test_target_switch_and_alpha_preservation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "keyed"),
+    [("1", False), ("P", False), ("1", True), ("L", True), ("P", True), ("RGB", True)],
+)
+async def test_resize_filters_palette_and_one_bit_colors_and_preserves_keyed_alpha(mode, keyed):
+    image = Image.new(mode, (8, 8))
+    if mode == "P":
+        image.putpalette([0, 0, 0, 255, 255, 255])
+    white = (255, 255, 255) if mode == "RGB" else 1 if mode == "P" else 255
+    black = (0, 0, 0) if mode == "RGB" else 0
+    image.putdata([white if (x + y) % 2 else black for y in range(8) for x in range(8)])
+    source = io.BytesIO()
+    image.save(source, format="PNG", **({"transparency": black} if keyed else {}))
+
+    result = await ImageConverter().convert(
+        source.getvalue(), "image/png", ImageTarget(frozenset({"image/png"}), max_dimension=1)
+    )
+
+    with Image.open(io.BytesIO(result.data)) as converted:
+        assert converted.size == (1, 1)
+        expected = (255, 255, 255, 128) if keyed else (128, 128, 128, 255)
+        assert converted.convert("RGBA").getpixel((0, 0)) == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["I;16", "I;16B"], ids=["little-endian", "big-endian"])
 async def test_high_bit_depth_grayscale_preserves_tones_during_conversion(mode):
     samples = [0, 10000, 32768, 50000, 65535]

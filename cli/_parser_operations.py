@@ -796,5 +796,7 @@ def _add_performance_parsers(
     history_parser.add_argument(
         "--at",
         metavar="<time>",
-        help="Show the full windows containing this time (as in log lines: local time)",
+        help=(
+            "Show full windows containing this ISO 8601 time. Without an offset, use local time."
+        ),
     )

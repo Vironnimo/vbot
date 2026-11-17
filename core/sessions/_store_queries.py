@@ -733,18 +733,19 @@ def _summaries_page(
 
 
 def summary(
-    connection: sqlite3.Connection, address: SessionAddress
+    connection: sqlite3.Connection, address: SessionAddress, *, metadata_keys: Sequence[str] = ()
 ) -> Callable[[], JsonObject | None]:
     """Select one live Session's list columns by its exact address; absent is ``None``."""
+    selected_keys, metadata_columns = _summary_metadata_columns(metadata_keys)
     row = connection.execute(
-        f"SELECT {_store_values._SESSION_LIST_COLUMNS} {_LIST_FROM} "
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns} {_LIST_FROM} "
         "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? AND s.session_id = ?",
         _store_values._scope(address),
     ).fetchone()
     if row is None:
         return lambda: None
     changes = change_totals(connection, [int(row["session_key"])])
-    return lambda: _with_changes(_summary(row), row, changes)
+    return lambda: _with_changes(_summary(row, selected_keys), row, changes)
 
 
 def _with_changes(

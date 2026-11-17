@@ -45,6 +45,7 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
         self._max_file_size_bytes = max_file_size_bytes
         self._upload_kind = upload_kind
         self._current_file_size_bytes = 0
+        self.complete = False
 
     @override
     def on_part_begin(self) -> None:
@@ -62,6 +63,11 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
                 )
             self._current_file_size_bytes = next_size_bytes
         super().on_part_data(data, start, end)
+
+    @override
+    def on_end(self) -> None:
+        super().on_end()
+        self.complete = True
 
     def close_unclaimed_files(self, claimed: UploadFile | None) -> None:
         """Close spools even when cancellation or an incomplete part bypasses FormData."""
@@ -181,6 +187,9 @@ async def _parse_upload_file_with_limit(
         file = form.get("file")
         if not isinstance(file, StarletteUploadFile):
             raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
+        # The parser can return already completed parts after an incomplete body.
+        if not parser.complete:
+            raise HTTPException(status_code=400, detail="Malformed multipart body")
         claimed = cast(UploadFile, file)
         return claimed
     finally:

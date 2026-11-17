@@ -86,12 +86,15 @@ export function applyLogCatalog(state, result) {
     return state.selectedFile;
   }
 
-  state.selectedFile = state.defaultFile;
-  return state.selectedFile;
+  return selectLogFile(state, state.defaultFile);
 }
 
 export function selectLogFile(state, file) {
-  state.selectedFile = typeof file === 'string' ? file : '';
+  const selectedFile = typeof file === 'string' ? file : '';
+  if (selectedFile !== state.selectedFile) {
+    state.selectedFile = selectedFile;
+    resetWindow(state, [], null, { preserveLevel: Boolean(selectedFile) });
+  }
   return state.selectedFile;
 }
 
@@ -101,10 +104,6 @@ export function replaceLogEntries(state, result) {
     typeof result?.file === 'string' ? result.file : state.selectedFile;
   resetWindow(state, logEntriesOf(result), nextBeforeOf(result));
   state.readError = '';
-}
-
-export function clearLogEntries(state) {
-  resetWindow(state, [], null);
 }
 
 // Applies a live `reset` or `append` event of the shown file. An append first
@@ -258,10 +257,10 @@ export function setSearchText(state, value) {
 }
 
 export function deriveLevelOptions(state) {
-  return [
-    ALL_LEVELS_FILTER,
-    ...Array.from(state.entryWindow.levelCounts.keys()).sort(),
-  ];
+  const levels = new Set(state.entryWindow.levelCounts.keys());
+  levels.add(state.levelFilter);
+  levels.delete(ALL_LEVELS_FILTER);
+  return [ALL_LEVELS_FILTER, ...Array.from(levels).sort()];
 }
 
 // Counts the file, level, and order choices that differ from the default view
@@ -289,7 +288,12 @@ export function deriveSortOptions() {
   return SORT_ORDER_OPTIONS;
 }
 
-function resetWindow(state, entries, nextBefore) {
+function resetWindow(
+  state,
+  entries,
+  nextBefore,
+  { preserveLevel = false } = {},
+) {
   const win = state.entryWindow;
   const kept =
     entries.length > LOGS_WINDOW_MAX_ENTRIES
@@ -310,7 +314,7 @@ function resetWindow(state, entries, nextBefore) {
   invalidateOlderLoad(state);
   state.olderError = '';
   // A level the new entries lack would hide them all.
-  if (!win.levelCounts.has(state.levelFilter)) {
+  if (!preserveLevel && !win.levelCounts.has(state.levelFilter)) {
     state.levelFilter = ALL_LEVELS_FILTER;
   }
   refilter(state);

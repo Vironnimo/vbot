@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.utils.ids import new_id
+from core.utils.workers import settle_before_cancelling
 from desktop._http import shared_ssl_context
 from desktop.credentials import DeviceTokenStore, StoredComputerIdentity
 from desktop.extensions import (
@@ -464,6 +465,9 @@ class ComputerSharing:
                             if normalized.get(name) is True
                         }
                     )
+                    if any(normalized.get(name) is True for name in self._capabilities):
+                        # A failed identity write must not commit a new grant.
+                        self._identities.computer_identity(origin, create=True)
                     return settings
 
                 updated = update_section(SETTINGS_KEY, apply, self._settings_path)
@@ -471,8 +475,6 @@ class ComputerSharing:
                 for capability in self._capabilities:
                     if normalized.get(capability) is False:
                         self._capability_errors.pop(capability, None)
-                if any(_grants(updated, origin, self._capabilities).values()):
-                    self._identities.computer_identity(origin, create=True)
                 self._wake()
         finally:
             if stopping:
@@ -727,6 +729,9 @@ class ComputerSharing:
                             and self._origin == scope.origin
                             and self._socket is not None
                             and scope.capability_updates
+                            # A capability frame cannot change hello metadata or sign-in.
+                            and _computer_name(self._settings.get("name")) == name
+                            and self._authorization.header(server_url) == self._serving_header
                         )
                     if not refresh:
                         self._changed.set()
@@ -965,7 +970,21 @@ class ComputerSharing:
             self._socket = None
             scope.connection += 1
             self._set_connection(False, self._error_code)
-            await asyncio.gather(*(handler.disconnected() for handler in scope.handlers.values()))
+            await settle_before_cancelling(self._disconnect_handlers(scope))
+
+    @staticmethod
+    async def _disconnect_handlers(scope: _Scope) -> None:
+        handlers = tuple(scope.handlers.items())
+        results = await asyncio.gather(
+            *(handler.disconnected() for _, handler in handlers), return_exceptions=True
+        )
+        for (capability, _), result in zip(handlers, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "Desktop capability disconnect failed (capability=%s error_type=%s)",
+                    capability,
+                    type(result).__name__,
+                )
 
     async def _call(
         self, scope: _Scope, socket: Socket, connection: int, request: dict[str, Any]

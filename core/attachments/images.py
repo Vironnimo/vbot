@@ -351,6 +351,7 @@ class ImageConverter:
         image = original
         if max_dimension is not None and max(original.size) > max_dimension:
             factor = max_dimension / max(original.size)
+            original = _resampling_source(original)
             image = original.resize(
                 (max(1, int(original.width * factor)), max(1, int(original.height * factor))),
                 Image.Resampling.LANCZOS,
@@ -380,8 +381,24 @@ class ImageConverter:
                 break
             factor = min(0.85, math.sqrt(max_bytes / (smallest_overflow or max_bytes)) * 0.9)
             size = (max(1, int(image.width * factor)), max(1, int(image.height * factor)))
+            if image is original:
+                original = _resampling_source(original)
             image = original.resize(size, Image.Resampling.LANCZOS)
         raise ImageConversionError("output_too_large", max_bytes=max_bytes)
+
+
+def _resampling_source(image: Image.Image) -> Image.Image:
+    """Expand images whose palette or color key cannot be filtered as stored."""
+    if image.mode == "P":
+        return image.convert("RGBA" if image.has_transparency_data else "RGB")
+    if image.mode in {"1", "L"}:
+        if image.has_transparency_data:
+            return image.convert("LA")
+        if image.mode == "1":
+            return image.convert("L")
+    if image.mode == "RGB" and image.has_transparency_data:
+        return image.convert("RGBA")
+    return image
 
 
 def _encode(

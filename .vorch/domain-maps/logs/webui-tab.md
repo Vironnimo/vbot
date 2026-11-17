@@ -4,7 +4,9 @@ Supplementary to `logs.md`. Covers the WebUI Logs tab's bounded entry window, pa
 
 ## Bounded window
 
-The WebUI keeps a bounded window. `logsView.js` holds at most `LOGS_WINDOW_MAX_ENTRIES = 5000` entries in a `LogEntryWindow` class instance, which Svelte does not deep-proxy; every change bumps `viewState.revision`, which the view's deriveds read. Appends update the entries, the filtered `visible` list and level counts in place; only filter changes refilter. The view mounts visible entries from `renderFrom` on: the newest `LOGS_RENDER_STEP = 250` at first, plus live arrivals; "Load older entries" mounts 250 more loaded rows before it reads the page before `nextBefore`. Live appends past 5000 + 250 drop the oldest entries back to 5000 and move `nextBefore`; loading older stops at 5000. Older-page results for a replaced, trimmed or switched window are dropped.
+The WebUI keeps a bounded window. `logsView.js` holds at most `LOGS_WINDOW_MAX_ENTRIES = 5000` entries in a `LogEntryWindow` class instance, which Svelte does not deep-proxy; every change bumps `viewState.revision`, which the view's deriveds read. Appends update the entries, the filtered `visible` list and level counts in place; only filter changes refilter. The view mounts visible entries from `renderFrom` on: the newest `LOGS_RENDER_STEP = 250` at first, plus live arrivals; "Load older entries" mounts 250 more loaded rows before it reads the page before `nextBefore`. Live appends past 5000 + 250 drop the oldest entries back to 5000 and move `nextBefore`; loading older stops at 5000. Older-page results for a replaced, trimmed or switched window are dropped. A change of file discards the old window and its pagination cursor before reading the selected file.
+
+The level selector keeps showing an active filter when live updates remove its last matching entry from the window.
 
 ## Reconnect
 
