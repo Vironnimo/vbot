@@ -346,7 +346,9 @@ class ConversationController:
                     if kind == "connection_ready":
                         self.activity.connection_ready(event)
                     elif kind == "session_activity_changed":
-                        self.activity.changed(event.get("payload") or {})
+                        self.activity.changed(
+                            event.get("payload") or {}, sequence=event.get("sequence")
+                        )
                     if kind == "resource_changed":
                         resource = event.get("payload") or {}
                         if resource.get("kind") in {"agents", "projects"}:

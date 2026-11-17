@@ -49,17 +49,28 @@ class SessionActivity:
 
     def __init__(self) -> None:
         self._sessions: dict[tuple[str, str], Activity] = {}
+        self._snapshot_sequence: int | None = None
 
     def connection_ready(self, hello: JsonObject) -> None:
         """Start over from a hello: a Session it does not list is idle."""
         self._sessions = {}
         rows = hello.get("session_activity")
+        sequence = hello.get("last_sequence")
+        self._snapshot_sequence = (
+            sequence if isinstance(rows, list) and isinstance(sequence, int) else None
+        )
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict):
                 self.changed(row)
 
-    def changed(self, payload: JsonObject) -> None:
+    def changed(self, payload: JsonObject, *, sequence: object = None) -> None:
         """Apply one ``session_activity_changed`` payload or hello row."""
+        if (
+            self._snapshot_sequence is not None
+            and isinstance(sequence, int)
+            and sequence <= self._snapshot_sequence
+        ):
+            return
         key = _session_key(payload)
         if key is None:
             return

@@ -39,12 +39,17 @@ async def test_status_row_follows_the_server_reported_session_activity(
         await pilot.pause()
         view = app.conversation
         assert view is not None and not view.facts.get("active_run")
-        await server.bus.put({"type": "connection_ready", "session_activity": [working]})
+        await server.bus.put(
+            {"type": "connection_ready", "session_activity": [working], "last_sequence": 10}
+        )
+        await server.bus.put({"type": "session_activity_changed", "payload": idle, "sequence": 9})
         await pilot.pause()
         # The span counts from the Session leaving idle, across Runs.
         message = app._status_message(view)[0]
         assert "Working · 4m 12s" in message and "Ctrl+X" in message
-        await server.bus.put({"type": "session_activity_changed", "payload": waiting})
+        await server.bus.put(
+            {"type": "session_activity_changed", "payload": waiting, "sequence": 11}
+        )
         await server.bus.put(
             {
                 "type": "session_activity_changed",
