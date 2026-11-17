@@ -8,8 +8,10 @@ from core.model_tasks.image_providers import (
     ProviderImageClient,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.task_client import TaskRequestObserver
 
 OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
+GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def _unified_image_response(*image_bytes: bytes, usage: dict | None = None) -> dict:
@@ -83,4 +85,31 @@ def _openai_image_client(model_id: str) -> ProviderImageClient:
         connection=connection,
         credential="sk-test",
         model_id=model_id,
+    )
+
+
+def _google_image_client(
+    model_id: str, *, usage_observer: TaskRequestObserver | None = None
+) -> ProviderImageClient:
+    """Build a ProviderImageClient wired to a mockable Google AI Studio endpoint."""
+
+    provider = ProviderConfig(
+        id="google",
+        name="Google AI Studio",
+        adapter="google",
+        base_url=GOOGLE_BASE,
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="x-goog-api-key", prefix="", credential_key="GEMINI_API_KEY"),
+    )
+    return ProviderImageClient(
+        provider=provider,
+        connection=connection,
+        credential="google-test-key",
+        model_id=model_id,
+        usage_observer=usage_observer,
     )

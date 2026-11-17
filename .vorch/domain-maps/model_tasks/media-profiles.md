@@ -4,13 +4,14 @@ Task-gated reference for what an image or video generation target offers: `Image
 
 ## Why profiles
 
-The Model DB publishes raw parameter facts per Model (`capabilities.task_options.<task>`, see `models.md`). One Model behaves differently per wire: the ChatGPT subscription renders through a carrier Model that rejects `n`, and OpenAI's native API takes pixel sizes where OpenRouter takes aspect ratios and resolution tiers. A profile combines the facts with the wire once. Settings fields, the Tool schema and the request translation all read the same profile, so they cannot disagree. A profile never invents values: a Model without published facts offers no per-call choices.
+The Model DB publishes raw parameter facts per Model (`capabilities.task_options.<task>`, see `models.md`). One Model behaves differently per wire: the ChatGPT subscription renders through a carrier Model that rejects `n`, and OpenAI's native API takes pixel sizes where OpenRouter and Google take aspect ratios and resolution tiers. A profile combines the facts with the wire once. Settings fields, the Tool schema and the request translation all read the same profile, so they cannot disagree. A profile never invents values: a Model without published facts offers no per-call choices.
 
 ## Image wires
 
 `image_wire(provider_id, adapter, connection_mode)` picks the wire:
 - `openrouter` for Provider `openrouter`;
 - `openai_subscription` for Adapter `openai`/`openai_compatible` with Connection mode `codex_responses`;
+- `google` for Adapter `google` (Google AI Studio, native `generateContent`);
 - `openai_images` for every other `openai`/`openai_compatible` Connection;
 - `unsupported` otherwise.
 
@@ -19,12 +20,12 @@ The Model DB publishes raw parameter facts per Model (`capabilities.task_options
 ## ImageProfile
 
 - `parameters`: the Settings-facing parameter specs after the wire rules.
-  - Hidden per wire: OpenRouter `input_references`, `stream`; OpenAI images `response_format`, `stream`; subscription `n`, `response_format`, `stream`, `model`.
+  - Hidden per wire: OpenRouter `input_references`, `stream`; OpenAI images `response_format`, `stream`; subscription `n`, `response_format`, `stream`, `model`; Google `input_references` (its maximum feeds `max_source_images` only).
   - An open `boolean` spec (OpenRouter's marker for "supported, no values published") becomes `number` for `seed` and `string` otherwise.
 - `fixed_options`: wire options sent over any Setting. `openai_images` sends `response_format: b64_json` when the Model lists `response_format`, because DALL-E otherwise answers with URLs.
 - `max_source_images`: `0` for a Model without `image` input or an unresolved Model; the published `input_references.max`; `16` on `openai_images` (OpenAI images API reference, read 2026-10-04); else `None` (no known limit). The service refuses more images with `ImageTooLargeError`; the Tool sets `maxItems`, or drops `source_images` at `0`.
 - `call_choices`: the per-call options of the image Tool (`CALL_OPTION_NAMES`: `aspect_ratio`, `resolution`, `background`). An option needs at least two values; otherwise the Tool omits it.
-  - OpenRouter: the Model's `aspect_ratio` and `resolution` enum values without `auto`.
+  - OpenRouter and Google: the Model's `aspect_ratio` and `resolution` enum values without `auto`, sent unchanged. Google's facts come per family from `core/providers/google.py` (Google image generation guide and Model pages, read 2026-11-17): Nano Banana 2.1 and 3.1 Flash Image take 14 ratios including `1:4 4:1 1:8 8:1`, the others the 10 standard ratios; tiers are `1K 2K 4K` (3.1 Flash Image adds `512`), while 3.1 Flash Lite Image (1K only) and 2.5 Flash Image (one size) offer none; `thinking_level` is a Setting on 2.1 (`minimal medium high`) and on 3.1 Flash/Flash Lite Image (`minimal high`); `input_references.max` is 14, 3 for 2.5 Flash Image (Google: works best with up to 3), unknown for Flash Lite Image. An image id outside these families publishes no facts.
   - Other wires with a free-form `size` (`type: string`, gpt-image-2): `size_translation = "flexible"`. Aspect ratios `1:1 3:2 2:3 4:3 3:4 16:9 9:16 21:9`, tiers `1K 2K 4K` (pixel budgets). `flexible_size()` returns `WIDTHxHEIGHT` with edges that are multiples of the reduced ratio times 16, at most 3840 px per edge, and 655,360 to 8,294,400 pixels (OpenAI image generation guide, read 2026-10-04). A call that names only one half takes the other from the configured `size` (nearest ratio, nearest tier), else `1:1` or `1K`. Settings show `size` as presets: `auto`, `1024x1024`, `1536x1024`, `1024x1536`, plus the 2K and 4K sizes of `1:1 3:2 2:3 16:9 9:16`.
   - Other wires with an enum `size` (DALL-E, gpt-image-1): `size_translation = "fixed"`. Each size is labelled by the nearest common ratio within 5%, else its exact ratio; the largest size per label wins. DALL-E 3 offers `1:1`, `16:9`, `9:16`. There is no `resolution` choice.
   - `background`: `transparent` and `opaque` when the Model lists `transparent`.

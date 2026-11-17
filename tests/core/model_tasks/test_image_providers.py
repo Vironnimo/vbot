@@ -1,4 +1,4 @@
-"""Model tasks: the OpenRouter and OpenAI image wires of ``ProviderImageClient``.
+"""Model tasks: the OpenRouter, OpenAI and Google image wires of ``ProviderImageClient``.
 
 Every case goes through the public ``generate`` against a mocked endpoint:
 the request the Provider receives, the images the caller gets back, and how
@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -18,10 +19,16 @@ import respx
 
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import ImageInput
-from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.providers.errors import (
+    ProviderContentRefusedError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from tests.core.model_tasks.image_providers_test_support import (
+    GOOGLE_BASE,
     OPENROUTER_IMAGES_URL,
+    _google_image_client,
     _openai_image_client,
     _openrouter_image_client,
     _unified_image_response,
@@ -31,20 +38,40 @@ OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations"
 OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits"
 _OPENROUTER_MODEL = "black-forest-labs/flux.2-pro"
 _OPENAI_MODEL = "gpt-image-1"
+_GOOGLE_MODEL = "gemini-3.1-flash-image"
+GOOGLE_GENERATE_URL = f"{GOOGLE_BASE}/models/{_GOOGLE_MODEL}:generateContent"
 
 
 def _client(wire: str) -> ProviderImageClient:
     if wire == "openrouter":
         return _openrouter_image_client(_OPENROUTER_MODEL)
+    if wire == "google":
+        return _google_image_client(_GOOGLE_MODEL)
     return _openai_image_client(_OPENAI_MODEL)
 
 
 def _url(wire: str) -> str:
-    return OPENROUTER_IMAGES_URL if wire == "openrouter" else OPENAI_GENERATIONS_URL
+    return {"openrouter": OPENROUTER_IMAGES_URL, "google": GOOGLE_GENERATE_URL}.get(
+        wire, OPENAI_GENERATIONS_URL
+    )
 
 
 def _model(wire: str) -> str:
     return _OPENROUTER_MODEL if wire == "openrouter" else _OPENAI_MODEL
+
+
+def _google_answer(*parts: dict[str, Any], finish: str = "STOP", **fields: Any) -> dict[str, Any]:
+    """Build a Gemini ``generateContent`` answer with one candidate."""
+
+    candidate = {"content": {"role": "model", "parts": list(parts)}, "finishReason": finish}
+    if "finishMessage" in fields:
+        candidate["finishMessage"] = fields.pop("finishMessage")
+    return {"candidates": [candidate], **fields}
+
+
+def _inline_image(data: bytes, mime_type: str = "image/png", **fields: Any) -> dict[str, Any]:
+    encoded = base64.b64encode(data).decode()
+    return {"inlineData": {"mimeType": mime_type, "data": encoded}, **fields}
 
 
 _UNIFIED_OPTIONS = {
@@ -385,6 +412,34 @@ async def test_generate_decodes_every_image_with_its_media_type(
             "b64_json",
             id="openai-url-response",
         ),
+        pytest.param(
+            "google",
+            httpx.Response(200, json={"candidates": []}),
+            "no image",
+            id="google-no-candidate",
+        ),
+        # A cut-off answer is no decision by the Model to render nothing.
+        pytest.param(
+            "google",
+            httpx.Response(200, json=_google_answer({"text": "Here is"}, finish="MAX_TOKENS")),
+            "MAX_TOKENS",
+            id="google-truncated",
+        ),
+        pytest.param(
+            "google",
+            httpx.Response(
+                200,
+                json=_google_answer({"inlineData": {"mimeType": "image/png", "data": "no-b64!"}}),
+            ),
+            "could not be decoded",
+            id="google-undecodable-image",
+        ),
+        pytest.param(
+            "google",
+            httpx.Response(500, json={"error": {"code": 500, "status": "INTERNAL"}}),
+            "HTTP 500",
+            id="google-ambiguous-500",
+        ),
     ],
 )
 @respx.mock
@@ -401,20 +456,26 @@ async def test_unusable_image_response_is_never_replayed(
     assert route.call_count == 1
 
 
+# OpenRouter: no provider was available. Google: the Model is overloaded,
+# documented as "wait and retry".
+@pytest.mark.parametrize(
+    ("wire", "body"),
+    [
+        pytest.param("openrouter", _unified_image_response(b"img"), id="openrouter"),
+        pytest.param("google", _google_answer(_inline_image(b"img")), id="google"),
+    ],
+)
 @respx.mock
 @pytest.mark.asyncio
-async def test_openrouter_retries_the_documented_not_processed_503(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-
-    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+async def test_documented_not_processed_503_is_retried(wire: str, body: dict[str, Any]) -> None:
+    route = respx.post(_url(wire)).mock(
         side_effect=[
-            httpx.Response(503, text="no provider available"),
-            httpx.Response(200, json=_unified_image_response(b"img")),
+            httpx.Response(503, text="temporarily unavailable"),
+            httpx.Response(200, json=body),
         ]
     )
 
-    result = await _client("openrouter").generate("a cat", options={})
+    result = await _client(wire).generate("a cat", options={})
 
     assert tuple(image.data for image in result.images) == (b"img",)
     assert route.call_count == 2
@@ -471,3 +532,159 @@ async def test_provider_without_an_image_wire_is_rejected() -> None:
         await client.generate("a cat", options={})
 
     assert raised.value.retryable is False
+
+
+@pytest.mark.parametrize(
+    ("options", "generation_config", "extra_fields"),
+    [
+        # Google's defaults apply to every option left unset.
+        pytest.param({}, {}, {}, id="no-options"),
+        pytest.param(
+            {
+                "aspect_ratio": "21:9",
+                "resolution": "512",
+                "thinking_level": "high",
+                "n": 2,
+                "seed": 7,
+                "output_format": "webp",
+            },
+            {
+                "imageConfig": {"aspectRatio": "21:9", "imageSize": "512"},
+                "thinkingConfig": {"thinkingLevel": "high"},
+            },
+            {},
+            id="every-option-and-no-foreign-key",
+        ),
+        pytest.param(
+            {"aspect_ratio": "", "resolution": "2K", "thinking_level": None},
+            {"imageConfig": {"imageSize": "2K"}},
+            {},
+            id="empty-placeholders-dropped",
+        ),
+        pytest.param(
+            {"extra_options": {"safetySettings": [{"category": "X", "threshold": "Y"}]}},
+            {},
+            {"safetySettings": [{"category": "X", "threshold": "Y"}]},
+            id="extra-options-merged",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_google_request_carries_prompt_sources_and_image_config(
+    options: dict[str, Any], generation_config: dict[str, Any], extra_fields: dict[str, Any]
+) -> None:
+    route = respx.post(GOOGLE_GENERATE_URL).mock(
+        return_value=httpx.Response(200, json=_google_answer(_inline_image(b"img")))
+    )
+
+    await _client("google").generate(
+        "put the cat on the sofa",
+        options=options,
+        input_images=(
+            ImageInput(filename="cat.png", media_type="image/png", data=b"cat"),
+            ImageInput(filename="sofa.jpg", media_type="image/jpeg", data=b"sofa"),
+        ),
+    )
+
+    request = route.calls.last.request
+    assert json.loads(request.content) == {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "put the cat on the sofa"},
+                    {"inlineData": {"mimeType": "image/png", "data": "Y2F0"}},
+                    {"inlineData": {"mimeType": "image/jpeg", "data": "c29mYQ=="}},
+                ],
+            }
+        ],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"], **generation_config},
+        **extra_fields,
+    }
+    assert request.headers["x-goog-api-key"] == "google-test-key"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_google_returns_the_final_images_and_records_token_usage() -> None:
+    usage_metadata = {
+        "promptTokenCount": 12,
+        "candidatesTokenCount": 1290,
+        "thoughtsTokenCount": 300,
+        "totalTokenCount": 1602,
+    }
+    respx.post(GOOGLE_GENERATE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_google_answer(
+                # An interim thought image is a draft, never a result.
+                _inline_image(b"draft", thought=True),
+                {"text": "Here is your cat.", "thoughtSignature": "c2ln"},
+                _inline_image(b"final-png", thoughtSignature="c2ln"),
+                _inline_image(b"final-jpeg", "image/jpeg"),
+                usageMetadata=usage_metadata,
+                modelVersion=_GOOGLE_MODEL,
+            ),
+        )
+    )
+    observer = AsyncMock()
+    observer.start.return_value = "test-call"
+
+    result = await _google_image_client(_GOOGLE_MODEL, usage_observer=observer).generate(
+        "a cat", options={}
+    )
+
+    assert [(image.data, image.media_type, image.index) for image in result.images] == [
+        (b"final-png", "image/png", 0),
+        (b"final-jpeg", "image/jpeg", 1),
+    ]
+    assert result.usage == observer.finish.await_args.kwargs["usage"]
+    assert result.usage is not None
+    assert (result.usage["input_tokens"], result.usage["reasoning_tokens"]) == (12, 300)
+    assert "inlineData" not in json.dumps(result.raw)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        pytest.param(
+            {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+            "Google blocked the prompt (PROHIBITED_CONTENT)",
+            id="blocked-prompt",
+        ),
+        pytest.param(
+            _google_answer(finish="IMAGE_SAFETY", finishMessage="Unable to show the image."),
+            "Unable to show the image.",
+            id="image-safety",
+        ),
+        pytest.param(
+            _google_answer(finish="IMAGE_OTHER"),
+            "Google returned no image (IMAGE_OTHER)",
+            id="image-other",
+        ),
+        pytest.param(
+            _google_answer({"text": "I can't draw real people."}, finish="NO_IMAGE"),
+            "I can't draw real people.",
+            id="no-image-with-reason",
+        ),
+        # The Model answered in words only: its reply is the reason.
+        pytest.param(
+            _google_answer({"text": "Which cat do you mean?"}),
+            "Which cat do you mean?",
+            id="text-only",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_google_render_declined_by_the_model_is_a_refusal(
+    body: dict[str, Any], reason: str
+) -> None:
+    route = respx.post(GOOGLE_GENERATE_URL).mock(return_value=httpx.Response(200, json=body))
+
+    with pytest.raises(ProviderContentRefusedError) as raised:
+        await _client("google").generate("a cat", options={})
+
+    assert raised.value.reason == reason
+    assert route.call_count == 1

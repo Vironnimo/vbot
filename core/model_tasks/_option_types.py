@@ -104,6 +104,7 @@ IMAGE_PARAMETER_ORDER: tuple[str, ...] = (
     "response_format",
     "n",
     "seed",
+    "thinking_level",
 )
 
 IMAGE_PARAMETER_SKIP: frozenset[str] = frozenset({"input_references", "stream"})
@@ -123,6 +124,7 @@ IMAGE_PARAMETER_LABELS: Mapping[str, str] = {
     "n": "Number of images",
     "seed": "Seed",
     "moderation": "Moderation",
+    "thinking_level": "Thinking level",
 }
 
 IMAGE_PARAMETER_DESCRIPTIONS: Mapping[str, str] = {
@@ -131,6 +133,7 @@ IMAGE_PARAMETER_DESCRIPTIONS: Mapping[str, str] = {
     "output_compression": "Compression level (webp/jpeg only).",
     "moderation": "Content-moderation strictness.",
     "response_format": "How the provider returns the image; vBot decodes b64_json.",
+    "thinking_level": "How much the model reasons before rendering; lower is faster.",
 }
 
 IMAGE_NUMBER_VALUED_PARAMETERS: frozenset[str] = frozenset({"seed"})
@@ -146,6 +149,7 @@ IMAGE_CHOICE_LABELS: Mapping[str, str] = {
     "webp": "WebP",
     "b64_json": "Base64 JSON",
     "url": "URL",
+    "minimal": "Minimal",
     "low": "Low",
     "medium": "Medium",
     "high": "High",
