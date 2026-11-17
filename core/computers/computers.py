@@ -61,7 +61,11 @@ class ComputerConnection:
         default_factory=lambda: asyncio.Queue(maxsize=128)
     )
     pending: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
-    closed: bool = False
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+
+    @property
+    def closed(self) -> bool:
+        return self.ended.is_set()
 
 
 class ComputerRegistry:
@@ -124,11 +128,10 @@ class ComputerRegistry:
         target = policy["computer_id"] if requested_id is None else requested_id
         if not isinstance(target, str) or not target:
             raise ComputerError("computer_not_found", "No computer was selected; nothing was sent.")
-        if target not in self._infos:
+        if requested_id is not None and target not in self._infos:
+            folded = target.casefold()
             matches = [
-                item.id
-                for item in self._infos.values()
-                if item.name.casefold() == target.casefold()
+                item.id for item in tuple(self._infos.values()) if item.name.casefold() == folded
             ]
             if len(matches) == 1:
                 target = matches[0]
@@ -308,7 +311,7 @@ class ComputerRegistry:
     def disconnect(self, connection: ComputerConnection) -> None:
         if connection.closed:
             return
-        connection.closed = True
+        connection.ended.set()
         for future in tuple(connection.pending.values()):
             if not future.done():
                 future.set_exception(

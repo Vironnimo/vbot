@@ -8,7 +8,7 @@ from typing import Any
 
 from core.computers import ComputerError, ComputerRegistry
 from core.computers.computers import MAX_FRAME_BYTES, ComputerConnection
-from core.utils.workers import cancel_and_wait
+from core.utils.workers import cancel_and_wait, settle_before_cancelling
 from server.access import scope_principal
 
 
@@ -19,28 +19,54 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
         await websocket.close(code=4403, reason="Native Desktop connection required")
         return
     await websocket.accept()
-    connection: ComputerConnection | None = None
-    sender: asyncio.Task[None] | None = None
     try:
         async with asyncio.timeout(10):
             hello = await _receive(websocket)
         if not isinstance(hello, dict):
             raise ComputerError("computer_protocol", "Computer registration must be an object.")
         connection = await computers.connect(hello, actor=principal.actor)
+        link = asyncio.create_task(_exchange(websocket, computers, connection))
+        ended = asyncio.create_task(connection.ended.wait())
+        try:
+            done, _ = await asyncio.wait((link, ended), return_when=asyncio.FIRST_COMPLETED)
+            if link in done:
+                await link
+            close_requested = connection.closed
+        finally:
+            # Publish loss before waiting for the old link's I/O to unwind.
+            computers.disconnect(connection)
+            # A replaced link can be blocked even in its welcome or a send.
+            link.cancel()
+            ended.cancel()
+            await settle_before_cancelling(asyncio.gather(link, ended, return_exceptions=True))
+        if close_requested:
+            await websocket.close(code=1000, reason="Computer connection closed")
+    except ComputerError as error:
         await websocket.send_json(
-            {
-                "type": "welcome",
-                "protocol": 1,
-                "computer_id": connection.info.id,
-                "instance_id": connection.info.instance_id,
-                "server_instance": computers.server_instance,
-                "capability_updates": 1,
-            }
+            {"type": "error", "error": {"code": error.code, "message": error.message}}
         )
-        computer_id = connection.info.id
-        sender = asyncio.create_task(
-            _send(websocket, connection), name=f"computer-link:{computer_id}"
-        )
+        await websocket.close(code=4403 if error.code == "computer_identity_conflict" else 1008)
+    except TimeoutError, ValueError, json.JSONDecodeError:
+        await websocket.close(code=1008, reason="Invalid computer connection message")
+
+
+async def _exchange(
+    websocket: Any, computers: ComputerRegistry, connection: ComputerConnection
+) -> None:
+    await websocket.send_json(
+        {
+            "type": "welcome",
+            "protocol": 1,
+            "computer_id": connection.info.id,
+            "instance_id": connection.info.instance_id,
+            "server_instance": computers.server_instance,
+            "capability_updates": 1,
+        }
+    )
+    sender = asyncio.create_task(
+        _send(websocket, connection), name=f"computer-link:{connection.info.id}"
+    )
+    try:
         while not connection.closed:
             incoming = asyncio.create_task(_receive(websocket))
             try:
@@ -49,25 +75,12 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
                 )
                 if sender in done:
                     await sender
-                    break
+                    return
                 computers.receive(connection, incoming.result())
             finally:
                 await cancel_and_wait(incoming)
-        if connection.closed:
-            # A newer link of the same installation replaced this one.
-            await websocket.close(code=1000, reason="Computer connection replaced")
-    except ComputerError as error:
-        await websocket.send_json(
-            {"type": "error", "error": {"code": error.code, "message": error.message}}
-        )
-        await websocket.close(code=4403 if error.code == "computer_identity_conflict" else 1008)
-    except TimeoutError, ValueError, json.JSONDecodeError:
-        await websocket.close(code=1008, reason="Invalid computer connection message")
     finally:
-        if connection is not None:
-            computers.disconnect(connection)
-        if sender is not None:
-            await cancel_and_wait(sender)
+        await cancel_and_wait(sender)
 
 
 async def _receive(websocket: Any) -> Any:
