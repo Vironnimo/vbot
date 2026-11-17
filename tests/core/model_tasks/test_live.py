@@ -57,6 +57,7 @@ from tests.core.usage.usage_test_support import read_ledger
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 OPENAI_TARGET = "openai/gpt-live-1-codex::subscription"
 XAI_TARGET = "xai/grok-voice-think-fast-2.0::subscription"
+GOOGLE_TARGET = "google/gemini-3.8-live-extended-thinking::api-key"
 VOICE_TOOLS = (
     {"name": "overview", "description": "What vBot shows.", "parameters": {"type": "object"}},
     {"name": "end_call", "description": "Hang up.", "parameters": {"type": "object"}},
@@ -1045,10 +1046,12 @@ class FakeModelTasks:
         target: str = OPENAI_TARGET,
         options: dict[str, Any] | None = None,
         configured: bool = True,
+        model: Any = None,
     ) -> None:
         self.target = target
         self.options = options if options is not None else {"voice": "cove"}
         self.configured = configured
+        self.model = model
 
     def binding_for(self, task_type: str) -> SimpleNamespace:
         if not self.configured:
@@ -1064,8 +1067,8 @@ class FakeModelTasks:
     def options_with_defaults(self, binding: Any) -> dict[str, Any]:
         return dict(self.options)
 
-    def model_for_target(self, target_ref: Any) -> None:
-        return None
+    def model_for_target(self, target_ref: Any) -> Any:
+        return self.model
 
 
 def _service(
@@ -1320,6 +1323,24 @@ async def test_stopping_the_voice_run_while_connecting_cancels_the_start(
 
 
 _VOICE_NAMES = ["overview", "end_call"]
+_GEMINI_THINKING = SimpleNamespace(
+    capabilities=SimpleNamespace(
+        task_options={
+            "live_voice": {
+                "parameters": {
+                    "voice": {"type": "enum", "values": ["kore"], "default": "kore"},
+                    "backend": {"type": "enum", "values": ["none", "vbot"], "default": "none"},
+                    "thinking_level": {
+                        "type": "enum",
+                        "values": ["low", "medium", "high"],
+                        "default": "low",
+                    },
+                },
+                "tool_calls": "non_blocking",
+            }
+        }
+    )
+)
 
 
 @pytest.mark.asyncio
@@ -1372,8 +1393,33 @@ _VOICE_NAMES = ["overview", "end_call"]
                 ),
             },
         ),
+        (
+            GOOGLE_TARGET,
+            {"voice": "kore"},
+            [],
+            {
+                "voice": "kore",
+                "tools": list(VOICE_TOOLS),
+                # The Model requires a level and runs calls asynchronously only.
+                "thinking_level": "low",
+                "non_blocking_tools": True,
+            },
+        ),
+        (
+            GOOGLE_TARGET,
+            {"backend": "vbot", "thinking_level": "high"},
+            ["vbot_request"],
+            {"tools": [*VOICE_TOOLS, {"name": "vbot_request"}], "thinking_level": "high"},
+        ),
     ],
-    ids=["openai-vbot", "openai-hosted", "xai-own-tools", "xai-vbot"],
+    ids=[
+        "openai-vbot",
+        "openai-hosted",
+        "xai-own-tools",
+        "xai-vbot",
+        "google-own-tools",
+        "google-vbot",
+    ],
 )
 async def test_the_backend_choice_decides_what_the_voice_model_gets(
     target: str,
@@ -1382,13 +1428,15 @@ async def test_the_backend_choice_decides_what_the_voice_model_gets(
     expected: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    xai = target == XAI_TARGET
-    wire = FakeWire(relay=xai)
-    opened = _opening(monkeypatch, "open_xai_live_wire" if xai else "open_openai_live_wire", wire)
-    service, chat = _service(FakeModelTasks(target=target, options=options))
+    provider = target.split("/", 1)[0]
+    relay = provider != "openai"
+    wire = FakeWire(relay=relay)
+    opened = _opening(monkeypatch, f"open_{provider}_live_wire", wire)
+    model = _GEMINI_THINKING if provider == "google" else None
+    service, chat = _service(FakeModelTasks(target=target, options=options, model=model))
 
     call = await service.start_call(
-        media="relay" if xai else "webrtc", offer_sdp=None if xai else OFFER, host=FakeHost()
+        media="relay" if relay else "webrtc", offer_sdp=None if relay else OFFER, host=FakeHost()
     )
 
     assert [started["extra_tools"] for started in chat.started] == [extra_tools]

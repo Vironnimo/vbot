@@ -11,13 +11,13 @@ every Tool call the voice model made, with the Agent's Tools. The binding's
   through ``vbot_request`` or its Provider's native delegation.
 * ``openai``: OpenAI's hosted backend model, which calls the voice Agent's
   Tools (GPT-Live only).
-* ``none``: the voice model uses only the voice Agent's Tools (xAI only).
+* ``none``: the voice model uses only the voice Agent's Tools (xAI and Google).
 
 The :class:`LiveCallHost` the server supplies runs the Live Tools, says what
 vBot shows, and attaches the accessor's media and display. The bound Provider
 decides the media kind: ``webrtc`` (OpenAI; the accessor connects audio to the
-provider) or ``relay`` (xAI; audio passes through the server as PCM16 mono
-24 kHz).
+provider) or ``relay`` (xAI and Google; audio passes through the server as
+PCM16 mono 24 kHz).
 
 Accessor updates published through :meth:`LiveCallHost.publish`:
 
@@ -54,6 +54,7 @@ from core.model_tasks._live_brief import (
     voice_instructions,
 )
 from core.model_tasks._live_call import LiveCallSession
+from core.model_tasks._live_google import open_google_live_wire
 from core.model_tasks._live_openai import (
     ControlJoinError,
     OpenAIBackend,
@@ -64,6 +65,8 @@ from core.model_tasks._live_options import (
     LIVE_BACKEND_OPENAI,
     LIVE_BACKEND_VBOT,
     live_backend_choices,
+    live_thinking_level,
+    live_tools_non_blocking,
 )
 from core.model_tasks._live_results import (
     LIVE_UPDATE_PREFIX,
@@ -286,13 +289,19 @@ class LiveRuntime(Protocol):
 
 @dataclass(frozen=True)
 class _WireSetup:
-    """What opening one Provider's wire needs beyond the target."""
+    """What opening one Provider's wire needs beyond the target.
+
+    ``thinking_level`` and ``non_blocking_tools`` come from the Model's
+    ``live_voice`` facts; wires whose Models declare none ignore them.
+    """
 
     offer_sdp: str | None
     voice: str | None
     instructions: str
     tools: tuple[JsonObject, ...]
     openai_backend: OpenAIBackend | None
+    thinking_level: str | None = None
+    non_blocking_tools: bool = False
 
 
 async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
@@ -313,6 +322,18 @@ async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSe
         instructions=setup.instructions,
         voice=setup.voice,
         tools=list(setup.tools),
+    )
+
+
+async def _open_google(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
+    return await open_google_live_wire(
+        runtime,
+        target_ref,
+        instructions=setup.instructions,
+        voice=setup.voice,
+        tools=list(setup.tools),
+        thinking_level=setup.thinking_level,
+        non_blocking_tools=setup.non_blocking_tools,
     )
 
 
@@ -344,6 +365,12 @@ _PROVIDER_WIRES: dict[str, _ProviderWire] = {
         backends=(LIVE_BACKEND_NONE, LIVE_BACKEND_VBOT),
         open=_open_xai,
     ),
+    "google": _ProviderWire(
+        media=MEDIA_RELAY,
+        tools=True,
+        backends=(LIVE_BACKEND_NONE, LIVE_BACKEND_VBOT),
+        open=_open_google,
+    ),
 }
 
 
@@ -354,6 +381,8 @@ class _CallPlan:
     voice: str | None
     backend: str
     openai_backend_model: str | None
+    thinking_level: str | None = None
+    non_blocking_tools: bool = False
 
 
 @dataclass(frozen=True)
@@ -565,6 +594,8 @@ class LiveVoiceService:
                     instructions=setup.instructions,
                     tools=setup.tools,
                     openai_backend=setup.openai_backend,
+                    thinking_level=plan.thinking_level,
+                    non_blocking_tools=plan.non_blocking_tools,
                 ),
             )
         except asyncio.CancelledError:
@@ -610,7 +641,8 @@ class LiveVoiceService:
                 "not_configured", f"Live voice does not support Provider {target_ref.provider_id}"
             )
         voice = options.get("voice")
-        backend = self._backend(target_ref, options, provider_wire)
+        model = self._model_tasks.model_for_target(target_ref)
+        backend = self._backend(model, options, provider_wire)
         backend_model = options.get("openai_backend_model")
         if backend == LIVE_BACKEND_OPENAI and not (
             isinstance(backend_model, str) and backend_model
@@ -632,13 +664,13 @@ class LiveVoiceService:
             voice=voice if isinstance(voice, str) and voice else None,
             backend=backend,
             openai_backend_model=backend_model if isinstance(backend_model, str) else None,
+            thinking_level=live_thinking_level(model, options),
+            non_blocking_tools=live_tools_non_blocking(model),
         )
 
-    def _backend(
-        self, target_ref: TaskModelTargetRef, options: JsonObject, provider_wire: _ProviderWire
-    ) -> str:
+    def _backend(self, model: Any, options: JsonObject, provider_wire: _ProviderWire) -> str:
         """Return who answers the voice model's requests; the wire must serve it."""
-        offered = live_backend_choices(self._model_tasks.model_for_target(target_ref))
+        offered = live_backend_choices(model)
         backend = options.get("backend")
         if backend in (None, ""):
             backend = offered[0] if offered else provider_wire.backends[0]

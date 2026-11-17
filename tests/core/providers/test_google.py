@@ -121,6 +121,37 @@ def test_speech_models_publish_their_option_schema(
 
 
 @pytest.mark.parametrize(
+    ("model_id", "levels", "non_blocking"),
+    [
+        ("gemini-3.8-live", [], False),
+        ("gemini-2.5-flash-native-audio-latest", [], False),
+        ("gemini-3.1-flash-live-preview", ["minimal", "low", "medium", "high"], False),
+        # Extended Thinking requires a level and runs function calls asynchronously only.
+        ("gemini-3.8-live-extended-thinking", ["low", "medium", "high"], True),
+    ],
+)
+def test_live_models_publish_voice_backend_and_thinking_level(
+    model_id: str, levels: list[str], non_blocking: bool
+) -> None:
+    model = GoogleAdapter.normalize_catalog_entry(_entry(model_id, ("bidiGenerateContent",)))
+
+    schema = option_schema_for("live_voice", "google", f"google/{model_id}::api-key", model=model)
+
+    by_name = {field.name: field for field in schema.fields}
+    assert list(by_name) == ["voice", *(["thinking_level"] if levels else []), "backend"]
+    assert by_name["voice"].default == "kore"
+    assert len(by_name["voice"].options) == 30
+    assert [choice.value for choice in by_name["backend"].options] == ["vbot", "none"]
+    assert by_name["backend"].default == "none"
+    if levels:
+        assert [choice.value for choice in by_name["thinking_level"].options] == levels
+        assert by_name["thinking_level"].default == levels[0]
+    facts = model.capabilities.task_options["live_voice"]
+    assert (facts.get("tool_calls") == "non_blocking") is non_blocking
+    validate_task_model_options(schema, schema.default_options())
+
+
+@pytest.mark.parametrize(
     ("model_id", "values", "max_sources"),
     [
         pytest.param(

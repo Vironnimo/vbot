@@ -14,8 +14,8 @@ Media provider targets also get an ``extra_options`` JSON escape hatch merged
 into the provider request by the wire layer, so an option vBot does not
 surface is usable without a code change. Video fields come from OpenRouter's
 dedicated Video catalog; Music exposes only sampling controls published by its
-Model. Live voice renders its voice, delegating backend Model, and that
-backend's reasoning effort from its ``live_voice`` facts; backend choices
+Model. Live voice renders its voice, thinking level, delegating backend, and
+that backend's Model from its ``live_voice`` facts; backend choices
 depend on the Model registry and the target's Connection, so its schema
 carries no ``extra_options``. Decision targets expose only the options their
 native wire explicitly supports, without generation controls or an escape hatch."""
