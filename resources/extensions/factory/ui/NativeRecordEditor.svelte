@@ -1,5 +1,4 @@
 <script>
-  import { isChatModel } from '@vbot/extension-sdk/lib/modelSelection.js';
   import { untrack } from 'svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
@@ -80,8 +79,6 @@
                 .filter(
                   ([key, value]) =>
                     ![
-                      'model',
-                      'thinking_effort',
                       'allowed_models',
                       'allowed_skills',
                       'allowed_tools',
@@ -129,8 +126,6 @@
       );
       if (['member', 'factory'].includes(kind) && patch.config) {
         const clear = [
-          'model',
-          'thinking_effort',
           'allowed_skills',
           'allowed_tools',
           'denied_tools',
@@ -290,30 +285,6 @@
       min="1"
       value={editor.draft.capacity}
       onInput={(value) => (editor.draft.capacity = value)}
-    />
-    <label for="native-model">{t('factory.native.localModel')}</label><Dropdown
-      id="native-model"
-      ariaLabel={t('factory.native.localModel')}
-      options={[
-        { value: '', label: t('factory.native.inheritedModel') },
-        ...(model.catalog.models || []).filter(isChatModel).map((item) => ({
-          value: item.id,
-          label: item.name || item.id,
-        })),
-      ]}
-      value={editor.draft.config.model || ''}
-      onValueChange={(value) =>
-        (editor.draft.config = { ...editor.draft.config, model: value })}
-    />
-    <label for="native-effort">{t('factory.native.localEffort')}</label
-    ><TextField
-      id="native-effort"
-      value={editor.draft.config.thinking_effort || ''}
-      onInput={(value) =>
-        (editor.draft.config = {
-          ...editor.draft.config,
-          thinking_effort: value,
-        })}
     />
   {/if}
   {#if kind !== 'task'}

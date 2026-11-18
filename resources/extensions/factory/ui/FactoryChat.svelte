@@ -130,6 +130,18 @@
       input?.focus();
     }
   }
+  async function stopDiscussion() {
+    if (!chat?.topic || sending) return;
+    try {
+      await model.call('conversation.stop', {
+        project_id: projectId,
+        topic_id: chat.topic.id,
+      });
+      await refresh();
+    } catch (cause) {
+      error = failureText(cause);
+    }
+  }
   function newTopic() {
     request++;
     chat = null;
@@ -154,6 +166,18 @@
       {#if chat?.topic}<span>{chat.topic.title}</span>{/if}
     </div>
     <div class="actions">
+      {#if chat?.agent_id}
+        <Button
+          variant="tertiary"
+          onClick={() => model.client.openAgent(chat.agent_id)}
+          >{t('factory.native.editAgent')}</Button
+        >
+      {/if}
+      {#if chat?.topic?.state === 'open' && !inactive && !chat?.topic.task_id && (chat?.replying || chat.posts?.at(-1)?.author === 'user')}
+        <Button variant="danger" onClick={stopDiscussion}
+          >{t('factory.chat.stop')}</Button
+        >
+      {/if}
       {#if chat?.session}
         <Button
           variant="tertiary"
@@ -208,7 +232,9 @@
       >{chat.task?.title || t('factory.native.task')} ↗</button
     >
   {/if}
-  {#if chat?.replying}<p role="status">
+  {#if chat?.topic?.state === 'closed'}<p role="status">
+      {t('factory.chat.stopped')}
+    </p>{:else if chat?.replying}<p role="status">
       {t('factory.chat.replying', { name })}
     </p>{/if}
   {#if chat?.failure}<p role="status">{waitingLabel(chat.failure)}</p>{/if}

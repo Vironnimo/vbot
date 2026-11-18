@@ -997,6 +997,56 @@ async def test_owned_descendant_cannot_expand_the_factory_skill_selection(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_team", [False, True], ids=["discussion", "team"])
+async def test_stopping_discussion_work_drains_a_delegated_review(
+    native_factory_runtime: NativeFactoryRuntime, tmp_path: Path, stop_team: bool
+) -> None:
+    harness = native_factory_runtime
+    runtime = harness.runtime
+    runtime.projects.create("product", "Product", tmp_path, sources=[])
+    leader = runtime.agents.create("leader", model=MODEL, librarian_enabled=False)
+    reviewer = runtime.agents.create("reviewer", model=MODEL, librarian_enabled=False)
+    factory = (
+        await harness.operation("factory.create", project_id="product", leader_agent_id=leader.id)
+    )["factory"]
+    chat = await harness.operation(
+        "conversation.send", project_id="product", text="Review this", request_id="first"
+    )
+    initial = await harness.request()
+    root = runtime.chat_run_manager.active_runs()[0]
+    harness.model.tool(
+        "subagent",
+        {"agent_id": reviewer.id, "content": "Review this", "description": "Review work"},
+        request=initial,
+    )
+    held = [await harness.request(), await harness.request()]
+    parent = next(req for req in held if req["kwargs"]["test_context"]["agent_id"] == leader.id)
+    parent["answer"].set_result({"content": "Waiting for the review", "tool_calls": None})
+    await harness.finish(root)
+    assert any(run.agent_id == reviewer.id for run in runtime.chat_run_manager.active_runs())
+    if stop_team:
+        await harness.operation(
+            "factory.update",
+            id=factory["id"],
+            expected_revision=factory["revision"],
+            state="paused",
+        )
+    else:
+        await harness.operation(
+            "conversation.stop", project_id="product", topic_id=chat["topic"]["id"]
+        )
+    await harness.settle()
+    assert not runtime.chat_run_manager.active_runs()
+    usage = (await harness.operation("factory.usage", id=factory["id"]))["usage"]
+    assert usage["runs"] >= 2 and usage["tool_calls"] >= 1
+    assert not (
+        await harness.operation(
+            "conversation.get", project_id="product", topic_id=chat["topic"]["id"]
+        )
+    )["replying"]
+
+
+@pytest.mark.asyncio
 async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
     native_factory_runtime: NativeFactoryRuntime, tmp_path: Path
 ) -> None:
@@ -1040,6 +1090,13 @@ async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
         assert replay["session"] == live["session"] and not replay["replying"]
         assert [m["text"] for m in replay["posts"]] == ["Discuss this first", "An idea"]
         assert not (await harness.operation("work.list", **scope))["work"]
+        [reply] = (await harness.operation("work.list", **scope, include_replies=True))["work"]
+        assert reply["kind"] == "reply" and reply["title"] == "An idea"
+        projection = await harness.operation("work.reply", **scope, id=reply["id"])
+        assert projection["topic_id"] == discussion and projection["text"] == "An idea"
+        with pytest.raises(ValueError, match="this Project"):
+            await harness.operation("work.reply", project_id="other", id=reply["id"])
+
         member = runtime.agents.create("engineer", model=MODEL, librarian_enabled=False)
         worker = (
             await harness.operation(

@@ -127,6 +127,16 @@
       ...extra,
     });
   }
+  async function pauseTeam() {
+    const factory = native.factory;
+    if (factory)
+      await native.mutate('factory.update', {
+        id: factory.id,
+        expected_revision: factory.revision,
+        state: factory.state === 'active' ? 'paused' : 'active',
+      });
+  }
+
   async function editMember(id) {
     if (editor && !(await editor.flush())) return;
     memberEdit = memberEdit === id ? '' : id;
@@ -165,7 +175,19 @@
             .length,
           limit: native.factory.capacity,
         })}</span
-      >{/if}
+      >
+      {#if native.factory.state !== 'archived'}
+        <Button
+          variant={native.factory.state === 'active' ? 'danger' : 'secondary'}
+          disabled={Boolean(native.pending)}
+          onClick={pauseTeam}
+        >
+          {native.factory.state === 'active'
+            ? t('factory.native.pauseTeam')
+            : t('factory.native.resumeTeam')}
+        </Button>
+      {/if}
+    {/if}
   </div>
   {#if native.cursors.factory}<Button onClick={() => native.more('factory')}
       >{t('factory.native.more')}</Button
@@ -211,7 +233,12 @@
           )}
           onSent={native.refresh}
         />
-        <ProjectWork {model} projectId={currentProject} {statusLabel} />
+        <ProjectWork
+          {model}
+          projectId={currentProject}
+          factoryId={native.factory?.id}
+          {statusLabel}
+        />
       </div>{/key}
   {/if}
   {#if native.loading}<p role="status">{t('factory.native.loading')}</p>
@@ -291,14 +318,6 @@
       {#if ['active', 'paused'].includes(native.factory.state)}
         <div class="native-actions">
           <Button
-            onClick={() =>
-              act('factory.update', native.factory, {
-                state: native.factory.state === 'paused' ? 'active' : 'paused',
-              })}
-            >{native.factory.state === 'paused'
-              ? t('factory.native.resume')
-              : t('factory.native.pause')}</Button
-          ><Button
             variant="danger"
             onClick={() => act('factory.archive', native.factory)}
             >{t('factory.native.archive')}</Button
@@ -342,8 +361,11 @@
                 memberName={agentName(member)}
                 inactive={native.factory.state !== 'active'}
               />{/if}
-            <Button onClick={() => editMember(member.id)}
-              >{t('common.edit')}</Button
+            <Button onClick={() => model.client.openAgent(member.agent_id)}
+              >{t('factory.native.editAgent')}</Button
+            >
+            <Button variant="tertiary" onClick={() => editMember(member.id)}
+              >{t('factory.native.editMembership')}</Button
             >{#if member.state === 'active' && member.id !== native.factory.leader_member_id}<Button
                 variant="tertiary"
                 onClick={() => act('member.retire', member)}

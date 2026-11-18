@@ -802,6 +802,7 @@
                 desktop.showToast({ title: message, variant })}
               onOpenSession={(address) =>
                 chatNavigation.openSessionLink(address)}
+              onOpenAgent={(id) => navigator.navigate('agents', [id])}
             />
           {/snippet}
         </LazyContent>

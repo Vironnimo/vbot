@@ -172,6 +172,8 @@ use a declared context field, `op` (`eq`, `ne`, `in`, `exists`, `gt`, `gte`, `lt
 and ordered comparisons require finite numbers without coercion. Missing fields
 fail comparisons; `{ "field": "project_id", "op": "exists", "value": false }`
 tests absence explicitly. Expressions are limited to depth 8 and 64 nodes.
+Use `client.openAgent(agentId)` to open an Identity Agent in the standard Agents editor (API 35).
+
 Message scopes add `message_id` and `message_role`, Session rows add
 `session_selected`, and editor scopes add `editor_mode` (`create` or `edit`).
 

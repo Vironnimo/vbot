@@ -105,6 +105,7 @@ function nativeBridge({ established = true } = {}) {
       member: put(data.members, {
         ...args,
         id: 'mem-added',
+        agent_id: args.agent_id || 'specialist',
         state: 'active',
         config: {},
         capacity: 1,
@@ -265,7 +266,12 @@ describe('Factory native work', () => {
 
   it('resumes the Leader topic, sends inline and keeps a different Project separate', async () => {
     const { bridge, state, operation } = nativeBridge();
-    const topic = { id: 'top-current', title: 'Startup time', state: 'open' };
+    const topic = {
+      id: 'top-current',
+      title: 'Startup time',
+      state: 'open',
+      revision: 4,
+    };
     const address = {
       project_id: null,
       agent_id: 'planner',
@@ -283,16 +289,32 @@ describe('Factory native work', () => {
             posts: [...posts],
             session,
             task_session: session && taskAddress,
+            replying: Boolean(session),
           }
         : { topic: null, posts: [] };
     state.handlers['conversation.send'] = ({ text }) => {
       posts.push({ id: 'two', author: 'user', text });
       return { topic, posts: [...posts] };
     };
+    state.handlers['work.reply'] = () => ({
+      text: 'Full report with findings',
+      topic_id: topic.id,
+      author: 'Leader',
+    });
+    state.handlers['conversation.stop'] = () => {
+      topic.state = 'closed';
+      return { topic_id: topic.id, state: 'closed' };
+    };
     state.handlers['work.list'] = ({ project_id }) => ({
       work:
         project_id === 'project-a'
           ? [
+              {
+                id: 'report',
+                kind: 'reply',
+                title: 'Review findings',
+                author: 'Leader',
+              },
               {
                 kind: 'card',
                 id: 'scheduled',
@@ -326,6 +348,13 @@ describe('Factory native work', () => {
     expect(document.querySelector('.project-overview').textContent).toContain(
       'Review PR 42',
     );
+    Array.from(document.querySelectorAll('.work li button'))
+      .find((node) => node.textContent.includes('Review findings'))
+      .click();
+    await settle();
+    expect(modal().textContent).toContain('Full report with findings');
+    modal().querySelector('button').click();
+    await settle();
     const input = document.querySelector('.project-overview textarea');
     input.value = 'Continue here';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -341,6 +370,13 @@ describe('Factory native work', () => {
       request_id: expect.any(String),
     });
     expect(log().textContent).toContain('Continue here');
+    button(t('factory.chat.stop')).click();
+    await settle();
+    expect(calls(operation, 'conversation.stop').at(-1)[1]).toEqual({
+      topic_id: topic.id,
+      project_id: 'project-a',
+    });
+    expect(input.disabled).toBe(true);
     await choose('native-project', 'Project B');
     await settle();
     expect(log().textContent).not.toContain('Continue here');
@@ -566,7 +602,9 @@ describe('Factory native work', () => {
     const panel = [
       ...document.querySelectorAll('.native-members section'),
     ].find((item) => item.textContent.includes('Implementer'));
-    button(t('common.edit'), panel).click();
+    button(t('factory.native.editAgent'), panel).click();
+    expect(bridge.openAgent).toHaveBeenLastCalledWith('specialist');
+    button(t('factory.native.editMembership'), panel).click();
     await settle();
     fill('native-instructions', 'Local member remit');
     expect(await bridge.autosave.flush()).toBe(true);
@@ -576,13 +614,7 @@ describe('Factory native work', () => {
     expect(calls(operation, 'member.update').at(-1)[1]).not.toHaveProperty(
       'identity_config',
     );
-    await choose('native-model', 'Demo worker');
-    expect(await bridge.autosave.flush()).toBe(true);
-    await choose('native-model', t('factory.native.inheritedModel'));
-    expect(await bridge.autosave.flush()).toBe(true);
-    expect(calls(operation, 'member.update').at(-1)[1].clear_fields).toEqual([
-      'model',
-    ]);
+    expect(document.querySelector('#native-model')).toBeNull();
     button(t('factory.native.settings')).click();
     await settle();
     fill('native-allowed-models', 'demo/worker, demo/reviewer');
@@ -597,11 +629,11 @@ describe('Factory native work', () => {
     expect(calls(operation, 'factory.update').at(-1)[1].clear_fields).toEqual([
       'allowed_skills',
     ]);
-    button(t('factory.native.pause')).click();
+    button(t('factory.native.pauseTeam')).click();
     await settle();
     expect(data.factories[0].state).toBe('paused');
-    expect(button(t('factory.native.pause'))).toBeUndefined();
-    button(t('factory.native.resume')).click();
+    expect(button(t('factory.native.pauseTeam'))).toBeUndefined();
+    button(t('factory.native.resumeTeam')).click();
     await settle();
     expect(data.factories[0].state).toBe('active');
     state.handlers['factory.archive'] = () => {
@@ -614,8 +646,8 @@ describe('Factory native work', () => {
     button(t('factory.native.archive')).click();
     await settle();
     expect(data.factories[0].state).toBe('archived');
-    expect(button(t('factory.native.pause'))).toBeUndefined();
-    expect(button(t('factory.native.resume'))).toBeUndefined();
+    expect(button(t('factory.native.pauseTeam'))).toBeUndefined();
+    expect(button(t('factory.native.resumeTeam'))).toBeUndefined();
     expect(button(t('factory.native.archive'))).toBeUndefined();
     expect(document.getElementById('native-remit')).not.toBeNull();
   });

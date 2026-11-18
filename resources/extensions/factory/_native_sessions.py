@@ -133,13 +133,6 @@ class NativeSessions:
                             else [name for name in local_skills if name in ceiling_skills]
                         )
                         allowed_models = boundary.get("allowed_models")
-                        if (
-                            allowed_models is not None
-                            and local.get("model")
-                            and not self.native._model_allowed(local["model"], allowed_models)
-                        ):
-                            await self.native.block(execution, "model_unavailable")
-                            return
                         config = TemporaryAgentConfig(
                             model="",
                             cwd=Path(project["cwd"]),
@@ -160,10 +153,6 @@ class NativeSessions:
                             ),
                             identity_agent=member["agent_id"],
                             identity_incarnation=member.get("agent_proof") or None,
-                            model_override=local.get("model") or boundary.get("model") or None,
-                            thinking_effort_override=local.get("thinking_effort")
-                            or boundary.get("thinking_effort")
-                            or None,
                             permission_ceiling=boundary.get("permission_ceiling"),
                         )
                         if allowed_models is not None:

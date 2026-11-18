@@ -11,6 +11,7 @@
     shell = null,
     onToast = () => {},
     onOpenSession = () => {},
+    onOpenAgent = () => {},
     onUiCommand = null,
     embedded = false,
     autosaveContext = null,
@@ -57,6 +58,7 @@
   {subscribeInvalidations}
   {onToast}
   {onOpenSession}
+  {onOpenAgent}
   {uiContext}
   {apiCapabilities}
   {onUiCommand}

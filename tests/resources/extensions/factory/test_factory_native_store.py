@@ -33,7 +33,8 @@ async def test_native_schema_addition_preserves_workflow_cards_and_reopens(tmp_p
         migrations=tuple(
             item
             for item in MIGRATIONS
-            if item.name not in {"native_factory_teams", "factory_budget_changes"}
+            if item.name
+            not in {"native_factory_teams", "factory_budget_changes", "agent_profile_models"}
         ),
     )
     database = open_offline_database(before)
@@ -48,18 +49,37 @@ async def test_native_schema_addition_preserves_workflow_cards_and_reopens(tmp_p
     after = extension_database_spec(
         tmp_path, "factory", DATABASE_NAME, SCHEMA_SQL, migrations=MIGRATIONS
     )
-    database = open_offline_database(after)
+    previous = extension_database_spec(
+        tmp_path,
+        "factory",
+        DATABASE_NAME,
+        SCHEMA_SQL,
+        migrations=tuple(item for item in MIGRATIONS if item.name != "agent_profile_models"),
+    )
+    database = open_offline_database(previous)
     try:
         store = FactoryStore(database)
         assert await store.get_card(card["id"]) == card
-        factory, _, _ = await team(store)
+        factory, _, worker = await team(store)
+        legacy = await store.native.update_member(
+            worker["id"],
+            {"config": {"model": "old", "thinking_effort": "high", "allowed_tools": ["read"]}},
+        )
+        factory = await store.native.update_factory(
+            factory["id"], {"config": {"model": "old", "allowed_models": ["permitted"]}}
+        )
         reservation = await store.native.reserve_identity("create", {"role": "Reviewer"})
     finally:
         database.close()
     database = open_offline_database(after)
     try:
         store = FactoryStore(database)
-        assert await store.native.get_factory(factory["id"]) == factory
+        upgraded = await store.native.get_factory(factory["id"])
+        assert upgraded["revision"] == factory["revision"] + 1
+        assert upgraded["config"] == {"allowed_models": ["permitted"]}
+        member = await store.native.get_member(worker["id"])
+        assert member["config"] == {"allowed_tools": ["read"]}
+        assert member["revision"] == legacy["revision"] + 1
         assert await store.native.reserve_identity("create", {"role": "Reviewer"}) == reservation
         assert await store.get_card(card["id"]) == card
         workflow = await store.save_workflow(normalize(templates()[0]), expected_revision=0)

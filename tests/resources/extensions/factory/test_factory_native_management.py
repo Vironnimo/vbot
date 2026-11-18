@@ -319,21 +319,26 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
 
     harness.host.inspect_prompt = preview
     factory = retried["factory"]
+    with pytest.raises(FactoryError, match="Agents settings"):
+        await harness.operation(
+            "factory.update",
+            id=factory["id"],
+            expected_revision=factory["revision"],
+            config={"model": "factory-model"},
+        )
     configured = (
         await harness.operation(
             "factory.update",
             id=factory["id"],
             expected_revision=factory["revision"],
             config={
-                "model": "factory-model",
-                "thinking_effort": "high",
-                "allowed_models": ["factory-model"],
+                "allowed_models": ["global-default"],
                 "permission_ceiling": ceiling,
                 "future_setting": "retained",
             },
         )
     )["factory"]
-    assert inspected[-1] == ("factory-model", "high")
+    assert inspected[-1] == (None, None)
     assert configured["config"]["permission_ceiling"] == ceiling
     with pytest.raises(FactoryError) as outside:
         await harness.operation(
@@ -351,7 +356,7 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
             "factory.update",
             id=factory["id"],
             expected_revision=configured["revision"],
-            clear_fields=["model", "thinking_effort", "allowed_models", "permission_ceiling"],
+            clear_fields=["allowed_models", "permission_ceiling"],
         )
     )["factory"]
     assert cleared["config"] == {"future_setting": "retained"}
