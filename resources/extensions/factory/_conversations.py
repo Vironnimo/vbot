@@ -100,7 +100,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
                 "factory_not_found", "This Project has no team for that conversation."
             )
         if not sending:
-            return {"topic": None, "posts": []}
+            return {"topic": None, "posts": [], "factory_id": None}
         factory = await _bootstrap(management, project_id)
     factory_id = factory["id"]
     if sending and factory["state"] != "active":
@@ -127,6 +127,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
                     "receipt_conflict", "This message receipt belongs to a different conversation."
                 )
             topic = first
+    legacy_topic = None
     if (
         not args.get("new_topic")
         and not task_id
@@ -136,12 +137,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         previous = await store.previous_direct_discussion(factory_id, member_id, topic_id)
         if previous:
             topic = {**previous, "direct_member_id": member_id}
-            if sending:
-                topic = await store.update_topic(
-                    previous["id"],
-                    {"direct_member_id": member_id},
-                    expected_revision=previous["revision"],
-                )
+            legacy_topic = previous
     if topic and (
         topic["factory_id"] != factory_id
         or not topic.get("direct_member_id")
@@ -152,13 +148,34 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         raise FactoryError(
             "conversation_mismatch", "Open the conversation for this Project and member."
         )
+    recipient = topic["direct_member_id"] if topic else member_id
+    recipient_member = member if recipient == member_id else await store.get_member(recipient)
+    if recipient_member["factory_id"] != factory_id:
+        raise FactoryError("outside_factory", "Open the conversation in its own Factory.")
+    (profile,) = await management.identities.member_profiles([recipient_member])
+    participant = {
+        "factory_id": factory_id,
+        "agent_id": recipient_member["agent_id"],
+        "agent_proof": recipient_member.get("agent_proof"),
+        "profile_available": profile["profile_available"],
+        "member_name": profile["agent_name"]
+        or recipient_member.get("name")
+        or recipient_member["role"],
+    }
     if sending:
+        if not profile["profile_available"]:
+            raise FactoryError(
+                "member_profile_unavailable", "Choose a member with an available Agent profile."
+            )
+        if recipient_member["state"] != "active":
+            raise FactoryError("member_retired", "This member is retired. Choose an active member.")
+        if legacy_topic:
+            topic = await store.update_topic(
+                legacy_topic["id"],
+                {"direct_member_id": member_id},
+                expected_revision=legacy_topic["revision"],
+            )
         if topic:
-            recipient = topic["direct_member_id"]
-            if recipient != member_id and (await store.get_member(recipient))["state"] != "active":
-                raise FactoryError(
-                    "member_retired", "This member is retired. Choose an active member."
-                )
             await store.add_post(topic["id"], body, recipients=[recipient], receipt=receipt)
             topic = await store.get_topic(topic["id"])
         else:
@@ -174,15 +191,9 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
             )
         await management.service.native.changed("topics", topic)
     if not topic:
-        return {
-            "topic": None,
-            "posts": [],
-            "agent_id": member["agent_id"],
-            "member_name": member.get("name") or member["role"],
-        }
+        return {"topic": None, "posts": [], **participant}
     if topic["task_id"] and task is None:
         task = await store.get_task(topic["task_id"])
-    recipient_member = await store.get_member(topic["direct_member_id"])
     history = await store.conversation_history(topic, args.get("before", ""))
     discussion = await store.latest_execution("topic", topic["id"], recipient_member["id"])
     epoch = management.service.native.topic_epoch(factory, recipient_member)
@@ -198,8 +209,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         "replying": bool(current and current["state"] in {"admitting", "running"}),
         "topic": topic,
         **history,
-        "agent_id": recipient_member["agent_id"],
-        "member_name": recipient_member.get("name") or recipient_member["role"],
+        **participant,
         "task": {
             key: task[key]
             for key in (

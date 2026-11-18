@@ -55,7 +55,19 @@ class ExtensionIdentityAgents:
             "incarnation": agent.created_at,
             "name": agent.name,
             "model": agent.model,
-            "created_by_owner": agent.extension_owner == self._identity.name,
+            **self._ownership(agent),
+        }
+
+    def _ownership(self, agent: Agent) -> dict[str, Any]:
+        owned = agent.extension_owner == self._identity.name
+        return {
+            "extension_owner": agent.extension_owner,
+            "created_by_owner": owned,
+            **(
+                {"creation_request_id": agent.extension_creation_request["id"]}
+                if owned and agent.extension_creation_request
+                else {}
+            ),
         }
 
     def _get(self, agent_id: str) -> Agent:
@@ -71,6 +83,30 @@ class ExtensionIdentityAgents:
 
     async def get(self, agent_id: str) -> dict[str, Any]:
         return self._record(await _WORKERS.run(self._get, agent_id))
+
+    async def profiles(self, agent_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Read names, ownership and incarnation of an explicit page of members."""
+        if (
+            not isinstance(agent_ids, list)
+            or len(agent_ids) > 100
+            or any(not isinstance(i, str) for i in agent_ids)
+        ):
+            raise AgentError("Supply at most 100 identity Agent ids")
+
+        def read() -> dict[str, dict[str, Any]]:
+            self._require_current(self._identity)
+            return {
+                agent_id: {
+                    "name": agent.name,
+                    "incarnation": agent.incarnation,
+                    **self._ownership(agent),
+                    "placement": self._agents.resolved_placement(agent),
+                }
+                for agent_id in dict.fromkeys(agent_ids)
+                if (agent := self._agents.find(agent_id)) is not None and agent.builtin is None
+            }
+
+        return await _WORKERS.run(read)
 
     async def create(
         self, agent_id: str, *, request_id: str | None = None, **config: Any

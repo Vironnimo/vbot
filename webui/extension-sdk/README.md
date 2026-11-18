@@ -234,7 +234,7 @@ use a declared context field, `op` (`eq`, `ne`, `in`, `exists`, `gt`, `gte`, `lt
 and ordered comparisons require finite numbers without coercion. Missing fields
 fail comparisons; `{ "field": "project_id", "op": "exists", "value": false }`
 tests absence explicitly. Expressions are limited to depth 8 and 64 nodes.
-Use `client.openAgent(agentId)` to open an Identity Agent in the standard Agents editor (API 35).
+Use `client.openAgent(agentId)` to open the standard Agent profile editor (API 35). Declare `"api_version": 36` to open the editor over your page with `client.openAgent(agentId, { expectedIncarnation, relatedScope })`. Pass the stored incarnation to bind edits to that identity. The optional scope identifies the team's delegation targets. Register `agent.profile_targets({scope, after?})` to return pages of `{agents: [{id, name, placement?}], next_after}` with a null cursor on the last page.
 
 Message scopes add `message_id` and `message_role`, Session rows add
 `session_selected`, and editor scopes add `editor_mode` (`create` or `edit`).

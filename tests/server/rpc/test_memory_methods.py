@@ -246,6 +246,29 @@ async def test_memory_revert_announces_changed_files_without_a_recorded_revision
             "invalid_request",
             "scope",
         ),
+        (
+            "memory.list",
+            {"project_id": "demo", "expected_incarnation": "other"},
+            "invalid_request",
+            "agent_id",
+        ),
+        (
+            "memory.list",
+            {"agent_id": "coder", "expected_incarnation": "other"},
+            "agent_not_found",
+            "original",
+        ),
+        (
+            "memory.add",
+            {
+                "agent_id": "coder",
+                "scope": "agent",
+                "content": "x",
+                "expected_incarnation": "other",
+            },
+            "agent_not_found",
+            "original",
+        ),
         # The Agent store owns the not-found contract the RPC code is derived from.
         ("memory.list", {"agent_id": "ghost"}, "agent_not_found", ""),
         (
@@ -320,7 +343,14 @@ async def test_memory_write_runs_off_the_loop_and_finishes_before_the_workspace_
 
     monkeypatch.setattr(memory, "add_entry", blocked_add_entry)
     adding = asyncio.create_task(
-        call(state, "memory.add", agent_id="coder", scope="agent", content="Durable fact.")
+        call(
+            state,
+            "memory.add",
+            agent_id="coder",
+            scope="agent",
+            content="Durable fact.",
+            expected_incarnation=original.created_at,
+        )
     )
     tasks: list[asyncio.Task[Any]] = [adding]
     try:

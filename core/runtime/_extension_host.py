@@ -1108,13 +1108,19 @@ class ExtensionHostFactory:
             for skill in self._get_skills().list_all()
         ]
         return {
-            # Identity Agents in roster order; built-in Agents stay hidden.
+            # Profiles that existing Extension jobs and workflows can name.
             "agents": [
                 {
                     "id": agent.id,
                     "name": agent.name,
                     "description": agent.description,
                     "placement": agent.placement.kind if agent.placement is not None else "chat",
+                    "incarnation": agent.incarnation,
+                    **(
+                        {"extension_owner": agent.extension_owner}
+                        if agent.extension_owner is not None
+                        else {}
+                    ),
                 }
                 for agent in self.agents.list()
             ],

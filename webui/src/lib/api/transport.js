@@ -38,6 +38,15 @@ export function createRpcEnvelope(method, params = {}) {
   return { method, params };
 }
 
+export function agentProfileRpc(
+  method,
+  params,
+  { expected_incarnation, ...options } = {},
+) {
+  if (expected_incarnation === undefined) return rpc(method, params, options);
+  return rpc(method, { ...params, expected_incarnation }, options);
+}
+
 export async function rpc(method, params = {}, options = {}) {
   const envelope = createRpcEnvelope(method, params);
   // `untracked` keeps the client metrics report out of its own measurements.

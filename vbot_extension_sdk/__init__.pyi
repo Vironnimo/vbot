@@ -206,6 +206,16 @@ class ExtensionAPI:
     def on_startup(self, handler: Any) -> None: ...
     def on_shutdown(self, handler: Any) -> None: ...
 
+class IdentityAgentProfiles(typing.Protocol):
+    async def get(self, agent_id: str) -> dict[str, Any]: ...
+    async def profiles(self, agent_ids: list[str]) -> dict[str, dict[str, Any]]: ...
+    async def create(
+        self, agent_id: str, *, request_id: str | None = None, **config: Any
+    ) -> dict[str, Any]: ...
+    async def update(
+        self, agent_id: str, *, expected_incarnation: str, **changes: Any
+    ) -> dict[str, Any]: ...
+
 @dataclass(frozen=True)
 class ExtensionHost:
     data_dir: Path
@@ -218,7 +228,7 @@ class ExtensionHost:
     resolve_cwd: Callable[[str | None, str], Path] | None = None
     for_owner: Callable[[Any], ExtensionHost] | None = None
     temporary_agents: Any | None = None
-    identity_agents: Any | None = None
+    identity_agents: IdentityAgentProfiles | None = None
     state_dir: Path | None = None
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None

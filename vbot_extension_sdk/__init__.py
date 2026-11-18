@@ -15,6 +15,7 @@ _EXPORTS = exports_for(
         "core.agents.temporary_execution": ("TemporaryRunInput",),
         "core.extensions.operations": (
             "ExtensionHost",
+            "IdentityAgentProfiles",
             "ExtensionOperations",
             "ManagementOperation",
             "ExtensionOperationError",

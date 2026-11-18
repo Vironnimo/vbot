@@ -33,6 +33,7 @@ def _nonempty(description: str = "") -> JsonObject:
 _ID = _nonempty("Existing entity id; the owning service validates its scope and existence.")
 _AGENT = _nonempty("Identity Agent id, or a Project Team address such as coder@my-project.")
 _ADDRESS = {"agent_id": _AGENT, "session_id": _ID}
+_EXPECTED_INCARNATION = _nonempty("Creation stamp of the Identity Agent the caller opened.")
 _ADDRESS_REQUIRED = ("agent_id", "session_id")
 _STRINGS = array(string())
 _NAMES = array(_nonempty())
@@ -160,6 +161,7 @@ _SERVICE_AGENT_FIELDS = {
 }
 _AGENT_UPDATE_FIELDS = {
     **AGENT_FIELDS,
+    "expected_incarnation": _EXPECTED_INCARNATION,
     "current_session_id": nullable(_ID),
     "workspace": nullable(string("Absolute Workspace path, or null to use the default.")),
     "root_project_id": nullable(_ID),
@@ -322,7 +324,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "agent.get",
         "query",
-        params({"id": _ID}, ("id",)),
+        params({"id": _ID, "expected_incarnation": _EXPECTED_INCARNATION}, ("id",)),
         ("agents",),
         "Read an Identity Agent's effective configuration.",
     ),
@@ -367,7 +369,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "agent.soul.get",
         "query",
-        params({"id": _ID}, ("id",)),
+        params({"id": _ID, "expected_incarnation": _EXPECTED_INCARNATION}, ("id",)),
         ("agents",),
         "Read SOUL.md content and its optimistic-concurrency revision.",
     ),
@@ -375,7 +377,13 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "agent.soul.set",
         "execute",
         params(
-            {"id": _ID, "content": string(), "revision": string()}, ("id", "content", "revision")
+            {
+                "id": _ID,
+                "content": string(),
+                "revision": string(),
+                "expected_incarnation": _EXPECTED_INCARNATION,
+            },
+            ("id", "content", "revision"),
         ),
         ("agents",),
         "Replace SOUL.md only when the supplied revision is current.",
@@ -383,7 +391,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "agent.suggest_description",
         "execute",
-        params({"id": _ID}, ("id",)),
+        params({"id": _ID, "expected_incarnation": _EXPECTED_INCARNATION}, ("id",)),
         (),
         "Ask the Agent's Model to draft a description without saving it.",
     ),
@@ -886,7 +894,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "skill.inspect",
         "query",
-        params({"id": _ID}, ("id",)),
+        params({"id": _ID, "expected_incarnation": _EXPECTED_INCARNATION}, ("id",)),
         ("skills",),
         "Inspect an exact Skill package id from the inventory.",
     ),
@@ -934,7 +942,12 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "skill.update",
         "execute",
         params(
-            {**_SKILL, "content": _nonempty("Full SKILL.md document."), "source": nullable(_ID)},
+            {
+                **_SKILL,
+                "content": _nonempty("Full SKILL.md document."),
+                "source": nullable(_ID),
+                "expected_incarnation": _EXPECTED_INCARNATION,
+            },
             (*_SKILL_REQUIRED, "content"),
         ),
         ("skills",),
@@ -943,7 +956,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "skill.delete",
         "execute",
-        params(_SKILL, _SKILL_REQUIRED),
+        params({**_SKILL, "expected_incarnation": _EXPECTED_INCARNATION}, _SKILL_REQUIRED),
         ("skills",),
         "Archive a Skill package through the canonical authoring service.",
     ),
@@ -1016,7 +1029,10 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "skill.set_disabled",
         "execute",
-        params({"id": _ID, "disabled": boolean()}, ("id", "disabled")),
+        params(
+            {"id": _ID, "disabled": boolean(), "expected_incarnation": _EXPECTED_INCARNATION},
+            ("id", "disabled"),
+        ),
         ("skills", "projects"),
         "Enable or disable an exact inventoried Skill package.",
     ),

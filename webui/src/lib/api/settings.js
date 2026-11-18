@@ -3,6 +3,7 @@ import {
   RPC_ERROR_NETWORK,
   buildHttpUrl,
   rpc,
+  agentProfileRpc,
   requireNonEmptyString,
   requirePlainObject,
   requireAgentMemoryMutation,
@@ -353,12 +354,16 @@ export function listAgentMemories(agentId, options = {}) {
     'Agent id must be a non-empty string',
     'memory.list',
   );
-  return rpc('memory.list', { agent_id: agentId }, options);
+  return agentProfileRpc('memory.list', { agent_id: agentId }, options);
 }
 
 export function addAgentMemory(agentId, scope, content, options = {}) {
   requireAgentMemoryMutation(agentId, scope, content, 'memory.add');
-  return rpc('memory.add', { agent_id: agentId, scope, content }, options);
+  return agentProfileRpc(
+    'memory.add',
+    { agent_id: agentId, scope, content },
+    options,
+  );
 }
 
 export function replaceAgentMemory(
@@ -370,7 +375,7 @@ export function replaceAgentMemory(
 ) {
   requireAgentMemoryMutation(agentId, scope, content, 'memory.replace');
   requirePositiveInteger(entryId, 'Memory entry id', 'memory.replace');
-  return rpc(
+  return agentProfileRpc(
     'memory.replace',
     { agent_id: agentId, scope, entry_id: entryId, content },
     options,
@@ -385,7 +390,7 @@ export function removeAgentMemory(agentId, scope, entryId, options = {}) {
   );
   requireMemoryScope(scope, 'memory.remove');
   requirePositiveInteger(entryId, 'Memory entry id', 'memory.remove');
-  return rpc(
+  return agentProfileRpc(
     'memory.remove',
     { agent_id: agentId, scope, entry_id: entryId },
     options,

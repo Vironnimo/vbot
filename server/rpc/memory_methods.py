@@ -42,6 +42,7 @@ class _MemoryOwner:
     agent_id: str | None = None
     project_id: str | None = None
     actor: str = "rpc"
+    expected_incarnation: str | None = None
 
     @property
     def fields(self) -> JsonObject:
@@ -332,6 +333,9 @@ def _operate[Result](state: Any, owner: _MemoryOwner, operation: Callable[[], Re
             with state.runtime.projects.configuration_guard():
                 state.runtime.projects.memory_workspace(owner.project_id)
                 return operation()
+        if owner.agent_id is not None and owner.expected_incarnation is not None:
+            with state.runtime.agents.incarnation_guard(owner.agent_id, owner.expected_incarnation):
+                return operation()
         return operation()
     except MemoryRevertIncompleteError:
         # Revert publishes the files left changed before mapping this error.
@@ -363,15 +367,27 @@ async def _memory_owner(state: Any, params: JsonObject) -> _MemoryOwner:
             "params must name exactly one of agent_id or project_id",
         )
     if "project_id" in params:
+        if "expected_incarnation" in params:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "expected_incarnation requires an agent_id")
         project_id = _required_string(params, "project_id")
         workspace = await _MEMORY_RPC_WORKERS.run(_project_workspace, state, project_id)
         return _MemoryOwner(workspace=workspace, project_id=project_id, actor=actor)
     agent_id = _required_string(params, "agent_id")
+    expected_incarnation = (
+        _required_string(params, "expected_incarnation")
+        if "expected_incarnation" in params
+        else None
+    )
     try:
         agent = await state.runtime.agents.get_async(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _MemoryOwner(workspace=Path(agent.workspace), agent_id=agent_id, actor=actor)
+    return _MemoryOwner(
+        workspace=Path(agent.workspace),
+        agent_id=agent_id,
+        actor=actor,
+        expected_incarnation=expected_incarnation,
+    )
 
 
 def _project_workspace(state: Any, project_id: str) -> Path:

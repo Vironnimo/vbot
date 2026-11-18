@@ -557,11 +557,15 @@ class SkillRuntime:
         allowed_names = set(effective_project_allowed_skills(bundle.project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
-    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
+    def inspect_skill(
+        self, entry_id: str, *, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
         """Read exactly one currently inventoried package without activating it."""
-        return self._inventory.inspect_skill(entry_id)
+        return self._inventory.inspect_skill(entry_id, expected_incarnation=expected_incarnation)
 
-    def set_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
+    def set_package_disabled(
+        self, entry_id: str, *, disabled: bool, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
         """Turn the inventoried package ``entry_id`` off, or on again.
 
         Only that package changes: a same-named package of another source stays
@@ -573,7 +577,9 @@ class SkillRuntime:
         change. Raises ``ValueError`` for an unknown or unloadable package, and
         ``SkillPolicyError`` or ``ProjectError`` when the change cannot be saved.
         """
-        return self._inventory.set_package_disabled(entry_id, disabled=disabled)
+        return self._inventory.set_package_disabled(
+            entry_id, disabled=disabled, expected_incarnation=expected_incarnation
+        )
 
     def skill_inventory(self) -> dict[str, Any]:
         """One pass over every Skill source for the human manager (no exclusions).

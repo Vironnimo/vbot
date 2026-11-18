@@ -221,6 +221,15 @@ class AgentStore:
         with self._change():
             yield
 
+    @contextmanager
+    def incarnation_guard(self, agent_id: str, expected_incarnation: str) -> Iterator[None]:
+        """Keep work addressed by a durable creation stamp on that exact Agent."""
+        with self.lifecycle_guard():
+            document = _validated_agent_data(self._require_agent_path(agent_id))
+            if document.get("created_at") != expected_incarnation:
+                raise AgentNotFoundError(f"The original Agent at {agent_id} no longer exists")
+            yield
+
     def close(self) -> None:
         with self._write_lock:
             if self._owns_sessions and self._sessions is not None:
@@ -389,10 +398,7 @@ class AgentStore:
                 return None
 
     def list(self) -> list[Agent]:
-        """Return valid persisted Agents in the canonical roster order.
-
-        The roster holds the user's Agents; built-in Agents are never part of it.
-        """
+        """Enumerate non-built-in identities for runtime catalogs and lifecycle operations."""
         return self._roster.list()
 
     def list_with_builtins(self) -> builtins.list[Agent]:
@@ -441,6 +447,10 @@ class AgentStore:
         file remains available for ``doctor config`` diagnostics.
         """
         return self._roster.list_with_order()
+
+    def personal_roster(self) -> AgentListResult:
+        """The user's identities in their chosen order, excluding identities owned by others."""
+        return self._roster.list_with_order(personal_only=True)
 
     def reorder(
         self,

@@ -477,7 +477,7 @@ def place_in_roster(store: AgentStore, agent_id: str, index: int | None) -> None
         try:
             store.list_with_order()
             order = store._roster._load_agent_order()
-            if order is None or index is None:
+            if order is None or index is None or agent_id not in order.agent_ids:
                 return
             agent_ids = [item for item in order.agent_ids if item != agent_id]
             agent_ids.insert(min(max(index, 0), len(agent_ids)), agent_id)

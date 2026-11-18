@@ -45,6 +45,9 @@ export default {
   'factory.native.selectProject': 'Select a Project',
   'factory.native.setup': 'Choose a Leader',
   'factory.native.leader': 'Leader',
+  'factory.native.makeLeader': 'Make Leader',
+  'factory.native.replaceLeader':
+    'The Leader profile is unavailable. Choose an active team member as Leader or add one first.',
   'factory.native.leaderHelp':
     'The Leader coordinates the team and can assign tasks to its members. Choose an existing Agent or create a new one.',
   'factory.native.existingAgent': 'Existing Agent',
@@ -116,6 +119,7 @@ export default {
   'factory.native.budget': 'Task limits',
   'factory.native.factoryLimits': 'Factory limits',
   'factory.native.editAgent': 'Edit Agent',
+  'factory.native.profileUnavailable': 'Original Agent profile unavailable',
   'factory.native.editMembership': 'Edit team role and limits',
   'factory.native.pauseTeam': 'Stop team',
   'factory.native.resumeTeam': 'Resume team',
@@ -301,7 +305,7 @@ export default {
   'factory.selectAgent': 'Select an Agent',
   'factory.agentsGroup': 'Agents',
   'factory.teamGroup': '{project} Team',
-  'factory.agentUnavailable': 'Unavailable Agent',
+  'factory.agentOutsideChoices': 'Outside the current selection',
   'factory.modelUnresolved':
     'This Agent has no usable Model. Choose a Model here or give the Agent one.',
   'factory.effectiveModel': 'Runs with {model}',

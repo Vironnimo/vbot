@@ -33,8 +33,7 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
       lastChatLocation = null;
       return;
     }
-    if (selection.agents.length === 0 || chatLinkWaitingForProjects(location))
-      return;
+    if (!selection.agentsLoaded || chatLinkWaitingForProjects(location)) return;
     untrack(() => {
       const previous = lastChatLocation;
       lastChatLocation = location;

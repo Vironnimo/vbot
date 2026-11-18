@@ -104,7 +104,9 @@ The ceiling applies alongside the operator's default Permission Rules captured
 at creation and any Session overrides. Delegated Runs inherit the effective
 boundary. Editing a profile's Tool settings or ceiling requires a new conversation.
 
-API 35 adds `client.openAgent(agentId)` to the page bridge for opening an Identity Agent in the regular Agents editor.
+API 36 adds `host.identity_agents.profiles(agent_ids)` for batch profile reads. A page can open the standard Agent editor in place and bind edits to the intended Agent incarnation. The host catalog identifies Extension-owned profiles.
+
+API 35 adds `client.openAgent(agentId)` to the page bridge for opening the regular Agent editor.
 
 API 34 adds `host.execution_usage_changes` for incremental, owner-scoped settled
 Usage snapshots. Carry its `ledger_id` and `revision` cursor between reads; a
@@ -116,6 +118,7 @@ including Tools hidden from configuration pickers. API 32 adds actual Identity
 Agent execution in owner-managed Sessions and
 `host.identity_agents` for creating/configuring an Extension's own specialists.
 The original `identity_profile` remains a temporary configuration snapshot.
+For explicit membership pages, `await host.identity_agents.profiles(agent_ids)` returns up to 100 addressed profiles keyed by id, with their names, ownership, placement and persisted incarnation (null for an unstamped legacy profile). Missing ids are omitted. Only the creating Extension receives its original `creation_request_id` when one exists.
 Owner-bound identity creation accepts a stable `request_id`; retrying the exact
 owner, Agent id, request and configuration returns the original identity.
 

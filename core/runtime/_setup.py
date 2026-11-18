@@ -22,7 +22,7 @@ _CONDITIONS = LoggedConditions()
 def setup_agent(runtime: RuntimeServices) -> Agent | None:
     """Read the initial Chat Agent selected during setup, or the first remaining one."""
     previous = runtime.storage.setup.read()
-    agents = [agent for agent in runtime.agents.list() if agent.placement is None]
+    agents = [agent for agent in runtime.agents.personal_roster().agents if agent.placement is None]
     return next(
         (agent for agent in agents if agent.id == previous.agent_id), next(iter(agents), None)
     )

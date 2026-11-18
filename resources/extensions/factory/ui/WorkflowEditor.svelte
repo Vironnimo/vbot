@@ -96,6 +96,10 @@
       (item) => item.id === draft.project_id,
     ) ?? null,
   );
+  const agentProfiles = $derived([
+    ...(model.catalog.agents ?? []),
+    ...(project?.factory_agents ?? []),
+  ]);
   // The saved Workflow with the host's trigger status.
   const saved = $derived(
     workflow
@@ -192,7 +196,7 @@
     const found =
       step.source === 'team'
         ? project?.agent_profiles?.find((item) => item.id === step.agent)
-        : model.catalog.agents?.find((item) => item.id === step.agent);
+        : agentProfiles.find((item) => item.id === step.agent);
     return found?.name ?? step.agent;
   }
 
@@ -357,6 +361,7 @@
     {#if draft.steps[selectedIndex]}
       {#key draft.steps[selectedIndex].id}
         <WorkflowStep
+          agents={agentProfiles}
           workflow={draft}
           bind:step={draft.steps[selectedIndex]}
           index={selectedIndex}

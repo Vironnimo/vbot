@@ -6,6 +6,10 @@
   // overwriting it.
   import { untrack } from 'svelte';
   import { formatFileSize, t } from '$lib/i18n.js';
+  import {
+    agentProfileParams,
+    useAgentProfileBinding,
+  } from '$lib/agentProfileBinding.js';
   import { getAgentSoul, setAgentSoul } from '$lib/api.js';
   import { normalizeSoulText, soulStats } from '$lib/agentSoul.js';
   import MarkdownContent from '../chat/MarkdownContent.svelte';
@@ -15,6 +19,8 @@
   import Modal from '../ui/Modal.svelte';
   import TabList from '../ui/TabList.svelte';
   import TextArea from '../ui/TextArea.svelte';
+
+  const binding = useAgentProfileBinding();
 
   let {
     agentId,
@@ -76,7 +82,10 @@
     const requestedId = agentId;
     loadError = '';
     try {
-      const result = await getAgentSoul(requestedId);
+      const result = await getAgentSoul(
+        requestedId,
+        agentProfileParams(binding, requestedId),
+      );
       if (generation !== loadGeneration) return;
       soul = result;
     } catch (error) {
@@ -123,6 +132,7 @@
         agentId,
         draft,
         overwrite && conflict ? conflict.revision : baseRevision,
+        agentProfileParams(binding, agentId),
       );
       soul = result;
       closeEditor();

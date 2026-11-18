@@ -45,13 +45,13 @@ class _StubStoredAgent:
 
 
 class _StubAgentStore:
-    """Agent store stub exposing only the directory card's ``list`` seam."""
+    """Personal roster the directory card offers as move targets."""
 
     def __init__(self, agent_ids: list[str]) -> None:
         self._agents = [_StubStoredAgent(agent_id) for agent_id in agent_ids]
 
-    def list(self) -> list[_StubStoredAgent]:
-        return list(self._agents)
+    def personal_roster(self) -> SimpleNamespace:
+        return SimpleNamespace(agents=self._agents)
 
 
 class _StubScannedAgent:

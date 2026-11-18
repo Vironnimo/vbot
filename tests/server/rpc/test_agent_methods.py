@@ -132,16 +132,49 @@ async def test_a_suggested_description_comes_from_the_agent_files_and_saves_noth
 
 
 @pytest.mark.asyncio
+async def test_profile_opened_for_one_incarnation_cannot_read_or_change_its_replacement(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents = store = _real_agent_state(tmp_path / "real", {}).runtime.agents
+    original = store.create("reviewer")
+    binding = {"id": original.id, "expected_incarnation": original.created_at}
+    soul = await rpc_result(state, "agent.soul.get", **binding)
+    edited = await rpc_result(state, "agent.update", **binding, name="My reviewer")
+    assert edited["name"] == "My reviewer"
+    assert (await rpc_result(state, "agent.get", **binding))["name"] == "My reviewer"
+
+    with store.archive_files("reviewer", tmp_path / "archived"):
+        pass
+    replacement = store.create("reviewer", name="New reviewer")
+    assert replacement.created_at != original.created_at
+    for method, arguments in (
+        ("agent.get", {}),
+        ("agent.update", {"name": "Stale edit", "custom_system_prompt_enabled": True}),
+        ("agent.suggest_description", {}),
+        ("agent.soul.get", {}),
+        ("agent.soul.set", {"content": "Stale edit", "revision": soul["revision"]}),
+    ):
+        refused = await rpc_error(state, method, **binding, **arguments)
+        assert refused["code"] == "agent_not_found", method
+
+    assert store.get("reviewer").name == "New reviewer"
+    assert not store.get("reviewer").custom_system_prompt_enabled
+    assert store.read_soul("reviewer").content == soul["content"]
+
+
+@pytest.mark.asyncio
 async def test_soul_writes_name_the_revision_they_replace(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents = _real_agent_state(tmp_path / "real", {}).runtime.agents
-    state.runtime.agents.create("coder")
-    read = await rpc_result(state, "agent.soul.get", id="coder")
+    agent = state.runtime.agents.create("coder")
+    binding = {"id": agent.id, "expected_incarnation": agent.created_at}
+    read = await rpc_result(state, "agent.soul.get", **binding)
     soul_path = Path(read["path"])
     assert (soul_path.name, read["content"]) == ("SOUL.md", "# SOUL.md\n")
 
     saved = await rpc_result(
-        state, "agent.soul.set", id="coder", content="You review code.", revision=read["revision"]
+        state, "agent.soul.set", **binding, content="You review code.", revision=read["revision"]
     )
     assert saved["content"] == "You review code."
     assert saved["revision"] != read["revision"]
@@ -725,6 +758,7 @@ async def test_placement_rpc_contract_and_transition_reasons(tmp_path: Path):
     await rpc_result(state, "agent.create", id="owner")
     helper = await rpc_result(state, "agent.create", id="helper", placement={"kind": "helper"})
     assert helper["placement"] == {"kind": "helper"}
+    state.runtime.agents.create("factory-leader", name="Leader", extension_owner="factory")
     error = await rpc_error(state, "agent.update", id="owner", placement={"kind": "helper"})
     assert error["code"] == "agent_placement" and error["data"]["reason"] == "last_chat_agent"
     await rpc_result(state, "agent.create", id="other")
@@ -733,7 +767,27 @@ async def test_placement_rpc_contract_and_transition_reasons(tmp_path: Path):
     )
     assert private["placement"] == {"kind": "private", "owner_id": "owner", "orphaned": False}
     assert "owner_binding" not in str(private)
+    await rpc_result(
+        state,
+        "agent.create",
+        id="personal-child",
+        placement={"kind": "private", "owner_id": "factory-leader"},
+    )
     listing = await rpc_result(state, "agent.list")
+    assert [agent["id"] for agent in listing["agents"]] == [
+        "owner",
+        "helper",
+        "other",
+        "personal-child",
+    ]
+    assert listing["agents"][-1]["placement"] == {
+        "kind": "private",
+        "owner_id": "factory-leader",
+        "orphaned": False,
+    }
+    profile = await rpc_result(state, "agent.get", id="factory-leader")
+    assert (profile["name"], profile["extension_owner"]) == ("Leader", "factory")
+    assert all(row["extension_owner"] is None for row in listing["agents"])
     assert "owner_binding" not in str(listing)
     error = await rpc_error(state, "agent.update", id="owner", placement={"kind": "helper"})
     assert error["code"] == "agent_placement" and error["data"]["reason"] == "has_private_agents"

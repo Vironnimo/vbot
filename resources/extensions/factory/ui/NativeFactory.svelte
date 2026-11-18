@@ -22,10 +22,7 @@
     showChildren = $state(false),
     inspected = $state(null);
   const agentName = (member) =>
-    model.catalog.agents?.find((item) => item.id === member.agent_id)?.name ||
-    member.agent_name ||
-    member.name ||
-    member.agent_id;
+    member.agent_name || member.name || member.agent_id;
   const projectName = (id) =>
     model.catalog.projects?.find((item) => item.id === id)?.name || id;
   const projects = $derived(
@@ -326,6 +323,9 @@
       <Button variant="primary" onClick={() => actions?.open('member')}
         >{t('factory.native.addMember')}</Button
       >
+      {#if native.factory.leader_available === false && native.factory.state !== 'archived'}
+        <Banner variant="warn">{t('factory.native.replaceLeader')}</Banner>
+      {/if}
       <div class="native-members">
         {#each native.members as member (member.id)}<section
             class="native-panel"
@@ -334,8 +334,8 @@
               {agentName(
                 member,
               )}{#if member.role && member.role !== agentName(member)}
-                · {member.role}{:else if member.id === native.factory.leader_member_id}
-                · {t('factory.native.leader')}{/if}
+                Â· {member.role}{:else if member.id === native.factory.leader_member_id}
+                Â· {t('factory.native.leader')}{/if}
             </h2>
             <p>
               {member.state === 'active'
@@ -343,11 +343,14 @@
                 : t('factory.native.retired')}
             </p>
             <p>
-              {member.created_by_factory
+              {#if !member.profile_available}{t(
+                  'factory.native.profileUnavailable',
+                )} Â·
+              {/if}{member.created_by_factory
                 ? t('factory.native.createdAgent')
                 : t('factory.native.linkedAgent')}
             </p>
-            {#if member.state === 'active'}<Button
+            {#if member.state === 'active' && member.profile_available}<Button
                 onClick={() =>
                   (chatMember = chatMember === member.id ? '' : member.id)}
                 >{t('factory.chat.member')}</Button
@@ -359,9 +362,24 @@
                 memberName={agentName(member)}
                 inactive={native.factory.state !== 'active'}
               />{/if}
-            <Button onClick={() => model.client.openAgent(member.agent_id)}
-              >{t('factory.native.editAgent')}</Button
+            <Button
+              disabled={!member.profile_available || !member.agent_proof}
+              onClick={() =>
+                model.openAgentProfile(
+                  member.agent_id,
+                  member.agent_proof,
+                  member.factory_id,
+                )}>{t('factory.native.editAgent')}</Button
             >
+            {#if native.factory.leader_available === false && native.factory.state !== 'archived' && member.state === 'active' && member.profile_available}
+              <Button
+                disabled={Boolean(native.pending)}
+                onClick={() =>
+                  act('factory.update', native.factory, {
+                    leader_member_id: member.id,
+                  })}>{t('factory.native.makeLeader')}</Button
+              >
+            {/if}
             <Button variant="tertiary" onClick={() => editMember(member.id)}
               >{t('factory.native.editMembership')}</Button
             >{#if member.state === 'active' && member.id !== native.factory.leader_member_id}<Button
@@ -399,7 +417,7 @@
       <div class="native-actions">
         <Button onClick={() => onNavigate(factoryRoute())}
           >{t('factory.native.back')}</Button
-        ><span>{statusLabel(task.state)} · {memberName(task.assignee_id)}</span
+        ><span>{statusLabel(task.state)} Â· {memberName(task.assignee_id)}</span
         >{#if task.reason}<span>{reasonLabel(task.reason)}</span>{/if}
       </div>
       {#key task.id}<FactoryChat
@@ -468,7 +486,7 @@
                 onClick={() =>
                   onNavigate(`/task/${encodeURIComponent(child.id)}`)}
                 >{child.title}</Button
-              >{memberName(child.assignee_id)} · {statusLabel(child.state)}
+              >{memberName(child.assignee_id)} Â· {statusLabel(child.state)}
             </li>{/each}
         </ul>
       </section>
@@ -509,7 +527,7 @@
           >{/if}
         <ol class="native-posts" data-native-events>
           {#each native.detail.events || [] as event (event.id)}<li>
-              <strong>{eventLabel(event.event)}</strong> · {actorName(
+              <strong>{eventLabel(event.event)}</strong> Â· {actorName(
                 event.actor,
               )}
               <time datetime={event.created_at}

@@ -387,13 +387,15 @@ async def test_agent_delete_refuses_the_last_agent(
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
     agents.create("coder")
     agents.create("helper", placement=AgentPlacement("helper"))
+    agents.create("leader", extension_owner="factory")
     try:
         error = await rpc_error(state, "agent.delete", id="coder")
         assert error["code"] == "last_agent"
-        assert set(_agent_names(state)) == {"coder", "helper"}
+        assert set(_agent_names(state)) == {"coder", "helper", "leader"}
         assert state.runtime.recall.removed_agents == []
-        await rpc_result(state, "agent.delete", id="helper")
-        assert list(_agent_names(state)) == ["coder"]
+        deleted = await rpc_result(state, "agent.delete", id="helper")
+        assert [agent["id"] for agent in deleted["remaining_agents"]] == ["coder"]
+        assert set(_agent_names(state)) == {"coder", "leader"}
     finally:
         agents.close()
 

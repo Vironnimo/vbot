@@ -171,6 +171,11 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     # A missing current-Session pointer stays empty: no Session is created for it.
     assert agent.current_session_id == ""
     assert agent.created_at
+    assert agent.incarnation is None
+    assert "created_at" not in json.loads((agent_dir / "agent.json").read_bytes())
+    identified = store.identify("minimal")
+    assert identified.incarnation == identified.created_at
+    assert store.get("minimal").incarnation == identified.incarnation
     assert agent.updated_at
     assert Path(agent.workspace) == agent_dir / "workspace"
 
@@ -225,12 +230,13 @@ def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> No
     invalid_dir = store.data_dir / "agents" / "main"
     invalid_dir.mkdir(parents=True)
     (invalid_dir / "agent.json").write_text("not json\n", encoding="utf-8")
+    store.create("factory-leader", extension_owner="factory")
 
     created = store.ensure_bootstrap()
 
     assert created is not None
     assert created.id == "main-2"
-    assert [agent.id for agent in store.list()] == ["main-2"]
+    assert [agent.id for agent in store.personal_roster().agents] == ["main-2"]
 
 
 def test_a_new_agent_never_takes_an_id_that_secret_grants_still_name(
@@ -772,7 +778,8 @@ def test_create_appends_agents_to_persisted_order(store: AgentStore) -> None:
 def test_reorder_persists_complete_roster_with_revision(store: AgentStore) -> None:
     store.create("alpha", "Alpha Agent")
     store.create("beta", "Beta Agent")
-    initial = store.list_with_order()
+    initial = store.personal_roster()
+    store.create("factory-leader", extension_owner="factory")
 
     reordered = store.reorder(
         ["beta", "alpha"],
@@ -782,12 +789,19 @@ def test_reorder_persists_complete_roster_with_revision(store: AgentStore) -> No
     assert [agent.id for agent in reordered.agents] == ["beta", "alpha"]
     assert reordered.order_revision == initial.order_revision + 1
     assert reordered.order_changed is True
-    assert [agent.id for agent in store.list()] == ["beta", "alpha"]
+    assert [agent.id for agent in store.list()] == ["beta", "alpha", "factory-leader"]
     order_path = store.data_dir / "agents" / "order.json"
+    # A pre-upgrade order included Extension-owned Agents among personal ones.
+    legacy_order = json.loads(order_path.read_bytes())
+    legacy_order["agent_ids"].insert(1, "factory-leader")
+    order_path.write_text(json.dumps(legacy_order), encoding="utf-8")
+    migrated = store.personal_roster()
+    assert [agent.id for agent in migrated.agents] == ["beta", "alpha"]
+    assert migrated.order_revision == reordered.order_revision + 1
     original = order_path.read_bytes()
     repeated = store.reorder(["beta", "alpha"], expected_revision=0)
     assert (repeated.order_revision, repeated.order_changed) == (
-        reordered.order_revision,
+        migrated.order_revision,
         False,
     )
     assert order_path.read_bytes() == original

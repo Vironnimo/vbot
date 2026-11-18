@@ -48,6 +48,8 @@ def _memory_params(
         required,
     )
     result["oneOf"] = [{"required": ["agent_id"]}, {"required": ["project_id"]}]
+    if properties and "expected_incarnation" in properties:
+        result["not"] = {"required": ["project_id", "expected_incarnation"]}
     if properties and "scope" in properties:
         result["allOf"] = [
             {
@@ -59,6 +61,9 @@ def _memory_params(
     return result
 
 
+_AGENT_PROFILE = {
+    "expected_incarnation": _text("Creation stamp of the Identity Agent the caller opened.")
+}
 _MEMORY_SCOPE = enum("agent", "user", "project")
 _MEMORY_ENTRY = {"scope": _MEMORY_SCOPE, "entry_id": _POSITIVE}
 _RUN_OVERRIDES = obj(
@@ -333,28 +338,33 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
     service(
         "memory.list",
         "query",
-        _memory_params(),
+        _memory_params(_AGENT_PROFILE),
         ("memories",),
         "List an owner's current Memory entries.",
     ),
     service(
         "memory.add",
         "execute",
-        _memory_params({"scope": _MEMORY_SCOPE, "content": _text()}, ("scope", "content")),
+        _memory_params(
+            {**_AGENT_PROFILE, "scope": _MEMORY_SCOPE, "content": _text()}, ("scope", "content")
+        ),
         ("memories",),
         "Append one Memory entry within the owner's budget.",
     ),
     service(
         "memory.replace",
         "execute",
-        _memory_params({**_MEMORY_ENTRY, "content": _text()}, ("scope", "entry_id", "content")),
+        _memory_params(
+            {**_AGENT_PROFILE, **_MEMORY_ENTRY, "content": _text()},
+            ("scope", "entry_id", "content"),
+        ),
         ("memories",),
         "Replace a positional Memory entry and retain its revision history.",
     ),
     service(
         "memory.remove",
         "execute",
-        _memory_params(_MEMORY_ENTRY, ("scope", "entry_id")),
+        _memory_params({**_AGENT_PROFILE, **_MEMORY_ENTRY}, ("scope", "entry_id")),
         ("memories",),
         "Remove a positional Memory entry with history.",
     ),

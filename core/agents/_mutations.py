@@ -274,6 +274,7 @@ class AgentMutations:
             allowed_fields = set(Agent.__dataclass_fields__) - {
                 "id",
                 "created_at",
+                "creation_time_persisted",
                 "extension_owner",
                 "extension_creation_request",
                 "updated_at",

@@ -97,6 +97,8 @@ export function stateLabel(state) {
 
 export function waitingLabel(reason) {
   switch (reason) {
+    case 'member_profile_unavailable':
+      return t('factory.native.profileUnavailable');
     case 'checkpoint':
       return t('factory.reason.checkpoint');
     case 'finished':

@@ -1,4 +1,5 @@
 import {
+  agentProfileRpc,
   rpc,
   RPC_ERROR_INVALID_CLIENT_REQUEST,
   ApiClientError,
@@ -72,7 +73,7 @@ export function reorderAgents(agentIds, expectedRevision, options = {}) {
 
 export function getAgent(id, options = {}) {
   requireNonEmptyString(id, 'Agent id must be a non-empty string', 'agent.get');
-  return rpc('agent.get', { id }, options);
+  return agentProfileRpc('agent.get', { id }, options);
 }
 
 // Drafts a description from the Agent's own files with its Model; saves nothing.
@@ -82,7 +83,7 @@ export function suggestAgentDescription(id, options = {}) {
     'Agent id must be a non-empty string',
     'agent.suggest_description',
   );
-  return rpc('agent.suggest_description', { id }, options);
+  return agentProfileRpc('agent.suggest_description', { id }, options);
 }
 
 // The Agent's SOUL.md with the revision a write names; `soul_conflict` errors
@@ -93,7 +94,7 @@ export function getAgentSoul(id, options = {}) {
     'Agent id must be a non-empty string',
     'agent.soul.get',
   );
-  return rpc('agent.soul.get', { id }, options);
+  return agentProfileRpc('agent.soul.get', { id }, options);
 }
 
 export function setAgentSoul(id, content, revision, options = {}) {
@@ -102,7 +103,7 @@ export function setAgentSoul(id, content, revision, options = {}) {
     'Agent id must be a non-empty string',
     'agent.soul.set',
   );
-  return rpc('agent.soul.set', { id, content, revision }, options);
+  return agentProfileRpc('agent.soul.set', { id, content, revision }, options);
 }
 
 export function createAgent(params = {}, options = {}) {
@@ -320,7 +321,7 @@ export function deleteSkill(scope, name, options = {}) {
     'Skill name must be a non-empty string',
     'skill.delete',
   );
-  return rpc('skill.delete', { scope, name }, options);
+  return agentProfileRpc('skill.delete', { scope, name }, options);
 }
 
 export function inspectSkill(id, options = {}) {
@@ -329,7 +330,7 @@ export function inspectSkill(id, options = {}) {
     'Skill id must be a non-empty string',
     'skill.inspect',
   );
-  return rpc('skill.inspect', { id }, options);
+  return agentProfileRpc('skill.inspect', { id }, options);
 }
 
 export function skillInventory(options = {}) {
@@ -355,7 +356,7 @@ export function setSkillDisabled(id, disabled, options = {}) {
       { method: 'skill.set_disabled' },
     );
   }
-  return rpc('skill.set_disabled', { id, disabled }, options);
+  return agentProfileRpc('skill.set_disabled', { id, disabled }, options);
 }
 
 function requireSkillScope(scope, method) {

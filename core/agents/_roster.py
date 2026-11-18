@@ -13,6 +13,7 @@ from core.agents._config import (
     _apply_defaults,
     validate_agent_order_data,
 )
+from core.agents._placement import resolved
 from core.agents._types import (
     BUILTIN_AGENT_IDS,
     Agent,
@@ -46,10 +47,7 @@ class AgentRoster:
         self._owner = owner
 
     def list(self) -> list[Agent]:
-        """Return valid persisted Agents in the canonical roster order.
-
-        The roster holds the user's Agents; built-in Agents are never part of it.
-        """
+        """Enumerate personal and Extension-owned identities, excluding built-ins."""
         return list(self.list_with_order().agents)
 
     def list_with_builtins(self) -> builtins.list[Agent]:
@@ -57,7 +55,7 @@ class AgentRoster:
         available = (self._owner.builtin_agent(builtin) for builtin in BUILTIN_AGENT_IDS)
         return [*self.list(), *(agent for agent in available if agent is not None)]
 
-    def list_with_order(self) -> AgentListResult:
+    def list_with_order(self, *, personal_only: bool = False) -> AgentListResult:
         """Return the canonical roster plus its conflict-detection revision.
 
         A missing order document preserves the historical id order and is
@@ -66,9 +64,9 @@ class AgentRoster:
         never hides Agents: the roster falls back to id order and the invalid
         file remains available for ``doctor config`` diagnostics.
         """
-        return self._owner._repairing_read(self._list_with_order)
+        return self._owner._repairing_read(lambda: self._list_with_order(personal_only))
 
-    def _list_with_order(self) -> AgentListResult:
+    def _list_with_order(self, personal_only: bool) -> AgentListResult:
         """:meth:`list_with_order` under the store lock."""
         agents_dir = self._owner._data_dir / "agents"
         if not agents_dir.exists():
@@ -82,23 +80,30 @@ class AgentRoster:
             agent_paths = []
 
         loaded: list[tuple[Path, Agent]] = []
+        owners: dict[str, Agent] = {}
         for agent_path in agent_paths:
             try:
                 agent = self._owner._load_seeded_agent(agent_path)
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
                 continue
-            if agent.builtin is None:
+            if agent.builtin is not None:
+                continue
+            if personal_only and agent.placement is None:
+                owners[agent.id] = agent
+            if not personal_only or agent.extension_owner is None:
                 loaded.append((agent_path, agent))
         # One Session read verifies every current pointer of the roster.
         live = self._owner._live_current_session_agent_ids([agent for _path, agent in loaded])
         agents: list[Agent] = []
+        extension_agents: list[Agent] = []
         persisted: dict[str, Agent] = {}
         for agent_path, raw_agent in loaded:
             try:
                 if raw_agent.current_session_id and raw_agent.id not in live:
                     raw_agent = self._owner._clear_current_session(raw_agent)
-                agents.append(_apply_defaults(raw_agent, defaults))
+                collection = agents if raw_agent.extension_owner is None else extension_agents
+                collection.append(_apply_defaults(raw_agent, defaults))
                 persisted[raw_agent.id] = raw_agent
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
@@ -107,10 +112,16 @@ class AgentRoster:
         ordered_agents = apply_order(
             agents, order.agent_ids if order is not None else (), item_id=lambda agent: agent.id
         )
+        placements = (
+            {agent.id: resolved(agent, owners.get) for agent in ordered_agents}
+            if personal_only
+            else {}
+        )
         if not agents and order is None:
             return AgentListResult(
-                agents=(),
+                agents=tuple(extension_agents),
                 order_revision=0,
+                persisted=persisted,
             )
 
         effective_ids = tuple(agent.id for agent in ordered_agents)
@@ -140,9 +151,10 @@ class AgentRoster:
                 order = reconciled
 
         return AgentListResult(
-            agents=tuple(ordered_agents),
+            agents=(*ordered_agents, *extension_agents),
             order_revision=order.revision if order is not None else 0,
             persisted=persisted,
+            placements=placements,
         )
 
     def reorder(
@@ -164,7 +176,7 @@ class AgentRoster:
             except ValueError as error:
                 raise InvalidAgentOrderError(str(error)) from error
 
-            current = self.list_with_order()
+            current = self.list_with_order(personal_only=True)
             current_ids = [agent.id for agent in current.agents]
             state = reorder_state(
                 agent_ids,
@@ -198,6 +210,7 @@ class AgentRoster:
                 order_revision=next_order.revision,
                 order_changed=True,
                 persisted=current.persisted,
+                placements=current.placements,
             )
 
     def _load_agent_order(self) -> _AgentOrderDocument | None:

@@ -1,5 +1,9 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import {
+    agentProfileParams,
+    useAgentProfileBinding,
+  } from '$lib/agentProfileBinding.js';
   import { suggestAgentDescription } from '$lib/api.js';
   import {
     AGENT_DESCRIPTION_MAX_LENGTH,
@@ -29,6 +33,7 @@
     inheritDisplayValue,
   } = $props();
 
+  const binding = useAgentProfileBinding();
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
   let isSuggesting = $state(false);
   let suggestError = $state('');
@@ -40,7 +45,10 @@
     isSuggesting = true;
     suggestError = '';
     try {
-      const result = await suggestAgentDescription(formValues.id);
+      const result = await suggestAgentDescription(
+        formValues.id,
+        agentProfileParams(binding, formValues.id),
+      );
       if (typeof result?.description === 'string' && result.description) {
         formValues.description = result.description;
       }
@@ -200,7 +208,7 @@
     </div>
   </section>
 
-  {#if agent && !agent.builtin}<AgentPlacementPanel
+  {#if agent && !agent.builtin && !agent.extension_owner}<AgentPlacementPanel
       {agent}
       {agents}
       onChanged={onPlacementChanged}

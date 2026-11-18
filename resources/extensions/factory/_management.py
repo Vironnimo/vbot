@@ -16,6 +16,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
 from . import _limits, _workflows
+from ._native_identities import personal_agents
 from ._values import require_state, text
 from .store import FINAL_STATES, FactoryError
 
@@ -32,7 +33,15 @@ class FactoryManagement:
         self.service = service
 
     async def operation(self, name: str, arguments: Json) -> Json:
-        if name.partition(".")[0] in {"factory", "member", "task", "topic", "conversation", "work"}:
+        if name.partition(".")[0] in {
+            "agent",
+            "factory",
+            "member",
+            "task",
+            "topic",
+            "conversation",
+            "work",
+        }:
             return await self.service.native_management.operation(name, arguments)
         if name in _READS:
             return await self._read(name, arguments)
@@ -71,8 +80,22 @@ class FactoryManagement:
         store = service.records()
         if name == "catalog":
             assert service.host is not None and service.host.catalog is not None
+            catalog = await service.host.catalog()
+            pending = await service.native_management.identities.pending_profiles()
+            by_project = await self._project_profiles(catalog)
             return {
-                "catalog": await service.host.catalog(),
+                "catalog": {
+                    **catalog,
+                    "agents": personal_agents(catalog),
+                    "projects": [
+                        {
+                            **item,
+                            "factory_agents": by_project.get(item["id"], []),
+                            "pending_factory_agents": pending.get(item["id"], []),
+                        }
+                        for item in catalog["projects"]
+                    ],
+                },
                 "templates": _workflows.templates(),
                 "triggers_available": service.host.triggers is not None,
             }
@@ -212,10 +235,21 @@ class FactoryManagement:
 
     # Workflows
 
-    async def _validated(self, raw: Any, *, workflow_id: str = "") -> tuple[Json, Json]:
+    async def _project_profiles(self, catalog: Json) -> dict[str, list[Json]]:
+        by_project: dict[str, list[Json]] = {}
+        owned = [agent for agent in catalog["agents"] if agent.get("extension_owner") == "factory"]
+        if owned:
+            projects = await self.service.records().native.workflow_profile_projects()
+            for agent in owned:
+                project = projects.get((agent["id"], agent["incarnation"]))
+                if project:
+                    by_project.setdefault(project, []).append(agent)
+        return by_project
+
+    async def _validated(self, raw: Any, *, previous: Json | None = None) -> tuple[Json, Json]:
         """A normalized Workflow checked against the catalog, and its steps' Models."""
         service = self.service
-        workflow = _workflows.normalize(raw, workflow_id=workflow_id)
+        workflow = _workflows.normalize(raw, workflow_id=previous["id"] if previous else "")
         assert service.host is not None and service.host.catalog is not None
         catalog = await service.host.catalog()
         projects = {item["id"]: item for item in catalog["projects"]}
@@ -234,7 +268,25 @@ class FactoryManagement:
                     f"{where}, trigger {trigger['title'] or trigger['id']!r}: Project {choice!r} "
                     "does not exist.",
                 )
-        agents = {item["id"] for item in catalog.get("agents", [])}
+        project_profiles = await self._project_profiles(catalog)
+        choices = {
+            item["id"]
+            for item in [
+                *personal_agents(catalog),
+                *project_profiles.get(workflow["project_id"], []),
+            ]
+        }
+        available = {item["id"] for item in catalog["agents"]}
+        existing_steps = (
+            previous["steps"]
+            if previous and previous["project_id"] == workflow["project_id"]
+            else []
+        )
+        prior_choices = {
+            (step["id"], step["agent"])
+            for step in existing_steps
+            if step["kind"] == "agent" and step["source"] == "agent" and step["agent"] in available
+        }
         team = {
             item["id"]
             for item in projects.get(workflow["project_id"], {}).get("agent_profiles", [])
@@ -256,7 +308,9 @@ class FactoryManagement:
                     f"{label}: a Team member needs the Workflow's Project. Set the Project or "
                     "choose an Agent.",
                 )
-            if step["agent"] not in (agents if step["source"] == "agent" else team):
+            identity_step = step["source"] == "agent"
+            retained = identity_step and (step["id"], step["agent"]) in prior_choices
+            if not retained and step["agent"] not in (choices if identity_step else team):
                 raise FactoryError(
                     "profile_not_found",
                     f"{label}: choose an available Agent or a member of the Project's Team.",
@@ -306,16 +360,16 @@ class FactoryManagement:
             return {"deleted": True, "id": workflow_id}
         raw = arguments.get("workflow")
         expected = arguments.get("expected_revision")
-        workflow_id = ""
+        previous = None
         if expected:
             workflow_id = raw.get("id", "") if isinstance(raw, dict) else ""
-            await store.get_workflow(str(workflow_id))
+            previous = await store.get_workflow(str(workflow_id))
         elif isinstance(raw, dict):
             # A new Workflow, such as a copied template, never takes over a saved id.
             taken = {item["id"] for item in await store.list_workflows()}
             if raw.get("id") in taken:
                 raw = {key: value for key, value in raw.items() if key != "id"}
-        workflow, effective = await self._validated(raw, workflow_id=workflow_id)
+        workflow, effective = await self._validated(raw, previous=previous)
         saved = await store.save_workflow(workflow, expected_revision=expected or 0)
         await service.triggers.sync()
         self._workflows_changed(saved["id"], saved["revision"])

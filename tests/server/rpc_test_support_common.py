@@ -122,6 +122,7 @@ class StubAgent:
     permission_ceiling: Any = None
     rule_files: tuple[Any, ...] = ()
     builtin: str | None = None
+    extension_owner: str | None = None
     placement: Any = None
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
@@ -217,7 +218,15 @@ class StubAgents:
             order_revision=self._order_revision,
             order_changed=False,
             persisted=dict(self._agents),
+            placements={
+                agent.id: self.resolved_placement(agent) for agent in self._agents.values()
+            },
         )
+
+    def personal_roster(self) -> Any:
+        roster = self.list_with_order()
+        roster.agents = tuple(agent for agent in roster.agents if agent.extension_owner is None)
+        return roster
 
     def reorder(self, agent_ids: builtins.list[str], *, expected_revision: int) -> Any:
         if len(agent_ids) != len(set(agent_ids)):
@@ -241,6 +250,9 @@ class StubAgents:
             order_revision=self._order_revision,
             order_changed=True,
             persisted=dict(self._agents),
+            placements={
+                agent.id: self.resolved_placement(agent) for agent in self._agents.values()
+            },
         )
 
     def create(self, agent_id: str, name: str | None = None, **changes: Any) -> StubAgent:

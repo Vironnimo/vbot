@@ -212,9 +212,11 @@ export function createNativeFactoryModel(model) {
     }
   }
   function accept(resource, record) {
-    if (resource === 'factory') factory = record;
+    if (resource === 'factory') factory = { ...factory, ...record };
     if (resource === 'member')
-      members = members.map((item) => (item.id === record.id ? record : item));
+      members = members.map((item) =>
+        item.id === record.id ? { ...item, ...record } : item,
+      );
     if (resource === 'task') {
       tasks = tasks.map((item) => (item.id === record.id ? record : item));
       if (detail?.task.id === record.id) detail = { ...detail, task: record };
@@ -244,6 +246,7 @@ export function createNativeFactoryModel(model) {
           'tasks',
           'topics',
           'permissions_approvals',
+          'agents',
         ].includes(change.resource)
       )
         void refresh();

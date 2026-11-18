@@ -1,9 +1,11 @@
 <script>
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { canDeleteAgent, privateAgents } from '$lib/agentPlacement.js';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
 
   import {
     deleteAgent,
+    getAgent,
     getSettings,
     listAgents,
     listConnections,
@@ -13,6 +15,10 @@
     reorderAgents,
     skillInventory,
   } from '$lib/api.js';
+  import {
+    provideAgentProfileBinding,
+    agentProfileParams,
+  } from '$lib/agentProfileBinding.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
   import { permanentDeleteNotice } from '$lib/archiveView.js';
   import { useAutosaveContext } from '$lib/autosave.js';
@@ -56,6 +62,8 @@
     navigation = createStandaloneNavigation(),
     // Seeds the empty place; the place decides what the view shows.
     sharedSelectedAgentId = '',
+    // An explicit profile keeps the editor on this identity inside its owning view.
+    profile = null,
     onAgentsChanged,
     onAgentSelected,
     // Shows the Agent's Chat (its list row's Open chat).
@@ -77,6 +85,15 @@
     memoriesRefreshToken = 0,
     skillsRefreshToken = 0,
   } = $props();
+  // The host keys each editor by its immutable opening request. Deferred writes
+  // continue to name the original identity even while the host is replacing it.
+  const boundProfile = untrack(() => profile);
+  const profileBinding = () => boundProfile;
+  provideAgentProfileBinding(profileBinding);
+  let explicitAgent = $state(null);
+  let relatedAgents = $state([]);
+  let profileTargetError = $state('');
+  let profileTargetRequest = 0;
   let sharedDefaultsOpen = $state(false);
   let sharedSettings = $state(null);
   let sharedSettingsError = $state('');
@@ -137,6 +154,7 @@
   }
 
   function navigateFromAgent(panelId) {
+    if (boundProfile) return onNavigateToSettingsPanel(panelId);
     if (panelId === 'defaults' || DEFAULTS_SECTIONS.includes(panelId))
       return navigation.navigate([
         DEFAULTS_PLACE,
@@ -192,7 +210,9 @@
   });
 
   let selectedAgent = $derived(
-    agents.find((agent) => agent.id === selectedAgentId) ?? null,
+    boundProfile
+      ? explicitAgent
+      : (agents.find((agent) => agent.id === selectedAgentId) ?? null),
   );
   // The editor's key: a new number whenever the shown Agent changes, except
   // when it changes because that Agent's id was renamed, so the open editor
@@ -213,9 +233,18 @@
     }
     return editorKeyState.key;
   });
+  let delegationAgents = $derived.by(() => {
+    if (!boundProfile) return agents;
+    const catalog = new SvelteMap(agents.map((agent) => [agent.id, agent]));
+    for (const peer of relatedAgents) {
+      if (!catalog.has(peer.id)) catalog.set(peer.id, peer);
+    }
+    if (explicitAgent) catalog.set(explicitAgent.id, explicitAgent);
+    return [...catalog.values()];
+  });
   let availableAgentTargets = $derived(
     buildAgentTargetCatalog({
-      identityAgents: agents,
+      identityAgents: delegationAgents,
       projectTeams: projectTargetProjects,
     }),
   );
@@ -227,6 +256,7 @@
   $effect(() => {
     const [target = '', panelId = ''] = navigation.place;
     untrack(() => {
+      if (boundProfile) return;
       if (target === DEFAULTS_PLACE) {
         void showSharedDefaults(panelId);
         return;
@@ -255,7 +285,7 @@
   $effect(() => {
     const agentId = selectedAgentId;
     const settled = agentsLoaded && !rosterLoading && !sharedDefaultsOpen;
-    if (!settled) return;
+    if (boundProfile || !settled) return;
     untrack(() => showSelectionInPlace(agentId));
   });
 
@@ -421,7 +451,36 @@
     };
   }
 
+  async function loadProfileTargets() {
+    if (!boundProfile?.readRelatedAgents) return;
+    const request = ++profileTargetRequest;
+    const rows = [];
+    const cursors = new SvelteSet();
+    let cursor = null;
+    try {
+      do {
+        const result = await boundProfile.readRelatedAgents(cursor);
+        if (destroyed || request !== profileTargetRequest) return;
+        rows.push(...result.agents);
+        cursor = result.next_after;
+        if (cursor && cursors.has(cursor))
+          throw new Error(t('agents.profile.targetsUnavailable'));
+        cursors.add(cursor);
+      } while (cursor);
+      relatedAgents = rows;
+      profileTargetError = '';
+    } catch (error) {
+      if (destroyed || request !== profileTargetRequest) return;
+      relatedAgents = [];
+      profileTargetError = viewErrorMessage(
+        error,
+        t('agents.profile.targetsUnavailable'),
+      );
+    }
+  }
+
   async function loadAgents(options = {}) {
+    void loadProfileTargets();
     const requestId = ++agentListRequestId;
     const showLoading = options.showLoading !== false;
     if (showLoading) {
@@ -432,25 +491,47 @@
     loadError = '';
 
     try {
-      const result = await listAgents();
-      if (requestId !== agentListRequestId) {
+      const [result, exact] = await Promise.all([
+        listAgents(),
+        boundProfile
+          ? getAgent(
+              boundProfile.agentId,
+              agentProfileParams(profileBinding, boundProfile.agentId),
+            )
+          : null,
+      ]);
+      if (destroyed || requestId !== agentListRequestId) {
         return;
       }
       agents = Array.isArray(result?.agents) ? result.agents : [];
       agentOrderRevision = Number.isInteger(result?.order_revision)
         ? result.order_revision
         : 0;
-      applyAgentSelection(
-        resolveShownAgentId([selectedAgentId, sharedSelectedAgentId]),
-      );
+      if (boundProfile) {
+        if (
+          exact?.id !== boundProfile.agentId ||
+          (boundProfile.expectedIncarnation &&
+            exact.created_at !== boundProfile.expectedIncarnation)
+        ) {
+          explicitAgent = null;
+          throw new Error(t('agents.profile.unavailable'));
+        }
+        explicitAgent = exact;
+      } else {
+        applyAgentSelection(
+          resolveShownAgentId([selectedAgentId, sharedSelectedAgentId]),
+        );
+      }
       agentsLoaded = true;
       if (options.notify !== false) {
         notifyAgentsChanged();
       }
     } catch (error) {
-      if (requestId !== agentListRequestId) {
+      if (destroyed || requestId !== agentListRequestId) {
         return;
       }
+      if (boundProfile && error?.code === 'agent_not_found')
+        explicitAgent = null;
       loadError = viewErrorMessage(error, t('agents.loadError'));
     } finally {
       if (loadingAgentListRequestId === requestId) {
@@ -516,6 +597,8 @@
   }
 
   function handleAgentUpdated(nextAgent, options = {}) {
+    if (boundProfile && nextAgent.id === boundProfile.agentId)
+      explicitAgent = nextAgent;
     agents = agents.map((agent) =>
       agent.id === nextAgent.id ? nextAgent : agent,
     );
@@ -646,56 +729,73 @@
   }
 </script>
 
-<section class="agents-view view active" aria-labelledby="agents-list-title">
+<section
+  class="agents-view"
+  class:view={!boundProfile}
+  class:active={!boundProfile}
+  aria-label={boundProfile ? t('agents.profile.edit') : undefined}
+  aria-labelledby={boundProfile ? undefined : 'agents-list-title'}
+>
   <div class="agents-layout">
-    <AgentListPane
-      {agents}
-      selectedAgentId={sharedDefaultsOpen ? '' : selectedAgentId}
-      {sharedDefaultsOpen}
-      onOpenSharedDefaults={() => navigation.navigate([DEFAULTS_PLACE])}
-      {isLoading}
-      {isReordering}
-      onSelect={(agentId) => navigation.navigate([agentId])}
-      onCreate={openCreateModal}
-      onReorder={handleAgentsReordered}
-      onReorderInteractionChange={handleReorderInteractionChange}
-      {deletingAgentId}
-      {onOpenChat}
-      {onOpenInSplit}
-      onCopyId={(agentId) => void copyAgentId(agentId)}
-      onDelete={requestAgentDelete}
-    />
-
+    {#if !boundProfile}<AgentListPane
+        {agents}
+        selectedAgentId={sharedDefaultsOpen ? '' : selectedAgentId}
+        {sharedDefaultsOpen}
+        onOpenSharedDefaults={() => navigation.navigate([DEFAULTS_PLACE])}
+        {isLoading}
+        {isReordering}
+        onSelect={(agentId) => navigation.navigate([agentId])}
+        onCreate={openCreateModal}
+        onReorder={handleAgentsReordered}
+        onReorderInteractionChange={handleReorderInteractionChange}
+        {deletingAgentId}
+        {onOpenChat}
+        {onOpenInSplit}
+        onCopyId={(agentId) => void copyAgentId(agentId)}
+        onDelete={requestAgentDelete}
+      />
+    {/if}
     <div class="agent-editor-host" hidden={sharedDefaultsOpen}>
-      {#key editorKey}
-        <AgentEditor
-          agent={selectedAgent}
-          {agents}
-          onPlacementChanged={() => loadAgents({ showLoading: false })}
-          isDeleting={Boolean(selectedAgent) &&
-            deletingAgentId === selectedAgent.id}
-          {availableModels}
-          {availableConnections}
-          {availableTools}
-          {skillCatalog}
-          {availableAgentTargets}
-          {agentTargetCatalogError}
-          projectOptions={availableProjects}
-          {projectCatalogError}
-          {loadError}
-          onAgentUpdated={handleAgentUpdated}
-          onAgentRenamed={handleAgentRenamed}
-          onAgentCreated={handleAgentCreated}
-          onDeleteRequested={requestAgentDelete}
-          {onToast}
-          onNavigateToSettingsPanel={navigateFromAgent}
-          {onNavigateToAgentPrompt}
-          onSkillsChanged={loadSkillCatalog}
-          {onOpenSkill}
-          {memoriesRefreshToken}
-          onModelDropdownOpenChange={modelCatalogLoader.trackPickerOpen}
-        />
-      {/key}
+      {#if boundProfile && !selectedAgent}
+        {#if loadError}
+          <Banner variant="error" role="alert">{loadError}</Banner>
+        {:else}<p class="agents-view__list-state" role="status">
+            {t('common.loading')}
+          </p>{/if}
+      {:else}
+        {#key editorKey}
+          <AgentEditor
+            agent={selectedAgent}
+            standaloneProfile={Boolean(boundProfile)}
+            {agents}
+            onPlacementChanged={() => loadAgents({ showLoading: false })}
+            isDeleting={Boolean(selectedAgent) &&
+              deletingAgentId === selectedAgent.id}
+            {availableModels}
+            {availableConnections}
+            {availableTools}
+            {skillCatalog}
+            {availableAgentTargets}
+            {delegationAgents}
+            agentTargetCatalogError={profileTargetError ||
+              agentTargetCatalogError}
+            projectOptions={availableProjects}
+            {projectCatalogError}
+            {loadError}
+            onAgentUpdated={handleAgentUpdated}
+            onAgentRenamed={handleAgentRenamed}
+            onAgentCreated={handleAgentCreated}
+            onDeleteRequested={requestAgentDelete}
+            {onToast}
+            onNavigateToSettingsPanel={navigateFromAgent}
+            {onNavigateToAgentPrompt}
+            onSkillsChanged={loadSkillCatalog}
+            {onOpenSkill}
+            {memoriesRefreshToken}
+            onModelDropdownOpenChange={modelCatalogLoader.trackPickerOpen}
+          />
+        {/key}
+      {/if}
     </div>
 
     {#if sharedDefaultsOpen || sharedSettings}

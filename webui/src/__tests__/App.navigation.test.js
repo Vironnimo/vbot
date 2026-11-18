@@ -460,6 +460,77 @@ describe('App navigation', () => {
     declarations.resolve({ contributions: [] });
   });
 
+  it('saves a team profile in its Extension page and closes back to the same frame and personal selection', async () => {
+    const personal = baseAgent();
+    const reviewer = {
+      ...personal,
+      id: 'reviewer',
+      name: 'Reviewer',
+      extension_owner: 'factory',
+    };
+    const stamp = reviewer.created_at;
+    const agentsRpc = createAgentsRpcMock({ agents: [personal] });
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [personal],
+        methods: {
+          'extensions.pages': () => ({ pages: [FIXTURE_EXTENSION_PAGE] }),
+          'agent.get': () => reviewer,
+          'agent.soul.get': (params) => agentsRpc('agent.soul.get', params),
+          'agent.update': (params) => ({ ...reviewer, ...params }),
+        },
+      }),
+    );
+    const hash = `#${FIXTURE_EXTENSION_ROUTE}/team`;
+    window.history.replaceState(null, '', hash);
+    mountApp();
+    sendConnectionReady();
+    await waitForCondition(() =>
+      expect(document.querySelector('iframe')).toBeTruthy(),
+    );
+    const frame = document.querySelector('iframe');
+    const win = frame.contentWindow;
+    const sent = vi.spyOn(win, 'postMessage');
+    frame.dispatchEvent(new Event('load'));
+    const init = sent.mock.calls.find(
+      ([data]) => data.type === 'vbot.extension.init',
+    )[0];
+    function fromPage(type, fields = {}) {
+      const event = new MessageEvent('message', {
+        data: { ...init, type, ...fields },
+      });
+      Object.defineProperties(event, {
+        source: { value: win },
+        origin: { value: 'null' },
+      });
+      window.dispatchEvent(event);
+    }
+    fromPage('vbot.extension.ready');
+    fromPage('vbot.extension.call', {
+      id: 'edit',
+      method: 'agent.open',
+      params: { agent_id: 'reviewer', expected_incarnation: stamp },
+    });
+    await waitForCondition(() =>
+      expect(document.querySelector('[role="dialog"] #agent-name')?.value).toBe(
+        'Reviewer',
+      ),
+    );
+    typeInto(document.querySelector('#agent-name'), 'My reviewer');
+    document.querySelector('[role="dialog"] .modal-close').click();
+    await waitForCondition(() => {
+      expect(rpcMock).toHaveBeenCalledWith('agent.update', {
+        id: 'reviewer',
+        expected_incarnation: stamp,
+        name: 'My reviewer',
+      });
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    });
+    expect(document.querySelector('iframe')).toBe(frame);
+    expect(window.location.hash).toBe(hash);
+    expect(localStorage.getItem('vbot.selectedAgentId')).toBe(personal.id);
+  });
+
   describe('Session links from outside the page', () => {
     const ALPHA = {
       id: 'alpha',
@@ -567,6 +638,7 @@ describe('App navigation', () => {
 
     it.each([
       'librarian',
+      'factory-leader',
       'hidden@work',
       'builder@unavailable',
       'builder@work',
@@ -578,6 +650,7 @@ describe('App navigation', () => {
             agents: [ALPHA],
             history: () => assistantHistory('linked-reply', 'Linked reply'),
             methods: {
+              'agent.get': ({ id }) => ({ id, name: 'Factory Leader' }),
               'project.list': () => {
                 if (address.endsWith('@unavailable'))
                   throw new Error('Catalog unavailable');
@@ -601,7 +674,10 @@ describe('App navigation', () => {
             },
           }),
         );
-        localStorage.setItem('vbot.selectedAgentId', 'alpha');
+        localStorage.setItem(
+          'vbot.selectedAgentId',
+          address === 'factory-leader' ? address : 'alpha',
+        );
         window.history.replaceState(
           null,
           '',
@@ -612,6 +688,14 @@ describe('App navigation', () => {
           expect(window.location.hash).toBe(`#chat/${address}/linked-session`);
           expect(document.body.textContent).toContain('Linked reply');
           expect(document.querySelector('.msg-input')).toBeTruthy();
+          if (address === 'factory-leader') {
+            expect(
+              document
+                .querySelector('.agent-pill--current')
+                ?.textContent.trim(),
+            ).toBe('Factory Leader');
+            expect(localStorage.getItem('vbot.selectedAgentId')).toBe('alpha');
+          }
           expect(window.history.state?.extra?.selection).toMatchObject({
             agentId: 'alpha',
             projectId: '',
@@ -626,6 +710,31 @@ describe('App navigation', () => {
         await waitForCondition(linkedSessionShown);
       },
     );
+
+    it('opens an explicitly addressed Session with an empty personal roster', async () => {
+      rpcMock.mockImplementation(
+        createAppRpcMock({
+          agents: [],
+          history: () => assistantHistory('review', 'Factory review'),
+          methods: { 'agent.get': ({ id }) => ({ id, name: 'Reviewer' }) },
+        }),
+      );
+      window.history.replaceState(
+        null,
+        '',
+        '#chat/factory-reviewer/review-session',
+      );
+      mountApp();
+      await waitForCondition(() => {
+        expect(document.body.textContent).toContain('Factory review');
+        expect(
+          document.querySelector('.agent-pill--current')?.textContent.trim(),
+        ).toBe('Reviewer');
+        expect(document.querySelector('.msg-input')).toBeTruthy();
+        expect(localStorage.getItem('vbot.selectedAgentId')).toBeNull();
+        expect(labelledButton('chat.newSession').disabled).toBe(true);
+      });
+    });
 
     it.each(['Agent', 'view'])(
       'does not resume a copied Project link after a newer %s choice',

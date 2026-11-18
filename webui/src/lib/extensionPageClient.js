@@ -485,7 +485,14 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       }),
     openLink: (url) => call('link.open', { url }),
     openSession: (address) => call('session.open', { address }),
-    openAgent: (agentId) => call('agent.open', { agent_id: agentId }),
+    openAgent: (agentId, { expectedIncarnation, relatedScope } = {}) =>
+      call('agent.open', {
+        agent_id: agentId,
+        ...(expectedIncarnation !== undefined
+          ? { expected_incarnation: expectedIncarnation }
+          : {}),
+        ...(relatedScope !== undefined ? { related_scope: relatedScope } : {}),
+      }),
     mountSession,
     setChatContext(value) {
       if (!validPageChatContext(value))

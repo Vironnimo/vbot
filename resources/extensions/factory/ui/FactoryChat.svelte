@@ -85,7 +85,7 @@
     const off = model.client.onInvalidation(({ change } = {}) => {
       if (
         !change ||
-        ['topics', 'tasks', 'cards', 'factories', 'members'].includes(
+        ['topics', 'tasks', 'cards', 'factories', 'members', 'agents'].includes(
           change.resource,
         )
       )
@@ -98,7 +98,15 @@
   });
   async function send() {
     const body = draft.trim();
-    if (!body || sending || !loaded || loading || inactive) return;
+    if (
+      !body ||
+      sending ||
+      !loaded ||
+      loading ||
+      inactive ||
+      chat?.profile_available === false
+    )
+      return;
     const args = {
       ...scope(),
       text: body,
@@ -170,11 +178,15 @@
       {#if chat?.topic}<span>{chat.topic.title}</span>{/if}
     </div>
     <div class="actions">
-      {#if chat?.agent_id}
+      {#if chat?.profile_available && chat.agent_proof}
         <Button
           variant="tertiary"
-          onClick={() => model.client.openAgent(chat.agent_id)}
-          >{t('factory.native.editAgent')}</Button
+          onClick={() =>
+            model.openAgentProfile(
+              chat.agent_id,
+              chat.agent_proof,
+              chat.factory_id,
+            )}>{t('factory.native.editAgent')}</Button
         >
       {/if}
       {#if chat?.topic?.state === 'open' && !inactive && !chat?.topic.task_id && (chat?.replying || chat.posts?.at(-1)?.author === 'user')}
@@ -269,7 +281,10 @@
       onkeydown={keydown}
       ariaLabel={t('factory.chat.message', { name })}
       placeholder={t('factory.chat.message', { name })}
-      disabled={sending || inactive || chat?.topic?.state === 'closed'}
+      disabled={sending ||
+        inactive ||
+        chat?.profile_available === false ||
+        chat?.topic?.state === 'closed'}
     />
     <Button
       variant="primary"
@@ -278,6 +293,7 @@
         loading ||
         sending ||
         inactive ||
+        chat?.profile_available === false ||
         !draft.trim() ||
         chat?.topic?.state === 'closed'}>{t('factory.chat.send')}</Button
     >

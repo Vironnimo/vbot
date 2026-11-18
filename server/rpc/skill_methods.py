@@ -30,6 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
+from core.agents import AgentNotFoundError
 from core.projects import ProjectError
 from core.settings import is_valid_agent_id
 from core.skills import (
@@ -49,7 +50,7 @@ from core.utils.workers import BoundedWorkerPool, SharedRefresh
 from server.events import RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.extension_services import is_extension_service_call
 from server.rpc._mutations import MutationHandler, serialized_mutation
-from server.rpc.agent_refs import _agent_reference_lock
+from server.rpc.agent_refs import _agent_reference_lock, agent_profile_guard
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import (
     RPC_ERROR_AGENT_NOT_FOUND,
@@ -132,6 +133,7 @@ async def _write(
     write: Callable[[Path], SkillWriteResult],
     *,
     refresh: bool = True,
+    params: JsonObject | None = None,
 ) -> JsonObject:
     """Run one authoring write, map its diagnostics to an RpcError, then invalidate.
 
@@ -139,8 +141,24 @@ async def _write(
     each success publishes one Skills invalidation for open views. ``refresh``
     false skips the registry invalidation for writes no registry sees (pins).
     """
+
+    def write_package() -> SkillWriteResult:
+        if params is not None and "expected_incarnation" in params:
+            if scope == _GLOBAL_SCOPE:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "An Agent incarnation requires a private Skill scope.",
+                )
+            with agent_profile_guard(
+                state.runtime.agents, scope.removeprefix(_AGENT_SCOPE_PREFIX), params
+            ):
+                return write(_scope_root(state, scope))
+        return write(_scope_root(state, scope))
+
     try:
-        result = await _SKILL_READ_WORKERS.run(write, _scope_root(state, scope))
+        result = await _SKILL_READ_WORKERS.run(write_package)
+    except AgentNotFoundError as exc:
+        raise RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(exc)) from exc
     except SkillAuthoringError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "; ".join(exc.diagnostics)) from exc
     except OSError as exc:
@@ -272,6 +290,7 @@ async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
         lambda root: state.runtime.skill_authoring.edit(
             root, name, content, writer=writer, source=source
         ),
+        params=params,
     )
 
 
@@ -283,6 +302,7 @@ async def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
         state,
         scope,
         lambda root: state.runtime.skill_authoring.delete(root, name, writer=writer),
+        params=params,
     )
 
 
@@ -440,12 +460,23 @@ async def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
+def _package_binding(params: JsonObject) -> dict[str, str]:
+    if "expected_incarnation" in params:
+        return {"expected_incarnation": _required_string(params, "expected_incarnation")}
+    return {}
+
+
 async def _skill_inspect(state: Any, params: JsonObject) -> JsonObject:
     entry_id = _required_string(params, "id")
     try:
         return cast(
-            JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.inspect_skill, entry_id)
+            JsonObject,
+            await _SKILL_READ_WORKERS.run(
+                state.runtime.inspect_skill, entry_id, **_package_binding(params)
+            ),
         )
+    except AgentNotFoundError as exc:
+        raise RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(exc)) from exc
     except (ValueError, OSError) as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
@@ -567,8 +598,15 @@ async def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
     disabled = _required_bool(params, "disabled")
     try:
         result = await _SKILL_READ_WORKERS.run(
-            partial(state.runtime.set_skill_package_disabled, entry_id, disabled=disabled)
+            partial(
+                state.runtime.set_skill_package_disabled,
+                entry_id,
+                disabled=disabled,
+                **_package_binding(params),
+            )
         )
+    except AgentNotFoundError as exc:
+        raise RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(exc)) from exc
     except ValueError as exc:
         raise RpcError(RPC_ERROR_SKILL_NOT_FOUND, str(exc)) from exc
     except (SkillPolicyError, ProjectError) as exc:

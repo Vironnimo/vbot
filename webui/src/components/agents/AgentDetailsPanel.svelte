@@ -21,6 +21,7 @@
     fieldError,
     workspaceIsCustom,
     canDeleteSelectedAgent,
+    showLifecycleActions = true,
   } = $props();
 
   let expanded = $state(false);
@@ -95,7 +96,7 @@
               ? 'agent-id-help agent-id-error'
               : 'agent-id-help'}
           />
-          {#if formMode === AGENT_FORM_MODE_EDIT}
+          {#if showLifecycleActions && formMode === AGENT_FORM_MODE_EDIT}
             <Button
               variant="tertiary"
               onClick={openRenameDialog}
@@ -185,7 +186,7 @@
       </div>
     </div>
 
-    {#if formMode === AGENT_FORM_MODE_EDIT}
+    {#if showLifecycleActions && formMode === AGENT_FORM_MODE_EDIT}
       <div class="s-group">
         <div class="s-row s-row--compact">
           <div class="s-row-info">

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +16,7 @@ from core.providers.errors import ProviderError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.agents._types import Agent
+    from core.agents import Agent, AgentStore
     from core.sessions import ChatSessionManager
     from core.skills.skills import SkillRegistry
     from core.usage import UsageRecorder
@@ -49,8 +50,10 @@ class AgentDescriptionSuggestionError(AgentError):
 
 
 async def suggest_agent_description(
-    agent: Agent,
+    agent_id: str,
     *,
+    agents: AgentStore,
+    expected_incarnation: str | None,
     sessions: ChatSessionManager,
     skills_for: Callable[[str], SkillRegistry],
     resolve_model: Callable[[str], tuple[str, str, str]],
@@ -64,15 +67,26 @@ async def suggest_agent_description(
     :class:`AgentDescriptionSuggestionError` for an empty answer.
     Collaborators are supplied by the caller; this owner has no Runtime dependency.
     """
-    facts = await workers.run(_agent_facts, agent, skills_for)
-    page = await sessions.run_async(
-        sessions.list_summaries_page, [(None, agent.id)], limit=SESSION_TITLE_INPUT_MAX
-    )
-    titles = [
-        str(summary.get("title") or summary.get("auto_title") or "").strip()
-        for summary in page.sessions
-    ]
-    facts += _section("Recent conversation titles", [title for title in titles if title])
+
+    def capture() -> tuple[Agent, str]:
+        guard = (
+            agents.incarnation_guard(agent_id, expected_incarnation)
+            if expected_incarnation is not None
+            else nullcontext()
+        )
+        with guard:
+            agent = agents.get(agent_id)
+            facts = _agent_facts(agent, skills_for)
+            page = sessions.list_summaries_page([(None, agent_id)], limit=SESSION_TITLE_INPUT_MAX)
+            titles = [
+                str(summary.get("title") or summary.get("auto_title") or "").strip()
+                for summary in page.sessions
+            ]
+            return agent, facts + _section(
+                "Recent conversation titles", [title for title in titles if title]
+            )
+
+    agent, facts = await sessions.run_async(capture)
     adapter: ProviderAdapter | None = None
 
     def prepare() -> tuple[str, str, str]:

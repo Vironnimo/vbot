@@ -49,6 +49,7 @@ from server.rpc.agent_refs import (
     _agent_reference_lock,
     _guard_agent_lifecycle,
     _subagents_reference_identity_agent,
+    agent_profile_guard,
 )
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
@@ -82,7 +83,7 @@ __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 async def _list_agents(state: Any) -> JsonObject:
     def read() -> JsonObject:
         # Agent reads load agent.json and may repair a current Session pointer.
-        return _agent_list_response(state, state.runtime.agents.list_with_order())
+        return _agent_list_response(state, state.runtime.agents.personal_roster())
 
     return await _run_agent_operation(state, read)
 
@@ -123,7 +124,9 @@ def _agent_list_response(state: Any, listing: Any) -> JsonObject:
     return {
         # The roster read holds each Agent's persisted values: no file is read again.
         "agents": [
-            _agent_response(state, agent, listing.persisted.get(agent.id), roster=listing.agents)
+            _agent_response(
+                state, agent, listing.persisted[agent.id], placement=listing.placements[agent.id]
+            )
             for agent in listing.agents
         ],
         "order_revision": listing.order_revision,
@@ -138,7 +141,7 @@ async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
     def read() -> JsonObject:
         return _agent_response(state, state.runtime.agents.get(agent_id))
 
-    return await _run_agent_operation(state, read)
+    return await _run_agent_operation(state, read, profile=params)
 
 
 async def _suggest_agent_description(state: Any, params: JsonObject) -> JsonObject:
@@ -148,7 +151,14 @@ async def _suggest_agent_description(state: Any, params: JsonObject) -> JsonObje
     )
     agent_id = _required_string(params, "id")
     try:
-        description = await state.runtime.suggest_agent_description(agent_id)
+        expected = (
+            _required_string(params, "expected_incarnation")
+            if "expected_incarnation" in params
+            else None
+        )
+        description = await state.runtime.suggest_agent_description(
+            agent_id, expected_incarnation=expected
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"description": description}
@@ -167,7 +177,10 @@ def _soul_response(soul: SoulFile) -> JsonObject:
 async def _get_agent_soul(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("agent.soul.get"), "agent.soul.get")
     agent_id = _required_string(params, "id")
-    soul = await _run_agent_operation(state, state.runtime.agents.read_soul, agent_id)
+
+    soul = await _run_agent_operation(
+        state, state.runtime.agents.read_soul, agent_id, profile=params
+    )
     return _soul_response(soul)
 
 
@@ -183,8 +196,11 @@ async def _set_agent_soul(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "revision must be a string")
 
     agents: AgentStore = state.runtime.agents
+
     soul = await _run_agent_operation(
-        state, lambda: agents.write_soul(agent_id, content, expected_revision=revision)
+        state,
+        lambda: agents.write_soul(agent_id, content, expected_revision=revision),
+        profile=params,
     )
     # Open editors in other windows re-read the Agent and its SOUL preview.
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
@@ -211,7 +227,7 @@ def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
 def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, list[str]]:
     agent_id = _required_string(params, "id")
     try:
-        changes = _agent_changes(params, blocked={"id"}, for_create=False)
+        changes = _agent_changes(params, blocked={"id", "expected_incarnation"}, for_create=False)
         copy_workspace_identity_files = changes.pop("copy_workspace_identity_files", False)
         root_project_id = changes.get("root_project_id")
         if root_project_id is not None and not state.runtime.projects.exists(root_project_id):
@@ -256,11 +272,18 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
 
 
 async def _run_agent_operation[Result](
-    state: Any, operation: Callable[..., Result], *arguments: Any
+    state: Any, operation: Callable[..., Result], *arguments: Any, profile: JsonObject | None = None
 ) -> Result:
-    """Run one Agent store operation on the Session database's pool, mapping its errors."""
+    """Run one Agent operation on the Session pool, optionally bound to an opened profile."""
+
+    def run() -> Result:
+        if profile is None or "expected_incarnation" not in profile:
+            return operation(*arguments)
+        with agent_profile_guard(state.runtime.agents, _required_string(profile, "id"), profile):
+            return operation(*arguments)
+
     try:
-        result: Result = await state.runtime.chat_sessions.run_async(operation, *arguments)
+        result: Result = await state.runtime.chat_sessions.run_async(run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return result
@@ -280,7 +303,7 @@ async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
 @_guard_agent_lifecycle
 async def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     response, changed_fields = await _run_agent_operation(
-        state, _update_agent_record, state, params
+        state, _update_agent_record, state, params, profile=params
     )
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     if changed_fields:
@@ -400,7 +423,8 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         chat_sessions = state.runtime.chat_sessions
-        agents = await chat_sessions.run_async(state.runtime.agents.list)
+        personal = await chat_sessions.run_async(state.runtime.agents.personal_roster)
+        agents = personal.agents
         candidate = next((agent for agent in agents if agent.id == agent_id), None)
         if (
             candidate is not None
@@ -426,7 +450,7 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
                 data={"agent_id": blocked_id},
             ) from exc
         # Read after the archive: it removed the Agent from their delegation lists.
-        roster = await chat_sessions.run_async(state.runtime.agents.list_with_order)
+        roster = await chat_sessions.run_async(state.runtime.agents.personal_roster)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     remaining = await _run_agent_operation(state, _agent_list_response, state, roster)

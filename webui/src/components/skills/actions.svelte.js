@@ -133,12 +133,13 @@ export function createSkillActions(context) {
   // caller shows this package, otherwise read from the server first.
   async function startEdit(entry) {
     if (busy || !entry.editable_scope) return;
+    const ownerBinding = context.ownerBinding?.(entry.owner_id);
     let content =
       context.inspected?.id === entry.id ? context.inspected.content : null;
     if (content === null) {
       busy = true;
       try {
-        content = (await inspectSkill(entry.id)).content;
+        content = (await inspectSkill(entry.id, ownerBinding)).content;
       } catch (error) {
         context.onToast({
           title: `${t('skills.readError')} ${error.message}`,
@@ -153,6 +154,7 @@ export function createSkillActions(context) {
       scope: entry.editable_scope,
       name: entry.name,
       shared: entry.shared,
+      ownerBinding,
     };
     editContent = content;
   }
@@ -172,6 +174,7 @@ export function createSkillActions(context) {
           scope: target.scope,
           name: target.name,
           content,
+          ...target.ownerBinding,
         });
         // The response saved this snapshot, not text entered while it ran or
         // a different editing visit to the same package.
@@ -197,7 +200,12 @@ export function createSkillActions(context) {
   // The off switch of this one package, for every Agent and Project.
   function setDisabled(entry, disabled) {
     return run(
-      () => setSkillDisabled(entry.id, disabled),
+      () =>
+        setSkillDisabled(
+          entry.id,
+          disabled,
+          context.ownerBinding?.(entry.owner_id),
+        ),
       () => t('skills.toggleError'),
       () =>
         disabled
@@ -389,6 +397,7 @@ export function createSkillActions(context) {
       scope: entry.editable_scope,
       name: entry.name,
       message: skillDeleteConfirmText(entry, context.agents),
+      ownerBinding: context.ownerBinding?.(entry.owner_id),
     };
   }
 
@@ -402,7 +411,11 @@ export function createSkillActions(context) {
     if (!target) return;
     await run(
       async () => {
-        await deleteSkillRequest(target.scope, target.name);
+        await deleteSkillRequest(
+          target.scope,
+          target.name,
+          target.ownerBinding,
+        );
         if (editing?.name === target.name && editing?.scope === target.scope)
           closeEditModal();
       },

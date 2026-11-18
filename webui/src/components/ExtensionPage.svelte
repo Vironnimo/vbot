@@ -53,6 +53,24 @@
     value.length > 0 &&
     value.length <= 256 &&
     !/[\s/\\@?#\p{C}]/u.test(value);
+  function validRelatedAgent(item) {
+    if (
+      !isPlainObject(item) ||
+      !safeId(item.id) ||
+      typeof item.name !== 'string' ||
+      item.name.length > 512
+    )
+      return false;
+    if (item.placement == null) return true;
+    const placement = item.placement;
+    if (!isPlainObject(placement)) return false;
+    if (placement.kind === 'private')
+      return (
+        safeId(placement.owner_id) && typeof placement.orphaned === 'boolean'
+      );
+    return placement.kind === 'chat' || placement.kind === 'helper';
+  }
+
   const METHODS = new Set([
     'operation',
     'history.read',
@@ -265,6 +283,27 @@
         throw new Error(t('extensions.page.fileUnavailable'));
     }
     window.open(url.href, '_blank', 'noopener,noreferrer');
+  }
+
+  // The owning page projects the editor's related identities in bounded reads.
+  // Only this fixed operation runs, always for the original frame registration.
+  async function readProfileTargets(context, scope, after) {
+    if (frameContext !== context)
+      throw new Error(t('extensions.page.invalidLink'));
+    const result = await invokeExtensionPageOperation(
+      context.descriptor.owner,
+      'agent.profile_targets',
+      after ? { scope, after } : { scope },
+      { id: context.descriptor.page, epoch: context.descriptor.epoch },
+    );
+    if (
+      frameContext !== context ||
+      !Array.isArray(result?.agents) ||
+      !result.agents.every(validRelatedAgent) ||
+      (result.next_after != null && !safeId(result.next_after))
+    )
+      throw new Error(t('extensions.page.invalidLink'));
+    return result;
   }
 
   function contextPayload(context) {
@@ -884,9 +923,23 @@
         });
         result = {};
       } else if (data.method === 'agent.open') {
-        if (!safeId(data.params.agent_id))
+        const {
+          agent_id: id,
+          expected_incarnation: expected,
+          related_scope: scope,
+        } = data.params;
+        if (
+          !safeId(id) ||
+          (expected !== undefined && !safeId(expected)) ||
+          (scope !== undefined && !safeId(scope))
+        )
           throw new Error(t('extensions.page.invalidLink'));
-        onOpenAgent(data.params.agent_id);
+        onOpenAgent(id, {
+          expectedIncarnation: expected,
+          readRelatedAgents: scope
+            ? (after) => readProfileTargets(context, scope, after)
+            : undefined,
+        });
         result = {};
       } else if (data.method === 'session.open') {
         const address = data.params.address;

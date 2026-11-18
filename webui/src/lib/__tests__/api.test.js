@@ -366,14 +366,36 @@ describe('RPC wrappers', () => {
       { agent_ids: ['writer', 'coder'], expected_revision: 3 },
     ],
     [
+      'skill.set_disabled',
+      (o) =>
+        api.setSkillDisabled('package-id', true, {
+          ...o,
+          expected_incarnation: 'creation-stamp',
+        }),
+      {
+        id: 'package-id',
+        disabled: true,
+        expected_incarnation: 'creation-stamp',
+      },
+    ],
+    [
       'memory.list',
       (o) => api.listAgentMemories('coder', o),
       { agent_id: 'coder' },
     ],
     [
       'memory.add',
-      (o) => api.addAgentMemory('coder', 'agent', 'Keep tests focused.', o),
-      { agent_id: 'coder', scope: 'agent', content: 'Keep tests focused.' },
+      (o) =>
+        api.addAgentMemory('coder', 'agent', 'Keep tests focused.', {
+          ...o,
+          expected_incarnation: 'creation-stamp',
+        }),
+      {
+        agent_id: 'coder',
+        scope: 'agent',
+        content: 'Keep tests focused.',
+        expected_incarnation: 'creation-stamp',
+      },
     ],
     [
       'memory.replace',

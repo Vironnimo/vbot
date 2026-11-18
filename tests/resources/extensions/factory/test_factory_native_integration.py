@@ -12,12 +12,14 @@ from typing import Any, override
 import pytest
 import pytest_asyncio
 
+from core.archive.errors import ArchiveSubjectInUseError
 from core.extensions.operations import ExtensionOperations
 from core.projects import AgentOverrides
 from core.runs import Run, RunCancelledError
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
 from core.utils.config import Config
+from resources.extensions.factory._native_store import NativeFactoryStore
 from tests.core.chat.chat_loop_adapter_support import StubAdapter
 from tests.core.runtime.runtime_test_support import (
     extension_record,
@@ -163,6 +165,152 @@ async def native_factory_runtime(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("leader", [True, False])
+async def test_unfinished_identity_creation_can_be_completed_in_its_project(
+    native_factory_runtime: NativeFactoryRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    leader: bool,
+) -> None:
+    harness = native_factory_runtime
+    runtime = harness.runtime
+    runtime.agents.create("personal", model=MODEL)
+    for project in ("home", "away"):
+        directory = tmp_path / project
+        directory.mkdir()
+        runtime.projects.create(project, project, directory, sources=[])
+    foreign = (
+        await harness.operation("factory.create", project_id="away", leader_agent_id="personal")
+    )["factory"]
+    home = (
+        {}
+        if leader
+        else (
+            await harness.operation("factory.create", project_id="home", leader_agent_id="personal")
+        )["factory"]
+    )
+    store: NativeFactoryStore = harness.service.records().native
+    save = store.save_identity_reservation
+
+    async def interrupt(request_id: str, patch: Json) -> Json:
+        if "proof" in patch:
+            raise RuntimeError("interrupted before saving the host proof")
+        return await save(request_id, patch)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(store, "save_identity_reservation", interrupt)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            if leader:
+                await harness.operation(
+                    "factory.create",
+                    project_id="home",
+                    leader_name="Reserved",
+                    leader_model=MODEL,
+                    request_id="pending",
+                )
+            else:
+                await harness.operation(
+                    "member.create",
+                    factory_id=home["id"],
+                    name="Reserved",
+                    model=MODEL,
+                    request_id="pending",
+                )
+    pending = (await harness.service.native_management.identities.pending_profiles())["home"]
+    assert len(pending) == 1
+    identity = pending[0]
+    assert identity["name"] == "Reserved"
+    with pytest.raises(ValueError, match="personal Agent"):
+        await harness.operation("member.add", factory_id=foreign["id"], agent_id=identity["id"])
+    if leader:
+        home = (
+            await harness.operation(
+                "factory.create", project_id="home", leader_agent_id=identity["id"]
+            )
+        )["factory"]
+        member = await store.get_member(home["leader_member_id"])
+    else:
+        member = (
+            await harness.operation(
+                "member.add", factory_id=home["id"], agent_id=identity["id"], role="Corrected role"
+            )
+        )["member"]
+    assert member["created_by_factory"] and member["agent_proof"] == identity["incarnation"]
+    assert not await store.pending_identities()
+    assert not harness.model.requests
+
+
+@pytest.mark.asyncio
+async def test_operator_replaces_an_unavailable_leader_with_a_verified_membership(
+    native_factory_runtime: NativeFactoryRuntime, tmp_path: Path
+) -> None:
+    harness = native_factory_runtime
+    runtime = harness.runtime
+    for project in ("first", "second"):
+        directory = tmp_path / project
+        directory.mkdir()
+        runtime.projects.create(project, project, directory, sources=[])
+    leader = runtime.agents.create("starter", model=MODEL)
+    factory = (
+        await harness.operation("factory.create", project_id="first", leader_agent_id=leader.id)
+    )["factory"]
+    other = (
+        await harness.operation("factory.create", project_id="second", leader_agent_id=leader.id)
+    )["factory"]
+    store: NativeFactoryStore = harness.service.records().native
+    original = await store.get_member(factory["leader_member_id"])
+    await runtime.archive.archive_agent(leader.id)
+    replacement = runtime.agents.create(leader.id, model=MODEL)
+    assert replacement.created_at != original["agent_proof"]
+    topic = await store.create_topic(factory["id"], "Old discussion", participants=[original["id"]])
+    execution = await store.create_execution(
+        factory["id"],
+        "topic",
+        topic["id"],
+        original["id"],
+        1,
+        participant_id=original["id"],
+        group_id="native.old-discussion",
+        runtime={"factory_revision": factory["revision"], "member_revision": original["revision"]},
+    )
+    await store.change_execution(execution["id"], {"state": "running"})
+    await harness.service.native.reconcile()
+    await harness.settle()
+    interrupted = await store.get_execution(execution["id"])
+    assert interrupted["state"] == "failed"
+    assert interrupted["runtime"]["failure"] == "member_profile_unavailable"
+    assert not harness.model.requests
+    candidate = (
+        await harness.operation("member.add", factory_id=factory["id"], agent_id=leader.id)
+    )["member"]
+    assert candidate["agent_proof"] == replacement.created_at
+    assert not (await harness.operation("factory.get", id=factory["id"]))["factory"][
+        "leader_available"
+    ]
+
+    async def replace(member_id: str, revision: int) -> Json:
+        return await harness.operation(
+            "factory.update",
+            id=factory["id"],
+            expected_revision=revision,
+            leader_member_id=member_id,
+        )
+
+    with pytest.raises(ValueError, match="active member"):
+        await replace(other["leader_member_id"], factory["revision"])
+    with pytest.raises(ValueError, match="available Agent"):
+        await replace(original["id"], factory["revision"])
+    updated = (await replace(candidate["id"], factory["revision"]))["factory"]
+    assert updated["leader_member_id"] == candidate["id"]
+    assert await harness.service.records().native.get_member(original["id"]) == original
+    assert (await harness.operation("factory.get", id=factory["id"]))["factory"]["leader_available"]
+    with pytest.raises(ValueError, match="changed"):
+        await replace(original["id"], factory["revision"])
+    with pytest.raises(ValueError, match="current Leader"):
+        await replace(original["id"], updated["revision"])
+
+
+@pytest.mark.asyncio
 async def test_native_assignment_runs_the_real_identity_without_a_workflow(
     native_factory_runtime: NativeFactoryRuntime, tmp_path: Path
 ) -> None:
@@ -186,6 +334,9 @@ async def test_native_assignment_runs_the_real_identity_without_a_workflow(
         )
     )["member"]
     identity = runtime.agents.get(specialist["agent_id"])
+    with pytest.raises(ArchiveSubjectInUseError) as owned:
+        await runtime.archive.archive_agent(identity.id)
+    assert owned.value.references == ("extension:factory",)
     runtime.memory.add_entry(Path(identity.workspace), "agent", "test-owned-personal-memory")
     write_agent_skill(tmp_path, identity.id, "private-contract", "test-owned-private-skill")
     runtime.refresh_skills_for("product", identity.id)

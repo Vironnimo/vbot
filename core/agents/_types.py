@@ -16,6 +16,7 @@ from core.permissions import PermissionCeiling, PermissionRules
 from core.tools.availability import (
     ToolAccess,
 )
+from core.utils.timestamps import parse_timestamp
 
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 # Librarian passes curate an Agent's own Skills unless its switch is off.
@@ -199,6 +200,19 @@ class Agent:
     # Trusted Extension that created and may configure this exact identity.
     extension_owner: str | None = None
     extension_creation_request: dict[str, str] | None = None
+    # Older documents can lack a timestamp. Their display fallback is not proof
+    # that this identity is the one named by an existing membership.
+    creation_time_persisted: bool = field(default=True, repr=False, compare=False)
+
+    @property
+    def incarnation(self) -> str | None:
+        if not self.creation_time_persisted:
+            return None
+        try:
+            parse_timestamp(self.created_at)
+        except TypeError, ValueError:
+            return None
+        return self.created_at
 
     @property
     def bundled_prompt(self) -> bool:
@@ -276,6 +290,9 @@ class AgentListResult:
     # Each listed Agent's persisted values by id, as ``AgentStore.get_raw``
     # returns them, so a caller that needs both views reads no file again.
     persisted: Mapping[str, Agent] = field(default_factory=dict)
+    # A personal listing resolves placements during its scan. A Private Agent's
+    # verified owner may live outside the returned roster.
+    placements: Mapping[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

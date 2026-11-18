@@ -7,6 +7,7 @@ import {
   pickProjectAgentSessionId,
 } from '../../../lib/chatState.js';
 import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
+import { getAgent } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
 import { LIBRARIAN_AGENT_ID, librarianName } from '$lib/librarian.js';
 import { isLiveAgentId, liveAgentName } from '$lib/liveAgents.js';
@@ -109,6 +110,28 @@ export function createChatViewTarget(context) {
   });
 
   let activeAgent = $derived(getActiveAgent());
+
+  // An explicitly opened Session can belong to an identity outside the personal roster.
+  // Resolve its name for this view only. A deleted identity remains readable by address.
+  let viewedIdentity = $state(null);
+  $effect(() => {
+    const address = context.navigation.viewingSessionAgentId;
+    viewedIdentity = null;
+    if (!address || agentById(address)) return;
+    const { agentId, projectId } = parseAgentAddress(address);
+    if (projectId || isLiveAgentId(agentId) || agentId === LIBRARIAN_AGENT_ID)
+      return;
+    let current = true;
+    getAgent(agentId).then(
+      (agent) => {
+        if (current && agent?.id === agentId) viewedIdentity = agent;
+      },
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  });
 
   let activeSessionState = $derived(getActiveSessionState());
 
@@ -287,7 +310,10 @@ export function createChatViewTarget(context) {
         ? liveAgentName(agentId)
         : agentId === LIBRARIAN_AGENT_ID && !projectId
           ? librarianName()
-          : activeSessionState?.agentName || agentId || agentAddress,
+          : activeSessionState?.agentName ||
+            (viewedIdentity?.id === agentId ? viewedIdentity.name : null) ||
+            agentId ||
+            agentAddress,
       current_session_id: '',
       __overrideAddress: agentAddress,
       __liveCall: liveCall,

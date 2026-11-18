@@ -58,6 +58,17 @@ class ExecutionUsageChanges(Protocol):
     ) -> Awaitable[JsonObject]: ...
 
 
+class IdentityAgentProfiles(Protocol):
+    async def get(self, agent_id: str) -> JsonObject: ...
+    async def profiles(self, agent_ids: list[str]) -> dict[str, JsonObject]: ...
+    async def create(
+        self, agent_id: str, *, request_id: str | None = None, **config: Any
+    ) -> JsonObject: ...
+    async def update(
+        self, agent_id: str, *, expected_incarnation: str, **changes: Any
+    ) -> JsonObject: ...
+
+
 @dataclass(frozen=True)
 class ExtensionHost:
     """Narrow, injected host capabilities; never exposes the Runtime itself."""
@@ -76,7 +87,7 @@ class ExtensionHost:
     # owner's group ids with live participant Sessions, and ``archive_group()``.
     temporary_agents: Any | None = None
     # API32: actual durable identities; updates are limited to owner-created Agents.
-    identity_agents: Any | None = None
+    identity_agents: IdentityAgentProfiles | None = None
     state_dir: Path | None = None
     catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None
     publish_change: Callable[[str, Sequence[str], int], None] | None = None

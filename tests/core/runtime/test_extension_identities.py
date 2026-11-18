@@ -46,6 +46,19 @@ async def test_extension_identity_management_preserves_incarnation_and_creation_
         with pytest.raises(AgentError):
             await host.create("specialist", request_id="create-specialist", name="Wrong")
         assert created["created_by_owner"] is True
+        assert attached["extension_owner"] is None and created["extension_owner"] == "factory"
+        profiles = await host.profiles(["existing", "missing", "specialist"])
+        assert set(profiles) == {"existing", "specialist"}
+        assert profiles["specialist"] == {
+            "name": "Specialist",
+            "incarnation": created["incarnation"],
+            "extension_owner": "factory",
+            "created_by_owner": True,
+            "creation_request_id": "create-specialist",
+            "placement": {"kind": "chat"},
+        }
+        with pytest.raises(AgentError):
+            store.rename("specialist", "renamed")
         changed = await host.update(
             "specialist", expected_incarnation=created["incarnation"], name="Editor"
         )
@@ -56,6 +69,8 @@ async def test_extension_identity_management_preserves_incarnation_and_creation_
         current = False
         with pytest.raises(ValueError):
             await host.create("late")
+        with pytest.raises(ValueError):
+            await host.profiles(["specialist"])
         assert not store.exists("late")
     finally:
         store.close()

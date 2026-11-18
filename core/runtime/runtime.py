@@ -394,13 +394,16 @@ class Runtime(RuntimeServiceGraph):
     async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
         return await sample_extension(self, context, request)
 
-    async def suggest_agent_description(self, agent_id: str) -> str:
+    async def suggest_agent_description(
+        self, agent_id: str, *, expected_incarnation: str | None = None
+    ) -> str:
         """Draft a description of an Identity Agent with its own Model; nothing is saved."""
         from core.chat.model_resolution import resolve_model_target
 
-        agent = await self.agents.get_async(agent_id)
         return await suggest_agent_description(
-            agent,
+            agent_id,
+            agents=self.agents,
+            expected_incarnation=expected_incarnation,
             sessions=self.chat_sessions,
             skills_for=lambda identifier: self.skills_for(None, identifier),
             resolve_model=lambda model: resolve_model_target(self, model),
@@ -671,14 +674,22 @@ class Runtime(RuntimeServiceGraph):
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
 
-    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
-        return self._skill_operations().inspect_skill(entry_id)
+    def inspect_skill(
+        self, entry_id: str, *, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
+        return self._skill_operations().inspect_skill(
+            entry_id, expected_incarnation=expected_incarnation
+        )
 
     def skill_inventory(self) -> dict[str, Any]:
         return self._skill_operations().skill_inventory()
 
-    def set_skill_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
-        return self._skill_operations().set_package_disabled(entry_id, disabled=disabled)
+    def set_skill_package_disabled(
+        self, entry_id: str, *, disabled: bool, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
+        return self._skill_operations().set_package_disabled(
+            entry_id, disabled=disabled, expected_incarnation=expected_incarnation
+        )
 
     def profile_skill_content(self, project_id: str, name: str, allowed: list[str]) -> str | None:
         from core.skills.skill_validator import split_skill_document
@@ -889,7 +900,7 @@ class Runtime(RuntimeServiceGraph):
         return outcome
 
     async def agent_references(self, agent_id: str) -> tuple[str, ...]:
-        """Name the Channels and live automations that keep an Identity Agent from deletion.
+        """Name the Extension owner, Channels and live automations that keep an Agent from deletion.
 
         Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
         :meth:`AutomationReferences.agent_references`, sorted; automation history
@@ -906,6 +917,11 @@ class Runtime(RuntimeServiceGraph):
         references.extend(
             reference.label for reference in self.automation_references.agent_references(agent_id)
         )
+        agent = await self.chat_sessions.run_async(self.agents.find, agent_id)
+        if agent is not None and agent.extension_owner is not None:
+            installed = self._extensions.installed_names() if self._extensions is not None else None
+            if installed is None or agent.extension_owner in installed:
+                references.append(f"extension:{agent.extension_owner}")
         return tuple(sorted(references))
 
     def _agent_rename_services(self) -> AgentRenameServices:
