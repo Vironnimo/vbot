@@ -57,6 +57,7 @@
     onStopAll = () => {},
     onTranscriptionError,
     onListFiles = null,
+    onListFilesForSubmit = null,
     onLoadModelCatalog = null,
     // Opens the Secret form; a bare `/secret` calls it instead of sending.
     onOpenSecretForm = null,
@@ -154,6 +155,9 @@
     },
     get onListFiles() {
       return onListFiles;
+    },
+    get onListFilesForSubmit() {
+      return onListFilesForSubmit;
     },
     get onSendError() {
       return onSendError;
@@ -358,6 +362,11 @@
       },
     };
   };
+
+  let inputWidth = $state(0);
+  $effect(() => {
+    if (inputWidth > 0 && inputElement?.value) resizeInput();
+  });
 
   const resizeInput = () => {
     if (!inputElement) {
@@ -865,6 +874,7 @@
       {/if}
       <textarea
         bind:this={inputElement}
+        bind:clientWidth={inputWidth}
         bind:value={content}
         class="msg-input"
         {disabled}

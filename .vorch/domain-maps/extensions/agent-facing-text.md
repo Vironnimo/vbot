@@ -328,7 +328,8 @@ Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/
 | `Pass the group and participant ids...` | The page grant resolves an owned participant, even when the Agent is outside the roster. |
 | `Choose conversation (default)...` | Authors can choose the requested level of work detail for each surface. |
 | `Each view provides Open in Chat...` | The component supplies promotion to the same Session, so the page can omit its own button. |
-| `From a user click, call client.openAppChat()` and the following sentence | Pages launch the common App Agent for a user-authored question about the current view. |
+| `From a user click, call client.openAppChat()` | Pages launch the common App Agent for a user-authored question about the current view. |
+| `For both App and specialist chats, the host creates a new Session when the user sends the first message...` | Extension authors can open the composer without allocating a Session for an abandoned question. |
 | `For a specialist, declare its role and Tools...` | Gives the server declaration including the role and the existing Tool to enable. |
 | `Call client.openSpecialist...` | Launch must follow the user's interaction with the page. |
 | `As the user moves, publish visible labels...` | Names the shape and clear operation that keep location descriptions current. |

@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.database import Database, DatabaseError, open_database
@@ -360,6 +360,9 @@ class SessionStore:
             lambda connection: _store_mutations.move(connection, source, target)
         )
 
+    def latest_side_chat(self, source: SessionAddress) -> tuple[str, SessionAddress | None]:
+        return self._read(lambda connection: _store_queries.latest_side_chat(connection, source))
+
     def fork(
         self,
         source: SessionAddress,
@@ -367,9 +370,9 @@ class SessionStore:
         *,
         title: str | None = None,
         run_kind: str | None = None,
-        side_chat: Literal["new", "resume"] | None = None,
         side_chat_note: str | None = None,
         side_chat_request: tuple[str, str] | None = None,
+        expected_source_generation_id: str | None = None,
         allow_owner_managed_source: bool = False,
     ) -> tuple[SessionAddress, bool, str]:
         """Return the fork, whether this call created it, and its exact generation."""
@@ -380,9 +383,9 @@ class SessionStore:
                 target_scope,
                 title=title,
                 run_kind=run_kind,
-                side_chat=side_chat,
                 side_chat_note=side_chat_note,
                 side_chat_request=side_chat_request,
+                expected_source_generation_id=expected_source_generation_id,
                 allow_owner_managed_source=allow_owner_managed_source,
             )
         )

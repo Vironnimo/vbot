@@ -41,6 +41,13 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     getSettings: () => call('settings.get'),
     createAppChat: (profile, sessionId) =>
       call('session.create_app_chat', { profile, session_id: sessionId }),
+    createSideChat: (agentId, sessionId, sourceGenerationId, launchId) =>
+      call('session.create_side_chat', {
+        agent_id: agentId,
+        session_id: sessionId,
+        source_generation_id: sourceGenerationId,
+        launch_id: launchId,
+      }),
     getSetup: () => call('setup.get'),
     updateSetup: (step) => call('setup.update', { step }),
     finishSetup: () => call('setup.finish'),

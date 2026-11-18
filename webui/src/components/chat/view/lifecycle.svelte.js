@@ -8,7 +8,7 @@ import {
 import { createChatRunStream } from '$lib/chatRunStream.js';
 import { subscribeRunEvents } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
-import { onMount, untrack } from 'svelte';
+import { getContext, onMount, untrack } from 'svelte';
 
 // Own this retained Chat area's roster, event inputs, stream and browser lifetime.
 export function createChatViewLifecycle(context) {
@@ -306,6 +306,9 @@ export function createChatViewLifecycle(context) {
       chatController.refreshReflections(sourceState),
   });
   const chatController = createChatController({
+    // Canonical popup Chats continue any first input with an uncertain reply,
+    // including slash input whose identity is held only in memory.
+    submitChat: getContext('chatPopupOrigin')?.()?.submit,
     operations: defaultChatOperations({
       includeInherited: untrack(
         () => context.boundSession?.includeInherited ?? true,

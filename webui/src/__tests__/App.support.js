@@ -13,6 +13,7 @@ import {
 } from '../components/__tests__/timelineItems.support.js';
 
 export const rpcMock = vi.fn();
+export const uploadAttachmentMock = vi.fn();
 export const listSessionActivityMock = vi.fn(() =>
   Promise.resolve({ agents: [] }),
 );
@@ -69,6 +70,7 @@ vi.mock('$lib/api.js', () =>
     startTerminal: vi.fn(),
     subscribeTerminalEvents: vi.fn(),
     transcribeSpeech: vi.fn(),
+    uploadAttachment: (...args) => uploadAttachmentMock(...args),
     prepareSpeechTranscription: vi.fn(),
     subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
     subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),

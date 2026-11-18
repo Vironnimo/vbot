@@ -8,6 +8,7 @@ resolution uses the resolver's own async API.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, cast
@@ -16,6 +17,7 @@ from core.activity import IDLE
 from core.agents import APP_CHAT_PROFILES, BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
+from core.chat.commands import create_side_chat
 from core.chat.messages import ChatMessage
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.computers import normalize_execution
@@ -127,7 +129,11 @@ async def _create_app_chat(state: Any, params: JsonObject) -> JsonObject:
     if session_id is not None:
         address = SessionAddress(None, agent.id, session_id)
         try:
-            launch_id = await sessions.metadata_value_async(address, "app_chat_launch_id")
+            async with state.chat_runs.prepare_admission(
+                agent.id, project_id=None, session_id=session_id
+            ):
+                launch_id = await sessions.metadata_value_async(address, "app_chat_launch_id")
+                existing = await sessions.get_async(address)
         except SessionNotFoundError:
             pass
         else:
@@ -135,7 +141,11 @@ async def _create_app_chat(state: Any, params: JsonObject) -> JsonObject:
                 raise RpcError(
                     RPC_ERROR_INPUT_CONFLICT, "Session id already belongs to a different launch"
                 )
-            return {"agent_id": agent.id, "session_id": session_id}
+            return {
+                "agent_id": agent.id,
+                "session_id": session_id,
+                "generation_id": existing.generation_id,
+            }
     target: JsonObject = {
         "agent_id": agent.id,
         "session_id": session_id,
@@ -147,8 +157,13 @@ async def _create_app_chat(state: Any, params: JsonObject) -> JsonObject:
         state,
         target,
         initial_metadata={"app_chat_launch_id": session_id} if session_id is not None else None,
+        include_generation=True,
     )
-    return {"agent_id": agent.id, "session_id": created["session_id"]}
+    return {
+        "agent_id": agent.id,
+        "session_id": created["session_id"],
+        "generation_id": created["generation_id"],
+    }
 
 
 async def _create_session(
@@ -157,6 +172,7 @@ async def _create_session(
     *,
     initial_messages: Sequence[ChatMessage] = (),
     initial_metadata: JsonObject | None = None,
+    include_generation: bool = False,
 ) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
@@ -226,6 +242,8 @@ async def _create_session(
         "working_project_id": working_project_id,
     }
     response["agent_overrides"] = AgentOverrides(**(overrides or {})).capture(agent).as_dict()
+    if include_generation:
+        response["generation_id"] = session.generation_id
     if execution is not None:
         response["execution"] = execution
     return response
@@ -915,6 +933,49 @@ async def _set_notification_policy(state: Any, params: JsonObject) -> JsonObject
     return {"session": result}
 
 
+async def _create_side_chat(state: Any, params: JsonObject) -> JsonObject:
+    """Resolve a side-chat composer's first send to one persistent child Session."""
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "launch_id", "source_generation_id"},
+        "session.create_side_chat",
+    )
+    source = _required_session_address(params)
+    launch_id = _required_string(params, "launch_id")
+    if SESSION_ID_PATTERN.fullmatch(source.session_id) is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.session_id is not a valid Session id")
+    if SESSION_ID_PATTERN.fullmatch(launch_id) is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.launch_id is not a valid launch id")
+    generation = _required_string(params, "source_generation_id")
+    if SESSION_ID_PATTERN.fullmatch(generation) is None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.source_generation_id must be a generation id"
+        )
+    agent_address = format_agent_address(source.agent_id, source.project_id)
+    source_key = f"{agent_address}/{source.session_id}/{generation}"
+    try:
+        await state.runtime.agent_resolver.resolve_agent_async(
+            source.project_id, source.agent_id, require_model=False
+        )
+        child = await create_side_chat(
+            state.runtime.chat_sessions,
+            source,
+            # Spaces keep this reservation separate from chat.send's opaque input IDs.
+            request_id=f"side chat: {launch_id}",
+            request_hash=hashlib.sha256(source_key.encode("utf-8")).hexdigest(),
+            expected_source_generation_id=generation,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_session_changed(state, child.address)
+    return {
+        "agent_id": child.address.agent_id,
+        "project_id": child.address.project_id,
+        "session_id": child.id,
+        "generation_id": child.generation_id,
+    }
+
+
 async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     """Copy a session 1:1 into a fresh id, optionally re-homed to another agent.
 
@@ -1164,6 +1225,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "session.create": _create_session,
         "session.create_app_chat": _create_app_chat,
+        "session.create_side_chat": _create_side_chat,
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
         "session.show": show_session,

@@ -59,7 +59,8 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 | `references/chat.md` recovered acceptance paragraph and exit-code entry | The CLI can report confirmed admission after its one idempotent ordinary-message retry without a retained live Run; distinguishes that result from completed work and a separate CLI invocation, which creates new input. Commands retain their non-retry behavior. |
 | `In an existing WebUI Chat, send /btw <question>...` | Names the access surface and the form that always starts a separate conversation. |
 | `The same Agent sees the history saved up to that moment...` | Explains what an answer can draw on while the source Run continues. |
-| `Send /btw without a question to reopen the latest side conversation...` | Distinguishes resuming a side conversation from starting one with a new question. |
+| `Bare /btw reopens the latest side conversation...` | Explains why opening the popup can show either an existing exchange or an empty draft. |
+| `Sending that draft's first question copies the context saved at send time.` | Tells the user which source activity a question can refer to when the source Run continued while the draft was open. |
 | `Open in Chat shows its full history...` | Locates the inherited history when only the side exchange is visible in the popup. |
 | `projects-sessions.md` list paragraph: default 40, previews, shown/total, exact `Next:`, opaque cursor and full records via `--json` | Matches the compact listing and prevents treating a title preview as complete text, an opaque cursor as an id, or one page as the full Session history. |
 | `projects-sessions.md` Policy: `read it from list --json and keep its other fields` | Plain rows show only whether the Policy is inherited or overridden; replacing a Policy requires the full object. |

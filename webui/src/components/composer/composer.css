@@ -42,6 +42,24 @@
   color: transparent;
 }
 
+/* Keep the text field usable when the shared chat window is narrow. */
+@container chat-popup (max-width: 23rem) {
+  .input-area .input-wrap {
+    flex-wrap: wrap;
+  }
+
+  .input-area .msg-input-field {
+    flex: 1 0 100%;
+  }
+
+  .input-area .input-btns {
+    margin-inline-start: auto;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
 /* The context ring (chat/ContextUsageRing.svelte, which styles the ring and
      its card) sits at the bottom-right of the input box, between the textarea
      and the action buttons, aligned to the button row. */

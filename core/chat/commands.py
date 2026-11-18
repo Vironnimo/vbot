@@ -35,6 +35,7 @@ from core.runs import (
     RunNotFoundError,
 )
 from core.sessions import SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
     from core.providers.providers import ProviderRegistry
     from core.secrets.agent_secrets import AgentSecrets
     from core.secrets.requests import SecretRequests
-    from core.sessions import ChatSessionManager
+    from core.sessions import ChatSession, ChatSessionManager
     from core.tools.command_manager import CommandManager
 else:
     AgentSecrets = Any
@@ -141,6 +142,30 @@ from core.chat._command_types import (
 _LOGGER = get_logger("chat.commands")
 _COMMAND_WORKERS = BoundedWorkerPool(name="command", max_workers=4)
 
+SIDE_CHAT_NOTE = (
+    "This side conversation is a copy of another Session. The earlier task belongs to that "
+    "Session. Answer the user's questions here, looking up information as needed. Start work "
+    "on a task here only when the user asks you to take it on in this conversation."
+)
+
+
+async def create_side_chat(
+    sessions: ChatSessionManager,
+    source: SessionAddress,
+    *,
+    request_id: str,
+    request_hash: str,
+    expected_source_generation_id: str | None = None,
+) -> ChatSession:
+    """Resolve the exact fork for a first side question or a side-chat composer launch."""
+    return await sessions.fork(
+        source,
+        title="",
+        side_chat_note=SIDE_CHAT_NOTE,
+        side_chat_request=(request_id, request_hash),
+        expected_source_generation_id=expected_source_generation_id,
+    )
+
 
 async def _command_session_io(
     manager: Any,
@@ -171,6 +196,15 @@ def _require_dependency(value: Any, name: str) -> Any:
     if value is None:
         raise RuntimeError(f"CommandDispatcher requires {name} for this command")
     return value
+
+
+async def _verify_command_session(
+    context: CommandExecutionContext, sessions: ChatSessionManager
+) -> None:
+    if context.expected_generation_id is not None:
+        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
+        if (await sessions.get_async(address)).generation_id != context.expected_generation_id:
+            raise SessionNotFoundError("The original Session is no longer at this address.")
 
 
 def _notice(command: str, text: str) -> CommandOutcome:
@@ -550,6 +584,22 @@ class CommandDispatcher:
         self, prepared: PreparedCommand, context: CommandExecutionContext
     ) -> CommandOutcome:
         """Execute one prepared command completely inside Chat core."""
+        if context.expected_generation_id is None:
+            return await self._execute_prepared(prepared, context)
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        if prepared.registration_id is None and prepared.name == "agent" and prepared.argument:
+            # A takeover guards both addresses itself and verifies the generation under that guard.
+            await _verify_command_session(context, sessions)
+            return await self._execute_prepared(prepared, context)
+        async with self._chat_runs.prepare_admission(
+            context.agent_id, project_id=context.project_id, session_id=context.session_id
+        ):
+            await _verify_command_session(context, sessions)
+            return await self._execute_prepared(prepared, context)
+
+    async def _execute_prepared(
+        self, prepared: PreparedCommand, context: CommandExecutionContext
+    ) -> CommandOutcome:
         spec = self._prepared_spec(prepared)
         if spec is None:
             return _notice(

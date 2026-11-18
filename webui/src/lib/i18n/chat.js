@@ -1,4 +1,8 @@
 export default Object.freeze({
+  'appChat.minimize': 'Minimize chat',
+  'appChat.restore': 'Restore {title}',
+  'appChat.moveHint':
+    'Drag the title bar to move the chat, or use the arrow keys with the window focused.',
   'appChat.openFull': 'Open in Chat',
   'appChat.sideTitle': 'Side conversation',
   'appChat.askSettings': 'Ask about these settings',

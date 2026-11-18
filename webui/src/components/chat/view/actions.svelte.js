@@ -14,6 +14,7 @@ import { getAppChats } from '$lib/appChats.svelte.js';
 import { qualifyAgentAddress } from '$lib/agentAddress.js';
 import { getDraft, setDraft } from '$lib/composerMemory.js';
 import { sessionKey } from '$lib/chatState/sessionState.js';
+import { commandOutcome } from '$lib/chatState/controller.js';
 
 export function createChatViewActions(context) {
   const appChats = getAppChats();
@@ -127,8 +128,24 @@ export function createChatViewActions(context) {
     }, CHAT_TOAST_TIMEOUT_MS);
   };
   onMount(() => {
-    const notice = getPopupOrigin?.().notice;
-    if (notice) showChatToast(notice);
+    const popup = getPopupOrigin?.();
+    if (popup?.notice) showChatToast(popup.notice);
+    // The first input of a popup draft is already admitted before the
+    // canonical Chat mounts. Runs appear in its timeline; command replies
+    // use the same transient cards and navigation as subsequent inputs.
+    if (popup?.launch?.firstCommand && context.boundSession) {
+      const outcome = commandOutcome(
+        popup.launch.firstCommand,
+        context.boundSession.agentAddress,
+      );
+      popup.launch.firstCommand = null;
+      void presentSendOutcome(
+        outcome,
+        context.target.activeAgent,
+        context.target.activeSessionState,
+        () => {},
+      );
+    }
   });
 
   const clearSessionActionError = (
@@ -284,10 +301,13 @@ export function createChatViewActions(context) {
       }
     } else if (outcome.kind === 'side_chat') {
       if (!context.active || !appChats) return isSent(outcome);
-      const { address, questionDraft, reply } = outcome;
-      appChats.openSession(
+      const { address, draft, sourceGenerationId, questionDraft, reply } =
+        outcome;
+      const open = draft ? appChats.openSideDraft : appChats.openSession;
+      open(
         {
           address,
+          ...(draft ? { sourceGenerationId } : {}),
           title: t('appChat.sideTitle'),
           notice: reply,
           presentation: 'conversation',

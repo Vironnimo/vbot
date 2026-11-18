@@ -30,6 +30,9 @@ export function createChatController({
   chatState,
   runStream,
   operations,
+  submitChat = createChatSubmissions((params) =>
+    operations.startChatRun(params),
+  ),
   // The App's Run event feed (`runEventFeed.svelte.js`); without one this
   // owner applies no Run server events.
   runEvents = null,
@@ -48,9 +51,6 @@ export function createChatController({
   let initialHistoryPending = false;
   if (!operations || typeof operations !== 'object')
     throw new TypeError('Chat operations are required');
-  const submitChat = createChatSubmissions((params) =>
-    operations.startChatRun(params),
-  );
 
   // Feed positions: the newest one this owner applied, and the newest one a
   // hidden owner scanned for its displayed Session's Run starts. Those starts
@@ -325,13 +325,18 @@ export function createChatController({
         ? options.widgetStates
         : [];
     try {
-      const run = await submitChat(`${submissionScope}:${sessionState.key}`, {
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        ...messageParams(content, options),
-        ...(options.uiContext ? { ui_context: options.uiContext } : {}),
-        ...(widgetStates.length > 0 ? { widget_states: widgetStates } : {}),
-      });
+      const run = await submitChat(
+        `${submissionScope}:${sessionState.key}`,
+        sessionInputParams(
+          sessionState.agentId,
+          sessionState.sessionId,
+          content,
+          {
+            ...options,
+            widgetStates,
+          },
+        ),
+      );
       if (run?.command_handled) {
         return commandOutcome(run, sessionState.agentId);
       }
@@ -837,21 +842,56 @@ function messageParams(content, options = {}) {
   return params;
 }
 
+export function sessionInputParams(
+  agentAddress,
+  sessionId,
+  content,
+  options = {},
+) {
+  return {
+    agent_id: agentAddress,
+    session_id: sessionId,
+    ...messageParams(content, options),
+    ...(options.expectedGenerationId
+      ? { expected_generation_id: options.expectedGenerationId }
+      : {}),
+    ...(options.uiContext ? { ui_context: options.uiContext } : {}),
+    ...(options.widgetStates?.length
+      ? { widget_states: options.widgetStates }
+      : {}),
+  };
+}
+
 // The outcome a handled slash command asks Chat to present. Only a command
 // sent in an existing Session can navigate: from a draft, the server answers
 // navigation commands with a notice.
-function commandOutcome(response, agentAddress, { navigation = true } = {}) {
+export function commandOutcome(
+  response,
+  agentAddress,
+  { navigation = true } = {},
+) {
   const action = response?.data?.navigation;
   if (
     response.output === 'action' &&
-    action?.kind === 'open_side_chat' &&
+    ['open_side_chat', 'open_side_chat_draft'].includes(action?.kind) &&
     trimmedText(action.agent_id) &&
-    trimmedText(action.session_id)
+    trimmedText(action.session_id) &&
+    (action.kind !== 'open_side_chat_draft' ||
+      trimmedText(action.source_generation_id))
   ) {
     const { agent_id, project_id, session_id } = action;
     return {
       kind: 'side_chat',
-      address: { agent_id, project_id, session_id },
+      draft: action.kind === 'open_side_chat_draft',
+      sourceGenerationId: action.source_generation_id,
+      address: {
+        agent_id,
+        project_id,
+        session_id,
+        ...(trimmedText(action.generation_id)
+          ? { generation_id: action.generation_id }
+          : {}),
+      },
       questionDraft: response.data.question_draft,
       reply: response.reply,
     };

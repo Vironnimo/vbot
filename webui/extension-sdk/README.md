@@ -171,7 +171,7 @@ For a conversation with vBot's built-in App Agent, call
 Register an Extension specialist with `api.register_app_chat_profile` in Python.
 From a user click, `await client.openSpecialist('assistant')` opens the host chat
 for that owner-local profile. The optional second argument accepts the same
-`presentation` choices. The host owns the composer and submits each user message.
+`presentation` choices. Both calls open the host composer. For a new conversation the host creates the Session when the user sends the first message.
 After the visible selection changes, publish non-secret labels such as
 `client.setChatContext({ section: 'Jobs', field: 'Status', options: ['Queued', 'Done'] })`.
 Use `selection` for the selected record's label and `{}` to clear the labels.
