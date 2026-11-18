@@ -713,6 +713,31 @@ async def test_history_pages_newest_first_without_loading_the_whole_session(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
+async def test_side_chat_pages_its_own_messages_and_defaults_to_the_full_conversation(
+    history: _History, method: str
+) -> None:
+    parent = history.session()
+    parent.append(_user(1))
+    side = await history.sessions.fork(parent.address, side_chat="new", side_chat_note="Side chat")
+    side.append_many([_user(2), _user(3)])
+    full = await history.read(method=method, session_id=side.id)
+    assert [row["id"] for row in full["messages"]] == ["message-001", "message-002", "message-003"]
+
+    params = {"session_id": side.id, "include_inherited": False, "limit": 1}
+    latest = await history.read(method=method, **params)
+    assert [row["id"] for row in latest["messages"]] == ["message-003"]
+    older = await history.read(method=method, before=latest["next_before"], **params)
+    assert [row["id"] for row in older["messages"]] == ["message-002"]
+    assert not older["has_more"]
+    side.append(_user(4))
+    appended = await history.read(method=method, after=latest["next_after"], **params)
+    assert appended["incremental"] and [row["id"] for row in appended["messages"]] == [
+        "message-004"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.history", "chat.timeline"])
 async def test_history_cursor_is_positional_when_message_ids_repeat(
     history: _History, method: str
 ) -> None:
@@ -1053,9 +1078,14 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params",
-    [{"before": "message-missing"}, {"limit": chat_reads.MAX_CHAT_HISTORY_LIMIT + 1}],
+    [
+        {"before": "message-missing"},
+        {"limit": chat_reads.MAX_CHAT_HISTORY_LIMIT + 1},
+        {"include_inherited": "false"},
+        {"include_inherited": None},
+    ],
 )
-async def test_history_rejects_an_unknown_cursor_or_an_oversized_page(
+async def test_history_rejects_invalid_page_parameters(
     history: _History, params: dict[str, Any]
 ) -> None:
     history.session().append(_user(1))

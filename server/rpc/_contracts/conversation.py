@@ -262,6 +262,9 @@ _INSPECTION_CURSOR = obj(
 _HISTORY_FIELDS = {
     "agent_id": _AGENT,
     "session_id": nullable(_ID),
+    "include_inherited": boolean(
+        "Include the history inherited from a fork's source (default true)."
+    ),
     "limit": nullable(integer(1, 500)),
     "before": nullable(_ID),
     "after": nullable(_ID),

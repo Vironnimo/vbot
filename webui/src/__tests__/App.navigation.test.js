@@ -155,6 +155,212 @@ describe('App navigation', () => {
     });
   });
 
+  it('opens /btw beside a running Project Session and promotes the exact side conversation to Chat', async () => {
+    const owner = 'builder@work';
+    const source = { agent_id: owner, session_id: 'source' };
+    const side = { agent_id: owner, session_id: 'side' };
+    const parentHistory = assistantHistory('source-reply', 'Main conversation');
+    const sideHistory = assistantHistory('side-reply', 'Separate answer');
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [baseAgent()],
+        history: ({ session_id, include_inherited, before, after }) => {
+          if (session_id === 'source')
+            return {
+              ...parentHistory,
+              active_run: {
+                ...source,
+                run_id: 'working',
+                status: 'running',
+                events: [],
+              },
+            };
+          if (include_inherited !== false)
+            return {
+              items: [...parentHistory.items, ...sideHistory.items],
+              messages: [...parentHistory.messages, ...sideHistory.messages],
+            };
+          if (before)
+            return assistantHistory('side-earlier', 'Earlier side reply');
+          if (after)
+            return {
+              incremental: true,
+              next_after: 'current',
+              items: [],
+              messages: [],
+            };
+          return {
+            ...sideHistory,
+            next_before: 'older',
+            next_after: 'current',
+            has_more: true,
+          };
+        },
+        methods: {
+          'chat.commands': () => ({
+            items: [
+              {
+                name: 'btw',
+                type: 'command',
+                description: 'Open a side conversation',
+                argument: 'optional',
+              },
+              { name: 'help', type: 'command', argument: 'none' },
+              { name: 'explain', type: 'command', argument: 'required' },
+            ],
+          }),
+          'chat.stream': ({ session_id, content }) =>
+            !content.startsWith('/btw')
+              ? { accepted: true, session_available: true, session_id: 'side' }
+              : {
+                  command_handled: true,
+                  output: 'action',
+                  data: {
+                    navigation: {
+                      kind: 'open_side_chat',
+                      agent_id: 'builder',
+                      project_id: 'work',
+                      session_id:
+                        session_id === 'source' ? 'side' : 'nested-side',
+                    },
+                  },
+                },
+          'session.get': ({ agent_id, session_id }) => ({
+            session: { agent_id, id: session_id },
+          }),
+        },
+      }),
+    );
+    window.history.replaceState(null, '', '#chat/builder@work/source');
+    mountApp();
+    await waitForCondition(() =>
+      expect(labelledButton('chat.cancelRun')).toBeTruthy(),
+    );
+    const main = document.querySelector('.chat-view');
+    const submit = (area, message) => {
+      typeInto(area.querySelector('.msg-input'), message);
+      flushSync();
+      area.querySelector('button[type="submit"]').click();
+    };
+    for (const text of ['/help please', '/explain']) {
+      typeInto(main.querySelector('.msg-input'), text);
+      flushSync();
+      expect(labelledButton('chat.queueMessage')).toBeTruthy();
+    }
+    typeInto(main.querySelector('.msg-input'), '/btw Side question');
+    flushSync();
+    expect(labelledButton('chat.sendMessage')).toBeTruthy();
+    main.querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup')?.textContent).toContain(
+        'Separate answer',
+      ),
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      'chat.stream',
+      expect.objectContaining({ ...source, content: '/btw Side question' }),
+    );
+    expect(window.location.hash).toBe('#chat/builder@work/source');
+    expect(main.textContent).toContain('Main conversation');
+    expect(main.querySelector('.composer-stop-run')).toBeTruthy();
+    const popup = document.querySelector('.session-popup');
+    expect(popup.textContent).not.toContain('Main conversation');
+    const messages = popup.querySelector('.messages');
+    Object.defineProperties(messages, {
+      scrollHeight: { configurable: true, value: 1000 },
+      offsetHeight: { configurable: true, value: 500 },
+    });
+    messages.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+    messages.dispatchEvent(new Event('scroll'));
+    await waitForCondition(() =>
+      expect(popup.textContent).toContain('Earlier side reply'),
+    );
+    submit(popup, 'Follow up in the side conversation');
+    await waitForCondition(() =>
+      expect(rpcMock).toHaveBeenCalledWith(
+        'chat.stream',
+        expect.objectContaining({
+          ...side,
+          content: 'Follow up in the side conversation',
+        }),
+      ),
+    );
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.cancel', expect.anything());
+    await waitForCondition(() =>
+      expect(rpcMock).toHaveBeenCalledWith(
+        'chat.timeline',
+        expect.objectContaining({
+          ...side,
+          after: 'current',
+          include_inherited: false,
+        }),
+      ),
+    );
+    submit(popup, '/btw Nested question');
+    await waitForCondition(() => expect(popup.hidden).toBe(true));
+    buttonWithText(
+      '.session-popup:not([hidden]) button',
+      t('appChat.openFull'),
+    ).click();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#chat/builder@work/nested-side');
+      expect(document.querySelector('.session-popup')).toBeNull();
+      expect(main.textContent).toContain('Main conversation');
+      expect(main.textContent).toContain('Separate answer');
+    });
+  });
+
+  it.each([
+    ['Please check this detail', true],
+    ['Check ' + 'sk-proj-' + 'x'.repeat(48), false],
+  ])(
+    'keeps a rejected side question editable and shows the reason (%s)',
+    async (question, mayStore) => {
+      rpcMock.mockImplementation(
+        createAppRpcMock({
+          agents: [baseAgent()],
+          methods: {
+            'chat.stream': () => ({
+              command_handled: true,
+              output: 'action',
+              reply: 'No usable Model',
+              data: {
+                question_draft: question,
+                navigation: {
+                  kind: 'open_side_chat',
+                  agent_id: 'alpha',
+                  project_id: null,
+                  session_id: mayStore ? 'failed-question' : 'private-question',
+                },
+              },
+            }),
+          },
+        }),
+      );
+      mountApp();
+      const input = () => document.querySelector('.chat-view .msg-input');
+      await waitForCondition(() => expect(input()?.disabled).toBe(false));
+      const original = input();
+      typeInto(original, '/btw ' + question);
+      flushSync();
+      original.closest('form').querySelector('button[type="submit"]').click();
+      await waitForCondition(() => {
+        expect(
+          document.querySelector('.session-popup .chat-view__command-toast')
+            ?.textContent,
+        ).toContain('No usable Model');
+        expect(document.querySelector('.session-popup .msg-input')?.value).toBe(
+          mayStore ? question : '',
+        );
+        expect(original.value).toBe(mayStore ? '' : '/btw ' + question);
+      });
+      if (!mayStore) {
+        expect(JSON.stringify(window.localStorage)).not.toContain(question);
+        expect(JSON.stringify(window.sessionStorage)).not.toContain(question);
+      }
+    },
+  );
+
   it('resumes the App Agent in Settings, sends the current field and expands its exact Session', async () => {
     const settingsRpc = createSettingsRpcMock();
     let address;
@@ -176,6 +382,20 @@ describe('App navigation', () => {
       }
       if (method === 'session.get')
         return { session: { ...address, title: 'Settings' } };
+      if (method === 'chat.stream' && params.content === '/btw') {
+        return {
+          command_handled: true,
+          output: 'action',
+          data: {
+            navigation: {
+              kind: 'open_side_chat',
+              agent_id: 'app-assistant',
+              project_id: null,
+              session_id: 'settings-side',
+            },
+          },
+        };
+      }
       if (method === 'chat.timeline' && params.agent_id === 'app-assistant')
         return {
           ...assistantHistory('greeting', 'How can I help?'),
@@ -238,6 +458,43 @@ describe('App navigation', () => {
     );
     expect(opens).toBe(2);
     expect(window.location.hash).toBe('#settings/system');
+    const settingsPopup = input.closest('.session-popup');
+    function openNested() {
+      input.focus();
+      typeInto(input, '/btw');
+      flushSync();
+      settingsPopup.querySelector('button[type="submit"]').click();
+    }
+    openNested();
+    const nested = () => document.querySelector('.session-popup:not([hidden])');
+    await waitForCondition(() =>
+      expect(nested()?.getAttribute('aria-label')).toBe(t('appChat.sideTitle')),
+    );
+    expect(settingsPopup.hidden).toBe(true);
+    const closeNested = nested().querySelector(
+      'button[aria-label="' + t('common.close') + '"]',
+    );
+    closeNested.focus();
+    closeNested.click();
+    await waitForCondition(() => {
+      expect(nested()).toBe(settingsPopup);
+      expect(document.activeElement).toBe(input);
+    });
+    openNested();
+    await waitForCondition(() => expect(settingsPopup.hidden).toBe(true));
+    sidebarNavButton('agents').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup')).toBeNull(),
+    );
+    sidebarNavButton('settings').click();
+    await waitForCondition(() =>
+      expect(labelledButton('appChat.askSettings')).toBeTruthy(),
+    );
+    expect(document.querySelector('.session-popup')).toBeNull();
+    labelledButton('appChat.askSettings').click();
+    await waitForCondition(() =>
+      expect(nested()?.querySelector('.msg-input')).toBeTruthy(),
+    );
     buttonWithText('.session-popup button', t('appChat.openFull')).click();
     await waitForCondition(() => {
       expect(document.querySelector('.session-popup')).toBeNull();

@@ -117,7 +117,14 @@ def apply_edit(
     session_key = int(state["session_key"])
     target = _edit_target(connection, ranges, target_message_id)
     reset_title = (
-        _store_history.view_seq(connection, ranges, where="e.role = 'user'", upper=target) is None
+        _store_history.view_seq(
+            connection,
+            ranges,
+            where="e.role = 'user'",
+            lower=_store_values.title_source_floor(state),
+            upper=target,
+        )
+        is None
     )
     run_key = None
     if run_id is not None:

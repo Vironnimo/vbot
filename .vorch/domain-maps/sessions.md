@@ -6,7 +6,7 @@ Canonical Session history, accepted Accessor input, metadata, prompt state, acti
 
 `core/sessions/` owns the system-managed Session domain and the single canonical database `<data-dir>/sessions.db`. Every other domain addresses Sessions only through `ChatSessionManager`; no caller constructs storage paths or queries the database directly.
 
-History is stored once. A fork reads its source's entries through lineage instead of copying them, and a history edit supersedes the replaced tail in place instead of deleting it. Every history read therefore names one view: the current view (what the Session shows and sends to the Model) or the own audit (what the Session itself wrote). See Terms.
+Forks share settled history through lineage. A side conversation freezes the saved tail of a running Run (`sessions/lineage.md` -> Fork). A history edit supersedes its replaced tail in place. Every history read therefore names one view: the current view (what the Session shows and sends to the Model) or the own audit (what the Session itself wrote). See Terms.
 
 Data snapshots, quarantine, restore, recovery incidents and the data-store marker belong to the kernel (`database.md`); the Session store contributes only its spec hooks.
 
@@ -37,7 +37,7 @@ A fork's lineage names, per inherited range of history, the ancestor Session tha
 An entry a history edit replaced: it leaves its owner's current view but stays stored for the own audit and for forks made before the edit (`sessions/lineage.md` -> History edit).
 
 ### Materialized copy
-A descendant's own copy of an entry it inherited from a Session being deleted, made before the delete (`sessions/lineage.md` -> Delete). Not the descendant's own history: copies precede its fork point.
+An ancestor entry stored in a descendant before its fork point, to preserve a running Run's snapshot or detach the history from a deleted ancestor (`sessions/lineage.md` -> Fork, Delete).
 
 ### Review fork
 A fork that reviews its source for a Reflection and then follows its source's lifecycle instead of outliving it (`sessions/lineage.md` -> Delete; `automation.md` -> Reflection). Not a user fork or a fork into another Agent or Project, which stays when its source goes.

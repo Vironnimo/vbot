@@ -157,6 +157,8 @@ SESSION_RUN_KINDS_META_KEY = "run_kinds"
 # recalled, and deleted permanently after EPHEMERAL_SESSION_LIFETIME without
 # activity (owner of the expiry: ``core/archive``).
 SESSION_EPHEMERAL_META_KEY = "ephemeral"
+# Marks a persistent same-scope fork created for a side conversation.
+SESSION_SIDE_CHAT_META_KEY = "side_chat"
 EPHEMERAL_SESSION_LIFETIME = timedelta(hours=24)
 # The Session's working Project: its address Project, or for a Session of an
 # Identity Agent the Project chosen when it was created (absent: the Workspace).
@@ -198,8 +200,8 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,
         SESSION_GOAL_META_KEY,
-        "fast_mode",
         SESSION_EPHEMERAL_META_KEY,
+        SESSION_SIDE_CHAT_META_KEY,
     }
 )
 # Prompt pin slots rendered from the Session's Agent: its Skill catalog, SOUL

@@ -9,6 +9,7 @@
     address,
     active = true,
     readOnly = false,
+    includeInherited = true,
     monitor = null,
     references = null,
     hideOpenFull = false,
@@ -33,7 +34,7 @@
 </script>
 
 {#if agentAddress && sessionId}
-  {#key JSON.stringify([agentAddress, sessionId, readOnly])}
+  {#key JSON.stringify([agentAddress, sessionId, readOnly, includeInherited])}
     <ChatView
       {...events}
       {active}
@@ -41,7 +42,7 @@
       {monitor}
       {presentation}
       {getUIContext}
-      boundSession={{ agentAddress, sessionId }}
+      boundSession={{ agentAddress, sessionId, includeInherited }}
       onOpenFull={!hideOpenFull && events.onNavigateToSession
         ? openSession
         : null}

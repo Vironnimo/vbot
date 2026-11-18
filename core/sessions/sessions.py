@@ -6,7 +6,7 @@ import builtins
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.runs import RunKind
 from core.sessions._archive_types import ArchiveEntryRef
@@ -209,6 +209,9 @@ class ChatSessionManager:
         target_project_id: str | None = None,
         title: str | None = None,
         run_kind: RunKind | None = None,
+        side_chat: Literal["new", "resume"] | None = None,
+        side_chat_note: str | None = None,
+        side_chat_request: tuple[str, str] | None = None,
     ) -> ChatSession:
         return await self._lifecycle.fork(
             source,
@@ -216,6 +219,9 @@ class ChatSessionManager:
             target_project_id=target_project_id,
             title=title,
             run_kind=run_kind,
+            side_chat=side_chat,
+            side_chat_note=side_chat_note,
+            side_chat_request=side_chat_request,
         )
 
     async def archive(

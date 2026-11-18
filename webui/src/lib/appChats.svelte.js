@@ -22,22 +22,40 @@ function newSessionId() {
 }
 
 export function createAppChats(currentView) {
-  let popup = $state.raw(null);
+  let popups = $state.raw([]);
+  const popup = $derived(popups.at(-1) ?? null);
   // Remember addresses and in-flight creations, never callbacks into retired views.
   const launches = new SvelteMap();
 
-  function show(config) {
-    const view = currentView();
-    const instance = Symbol();
-    popup = { ...config, view, instance };
-    const close = () => {
-      if (popup?.instance === instance) popup = null;
-    };
-    return { close };
+  function dismiss(instance) {
+    const index = popups.findIndex((entry) => entry.instance === instance);
+    if (index >= 0) popups = popups.slice(0, index);
   }
 
-  function openSession({ address, title, readOnly = false, presentation }) {
-    return show({ address, title, readOnly, presentation });
+  function show(config, fromPopup) {
+    const view = currentView();
+    const instance = Symbol();
+    const entry = { ...config, view, instance, opener: document.activeElement };
+    if (!fromPopup) popups = [entry];
+    else if (popup?.instance === fromPopup) popups = [...popups, entry];
+    return { close: () => dismiss(instance) };
+  }
+
+  function openSession(
+    {
+      address,
+      title,
+      notice,
+      readOnly = false,
+      presentation,
+      includeInherited = true,
+    },
+    fromPopup,
+  ) {
+    return show(
+      { address, title, notice, readOnly, presentation, includeInherited },
+      fromPopup,
+    );
   }
 
   function openSpecialist({
@@ -72,7 +90,7 @@ export function createAppChats(currentView) {
   }
 
   function close() {
-    popup = null;
+    popups = [];
   }
 
   function forgetSession({ agentAddress, deletedSessionId }) {
@@ -83,17 +101,25 @@ export function createAppChats(currentView) {
     for (const [key, launch] of launches) {
       if (matches(launch.address)) launches.delete(key);
     }
-    if (matches(popup?.address ?? popup?.launch?.address)) close();
+    const removed = popups.find((entry) =>
+      matches(entry.address ?? entry.launch?.address),
+    );
+    if (removed) dismiss(removed.instance);
   }
 
   function renameAgent(oldId, newId) {
-    const address = popup?.address;
-    if (address?.agent_id === oldId && !address.project_id) {
-      popup = { ...popup, address: { ...address, agent_id: newId } };
-    }
+    popups = popups.map((entry) => {
+      const address = entry.address;
+      return address?.agent_id === oldId && !address.project_id
+        ? { ...entry, address: { ...address, agent_id: newId } }
+        : entry;
+    });
   }
 
   return {
+    get popups() {
+      return popups;
+    },
     get popup() {
       return popup;
     },
@@ -101,6 +127,7 @@ export function createAppChats(currentView) {
     openSpecialist,
     forgetSession,
     renameAgent,
+    dismiss,
     close,
   };
 }

@@ -332,6 +332,7 @@ def chat_history_snapshot(
     complete_runs: bool = False,
     after: tuple[str, int] | None = None,
     skip_unchanged: bool = False,
+    include_inherited: bool = True,
 ) -> Callable[[], SessionChatHistorySnapshot]:
     """Read one WebUI history projection of the current view from a single snapshot.
 
@@ -340,9 +341,11 @@ def chat_history_snapshot(
     """
     if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0):
         raise ChatSessionError("message page limit must be a positive integer")
-    state, ranges = _store_history.current_view(connection, address)
+    state, full_view = _store_history.current_view(connection, address)
+    floor = 0 if include_inherited else _store_history.own_floor(state)
+    ranges = _store_lineage.clip(full_view, floor, _store_lineage.MAX_SEQ) if floor else full_view
     generation = str(state["generation_id"])
-    incremental = _can_append(state, after)
+    incremental = _can_append(state, after) and after is not None and after[1] >= floor
     through = int(state["next_seq"])
     if skip_unchanged and incremental and after is not None and after[1] == through:
         unchanged = _unchanged_history_snapshot(generation, through)
@@ -429,8 +432,8 @@ def chat_history_snapshot(
                 is not None
             )
     usage = _store_history.session_usage(connection, state)
-    context = _store_history.context_batch(connection, ranges)
-    output_rows = _output_measurement_rows(connection, ranges)
+    context = _store_history.context_batch(connection, full_view)
+    output_rows = _output_measurement_rows(connection, full_view)
     background = _background_records(
         connection,
         ranges,

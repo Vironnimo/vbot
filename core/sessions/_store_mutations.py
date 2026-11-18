@@ -7,10 +7,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from core.chat.errors import ChatSessionError
 from core.sessions import (
+    _store_accessor_inputs,
     _store_codec,
     _store_copies,
     _store_fts,
@@ -21,7 +22,10 @@ from core.sessions import (
 from core.sessions._archive_types import ARCHIVE_KIND_AGENT, ARCHIVE_KIND_SESSION
 from core.sessions._metadata import _RUN_KIND_VALUES
 from core.sessions._types import (
+    SESSION_AUTO_TITLE_INITIALIZED_KEY,
+    SESSION_AUTO_TITLE_KEY,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+    SESSION_SIDE_CHAT_META_KEY,
     SESSION_TITLE_KEY,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
@@ -29,7 +33,11 @@ from core.sessions._types import (
     SessionIdentityReferenceUpdate,
     ToolResultFacts,
 )
-from core.sessions.errors import SessionNotFoundError, SessionStoreCorruptError
+from core.sessions.errors import (
+    AccessorInputConflictError,
+    SessionNotFoundError,
+    SessionStoreCorruptError,
+)
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -134,6 +142,13 @@ def _storage_change(
     state: sqlite3.Row, metadata: JsonObject
 ) -> _store_values._MetadataStorage | None:
     """Return the storage *metadata* needs, or ``None`` when the row already holds it."""
+    side_chat = _store_values.is_side_chat(state)
+    if SESSION_SIDE_CHAT_META_KEY in metadata and (
+        not side_chat or metadata[SESSION_SIDE_CHAT_META_KEY] is not True
+    ):
+        raise ChatSessionError("Session metadata side_chat is managed by Sessions")
+    if side_chat:
+        metadata = {**metadata, SESSION_SIDE_CHAT_META_KEY: True}
     storage = _store_values._session_metadata_storage(
         metadata, _store_values._derived_metadata_from_state(state)
     )
@@ -162,6 +177,8 @@ def metadata_change(
     previous = _store_values._session_metadata_from_state(state)
     updated = deepcopy(previous)
     mutation(updated)
+    if SESSION_SIDE_CHAT_META_KEY in previous:
+        updated.setdefault(SESSION_SIDE_CHAT_META_KEY, previous[SESSION_SIDE_CHAT_META_KEY])
     return previous, updated, _storage_change(state, updated)
 
 
@@ -186,6 +203,7 @@ def mutate_metadata(
             _store_lineage.view_ranges(connection, int(state["session_key"])),
             columns="e.seq",
             where="e.role = 'user'",
+            lower=_store_values.title_source_floor(state),
             limit=1,
         )
         if not first_user or int(first_user[0][0]) != expected_first_user_sequence:
@@ -436,24 +454,84 @@ def fork(
     *,
     title: str | None = None,
     run_kind: str | None = None,
+    side_chat: Literal["new", "resume"] | None = None,
+    side_chat_note: str | None = None,
+    side_chat_request: tuple[str, str] | None = None,
     allow_owner_managed_source: bool = False,
-) -> SessionAddress:
-    """Create a fork of *source* under a fresh id in *target_scope*.
+) -> tuple[SessionAddress, bool, str]:
+    """Create or resume a fork of *source*; report whether it was created.
 
     The fork inherits the source's current view up to the fork point through
-    lineage; no entry is copied. Channel, Sub-Agent and reflection bindings and
+    lineage. A side chat also freezes the committed entries of an active Run
+    and records its initial Note in this transaction. Channel, Sub-Agent and reflection bindings and
     the Run kinds stay behind; *run_kind* classifies the fork instead. A given
     *title* replaces the source's title, and an empty one clears it. Prompt
     state and the working Project carry over by the scope rules of a move.
     """
+    if side_chat not in (None, "new", "resume"):
+        raise ChatSessionError("side_chat must be new or resume")
+    if side_chat is None and side_chat_note is not None:
+        raise ChatSessionError("side_chat_note requires a side chat")
+    if side_chat is not None and (
+        not isinstance(side_chat_note, str) or not side_chat_note.strip()
+    ):
+        raise ChatSessionError("a side chat requires an initial note")
     if run_kind is not None and run_kind not in _RUN_KIND_VALUES:
         raise ChatSessionError(f"unknown run kind: {run_kind}")
     state = _store_values._live_metadata_row(connection, source)
     if not allow_owner_managed_source:
         _store_values._reject_owner_managed_mutation(connection, state)
-    target = _store_values._allocate_address(connection, target_scope)
     source_key = int(state["session_key"])
-    point = fork_point(connection, state)
+    if side_chat_request is not None:
+        if side_chat != "new" or not _same_scope(source, target_scope):
+            raise ChatSessionError("An Accessor question must fork in its source scope.")
+        input_id, request_hash = side_chat_request
+        prior = connection.execute(
+            "SELECT q.request_hash, q.source_key, q.target_session_id, "
+            "s.project_id, s.agent_id, s.session_id, s.state, s.generation_id "
+            "FROM session_side_chat_requests AS q LEFT JOIN sessions AS s ON s.session_key = q.target_key "
+            "WHERE q.input_id = ?",
+            (input_id,),
+        ).fetchone()
+        if prior is not None:
+            if prior["request_hash"] != request_hash:
+                raise AccessorInputConflictError(
+                    "Accessor input id conflicts with its original request"
+                )
+            if (
+                prior["source_key"] != source_key
+                or prior["state"] != "live"
+                or (prior["project_id"], prior["agent_id"], prior["session_id"])
+                != (source.project_id or "", source.agent_id, prior["target_session_id"])
+            ):
+                raise SessionNotFoundError(
+                    "The original side conversation is no longer at this address."
+                )
+            return _store_values._address(prior), False, str(prior["generation_id"])
+        if (
+            _store_accessor_inputs.lookup(connection, input_id, request_hash=request_hash)
+            is not None
+        ):
+            raise SessionNotFoundError(
+                "The source of the original side conversation is no longer available."
+            )
+    if side_chat:
+        if not _same_scope(source, target_scope):
+            raise ChatSessionError("A side chat belongs to its source Agent and Project.")
+        if side_chat == "resume":
+            previous = connection.execute(
+                "SELECT project_id, agent_id, session_id, generation_id FROM sessions WHERE fork_parent_key = ? "
+                "AND state = 'live' AND project_id = ? AND agent_id = ? "
+                "AND json_type(metadata_json, '$.side_chat') = 'true' "
+                "ORDER BY session_key DESC LIMIT 1",
+                (source_key, source.project_id or "", source.agent_id),
+            ).fetchone()
+            if previous is not None:
+                return _store_values._address(previous), False, str(previous["generation_id"])
+    target = _store_values._allocate_address(connection, target_scope)
+    settled = fork_point(connection, state)
+    point = int(state["next_seq"]) if side_chat else settled
+    now = utc_now_timestamp()
     metadata = _store_values._session_metadata_from_state(state)
     for key in (
         *SESSION_FORK_ALWAYS_STRIP_META_KEYS,
@@ -461,6 +539,12 @@ def fork(
         _store_values._WORKING_PROJECT_KEY,
     ):
         metadata.pop(key, None)
+    if side_chat:
+        metadata[SESSION_SIDE_CHAT_META_KEY] = True
+        metadata.pop(SESSION_AUTO_TITLE_KEY, None)
+        metadata.pop(SESSION_AUTO_TITLE_INITIALIZED_KEY, None)
+    else:
+        metadata.pop("fast_mode", None)
     overrides = metadata.get("agent_overrides")
     if isinstance(overrides, dict):
         overrides.pop("read_folders", None)
@@ -474,6 +558,7 @@ def fork(
     last_entry_id = (
         None if point == 0 else _store_lineage.entry_id_at(connection, ranges, point - 1)
     )
+    generation_id = uuid.uuid4().hex
     cursor = connection.execute(
         "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, state, "
         "created_at, next_seq, last_activity_at, last_entry_id, fork_parent_key, forked_at, "
@@ -483,14 +568,14 @@ def fork(
         + ", ".join("?" for _ in _store_values._METADATA_WRITE_COLUMNS)
         + ")",
         (
-            uuid.uuid4().hex,
+            generation_id,
             *_store_values._scope(target),
-            state["created_at"],
+            now if side_chat else state["created_at"],
             point,
-            state["last_activity_at"],
+            now if side_chat else state["last_activity_at"],
             last_entry_id,
             source_key,
-            utc_now_timestamp(),
+            now,
             point,
             _carried_working_project(state, target),
             *storage.columns,
@@ -509,15 +594,32 @@ def fork(
         connection,
         source_key=source_key,
         fork_key=fork_key,
-        fork_point=point,
+        fork_point=settled,
         source_next_seq=int(state["next_seq"]),
     )
+    # Live Tool calls and Run status can still change in place. Freeze their
+    # committed entries locally, exactly as when detaching inherited history.
+    if settled < point:
+        for segment in _store_lineage.clip(ranges, settled, point):
+            copies = _store_copies.copy_entries(connection, target_key=fork_key, view_range=segment)
+            _store_fts.fts_index_keys(connection, copies)
     _store_prompts.carry_prompt_state(
         connection, source=state, target_key=fork_key, same_scope=_same_scope(source, target)
     )
     if run_kind is not None:
         record_run_kind_by_key(connection, fork_key, run_kind)
-    return target
+    if side_chat_note is not None:
+        from core.chat.messages import ChatMessage
+
+        append_messages(connection, target, [ChatMessage.note(side_chat_note)])
+    if side_chat_request is not None:
+        connection.execute(
+            "INSERT INTO session_side_chat_requests "
+            "(input_id, request_hash, source_key, target_key, source_session_id, target_session_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (*side_chat_request, source_key, fork_key, source.session_id, target.session_id),
+        )
+    return target, True, generation_id
 
 
 def _detach_session(connection: sqlite3.Connection, session_key: int) -> None:

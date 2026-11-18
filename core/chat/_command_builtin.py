@@ -24,7 +24,7 @@ from core.chat.commands import (
     parse_agent_argument,
     parse_handoff_argument,
 )
-from core.chat.errors import CompactionUnavailableError
+from core.chat.errors import ChatSessionError, CompactionUnavailableError
 from core.chat.messages import ChatMessage
 from core.projects import (
     AgentResolutionError,
@@ -41,7 +41,9 @@ from core.sessions import (
     SUBAGENT_SESSION_META_KEY,
     SessionAddress,
 )
+from core.sessions.errors import AccessorInputConflictError, SessionNotFoundError
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
+from core.utils.errors import VBotError
 from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
@@ -58,6 +60,12 @@ HANDOFF_FRAGMENT_NAME = "handoff.md"
 HANDOFF_INSTRUCTION_NOTE = (
     "The user's /handoff message after this note adds an instruction for this handoff. "
     "Follow it while writing, without dropping anything else that genuinely matters."
+)
+
+SIDE_CHAT_NOTE = (
+    "This side conversation is a copy of another Session. The earlier task belongs to that "
+    "Session. Answer the user's questions here, looking up information as needed. Start work "
+    "on a task here only when the user asks you to take it on in this conversation."
 )
 
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
@@ -87,6 +95,56 @@ def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str
     if not (instruction or "").strip():
         return base
     return f"{base}\n\n{HANDOFF_INSTRUCTION_NOTE}"
+
+
+async def _execute_btw(
+    context: CommandExecutionContext,
+    argument: str | None,
+    *,
+    sessions: ChatSessionManager | None,
+) -> CommandOutcome:
+    sessions = _require_dependency(sessions, "ChatSessionManager")
+    source = SessionAddress(context.project_id, context.agent_id, context.session_id)
+    accessor = context.accessor_input if argument else None
+    if argument and accessor is None:
+        raise ChatSessionError("A WebUI side question requires an Accessor input.")
+    child = await sessions.fork(
+        source,
+        target_project_id=source.project_id,
+        title="",
+        side_chat="new" if argument else "resume",
+        side_chat_note=SIDE_CHAT_NOTE,
+        side_chat_request=(accessor.input_id, accessor.request_hash) if accessor else None,
+    )
+    change = _session_change(source.project_id, source.agent_id, child.id)
+    context.report_change(change)
+    runs: tuple[CommandRun, ...] = ()
+    feedback = None
+    if argument and accessor is not None:
+        try:
+            run = await accessor.submit(child.address, argument, child.generation_id)
+        except AccessorInputConflictError, SessionNotFoundError:
+            raise
+        except VBotError as exc:
+            feedback = CommandFeedback(
+                kind="notice", text=f"Could not send the side question. {exc}"
+            )
+        else:
+            if run is not None:
+                runs = (CommandRun(role="follow_up", run=run),)
+    return CommandOutcome(
+        command="btw",
+        feedback=feedback,
+        facts={"question_draft": argument} if feedback is not None else {},
+        navigation=CommandNavigation(
+            kind="open_side_chat",
+            agent_id=source.agent_id,
+            project_id=source.project_id,
+            session_id=child.id,
+        ),
+        runs=runs,
+        resource_changes=(change,),
+    )
 
 
 async def _execute_compact(

@@ -41,6 +41,7 @@ from server.rpc.payloads import (
     history_message,
 )
 from server.rpc.validation import (
+    _optional_bool,
     _optional_positive_integer,
     _optional_string,
     _reject_unsupported,
@@ -139,6 +140,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
+    include_inherited = _optional_bool(params, "include_inherited", default=True)
     before = _optional_string(params, "before")
     after = _optional_string(params, "after")
     child_limit = (
@@ -190,6 +192,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
                 active_reviews=active_reviews,
                 subagent_walk=subagent_walk,
                 complete_runs=timeline,
+                include_inherited=include_inherited,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -365,6 +368,7 @@ def _read_chat_history(
     active_reviews: list[Run] | None,
     subagent_walk: bool,
     complete_runs: bool = False,
+    include_inherited: bool = True,
 ) -> _ChatHistoryRead:
     """Read one History page and the Session facts it carries in one Session-pool hop.
 
@@ -378,6 +382,7 @@ def _read_chat_history(
         excluded_roles=("note", "history_edit"),
         complete_run_segment=True,
         complete_runs=complete_runs,
+        include_inherited=include_inherited,
         background_tool_names=COMMAND_STATUS_TOOL_NAMES if before is None else (),
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,

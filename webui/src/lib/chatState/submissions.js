@@ -40,7 +40,7 @@ export function createChatSubmissions(send, storage = browserStorage()) {
     // identity only in memory for an explicit retry: ordinary slash text is
     // deduplicated by admission, while Commands ignore the id as before.
     // Neither automatic replay nor browser persistence is safe for Commands.
-    const commandCandidate = isSlashCommandCandidate(params.content);
+    const commandCandidate = Boolean(slashCommandText(params.content));
     const request = JSON.stringify(params);
     const sensitive = containsPotentialKeyInValue(params);
     const intent = inputIdentity(request);
@@ -115,7 +115,7 @@ function uncertainAcknowledgment(error) {
   );
 }
 
-export function isSlashCommandCandidate(content) {
+function slashCommandText(content, hasAttachments = false) {
   const texts =
     typeof content === 'string'
       ? [content]
@@ -124,19 +124,38 @@ export function isSlashCommandCandidate(content) {
             .filter((block) => block?.type === 'text')
             .map((block) => block.text)
         : [];
-  if (texts.length !== 1) return false;
+  if (texts.length !== 1) return '';
   const text = texts[0];
   // CommandDispatcher accepts mixed content only for /secret. An ordinary
   // slash-prefixed message with attachments needs the same retry identity as
   // other user input; a Secret value must never enter submission storage.
   if (
-    Array.isArray(content) &&
-    content.length !== 1 &&
+    (hasAttachments || (Array.isArray(content) && content.length !== 1)) &&
     !isBareSecretCommand(text) &&
     !holdsSecretArgument(text)
   )
-    return false;
-  return typeof text === 'string' && text.trimStart().startsWith('/');
+    return '';
+  return typeof text === 'string' && text.trimStart().startsWith('/')
+    ? text.trim()
+    : '';
+}
+
+// Widget delivery and the composer's Send/Queue label use the same catalog.
+export function namesKnownCommand(
+  content,
+  availableSkills,
+  hasAttachments = false,
+) {
+  const text = slashCommandText(content, hasAttachments);
+  if (!text) return false;
+  const [name, argument] = text.slice(1).split(/\s+/, 2);
+  const command = availableSkills?.find(
+    (item) => item?.type === 'command' && item.name === name.toLowerCase(),
+  );
+  if (!command) return false;
+  if (command.argument === 'none') return !argument;
+  if (command.argument === 'required') return Boolean(argument);
+  return true;
 }
 
 function newInputId() {

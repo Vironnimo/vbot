@@ -12,7 +12,7 @@ from core.projects import AgentOverrides
 from core.runs import (
     Run,
 )
-from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 
 # Argument mode drives autocomplete: ``none`` commands run immediately on
 # selection; ``optional``/``required`` insert the token and wait for text.
@@ -21,7 +21,7 @@ CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
 CommandNavigationKind = Literal[
-    "continue_in_session", "offer_session", "open_extension_page", "new_session"
+    "continue_in_session", "offer_session", "open_extension_page", "open_side_chat", "new_session"
 ]
 # How a command sent for a new Session (one the conversation has not created yet)
 # runs: ``session_less`` runs without a Session; ``create_session`` creates the
@@ -134,6 +134,15 @@ CommandChangeObserver = Callable[[CommandResourceChange], None]
 
 
 @dataclass(frozen=True)
+class CommandAccessorInput:
+    """A human input and its admission on the Session a Command selects."""
+
+    input_id: str
+    request_hash: str
+    submit: Callable[[SessionAddress, str, str | None], Awaitable[Run | None]]
+
+
+@dataclass(frozen=True)
 class CommandExecutionContext:
     """Execution addressing and surface facts supplied by an accessor."""
 
@@ -146,6 +155,7 @@ class CommandExecutionContext:
     sender: MessageSender | None = None
     # The command as the user wrote it; ``execute`` supplies it from the prepared command.
     command_text: str = ""
+    accessor_input: CommandAccessorInput | None = None
 
     def report_change(self, change: CommandResourceChange) -> None:
         if self.on_change is not None:

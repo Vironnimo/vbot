@@ -17,6 +17,7 @@
     subscribeDraft,
   } from '$lib/composerMemory.js';
   import { isImeComposing } from '$lib/keyboard.js';
+  import { namesKnownCommand } from '$lib/chatState/submissions.js';
   import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
@@ -77,6 +78,14 @@
       return insertTranscript;
     },
   });
+  const queuesMessage = $derived(
+    isRunning &&
+      !namesKnownCommand(
+        content,
+        availableSkills,
+        media.pendingAttachments.length > 0,
+      ),
+  );
   const picker = createComposerPicker({
     get availableSkills() {
       return availableSkills;
@@ -759,8 +768,8 @@
     icon
     disabled={disabled || Boolean(sendDisabledReason)}
     disabledReason={sendDisabledReason}
-    ariaLabel={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
-    tooltip={isRunning
+    ariaLabel={queuesMessage ? t('chat.queueMessage') : t('chat.sendMessage')}
+    tooltip={queuesMessage
       ? { title: t('chat.queueMessage'), text: t('chat.queueMessageHint') }
       : { title: t('chat.sendMessage'), text: t('chat.sendMessageHint') }}
   >

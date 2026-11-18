@@ -82,6 +82,7 @@ def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mo
         for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
     } == {
         "agent": ("optional", "state_change", "needs_session"),
+        "btw": ("optional", "state_change", "needs_session"),
         "compact": ("optional", "notice", "needs_session"),
         "goal": ("optional", "state_change", "create_session"),
         "handoff": ("optional", "state_change", "needs_session"),

@@ -353,23 +353,27 @@ async def test_send_snapshots_mentioned_files_into_the_content(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "agent_id", "current_session_id", "busy", "marked"),
+    ("method", "agent_id", "current_session_id", "busy", "side_chat", "marked"),
     [
-        pytest.param("chat.send", "builder", "", False, True, id="send"),
-        pytest.param("chat.stream", "builder", "", True, True, id="queued-stream"),
-        pytest.param("chat.edit", "builder", "", False, True, id="edit"),
-        pytest.param("chat.send", "builder", "s1", False, False, id="already-current"),
-        pytest.param("chat.send", "builder@vbot", "", False, False, id="project-agent"),
+        pytest.param("chat.send", "builder", "", False, False, True, id="send"),
+        pytest.param("chat.stream", "builder", "", True, False, True, id="queued-stream"),
+        pytest.param("chat.edit", "builder", "", False, False, True, id="edit"),
+        pytest.param("chat.send", "builder", "s1", False, False, False, id="already-current"),
+        pytest.param("chat.send", "builder@vbot", "", False, False, False, id="project-agent"),
+        pytest.param("chat.stream", "builder", "parent", True, True, False, id="queued-side-chat"),
+        pytest.param("chat.edit", "builder", "parent", False, True, False, id="edited-side-chat"),
     ],
 )
 async def test_user_message_makes_the_identity_session_current(
-    method: str, agent_id: str, current_session_id: str, busy: bool, marked: bool
+    method: str, agent_id: str, current_session_id: str, busy: bool, side_chat: bool, marked: bool
 ) -> None:
     # A restart re-opens the Session the user last wrote to, even when the
     # message was queued. Re-marking an already current Session would tear down
     # the chat view in every window, and project agents have no pointer.
     agents = CurrentSessionAgents(current_session_id)
     state = chat_state(_RecordingLoop(busy=busy), agents=agents)
+    if side_chat:
+        state.runtime.chat_sessions.metadata["side_chat"] = True
     params: JsonObject = {"agent_id": agent_id, "session_id": "s1", "content": "hi"}
     if method == "chat.edit":
         params["message_id"] = "message-1"

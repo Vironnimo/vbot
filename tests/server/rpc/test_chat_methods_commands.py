@@ -13,6 +13,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, override
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -258,6 +259,108 @@ async def _occupy(state: SimpleNamespace, session_id: str = "session-one") -> An
     )
     await started.wait()
     return run, release
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_id", [None, "vbot"])
+async def test_side_chat_action_names_its_own_address_and_keeps_the_source_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_id: str | None
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter(block=True)
+    state = make_state(tmp_path, adapter)
+    source = state.runtime.chat_sessions.create("coder", session_id="main", project_id=project_id)
+    if project_id is None:
+        state.runtime.agents.update("coder", current_session_id=source.id)
+    response = await call(
+        state,
+        "chat.stream",
+        agent_id="coder@vbot" if project_id else "coder",
+        session_id=source.id,
+        content="/btw" if project_id else "/btw Side question?",
+    )
+    try:
+        result = response["result"]
+        navigation = result["data"]["navigation"]
+        assert result["command_handled"] and result["output"] == "action"
+        assert result["session_id"] == source.id
+        assert navigation == {
+            "kind": "open_side_chat",
+            "agent_id": "coder",
+            "project_id": project_id,
+            "session_id": navigation["session_id"],
+        }
+        side = SessionAddress(project_id, "coder", navigation["session_id"])
+        assert side.session_id != source.id
+        assert state.runtime.chat_sessions.metadata_value(side, "side_chat") is True
+        if project_id is None:
+            await adapter.request_started.wait()
+            assert state.runtime.agents.get("coder").current_session_id == source.id
+    finally:
+        adapter.release.set()
+        await asyncio.gather(*(run.wait() for run in state.chat_runs.active_runs()))
+
+
+@pytest.mark.asyncio
+async def test_side_question_reuses_its_fork_and_accepted_run_across_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    state = make_state(tmp_path, StubAdapter())
+    source = state.runtime.chat_sessions.create("coder", session_id="main")
+    params = {
+        "agent_id": "coder",
+        "session_id": source.id,
+        "content": "/btw First?",
+        "input_id": "once",
+    }
+    # Stop between reserving the fork and accepting the first User input.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            state.chat_loop, "submit_accessor_input", AsyncMock(side_effect=ChatError("offline"))
+        )
+        first = await call(state, "chat.stream", **params)
+    navigation = first["result"]["data"]["navigation"]
+    assert first["result"]["data"]["question_draft"] == "First?"
+    state.runtime.chat_sessions.close()
+
+    adapter = StubAdapter(block=True)
+    state = make_state(tmp_path, adapter)
+    sessions = state.runtime.chat_sessions
+    child = SessionAddress(None, "coder", navigation["session_id"])
+    try:
+        replies = await asyncio.gather(*(call(state, "chat.stream", **params) for _ in range(2)))
+        assert all(reply["result"]["data"]["navigation"] == navigation for reply in replies)
+        await asyncio.wait_for(adapter.request_started.wait(), 5)
+        assert {s.id for s in sessions.list("coder")} == {source.id, child.session_id}
+    finally:
+        adapter.release.set()
+        await asyncio.gather(*(run.wait() for run in state.chat_runs.active_runs()))
+    assert len(adapter.requests) == 1
+    (run,) = sessions.get(child).run_records()
+    assert run.run_kind == "user"
+    receipt = await sessions.lookup_accessor_input_async("once")
+    assert receipt is not None and receipt.run_id == run.run_id
+    sessions.close()
+
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    replay = await call(state, "chat.send", **params)
+    assert replay["result"]["data"]["navigation"] == navigation
+    assert [record.run_id for record in sessions.get(child).run_records()] == [run.run_id]
+    for change in ({"content": "/btw Changed?"}, {"session_id": child.session_id}):
+        conflict = await call(state, "chat.stream", **{**params, **change})
+        assert conflict["error"]["code"] == "input_conflict"
+    moved = SessionAddress(None, "coder", "moved")
+    await sessions.move(child, moved)
+    sessions.create("coder", session_id=child.session_id)
+    for remove in (False, True):
+        if remove:
+            sessions.delete(moved)
+        stale = await call(state, "chat.stream", **params)
+        assert "original side conversation" in stale["error"]["message"]
+    assert {s.id for s in sessions.list("coder")} == {source.id, child.session_id}
+    assert not sessions.get(child).run_records()
 
 
 @pytest.mark.asyncio

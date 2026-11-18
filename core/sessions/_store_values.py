@@ -397,6 +397,19 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
     )
 
 
+def is_side_chat(state: sqlite3.Row) -> bool:
+    """The fork retains its marker even if the source generation is deleted."""
+    return (
+        state["fork_point_seq"] is not None
+        and json.loads(state["metadata_json"]).get("side_chat") is True
+    )
+
+
+def title_source_floor(state: sqlite3.Row) -> int:
+    """Side chats take their title from their own conversation."""
+    return int(state["fork_point_seq"]) if is_side_chat(state) else 0
+
+
 def _working_project_from_state(state: sqlite3.Row) -> str | None:
     """Return the Project one Session row works in: its address Project, else its own."""
     if state["project_id"]:

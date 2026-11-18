@@ -446,7 +446,7 @@ class ChatSession:
         return self._store.active_user_message_count(self.address, limit=limit)
 
     def single_active_user_message(self) -> tuple[int, ChatMessage] | None:
-        """The sole current User entry's position and content from one snapshot."""
+        """The sole current User entry eligible for this conversation's title."""
         return self._store.single_active_user_message(self.address)
 
     def latest_note(self, content_prefix: str) -> ChatMessage | None:
@@ -467,13 +467,16 @@ class ChatSession:
         background_tool_names: Sequence[str] = (),
         background_note_marker: str | None = None,
         skip_unchanged: bool = False,
+        include_inherited: bool = True,
     ) -> SessionChatHistorySnapshot:
         """Read one History page with whole-Session facts from one snapshot.
 
         Background candidates are the Tool Results of ``background_tool_names``
         and the Notes containing ``background_note_marker``. With
         ``skip_unchanged``, an ``after`` cursor at the Session's end returns an
-        empty ``unchanged`` snapshot without reading those facts.
+        empty ``unchanged`` snapshot without reading those facts. Setting
+        ``include_inherited=False`` pages only the history since the fork point;
+        usage and Model context still describe the full Session.
         """
         decoded_cursor = None if before is None else _decode_chat_history_cursor(before)
         if before is not None and after is not None:
@@ -497,6 +500,7 @@ class ChatSession:
             background_note_marker=background_note_marker,
             after=after_cursor,
             skip_unchanged=skip_unchanged,
+            include_inherited=include_inherited,
         )
 
     def status_snapshot(self) -> SessionStatusSnapshot:

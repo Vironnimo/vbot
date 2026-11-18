@@ -351,6 +351,8 @@ describe('send and edit admission', () => {
   it.each(
     [
       'Apply',
+      '/status please explain',
+      '/needs-argument',
       [
         { type: 'text', text: '/status' },
         {
@@ -383,7 +385,10 @@ describe('send and edit admission', () => {
       const { chatState, controller } = setupController({
         operationOverrides: { startChatRun },
       });
-      chatState.availableSkills = [{ name: 'status', type: 'command' }];
+      chatState.availableSkills = [
+        { name: 'status', type: 'command', argument: 'none' },
+        { name: 'needs-argument', type: 'command', argument: 'required' },
+      ];
       const sessionState = ensureSessionState(
         chatState,
         'alpha',

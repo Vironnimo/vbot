@@ -216,6 +216,15 @@ class _RecordingLoop:
 class _InlineSessionPool:
     """Stands in for the Session database's pool: runs the unit inline."""
 
+    def __init__(self) -> None:
+        self.metadata: JsonObject = {}
+
+    async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
+        return self.metadata
+
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
+        return self.metadata.get(key)
+
     async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return function(*args, **kwargs)
 

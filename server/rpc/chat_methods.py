@@ -189,6 +189,8 @@ async def _submit_chat(
             address,
             prepared_command,
             reply_surface=reply_surface,
+            input_id=input_id,
+            request_hash=request_hash,
         )
 
     run_options: JsonObject = {}
