@@ -72,6 +72,7 @@ PRIVATE_TOOLS = {
         "task",
         (
             "list",
+            "history",
             "get",
             "create",
             "update",
@@ -85,7 +86,9 @@ PRIVATE_TOOLS = {
         ),
         (
             "Manage native Factory tasks and hand in outcomes with evidence. Assigned"
-            " work starts automatically when eligible."
+            " work starts automatically when eligible. In a direct conversation, create a task "
+            "when the user asks you to take on work. It stays with this conversation and "
+            "defaults to you as owner."
         ),
     ),
     "factory_topics": _definition(
@@ -140,7 +143,7 @@ def native_instructions(
             "end your turn; their reply resumes eligible waiting work. Explicit pause waits "
             "for an explicit resume."
         )
-    elif topic:
+    elif topic and not topic.get("direct_member_id"):
         parts.append(
             "Answer the discussion in factory_topics post. An answer ends this turn; "
             "it does not require a continuing acknowledgment exchange."
@@ -165,12 +168,32 @@ _TASK_FIELDS = (
     "user_approval",
     "workflow_id",
     "workflow_card_id",
+    "conversation_id",
     "result",
 )
-_TOPIC_FIELDS = ("id", "factory_id", "title", "task_id", "state", "participants")
+_TOPIC_FIELDS = (
+    "id",
+    "factory_id",
+    "title",
+    "task_id",
+    "state",
+    "participants",
+    "direct_member_id",
+    "card_id",
+)
 _FACTORY_FIELDS = ("id", "project_id", "name", "remit", "state", "limits", "config")
 _MEMBER_FIELDS = ("id", "agent_id", "name", "role", "instructions")
-_CARD_FIELDS = ("id", "workflow_id", "title", "description", "state", "summary")
+_CARD_FIELDS = (
+    "id",
+    "workflow_id",
+    "title",
+    "description",
+    "state",
+    "summary",
+    "waiting_reason",
+    "note",
+    "outputs",
+)
 _BOUNDARY_FIELDS = (
     "model",
     "thinking_effort",

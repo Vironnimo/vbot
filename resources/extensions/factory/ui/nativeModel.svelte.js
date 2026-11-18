@@ -17,7 +17,7 @@ export function createNativeFactoryModel(model) {
     refreshPromise = null,
     again = false;
   let cursors = $state({});
-  let selectedProject = null;
+
   const pageCounts = {
     factory: 1,
     member: 1,
@@ -95,7 +95,9 @@ export function createNativeFactoryModel(model) {
           const list = await pages(
             'factory',
             'factory.list',
-            { limit: 100 },
+            parts[0] === 'project'
+              ? { project_id: parts[1], limit: 100 }
+              : { limit: 100 },
             'factories',
           );
           let nextDetail = null,
@@ -119,8 +121,7 @@ export function createNativeFactoryModel(model) {
                 (list.factories || []).find(
                   (item) =>
                     item.state !== 'archived' &&
-                    (selectedProject == null ||
-                      item.project_id === selectedProject),
+                    (parts[0] !== 'project' || item.project_id === parts[1]),
                 )?.id;
           const reads = id
             ? await Promise.all([
@@ -255,8 +256,8 @@ export function createNativeFactoryModel(model) {
   });
   return {
     refresh,
-    selectProject(id) {
-      selectedProject = id;
+    get projectId() {
+      return parts[0] === 'project' ? parts[1] : factory?.project_id;
     },
     more,
     get cursors() {

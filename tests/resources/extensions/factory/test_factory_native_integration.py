@@ -994,3 +994,89 @@ async def test_owned_descendant_cannot_expand_the_factory_skill_selection(
     await harness.finish(root_run)
     await harness.settle()
     assert (await harness.operation("task.get", id=task["id"]))["task"]["state"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
+    native_factory_runtime: NativeFactoryRuntime, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from server.extension_services import bind_application_services
+    from server.rpc.methods import METHODS
+
+    harness = native_factory_runtime
+    runtime = harness.runtime
+    repo = tmp_path / "product"
+    repo.mkdir()
+    runtime.projects.create("product", "Product", repo, sources=[], default_model=MODEL)
+    close = bind_application_services(SimpleNamespace(runtime=runtime), METHODS)
+    scope = {"project_id": "product"}
+    try:
+        assert (await harness.operation("conversation.get", **scope))["topic"] is None
+        first = await harness.operation(
+            "conversation.send", **scope, text="Discuss this first", request_id="first"
+        )
+        discussion = first["topic"]["id"]
+        await harness.drive(
+            lambda _: {
+                "content": "An idea",
+                "tool_calls": None,
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+        )
+        replay = await harness.operation(
+            "conversation.send", **scope, text="Discuss this first", request_id="first"
+        )
+        assert [m["text"] for m in replay["posts"]] == ["Discuss this first", "An idea"]
+        assert not (await harness.operation("work.list", **scope))["work"]
+        member = runtime.agents.create("engineer", model=MODEL, librarian_enabled=False)
+        worker = (
+            await harness.operation(
+                "member.add", factory_id=first["topic"]["factory_id"], agent_id=member.id
+            )
+        )["member"]
+        direct = await harness.operation(
+            "conversation.send",
+            **scope,
+            member_id=worker["id"],
+            text="Please implement this",
+            request_id="second",
+        )
+        req = await harness.request()
+        assert req["kwargs"]["test_context"]["agent_id"] == member.id
+        harness.model.tool(
+            "factory_tasks",
+            {"action": "create", "title": "Implement this", "objective": "Ship it"},
+            request=req,
+        )
+        req = await harness.request()
+        items = (await harness.operation("work.list", **scope))["work"]
+        assert len(items) == 1
+        task_id = items[0]["id"]
+        assert "Please implement this" in str(req["messages"])
+        harness.model.tool(
+            "factory_tasks",
+            {"action": "complete", "id": task_id, "outcome": "Shipped", "evidence": "Verified it"},
+            request=req,
+        )
+        await harness.settle()
+        task_chat = await harness.operation("conversation.get", **scope, task_id=task_id)
+        assert task_chat["topic"]["id"] == direct["topic"]["id"]
+        assert task_chat["posts"][-1]["evidence"] == "Verified it"
+        assert (await harness.operation("conversation.get", **scope))["topic"]["id"] == discussion
+        await harness.operation(
+            "conversation.send", **scope, task_id=task_id, text="Why?", request_id="third"
+        )
+        await harness.drive(
+            lambda _: {
+                "content": "Because",
+                "tool_calls": None,
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            }
+        )
+        assert (await harness.operation("conversation.get", **scope, task_id=task_id))["posts"][-1][
+            "text"
+        ] == "Because"
+    finally:
+        close()

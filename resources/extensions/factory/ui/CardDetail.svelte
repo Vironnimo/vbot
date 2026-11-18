@@ -18,6 +18,7 @@
   import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import WorkflowDiagram from './WorkflowDiagram.svelte';
   import CardLimits from './CardLimits.svelte';
+  import FactoryChat from './FactoryChat.svelte';
   import { createRecordEditor } from './recordEditor.svelte.js';
   import {
     cardActions,
@@ -397,6 +398,11 @@
 
   <div class="factory-detail-grid">
     <div class="factory-detail-main">
+      {#if card.project_id}<FactoryChat
+          {model}
+          projectId={card.project_id}
+          cardId={card.id}
+        />{/if}
       <section
         class="factory-section factory-objective"
         aria-labelledby="factory-objective-title"

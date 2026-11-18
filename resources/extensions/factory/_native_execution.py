@@ -285,11 +285,18 @@ class NativeFactoryExecution:
         self.service.request_schedule()
 
     async def block(self, execution: Json, reason: str, detail: Json | None = None) -> None:
+        runtime = {**execution["runtime"], "failure": reason, "limit_hit": detail}
+        if execution["kind"] == "topic":
+            topic = await self.store.get_topic(execution["scope_id"])
+            if topic.get("direct_member_id"):
+                posts = await self.store.recent_posts(topic["id"], limit=1)
+                runtime["failed_sequence"] = posts[-1]["sequence"] if posts else 0
+                await self._publish("topics", topic)
         saved = await self.store.change_execution(
             execution["id"],
             {
                 "state": "draining",
-                "runtime": {**execution["runtime"], "failure": reason, "limit_hit": detail},
+                "runtime": runtime,
             },
             actor="factory",
         )
@@ -454,6 +461,9 @@ class NativeFactoryExecution:
                     task,
                     factory=factory,
                     member=member,
+                    posts=await self.store.recent_posts(task["conversation_id"], limit=20)
+                    if task.get("conversation_id")
+                    else None,
                     updates=[wake["content"] for wake in task["runtime"].get("wakes", [])[:1]],
                 ),
             )

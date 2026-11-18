@@ -32,7 +32,7 @@ class FactoryManagement:
         self.service = service
 
     async def operation(self, name: str, arguments: Json) -> Json:
-        if name.partition(".")[0] in {"factory", "member", "task", "topic"}:
+        if name.partition(".")[0] in {"factory", "member", "task", "topic", "conversation", "work"}:
             return await self.service.native_management.operation(name, arguments)
         if name in _READS:
             return await self._read(name, arguments)

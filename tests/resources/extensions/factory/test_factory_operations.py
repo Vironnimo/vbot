@@ -283,6 +283,17 @@ async def test_public_reads_filter_cards_and_name_running_steps(
         ),
     )
     await factory.card("proposal", project_id="other")
+    team = await factory.store.native.create_factory("project", leader_agent_id="lead")
+    task = await factory.store.native.create_task(team["id"], "Local work", "Investigate")
+    page = await factory.operation("work.list", project_id="project", limit=1)
+    assert [(row["id"], row["attention"]) for row in page["work"]] == [(proposal["id"], 1)]
+    remaining = await factory.operation("work.list", project_id="project", after=page["next_after"])
+    assert {row["id"] for row in remaining["work"]} == {task["id"], working["id"]}
+    found = await factory.operation("task.history", factory_id=team["id"], query="local")
+    assert [row["id"] for row in found["work"]] == [task["id"]]
+    assert (await factory.operation("task.get", id=working["id"]))["workflow_run"][
+        "state"
+    ] == "working"
     result = await factory.call({"action": "list", "project": "project"})
     assert result["ok"] is True
     fields = ("id", "project_id", "title", "state", "waiting_reason", "origin")

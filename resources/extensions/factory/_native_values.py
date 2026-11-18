@@ -66,7 +66,14 @@ def schema(properties: Json, required: tuple[str, ...] = ()) -> Json:
 
 ID = {"id": S}
 REV = {**ID, "expected_revision": INTEGER}
+CONVERSATION = {"project_id": S, "member_id": S, "topic_id": S, "task_id": S, "card_id": S}
 OPERATION_SCHEMAS = {
+    "work.list": schema({"project_id": S, "query": S, **PAGING}, ("project_id",)),
+    "conversation.get": schema({**CONVERSATION, "before": S}, ("project_id",)),
+    "conversation.send": schema(
+        {**CONVERSATION, "text": S, "request_id": S, "new_topic": B},
+        ("project_id", "text", "request_id"),
+    ),
     "factory.list": schema({"project_id": S, **PAGING}),
     "factory.get": schema(ID, ("id",)),
     "factory.create": schema(
@@ -112,6 +119,7 @@ OPERATION_SCHEMAS = {
         ("id", "expected_revision"),
     ),
     "member.retire": schema(REV, ("id", "expected_revision")),
+    "task.history": schema({"factory_id": S, "query": S, **PAGING}, ("factory_id",)),
     "task.list": schema(
         {"factory_id": S, "state": S, "assignee_id": S, "parent_id": S, **PAGING}, ("factory_id",)
     ),
@@ -162,6 +170,10 @@ OPERATION_DESCRIPTIONS = {
     "member.update": (
         "Change Factory-local member settings; identity_config explicitly edits a"
         " Factory-created Identity Agent."
+    ),
+    "task.history": (
+        "Find Project tasks and Workflow runs by title. "
+        "Use get with a returned id to read its result."
     ),
     "task.create": (
         "Create native work; assigning a member starts eligible work "

@@ -9,15 +9,17 @@
   import NativeRecordEditor from './NativeRecordEditor.svelte';
   import CardSession from './CardSession.svelte';
   import NativeActions from './NativeActions.svelte';
+  import FactoryChat from './FactoryChat.svelte';
+  import ProjectWork from './ProjectWork.svelte';
   import { createNativeFactoryModel } from './nativeModel.svelte.js';
   import { waitingLabel, eventLabel, timestamp } from './presentation.js';
   let { model, onNavigate } = $props();
   const native = createNativeFactoryModel(untrack(() => model));
-  let project = $state(''),
-    actions = $state(null),
+  let actions = $state(null),
     historyError = $state(''),
     editor = $state(null),
     memberEdit = $state(''),
+    chatMember = $state(''),
     showChildren = $state(false),
     inspected = $state(null);
   const agentName = (member) =>
@@ -58,7 +60,7 @@
     t('factory.native.unassigned');
   const task = $derived(native.detail?.task);
   const topic = $derived(native.topic?.topic);
-  const currentProject = $derived(native.factory?.project_id || project);
+  const currentProject = $derived(native.projectId || projects[0]?.value || '');
   const statuses = [
     { id: 'backlog', label: () => t('factory.native.backlog') },
     { id: 'ready', label: () => t('factory.native.ready') },
@@ -100,13 +102,15 @@
     }
   }
   async function chooseProject(value) {
-    project = value;
-    native.selectProject(value);
+    if (value === currentProject) return;
     const found = native.factories.find(
       (item) => item.project_id === value && item.state !== 'archived',
     );
-    await onNavigate(found ? `/factory/${encodeURIComponent(found.id)}` : '');
-    if (!found) await native.refresh();
+    await onNavigate(
+      found
+        ? `/factory/${encodeURIComponent(found.id)}`
+        : `/project/${encodeURIComponent(value)}`,
+    );
   }
   async function act(operation, record, extra = {}) {
     if (editor && !(await editor.flush())) return;
@@ -173,23 +177,12 @@
         >{t('common.retry')}</Button
       ></Banner
     >{/if}
-  {#if native.loading}<p role="status">{t('factory.native.loading')}</p>
-  {:else if !native.factory}
-    <p>
-      {projects.length
-        ? t('factory.native.noFactory')
-        : t('factory.native.noProjects')}
-    </p>
-    <Button
-      variant="primary"
-      disabled={!currentProject}
-      onClick={() => actions?.open('setup')}>{t('factory.native.setup')}</Button
-    >
-  {:else}
+  {#if native.factory && !native.loading}
     <nav class="native-tabs" aria-label={t('factory.title')}>
       <Button
         variant={native.view === 'board' ? 'secondary' : 'tertiary'}
-        onClick={() => onNavigate(factoryRoute())}>{t('factory.board')}</Button
+        onClick={() => onNavigate(factoryRoute())}
+        >{t('factory.chat.overview')}</Button
       >
       <Button
         variant={native.view === 'team' ? 'secondary' : 'tertiary'}
@@ -207,54 +200,86 @@
         >{t('factory.native.settings')}</Button
       >
     </nav>
+  {/if}
+  {#if native.view === 'board' && currentProject && !native.loading}
+    {#key currentProject}<div class="project-overview">
+        <FactoryChat
+          {model}
+          projectId={currentProject}
+          inactive={Boolean(
+            native.factory && native.factory.state !== 'active',
+          )}
+          onSent={native.refresh}
+        />
+        <ProjectWork {model} projectId={currentProject} {statusLabel} />
+      </div>{/key}
+  {/if}
+  {#if native.loading}<p role="status">{t('factory.native.loading')}</p>
+  {:else if !native.factory}
+    <p>
+      {projects.length
+        ? t('factory.native.noFactory')
+        : t('factory.native.noProjects')}
+    </p>
+    <Button
+      variant="tertiary"
+      disabled={!currentProject}
+      onClick={() => actions?.open('setup')}>{t('factory.native.setup')}</Button
+    >
+  {:else}
     {#if native.view === 'board'}
-      <div class="factory-board-toolbar">
-        <Button variant="primary" onClick={() => actions?.open('task')}
-          >{t('factory.native.newTask')}</Button
-        ><label class="native-check"
-          >{t('factory.native.showChildren')}<Toggle
-            ariaLabel={t('factory.native.showChildren')}
-            checked={showChildren}
-            onChange={(value) => (showChildren = value)}
-          /></label
-        >
-      </div>
-      {#if !native.tasks.length}<p>{t('factory.native.noTasks')}</p>{/if}
-      <div class="factory-board native-board">
-        {#each statuses as state (state.id)}<section
-            class="factory-column"
-            data-native-state={state.id}
+      <details>
+        <summary>{t('factory.board')}</summary>
+        <div class="factory-board-toolbar">
+          <Button variant="primary" onClick={() => actions?.open('task')}
+            >{t('factory.native.newTask')}</Button
+          ><label class="native-check"
+            >{t('factory.native.showChildren')}<Toggle
+              ariaLabel={t('factory.native.showChildren')}
+              checked={showChildren}
+              onChange={(value) => (showChildren = value)}
+            /></label
           >
-            <header><h2>{state.label()}</h2></header>
-            <ul class="factory-card-list">
-              {#each native.tasks.filter((item) => item.state === state.id && (showChildren || !item.parent_id)) as item (item.id)}<li
-                >
-                  <button
-                    class="factory-card"
-                    onclick={() =>
-                      onNavigate(`/task/${encodeURIComponent(item.id)}`)}
-                    ><strong>{item.title}</strong><span
-                      >{memberName(item.assignee_id)}</span
-                    >{#if item.reason || item.state === 'ready'}<span
-                        >{reasonLabel(item.reason || 'capacity')}</span
-                      >{/if}{#if item.parent_id}<span
-                        >{native.tasks.find((row) => row.id === item.parent_id)
-                          ?.title || item.parent_id}</span
-                      >{/if}{#if native.tasks.some((child) => child.parent_id === item.id)}<span
-                        >{native.tasks.filter(
-                          (child) =>
-                            child.parent_id === item.id &&
-                            child.state === 'done',
-                        ).length}/{native.tasks.filter(
-                          (child) => child.parent_id === item.id,
-                        ).length}
-                        {t('factory.native.children')}</span
-                      >{/if}</button
+        </div>
+        {#if !native.tasks.length}<p>{t('factory.native.noTasks')}</p>{/if}
+
+        <div class="factory-board native-board">
+          {#each statuses as state (state.id)}<section
+              class="factory-column"
+              data-native-state={state.id}
+            >
+              <header><h2>{state.label()}</h2></header>
+              <ul class="factory-card-list">
+                {#each native.tasks.filter((item) => item.state === state.id && (showChildren || !item.parent_id)) as item (item.id)}<li
                   >
-                </li>{/each}
-            </ul>
-          </section>{/each}
-      </div>
+                    <button
+                      class="factory-card"
+                      onclick={() =>
+                        onNavigate(`/task/${encodeURIComponent(item.id)}`)}
+                      ><strong>{item.title}</strong><span
+                        >{memberName(item.assignee_id)}</span
+                      >{#if item.reason || item.state === 'ready'}<span
+                          >{reasonLabel(item.reason || 'capacity')}</span
+                        >{/if}{#if item.parent_id}<span
+                          >{native.tasks.find(
+                            (row) => row.id === item.parent_id,
+                          )?.title || item.parent_id}</span
+                        >{/if}{#if native.tasks.some((child) => child.parent_id === item.id)}<span
+                          >{native.tasks.filter(
+                            (child) =>
+                              child.parent_id === item.id &&
+                              child.state === 'done',
+                          ).length}/{native.tasks.filter(
+                            (child) => child.parent_id === item.id,
+                          ).length}
+                          {t('factory.native.children')}</span
+                        >{/if}</button
+                    >
+                  </li>{/each}
+              </ul>
+            </section>{/each}
+        </div>
+      </details>
     {:else if native.view === 'settings'}
       {#key native.factory.id}<NativeRecordEditor
           bind:this={editor}
@@ -305,6 +330,18 @@
                 ? t('factory.native.createdAgent')
                 : t('factory.native.linkedAgent')}
             </p>
+            {#if member.state === 'active'}<Button
+                onClick={() =>
+                  (chatMember = chatMember === member.id ? '' : member.id)}
+                >{t('factory.chat.member')}</Button
+              >{/if}
+            {#if chatMember === member.id}<FactoryChat
+                {model}
+                projectId={currentProject}
+                memberId={member.id}
+                memberName={agentName(member)}
+                inactive={native.factory.state !== 'active'}
+              />{/if}
             <Button onClick={() => editMember(member.id)}
               >{t('common.edit')}</Button
             >{#if member.state === 'active' && member.id !== native.factory.leader_member_id}<Button
@@ -345,6 +382,15 @@
         ><span>{statusLabel(task.state)} · {memberName(task.assignee_id)}</span
         >{#if task.reason}<span>{reasonLabel(task.reason)}</span>{/if}
       </div>
+      {#key task.id}<FactoryChat
+          {model}
+          projectId={currentProject}
+          taskId={task.id}
+          memberName={memberName(
+            task.assignee_id || native.factory.leader_member_id,
+          )}
+          inactive={native.factory.state !== 'active'}
+        />{/key}
       {#key task.id}<NativeRecordEditor
           bind:this={editor}
           kind="task"
@@ -466,43 +512,51 @@
           )}{/each}
       </section>
     {:else if native.view === 'topic' && topic}
-      <h2>{topic.title}</h2>
-      <p>{(topic.participants || []).map(memberName).join(', ')}</p>
-      {#if topic.task_id}<Button
-          variant="tertiary"
-          onClick={() =>
-            onNavigate(`/task/${encodeURIComponent(topic.task_id)}`)}
-          >{t('factory.native.task')}</Button
-        >{/if}
-      <div class="native-actions">
-        {#if topic.state === 'open'}<Button
-            onClick={() => actions?.open('invite')}
-            >{t('factory.native.invite')}</Button
-          ><Button variant="primary" onClick={() => actions?.open('post')}
-            >{t('factory.native.post')}</Button
-          ><Button onClick={() => act('topic.close', topic)}
-            >{t('factory.native.closeTopic')}</Button
-          >{:else}<span>{t('factory.native.closed')}</span>{/if}
-      </div>
-      {#if native.topic.sessions?.length}<section class="native-panel">
-          <h2>{t('factory.native.history')}</h2>
-          {#each native.topic.sessions as session (session.group_id)}{@render historyLink(
-              session,
-            )}{/each}
-        </section>{/if}
-      <ol class="native-posts">
-        {#each native.topic.posts || [] as post (post.id)}<li>
-            <strong
-              >{post.author?.member_id
-                ? memberName(post.author.member_id)
-                : typeof post.author === 'string'
-                  ? post.author.startsWith('member:')
-                    ? memberName(post.author.slice(7))
-                    : t('factory.origin.user')
-                  : t('factory.origin.user')}</strong
-            ><MarkdownContent source={post.text} />
-          </li>{/each}
-      </ol>
+      {#if topic.direct_member_id}
+        {#key topic.id}<FactoryChat
+            {model}
+            projectId={currentProject}
+            topicId={topic.id}
+            inactive={native.factory.state !== 'active'}
+          />{/key}
+      {:else}
+        <h2>{topic.title}</h2>
+        <p>{(topic.participants || []).map(memberName).join(', ')}</p>
+        {#if topic.task_id}<Button
+            variant="tertiary"
+            onClick={() =>
+              onNavigate(`/task/${encodeURIComponent(topic.task_id)}`)}
+            >{t('factory.native.task')}</Button
+          >{/if}
+        <div class="native-actions">
+          {#if topic.state === 'open'}<Button
+              onClick={() => actions?.open('invite')}
+              >{t('factory.native.invite')}</Button
+            ><Button variant="primary" onClick={() => actions?.open('post')}
+              >{t('factory.native.post')}</Button
+            ><Button onClick={() => act('topic.close', topic)}
+              >{t('factory.native.closeTopic')}</Button
+            >{:else}<span>{t('factory.native.closed')}</span>{/if}
+        </div>
+        {#if native.topic.sessions?.length}<section class="native-panel">
+            <h2>{t('factory.native.history')}</h2>
+            {#each native.topic.sessions as session (session.group_id)}{@render historyLink(
+                session,
+              )}{/each}
+          </section>{/if}
+        <ol class="native-posts">
+          {#each native.topic.posts || [] as post (post.id)}<li>
+              <strong
+                >{post.author?.member_id
+                  ? memberName(post.author.member_id)
+                  : typeof post.author === 'string'
+                    ? post.author.startsWith('member:')
+                      ? memberName(post.author.slice(7))
+                      : t('factory.origin.user')
+                    : t('factory.origin.user')}</strong
+              ><MarkdownContent source={post.text} />
+            </li>{/each}
+        </ol>{/if}
     {/if}
   {/if}
   {#if native.view === 'board' && native.cursors.task}<Button
@@ -547,6 +601,18 @@
   .native-factory {
     max-width: 1600px;
     margin: 0 auto;
+  }
+  .project-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 800px) {
+    .project-overview {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
   .native-tabs,
   .native-actions {

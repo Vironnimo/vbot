@@ -40,6 +40,14 @@ CREATE TABLE native_topics (
 ) STRICT;
 CREATE INDEX native_topics_factory ON native_topics(factory_id, state, id);
 CREATE INDEX native_topics_task ON native_topics(task_id, id);
+CREATE INDEX native_direct_topics ON native_topics(
+ factory_id, json_extract(body_json, '$.direct_member_id'),
+ json_extract(body_json, '$.last_user_message_at') DESC, id
+);
+CREATE UNIQUE INDEX native_direct_receipt ON native_topics(
+ factory_id, json_extract(body_json, '$.start_receipt')
+) WHERE json_extract(body_json, '$.start_receipt') IS NOT NULL;
+CREATE INDEX native_topic_card ON native_topics(factory_id, json_extract(body_json, '$.card_id'));
 CREATE TABLE native_topic_participants (
  topic_id TEXT NOT NULL REFERENCES native_topics(id),
  member_id TEXT NOT NULL REFERENCES native_members(id),
