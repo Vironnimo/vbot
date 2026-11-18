@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Literal
 
+from core.extensions.app_chats import AppChatDeclaration
 from core.extensions.contributions import PAGE_ICONS as PAGE_ICONS
 from core.extensions.contributions import ContributionDeclaration
 from core.extensions.interactions import (
@@ -24,7 +25,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 35
+API_VERSION = 37
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
@@ -353,6 +354,7 @@ class ExtensionDeclarations:
     tool_families: list[ToolFamilyDeclaration] = field(default_factory=list)
     commands: list[CommandDeclaration] = field(default_factory=list)
     pages: list[PageDeclaration] = field(default_factory=list)
+    app_chat_profiles: dict[str, AppChatDeclaration] = field(default_factory=dict)
     contributions: list[ContributionDeclaration] = field(default_factory=list)
     services: list[ServiceDeclaration] = field(default_factory=list)
     resources: list[ResourceDeclaration] = field(default_factory=list)

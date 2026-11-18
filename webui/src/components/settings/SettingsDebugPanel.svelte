@@ -15,7 +15,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
 
   const noop = () => {};
 
@@ -48,14 +48,13 @@
 
   let { settings = null, onCommit = noop, onError = noop } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let debugSettings = $state(untrack(() => getDebugSettings(settings)));
   let saving = $state(false);
-  const debugDraft = createSettingsDraft({
+  const debugDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getDebugSettings,
     read: () => debugSettings,
     write: (next) => (debugSettings = next),

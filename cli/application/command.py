@@ -9,11 +9,15 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cli._output import print_application_update_result
 from cli._progress import ProgressPrinter
 from cli.application.state import ApplicationError, Installation, Operation, discover, exclusive
 from cli.formatting import output_mode
+
+if TYPE_CHECKING:
+    from cli._server_target import ServerInstance
 
 
 def add_parsers(subparsers) -> None:
@@ -153,8 +157,22 @@ def _wait_update(install: Installation, operation: Operation) -> Operation:
         return operations.wait(install, operation.id, progress=report)
 
 
-def dispatch(args: argparse.Namespace) -> int | None:
+def dispatch(args: argparse.Namespace, *, app_instance: ServerInstance | None = None) -> int | None:
     install = discover()
+    if (
+        app_instance is not None
+        and install is not None
+        and (
+            install.server_port != app_instance.port
+            or not install.server_data_directory
+            or Path(install.server_data_directory).resolve() != app_instance.data_dir
+        )
+    ):
+        if args.area in _INSTALLATION_AREAS:
+            raise ApplicationError(
+                "The running instance differs from this installation's recorded server."
+            )
+        return None
     if install is None:
         if args.area in _INSTALLATION_AREAS:
             raise ApplicationError(_INSTALLATION_AREAS[args.area])
@@ -164,12 +182,14 @@ def dispatch(args: argparse.Namespace) -> int | None:
     # Commands on an installation log beside its host and update worker.
     manager = LogManager(data_dir=install.root, enable_console=False)
     try:
-        return _dispatch_installed(args, install)
+        return _dispatch_installed(args, install, default_to_install=app_instance is None)
     finally:
         manager.close()
 
 
-def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int | None:
+def _dispatch_installed(
+    args: argparse.Namespace, install: Installation, *, default_to_install: bool = True
+) -> int | None:
     from cli.application import operations, processes
 
     if args.area == "application":
@@ -436,7 +456,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         return 0 if outcome.phase in {"completed", "prepared"} else 1
     # Ordinary management RPCs use the installed target by default. Client-only
     # remains a remote accessor, whose explicit host/port is resolved normally.
-    if install.owns_server:
+    if install.owns_server and default_to_install:
         if getattr(args, "data_dir", None) is None:
             args.data_dir = install.server_data_directory
         if getattr(args, "port", None) is None:

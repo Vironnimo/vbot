@@ -220,7 +220,7 @@
 
 {#if page === 'preferences'}
   <div class="s-group">
-    <div class="s-row">
+    <div class="s-row" data-setting-path="server.timezone">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.general.timezone')}
@@ -269,7 +269,11 @@
   <!-- The one setting comes first; the read-only facts about this server
        follow as plain values. -->
   <div class="s-group">
-    <div class="s-row s-row--compact">
+    <div
+      class="s-row s-row--compact"
+      data-setting-path="server.keep_awake"
+      data-setting-options="true false"
+    >
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.general.keepAwake')}

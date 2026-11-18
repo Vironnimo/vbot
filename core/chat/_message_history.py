@@ -127,7 +127,7 @@ def _add_context_note(session: ChatSession, note: str | _records.ChatMessage | N
 def _append_input_origin_note(
     session: ChatSession, input_origin: _records.InputOrigin | None
 ) -> None:
-    if input_origin is None:
+    if input_origin is None or input_origin == "extension":
         return
     if input_origin == _records.INPUT_ORIGIN_SPEECH_TRANSCRIPTION:
         session.add_note(_records.SPEECH_TRANSCRIPTION_SYSTEM_REMINDER)

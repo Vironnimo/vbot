@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents import default_workspace_dir
+from core.agents.temporary import TemporaryAgent
 from core.attachments import sniff_media_type
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.chat.errors import ChatError
@@ -104,7 +105,7 @@ def resolve_mention_root(
     *,
     session_id: str | None = None,
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
-) -> Path:
+) -> Path | None:
     """Resolve the directory ``@``-mentions work against for one chat address.
 
     Mirrors tool path resolution (``ToolContext.effective_cwd``): a Session
@@ -112,10 +113,16 @@ def resolve_mention_root(
     Agent's Workspace — so the picker lists exactly the tree that relative tool
     paths resolve against. An existing Session (*session_id*) uses its own
     working Project; without one (a draft, or a Session not created yet) the
-    root is where a new Session with *working_project_id* would work.
+    root is where a new Session with *working_project_id* would work. A
+    workspace-less temporary Agent has no mention root. Its Extension-owned
+    working directory is private to its execution.
     """
     resolver = runtime.agent_resolver
-    agent = resolver.resolve_agent(project_id, agent_id)
+    agent = resolver.resolve_agent(
+        project_id, agent_id, session_id=session_id, require_model=False, include_temporary=True
+    )
+    if isinstance(agent, TemporaryAgent):
+        return None
     working_project_id = resolver.resolve_working_project(
         project_id, agent, session_id=session_id, requested=working_project_id
     )

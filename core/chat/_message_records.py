@@ -30,7 +30,7 @@ MessageRole = Literal[
     "agent_takeover",
     "history_edit",
 ]
-InputOrigin = Literal["speech_transcription", "live_voice"]
+InputOrigin = Literal["speech_transcription", "live_voice", "extension"]
 ReplySurfaceKind = Literal["webui", "tui", "channel"]
 ConversationKind = Literal["direct", "group"]
 GroupRole = Literal["admin", "member"]
@@ -63,9 +63,7 @@ TUI_REPLY_SURFACE_REMINDER = (
 )
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
 INPUT_ORIGIN_LIVE_VOICE: InputOrigin = "live_voice"
-INPUT_ORIGINS: frozenset[str] = frozenset(
-    (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, INPUT_ORIGIN_LIVE_VOICE)
-)
+INPUT_ORIGINS: frozenset[str] = frozenset(get_args(InputOrigin))
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
     "The user dictated the following message; speech-to-text can mishear words and drop "
     "punctuation. Act on what the user most likely meant. Ask only when a likely mishearing "

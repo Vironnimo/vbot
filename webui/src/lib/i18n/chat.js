@@ -1,4 +1,7 @@
 export default Object.freeze({
+  'appChat.openFull': 'Open in Chat',
+  'appChat.askSettings': 'Ask about these settings',
+  'appChat.settingsTitle': 'Settings chat',
   'external.open': 'Import',
   'external.title': 'Import external history',
   'external.target': 'Continue with {agent}',
@@ -380,6 +383,7 @@ export default Object.freeze({
   'chat.agentBar.hideSessionList': 'Hide sessions',
   'chat.today': 'Today',
   'chat.historyEmptyTitle': 'No messages yet',
+  'chat.noConversationMessages': 'No conversation messages yet',
   'chat.toolArgs': 'Args',
   'chat.toolPendingName': 'tool',
   'chat.toolCancelled': 'cancelled',

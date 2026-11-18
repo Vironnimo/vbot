@@ -18,7 +18,7 @@ from typing import Any
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools import _code_process
+from core.tools import _code_process, _python_process
 from core.tools._code_process import MAX_OUTPUT_BYTES, MAX_STDERR_BYTES, run_python
 from core.tools._tool_results import tool_failure, tool_success
 from core.tools.contracts import JsonObject
@@ -167,7 +167,7 @@ async def test_python_runs_like_a_main_script(
         # The disposable runtime maps its CPython binary to the test interpreter.
         runtime = tmp_path / "runtime"
         monkeypatch.setattr(
-            _code_process,
+            _python_process,
             "sys",
             SimpleNamespace(platform=sys.platform, executable=str(runtime / "vBot.Server.exe")),
         )

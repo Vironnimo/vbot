@@ -8,6 +8,7 @@ RPC hands the Session store; tests on ``make_state`` run against a real store.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -237,6 +238,44 @@ async def test_session_create_resolves_the_address_and_publishes_a_scoped_change
             "scope": {"project_id": project_id, "agent_id": "builder", "session_id": "new-session"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_app_chat_launch_requires_its_builtin_and_retries_its_own_session(
+    tmp_path: Path,
+) -> None:
+    state = _make_state(tmp_path)
+    runtime = state.runtime
+    params = {"profile": "app", "session_id": "popup-one"}
+    try:
+        assert (await rpc_error(state, "session.create_app_chat", **params))[
+            "code"
+        ] == "agent_not_found"
+        runtime.agents.ensure_builtin_agents()
+        runtime.agents.create("first", model="openai/gpt-5.2", thinking_effort="high")
+        runtime.storage = SimpleNamespace(
+            setup=SimpleNamespace(read=lambda: SimpleNamespace(agent_id="first"))
+        )
+        first, second = await asyncio.gather(
+            rpc_result(state, "session.create_app_chat", **params),
+            rpc_result(state, "session.create_app_chat", **params),
+        )
+        assert first == second == {"agent_id": "app-assistant", "session_id": "popup-one"}
+        assert len(resource_changes(state)) == 1
+        assert runtime.agents.get("app-assistant").current_session_id == ""
+        assert runtime.sessions.metadata_value(
+            SessionAddress(None, "app-assistant", "popup-one"), "agent_overrides"
+        ) == {"model": "openai/gpt-5.2", "thinking_effort_default": True}
+        runtime.sessions.create("app-assistant", session_id="other-session")
+        refused = await rpc_error(
+            state, "session.create_app_chat", profile="app", session_id="other-session"
+        )
+        assert refused["code"] == "input_conflict"
+        assert (await rpc_error(state, "session.create_app_chat", profile="unknown"))[
+            "code"
+        ] == "invalid_request"
+    finally:
+        runtime.sessions.close()
 
 
 @pytest.mark.asyncio
@@ -513,6 +552,13 @@ async def test_session_project_groups_list_every_agent_by_working_project(
     runtime.projects.create("vbot", "vBot", repo)
     runtime.projects.create("idle", "Idle", tmp_path / "idle")
     runtime.agents.create("coder")
+    # An Agent created before vBot reserved this id remains an ordinary Session owner.
+    existing_dir = runtime.agents.data_dir / "agents" / "app-assistant"
+    existing_dir.mkdir()
+    (existing_dir / "agent.json").write_text(
+        '{"format_version":1,"id":"app-assistant","name":"Existing Agent"}', encoding="utf-8"
+    )
+    runtime.agents.ensure_builtin_agents()
     sessions = runtime.sessions
     try:
         sessions.create("coder", session_id="workspace", working_project_id=None)
@@ -553,6 +599,11 @@ async def test_session_project_groups_list_every_agent_by_working_project(
         batch = await rpc_result(state, "session.list", agent_ids=["coder", "builder@vbot"])
         assert {item["id"] for item in batch["sessions"]} == {"workspace", "in-vbot", "team"}
         assert batch["total_count"] == 3
+        sessions.create("app-assistant", session_id="prior-chat", working_project_id="idle")
+        old = await rpc_result(state, "session.list", working_project_id="idle")
+        assert [(row["id"], row["agent_address"]) for row in old["sessions"]] == [
+            ("prior-chat", "app-assistant")
+        ]
         unknown = await rpc_error(state, "session.list", working_project_id="gone")
         assert "gone" in unknown["message"]
     finally:
@@ -794,13 +845,13 @@ async def test_session_mark_read_acknowledges_the_exact_run_without_a_list_refre
         unread_run_id="run-newer",
     )
     stale = await rpc_result(
-        state, "session.mark_read", agent_id="builder", session_id="s1", run_id="run-old"
+        state, "session.mark_read", agent_id="tmp_participant", session_id="s1", run_id="run-old"
     )
 
-    assert resolver.resolved == [("vbot", "builder"), (None, "builder")]
+    assert resolver.resolved == []
     assert sessions.marked_read == [
         ("builder", "s1", "run-one", "vbot"),
-        ("builder", "s1", "run-old", None),
+        ("tmp_participant", "s1", "run-old", None),
     ]
     assert acknowledged["agent_id"] == "builder@vbot"
     assert acknowledged["marked_read"] is True

@@ -45,8 +45,18 @@ class TemporaryResolution:
         ``address`` itself; omit it for the binding's own configuration.
         """
         binding = self._registry().resolve(address, generation_id=generation_id)
+        return self.apply_to_session(_require_temporary_binding(binding), address, session)
+
+    def apply_to_session(
+        self,
+        agent: TemporaryAgent | OwnedIdentityAgent,
+        address: Any,
+        session: SessionAddress | None,
+        *,
+        require_model: bool = True,
+    ) -> RuntimeAgent:
         overrides = AgentOverrides() if session is None else self._owner.session_overrides(session)
-        return self._apply_address(_require_temporary_binding(binding), address, overrides)
+        return self._apply_address(agent, address, overrides, require_model=require_model)
 
     async def resolve_async(
         self,
@@ -65,6 +75,16 @@ class TemporaryResolution:
         agent = _require_temporary_binding(
             await registry.resolve_async(address, generation_id=generation_id)
         )
+        return await self.apply_to_session_async(agent, address, session)
+
+    async def apply_to_session_async(
+        self,
+        agent: TemporaryAgent | OwnedIdentityAgent,
+        address: Any,
+        session: SessionAddress | None,
+        *,
+        require_model: bool = True,
+    ) -> RuntimeAgent:
         overrides = (
             AgentOverrides()
             if session is None
@@ -72,7 +92,9 @@ class TemporaryResolution:
         )
         if getattr(address, "project_id", None) is None and overrides.is_empty:
             return agent
-        return await _RESOLUTION_WORKERS.run(self._apply_address, agent, address, overrides)
+        return await _RESOLUTION_WORKERS.run(
+            self._apply_address, agent, address, overrides, require_model=require_model
+        )
 
     def prepare_config(
         self, config: TemporaryAgentConfig, project_id: str | None
@@ -109,6 +131,7 @@ class TemporaryResolution:
             denied=tuple(sorted(set(access.denied) | set(config.tool_access.denied))),
             granted=tuple(name for name in config.tool_access.granted if name in access.allowed),
             fixed=access.fixed or config.tool_access.fixed or config.tool_access.mode == "none",
+            exact=access.exact or config.tool_access.exact,
         )
         selected_skills = (
             sorted(self._owner._skill_pool_names(project_id))
@@ -269,7 +292,7 @@ class TemporaryResolution:
         self, config: TemporaryAgentConfig, project_id: str | None = None
     ) -> TemporaryAgent | OwnedIdentityAgent:
         """Resolve editor configuration like a started one, without creating a Session."""
-        from core.agents.temporary import TemporaryAgent
+        from core.agents.temporary import AppChatAgentConfig, TemporaryAgent
 
         config = self.prepare_config(config, project_id)
         if config.identity_agent is not None:
@@ -284,6 +307,7 @@ class TemporaryResolution:
             tools=config.tools,
             fallback_models=config.fallback_models or [],
             instructions=config.instructions,
+            bundled_prompt=isinstance(config, AppChatAgentConfig),
             prompt_blocks=config.prompt_blocks,
             temperature=config.temperature,
             top_p=config.top_p,
@@ -314,10 +338,14 @@ class TemporaryResolution:
         agent: TemporaryAgent | OwnedIdentityAgent,
         address: Any,
         overrides: AgentOverrides,
+        *,
+        require_model: bool = True,
     ) -> RuntimeAgent:
         """Check the address's Project, then apply the Session's overrides."""
         self._require_project(getattr(address, "project_id", None))
-        resolved = self._owner._session_resolution._apply_overrides(agent, overrides)
+        resolved = self._owner._session_resolution._apply_overrides(
+            agent, overrides, require_model=require_model
+        )
         from core.agents.temporary import OwnedIdentityAgent
 
         if isinstance(agent, OwnedIdentityAgent) and isinstance(resolved, OwnedIdentityAgent):

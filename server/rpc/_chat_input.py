@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from core.agents import AgentNotFoundError, app_chat_profile
 from core.chat import (
     CommandDispatcher,
     CommandExecutionContext,
@@ -250,6 +251,11 @@ async def _expand_content_file_mentions(
                 working_project_id=new_session_project,
             )
         )
+        if root is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "This Session has no Workspace for file mentions. Attach the file to the message.",
+            )
         generation_id = None
         if file_reads is None:
             session = await runtime.chat_sessions.get_async(address)
@@ -290,6 +296,9 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
         return
     try:
         agent = await chat_sessions.run_async(agents.get, address.agent_id)
+    except AgentNotFoundError:
+        # Extension-owned Sessions use a temporary Agent without a roster pointer.
+        return
     except Exception as exc:
         _LOGGER.warning(
             "Failed to read agent for current-session mark (agent=%s): %s",
@@ -297,7 +306,7 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
             exc,
         )
         return
-    if agent.current_session_id == address.session_id:
+    if app_chat_profile(agent) is not None or agent.current_session_id == address.session_id:
         return
     try:
         await chat_sessions.run_async(

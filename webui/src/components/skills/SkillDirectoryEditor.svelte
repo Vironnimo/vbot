@@ -18,7 +18,7 @@
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     createSkillDirectoriesUpdatePayload,
     getDefaultSkillDirectoryValue,
@@ -33,10 +33,11 @@
   let newSkillDirectory = $state('');
   let saving = $state(false);
   let addElement = $state();
-  const directoriesDraft = createSettingsDraft({
+  const directoriesDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getSkillDirectories,
     read: () => skillDirectories,
     write: (next) => (skillDirectories = next),

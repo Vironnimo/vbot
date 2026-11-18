@@ -107,6 +107,9 @@ export function loadHistory(sessionState, messages, options = {}) {
       options.contextUsage,
     );
   }
+  if (options.agentName !== undefined) {
+    sessionState.agentName = options.agentName;
+  }
   if (isRecord(options.compactionPolicy)) {
     sessionState.compactionPolicy = options.compactionPolicy;
   }

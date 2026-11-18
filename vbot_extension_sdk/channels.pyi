@@ -323,5 +323,6 @@ class ToolAccess:
     granted: tuple[str, ...] = ()
     fixed: bool = False
     live_call: bool = False
+    exact: bool = False
 
     def to_dict(self) -> dict[str, Any]: ...

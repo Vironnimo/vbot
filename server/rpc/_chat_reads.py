@@ -84,6 +84,7 @@ class _ChatHistoryRead:
     # of the Session's own Sub-Agent above it; read for every page but a
     # ``before`` one.
     subagent_sessions: dict[SessionAddress, str] | None = None
+    agent_name: str | None = None
 
 
 async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
@@ -261,6 +262,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
         if before is None:
+            response["agent_name"] = read.agent_name
             response["output_speed"] = history.output_speed
             response["output_latency"] = history.output_latency
     if before is None:
@@ -384,12 +386,21 @@ def _read_chat_history(
     if history.unchanged:
         return _ChatHistoryRead(history, None, None, subagent_sessions=subagent_sessions)
     agent = _session_agent(state, address) if before is None else None
+    agent_name = getattr(agent, "name", None)
+    if agent is None and before is None:
+        # A temporary Agent has one binding for its own and delegated Sessions.
+        binding = state.runtime.chat_sessions.temporary_agent_binding(
+            address.project_id, address.agent_id
+        )
+        if binding is not None:
+            agent_name = binding.config.get("name")
     return _ChatHistoryRead(
         history,
         _session_compaction_policy(state, address, agent) if agent is not None else None,
         None if active_reviews is None else _read_reflection_runs(state, session, active_reviews),
         _agent_context_window(state, agent) if agent is not None else None,
         subagent_sessions,
+        agent_name=agent_name,
     )
 
 
@@ -412,10 +423,9 @@ def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddre
 def _session_agent(state: Any, address: SessionAddress) -> Any | None:
     """Return the Agent as the Session runs it, ``None`` when it no longer resolves.
 
-    The Session's Agent overrides apply, so its Model is the one its next Run
-    uses. A Session whose Agent no longer resolves through the ordinary
-    addressing (a removed Team member, a temporary Session) stays readable; the
-    facts that depend on its Agent are reported as unknown by omitting them.
+    The Session's overrides and any temporary Agent binding apply. History
+    remains readable when the owner no longer resolves, e.g. a removed Team
+    member or a binding whose Project was removed.
     """
     try:
         return state.runtime.agent_resolver.resolve_agent(
@@ -423,6 +433,7 @@ def _session_agent(state: Any, address: SessionAddress) -> Any | None:
             address.agent_id,
             session_id=address.session_id,
             require_model=False,
+            include_temporary=True,
         )
     except AgentResolutionError as exc:
         _LOGGER.debug(

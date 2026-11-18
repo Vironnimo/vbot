@@ -439,6 +439,7 @@ class StubAgentResolver:
         new_session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
+        include_temporary: bool = False,
     ) -> StubAgent | ConfigAgent:
         agent: StubAgent | ConfigAgent
         if project_id is None:

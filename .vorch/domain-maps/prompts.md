@@ -84,7 +84,7 @@ Read these only when your task matches - not by default.
 
 - Adding or changing a pinned prompt-epoch input, `pinned_context.py`, the `render_*` snapshot methods or a `BlockCatalog` -> `prompts/adding-a-pinned-input.md`
 - Changing what a core, memory or data block renders (`core:runtime`, `core:soul`, `core:working_project`, `core:channels`, ...), the Runtime variables, the Producers or the bundled layout -> `prompts/core-blocks.md`
-- Changing Tool-, Extension- or temporary-Session blocks (On-demand Tools, `tool:load_tools`, `tool:subagent`, `tool:bash`, `prompt_blocks`, `block_details`) -> `prompts/contributed-blocks.md`
+- Changing Tool, Extension, app profile or temporary Session blocks (On-demand Tools, `tool:load_tools`, `tool:subagent`, `tool:bash`, `prompt_blocks`, `block_details`) -> `prompts/contributed-blocks.md`
 - Changing include, SOUL or Project file reads (`render_prompt_file`, `render_project_files`, size cap, notices) -> `prompts/prompt-files.md`
 - Changing `prompt.*` RPCs (block edit/layout, `user:` blocks, scopes) or `prompt.preview` -> `prompts/block-editing-and-preview.md`
 - Changing Reflection, `/learn` or Librarian briefs or `BRIEF_FRAGMENT_NAMES` -> `prompts/learning-briefs.md`

@@ -10,7 +10,8 @@ child dispatch and persistence (`chat/request-building.md`, `tools/registry-disp
 - Internal, catalog-hidden and never on demand. A route with native
   `request.on_demand_tools: false` pins `load_tools` and `call_tool` from the
   first request, including when no normal Tool is selected yet. Tool access
-  `none` offers neither. The Agent's Tool loading choice and always-loaded
+  `none` offers neither. App chat profiles with exact Tool selection list
+  their eligible Tools directly on every route. The Agent's Tool loading choice and always-loaded
   selection still decide which target definitions are listed directly.
 - `name` and object `arguments` identify one target call. Only `name` is
   required: `arguments` may be omitted, and `null` or `""` count as omitted.

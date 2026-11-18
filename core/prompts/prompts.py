@@ -39,6 +39,7 @@ from core.prompts._types import (
     BLOCK_OWNER_IDENTITY,
     BLOCK_OWNER_SKILL_MANAGE,
     BLOCK_OWNER_SUBAGENT_SESSION,
+    BUILTIN_SCOPE_KEY,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
     CORE_IDENTITY_RUNTIME_BLOCK_ID,
@@ -723,6 +724,9 @@ class SystemPromptManager:
         ``SOUL.md`` notice names ``read`` only when the Agent's current Tool policy
         offers it.
         """
+        selected = getattr(agent, "prompt_blocks", None)
+        if selected is not None and CORE_SOUL_BLOCK_ID not in selected:
+            return ""
         return render_soul(agent, self._tool_policy.tool_availability(agent), on_read)
 
     def _render_working_project_block(self, context: BlockRenderContext) -> str:
@@ -888,13 +892,13 @@ class SystemPromptManager:
         )
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
-        if scope is None:
-            if agent.custom_system_prompt_enabled:
-                return PromptScope("agent", agent.id)
-            return PromptScope("default")
+        if scope is None and agent.custom_system_prompt_enabled:
+            return PromptScope("agent", agent.id)
 
         prompt_scope = _normalize_prompt_scope(scope)
         if prompt_scope.type == "default":
+            if getattr(agent, "bundled_prompt", False):
+                return PromptScope(BUILTIN_SCOPE_KEY)
             return prompt_scope
 
         agent_id = _require_scope_agent_id(prompt_scope)

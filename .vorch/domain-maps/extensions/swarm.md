@@ -1018,7 +1018,7 @@ browse the server's folders (`webui.md` -> Ownership). The Run directory counts
 as changed only when `sameServerPath` (`lib/pathPicker.js`) says it names another
 folder than the default, so a completed folder's trailing separator, or `/` for
 `\` on a Windows path, keeps the Project selection. The manifest
-requires API 20 (`extension.json`; path listing was added in API 12,
+requires API 37 for the hosted Session slot (`extension.json`; path listing was added in API 12,
 slash-command argument hints in API 20; `SwarmPage.test.js`,
 `SwarmPage.profiles.test.js`).
 Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.activity.test.js`, `test_extensions_methods.py`).
@@ -1044,6 +1044,8 @@ page in flight, and one dropped by a newer full load is covered or replaced by
 it, because that load started after the change.
 Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
 `SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
+Within Activity, View Session embeds the selected participant's host-owned Session by Swarm and participant id. While it is open the Swarm reader detaches; returning to Activity catches up and restores its enriched Board, Wiki and participant references. Leaving the tab releases the host slot.
+
 The Activity tab lists the Run's participants as the Board's chips, the inspected
 one pressed; until one is chosen, and only once the participants are loaded, it
 asks to choose one. A chosen participant's header (avatar, name, the shared
@@ -1051,7 +1053,7 @@ context ring with its figures, Resume participant when resumable, close) shows a
 once (the ring's window is the one the participant's Context names, kept across
 live updates that name none, else the catalog window of its Model), with a loading banner until its History arrives, and sticks below the Run
 view's tab row while the timeline scrolls (`--swarm-run-sticky-top`, as the
-Board's newer-posts bar); in an Activity narrower than 520px Resume participant moves
+Board's newer-posts bar); in an Activity narrower than 650px the Session and Resume controls move
 to a second row. A participant's Activity opens at its newest entries.
 Below the timeline a banner says why a failed or interrupted participant
 stopped when its timeline does not (`stopReason` in `pageActivity.svelte.js`).

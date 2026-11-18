@@ -29,7 +29,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildEmbeddingModelOptions,
     buildRecallMethodOptions,
@@ -63,14 +63,13 @@
     recallIndexStatus = null,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let recallSettings = $state(untrack(() => getRecallSettings(settings)));
   let saving = $state(false);
-  const recallDraft = createSettingsDraft({
+  const recallDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getRecallSettings,
     read: () => recallSettings,
     write: (next) => (recallSettings = next),

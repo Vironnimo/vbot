@@ -806,6 +806,44 @@ async def test_extension_page_history_projects_only_bound_visible_history(
 
 
 @pytest.mark.asyncio
+async def test_extension_page_session_resolves_only_its_registered_participant() -> None:
+    state = _page_state(None)
+    address = SessionAddress(None, "tmp_alpha", "ses_one")
+    registry = state.runtime.extensions
+
+    def binding(*, owner_name: str, group_id: str, participant_id: str) -> Any:
+        if (owner_name, group_id, participant_id) == ("alpha", "group-a", "participant-a"):
+            return SimpleNamespace(address=address)
+        return None
+
+    async def run_async(fn: Any, **kwargs: Any) -> Any:
+        return fn(**kwargs)
+
+    state.runtime.chat_sessions = SimpleNamespace(
+        run_async=run_async, temporary_binding_by_participant=binding
+    )
+    params = {"name": "alpha", "page": _PAGE, "group_id": "group-a"}
+    method = "extensions.page_session"
+    assert await rpc_result(state, method, **params, participant_id="participant-a") == {
+        "agent_id": "tmp_alpha",
+        "project_id": None,
+        "session_id": "ses_one",
+    }
+    assert (await rpc_error(state, method, **params, participant_id="other"))[
+        "code"
+    ] == "invalid_request"
+
+    async def retire_during_read(fn: Any, **kwargs: Any) -> Any:
+        registry.current = False
+        return fn(**kwargs)
+
+    state.runtime.chat_sessions.run_async = retire_during_read
+    assert (await rpc_error(state, method, **params, participant_id="participant-a"))[
+        "code"
+    ] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_extension_page_history_rejects_stale_page_and_foreign_participant() -> None:
     class Groups:
         async def inspect(self, group_id: str, participant_id: str, query: JsonObject) -> Any:

@@ -25,7 +25,7 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildSessionTitleSettingsPayload,
     normalizeSessionTitleSettings,
@@ -44,10 +44,11 @@
     untrack(() => normalizeSessionTitleSettings(settings)),
   );
   let saving = $state(false);
-  const sessionTitlesDraft = createSettingsDraft({
+  const sessionTitlesDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: normalizeSessionTitleSettings,
     read: () => formValues,
     write: (next) => (formValues = next),

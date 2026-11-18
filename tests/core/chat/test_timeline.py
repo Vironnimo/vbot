@@ -70,6 +70,7 @@ def visible_contract(items: list[JsonObject]) -> list[JsonObject]:
         "content",
         "status",
         "interrupted",
+        "finalAnswer",
         "reasoningSummary",
         "durationMs",
         "toolCallId",
@@ -139,6 +140,11 @@ def test_history_and_live_keep_ordered_phases_steering_tools_and_terminal_identi
         "assistant_output",
     ]
     assert run_block(history)["iterationCount"] == 2
+    assert [
+        item["finalAnswer"]
+        for item in run_block(history)["items"]
+        if item["type"] == "assistant_output"
+    ] == [False, True]
     output = next(
         item for item in run_block(history)["items"] if item["type"] == "assistant_output"
     )

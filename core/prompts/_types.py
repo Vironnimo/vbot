@@ -76,6 +76,8 @@ INHERITANCE_DEFAULT_OVERRIDE = "default_override"
 INHERITANCE_OWNER_DEFAULT = "owner_default"
 
 DEFAULT_SCOPE_KEY = "default"
+# Internal build-only scope. Its selected blocks use the packaged resources.
+BUILTIN_SCOPE_KEY = "builtin"
 
 AGENT_SCOPE_KEY_PREFIX = "agent:"
 

@@ -23,7 +23,7 @@
   } from '$lib/autosave.js';
   import { archiveRetention } from '$lib/archiveRetention.svelte.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
 
   const noop = () => {};
 
@@ -70,10 +70,11 @@
   let automatic = $derived(draft.retention_days !== null);
   let daysInvalid = $derived(automatic && !validDays(Number(daysText)));
 
-  const retentionDraft = createSettingsDraft({
+  const retentionDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings,
     read: () => draft,
     write: (next) => {

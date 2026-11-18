@@ -18,8 +18,110 @@ from server.rpc.extension_presentation import (
     _contributions,
     _page_service,
 )
-from server.rpc.extensions_methods import _extension_pages, _extensions_payload
+from server.rpc.extensions_methods import (
+    _extension_page_open_specialist,
+    _extension_pages,
+    _extensions_payload,
+)
 from tests.core.extensions.extension_test_support import write_package
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_format_data_directory")
+async def test_page_opens_only_its_declared_profile_and_retries_the_same_session(tmp_path):
+    from core.agents.temporary import TemporaryAgentRegistry
+    from core.chat._run_permissions import session_permissions
+    from core.permissions import ApprovalRequirement, PermissionGrant, apply_preset
+    from core.projects import AgentResolver
+    from core.sessions import ChatSessionManager
+    from core.tools import ToolRegistry
+
+    root = tmp_path / "extensions"
+    package = write_package(
+        root,
+        "fixture",
+        """
+from pathlib import Path
+
+def register(api):
+    api.register_page("board", "Board", "index.html")
+    api.register_app_chat_profile("guide", name="Guide", instructions="fixture-role",
+        permission_ceiling={"layers": [{
+            "source": "extension", "workdir": str(Path(__file__).resolve().parent),
+            "read": "anywhere", "write": "anywhere", "commands": "any", "web": "any",
+            "allow": [], "deny": ["Web(refused.example.com)"],
+        }]})
+""",
+    )
+    (package / "index.html").write_text("fixture", encoding="utf-8")
+    registry = ExtensionRegistry.load(root)
+    sessions = ChatSessionManager(tmp_path)
+    temporary = TemporaryAgentRegistry(sessions)
+
+    async def create(group, participant, config):
+        return temporary.create(
+            owner_name="fixture", group_id=group, participant_id=participant, config=config
+        )
+
+    host = SimpleNamespace(
+        for_owner=None, temporary_agents=SimpleNamespace(create=create), state_dir=tmp_path
+    )
+    registry.bind_host(host)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            extensions=registry,
+            chat_sessions=sessions,
+            tools=ToolRegistry(),
+            storage=SimpleNamespace(
+                load_defaults=lambda: {},
+                setup=SimpleNamespace(read=lambda: SimpleNamespace(agent_id="onboarding")),
+            ),
+            agents=SimpleNamespace(
+                list=lambda: [
+                    SimpleNamespace(id="onboarding", placement=None, model="fixture/onboarded")
+                ]
+            ),
+            agent_resolver=SimpleNamespace(require_chat_model_configured=Mock()),
+        )
+    )
+    page = {"id": "board", "epoch": registry.registration_identity("fixture").epoch}
+    params = {"name": "fixture", "page": page, "profile": "guide", "request_id": "window-1"}
+    try:
+        address = await _extension_page_open_specialist(state, params)
+        assert await _extension_page_open_specialist(state, params) == address
+        assert address["project_id"] is None
+        binding = sessions.temporary_binding_by_participant(
+            owner_name="fixture", group_id="app-chat:window-1", participant_id="operator"
+        )
+        assert binding.address.session_id == address["session_id"]
+        assert binding.config["instructions"] == "fixture-role"
+        assert binding.config["model"] == "fixture/onboarded"
+        resolver = AgentResolver(
+            state.runtime.agents,
+            Mock(),
+            Mock(),
+            dict,
+            sessions=sessions,
+            temporary_agents=temporary,
+        )
+        resolver.set_session_permission_rules(binding.address, apply_preset("full_access", None))
+        resolved = await resolver.resolve_temporary_agent_async(
+            binding.address, generation_id=binding.generation_id, session=binding.address
+        )
+        assert resolved.tool_access.exact
+        boundary = session_permissions(
+            resolved, data_dir=tmp_path, project_root=None, ceiling=None
+        ).boundary(tmp_path, owner=binding.address)
+        assert boundary.check_host("allowed.example.com") is None
+        assert boundary.ceiling(source="parent") == resolved.permission_ceiling
+        grant = PermissionGrant(boundary)
+        grant.approve([ApprovalRequirement.host("refused.example.com", "web")])
+        assert grant.check_host("refused.example.com").reason == "deny_rule"
+        for invalid in ({"profile": "settings"}, {"page": {**page, "epoch": "stale"}}):
+            with pytest.raises(RpcError):
+                await _extension_page_open_specialist(state, {**params, **invalid})
+    finally:
+        sessions.close()
 
 
 @pytest.mark.asyncio

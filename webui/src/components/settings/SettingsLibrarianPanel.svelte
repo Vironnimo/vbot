@@ -28,7 +28,7 @@
     librarianProblemText,
     librarianTriggerText,
   } from '$lib/librarian.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
 
   // Skill maintenance: the `librarian` settings section (the schedule, when
@@ -88,14 +88,13 @@
     skillsRefreshToken = 0,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let librarianSettings = $state(untrack(() => getLibrarianSettings(settings)));
   let saving = $state(false);
-  const librarianDraft = createSettingsDraft({
+  const librarianDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getLibrarianSettings,
     read: () => librarianSettings,
     write: (next) => (librarianSettings = next),

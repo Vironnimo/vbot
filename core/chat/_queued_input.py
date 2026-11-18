@@ -31,11 +31,13 @@ from core.chat.messages import (
     ReplySurface,
 )
 from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run, RunKind
+from core.sessions import SessionAddress
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
     from core.chat._run_state import ChatLoopDependencies, _ModelTarget, _RunExecutionContext
     from core.chat.chat import ChatLoop
+    from core.sessions import TemporarySessionBinding
 
 
 STEERING_SYSTEM_REMINDER = (
@@ -55,7 +57,23 @@ class QueuedChatInput:
     request: _RunRequest
 
     async def __call__(self, run: Run) -> ChatMessage:
-        return await self.loop._execution._execute_run(run, self.request)
+        request = self.request
+        if request.extension_app_chat:
+            binding = await self.app_chat_binding(
+                SessionAddress(run.project_id, run.agent_id, run.session_id),
+                run.expected_session_generation_id,
+            )
+            request = replace(request, temporary_binding=binding)
+        return await self.loop._execution._execute_run(run, request)
+
+    async def app_chat_binding(
+        self, address: SessionAddress, generation_id: str | None
+    ) -> TemporarySessionBinding:
+        """Resolve the registered profile admitted by this queued operator input."""
+        binding = await self.loop._input_binding(address, allow_app_chat=True)
+        if binding is None or binding.generation_id != generation_id:
+            raise ChatError("This Extension chat was replaced. Open it again in its page.")
+        return binding
 
     def with_edited_content(
         self,
@@ -99,6 +117,7 @@ async def persist_steering_input(
     )
     _append_input_origin_note(session, request.input_origin)
     _add_context_note(session, request.context_note)
+    _add_context_note(session, request.app_view)
     if reply_to_user:
         session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
     if not request.session_message:

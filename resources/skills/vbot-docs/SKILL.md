@@ -5,7 +5,7 @@ description: "Configure and inspect vBot, the app you run in: Agents including y
 
 # vBot
 
-Use the `vbot` CLI through the shell Tool to read and change vBot. Without target options it reaches the server that runs you, so a saved change applies there at once, also to yourself.
+Run the documented commands with the `vbot` Tool when available. Pass the arguments after `vbot` as a list of strings. With a shell Tool, run the command as written. Without target options it reaches the server that runs you, so a saved change applies there at once, also to yourself.
 
 Commands read `vbot <area> <action> [target] [options]`: ids are positional, everything else is a flag. `vbot help` lists the areas, `vbot <area>` its actions, `vbot <area> <action> --help` the exact arguments. Use only commands and flags that help shows.
 
@@ -45,7 +45,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
-When no row fits, or the reference you read lacks the answer, search the `references` folder for the command, flag or term with `search_files`, its `path` set to that folder inside the directory the `skill` Tool reported when it loaded this Skill. Then read the file that matches.
+Read a reference with the `skill` Tool using `name: "vbot-docs"` and its relative `file_path`. When no row fits and `search_files` is available, search the `references` folder inside the loaded Skill directory for the command, flag or term.
 
 ## Inputs, credentials and failures
 

@@ -102,6 +102,7 @@ export function createChatViewLifecycle(context) {
   });
 
   $effect(() => {
+    if (context.boundSession) return;
     if (lastAgentsRefreshToken === null) {
       lastAgentsRefreshToken = context.agentsRefreshToken;
       return;
@@ -153,6 +154,7 @@ export function createChatViewLifecycle(context) {
   // or a full Session refresh re-reads every address; an address joining the
   // set is read once. Scoped Session invalidations are applied separately.
   $effect(() => {
+    if (context.boundSession) return;
     const addresses = context.activity.pickerAgentAddresses;
     const reconnectRevision = context.connectionSnapshot
       ? `${context.connectionSnapshot.epoch ?? ''}:${context.connectionSnapshot.last_sequence ?? ''}`
@@ -227,7 +229,12 @@ export function createChatViewLifecycle(context) {
   });
 
   onMount(() => {
-    loadAgents({ preferredAgentId: context.sharedSelectedAgentId });
+    if (context.boundSession) {
+      const { agentAddress, sessionId } = context.boundSession;
+      void actions.loadHistoryForSession(agentAddress, sessionId);
+    } else {
+      loadAgents({ preferredAgentId: context.sharedSelectedAgentId });
+    }
     const onPageAttentionChange = () => {
       pageAttentionRevision += 1;
     };
@@ -265,7 +272,7 @@ export function createChatViewLifecycle(context) {
   // context.active selection. The mount's roster read decides the first address, so
   // nothing loads before it ends.
   $effect(() => {
-    if (chatState.loadingAgents) {
+    if (context.readOnly || chatState.loadingAgents) {
       return;
     }
     const { agentAddress } = target.activeAddressing();
@@ -282,6 +289,9 @@ export function createChatViewLifecycle(context) {
 
   const runStream = createChatRunStream({
     childLimit: 100,
+    acceptsSession: context.boundSession
+      ? target.isDisplayedSession
+      : undefined,
     chatState,
     subscribeRunEvents,
     refreshSessionQueue: (sessionState) =>
@@ -304,7 +314,9 @@ export function createChatViewLifecycle(context) {
     runEvents: untrack(() => context.runEvents),
     isDisplayedSession: target.isDisplayedSession,
     shouldLoadCurrentHistory: () =>
-      !navigation.viewingSessionId && !target.projectAgentActive,
+      !context.boundSession &&
+      !navigation.viewingSessionId &&
+      !target.projectAgentActive,
     onAgentsChanged: (agents) => context.onAgentsChanged?.(agents),
     onAgentSelected: reportAgentSelected,
     onSessionCreated: (sessionState) => {

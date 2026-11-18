@@ -51,10 +51,13 @@ from core.agents.agents import (
     validate_agent_rename_data,
     validate_agent_rename_file,
 )
+from core.agents.app_chats import APP_CHAT_PROFILES, app_chat_profile
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 
 __all__ = [
     "AGENT_FORMAT_VERSION",
+    "APP_CHAT_PROFILES",
+    "app_chat_profile",
     "BUILTIN_AGENT_IDS",
     "LIBRARIAN_AGENT_ID",
     "LIBRARIAN_AGENT_NAME",

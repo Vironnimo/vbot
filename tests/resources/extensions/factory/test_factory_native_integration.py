@@ -1125,6 +1125,9 @@ async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
         assert working["task_session"]["session_id"] == req["kwargs"]["test_context"]["session_id"]
         assert working["session"]["agent_id"] == working["task_session"]["agent_id"] == member.id
         assert working["session"] != working["task_session"]
+        assert working["session_binding"]["participant_id"] == worker["id"]
+        assert working["task_session_binding"]["participant_id"] == worker["id"]
+        assert working["session_binding"]["group_id"] != working["task_session_binding"]["group_id"]
         assert "Please implement this" in str(req["messages"])
         harness.model.tool(
             "factory_tasks",

@@ -313,6 +313,10 @@ class _RunRequest:
     parent_agent_input: bool = False
     # A note stored right before the input, such as what happened since the last Run.
     context_note: str | ChatMessage | None = None
+    # The user's view at submission, including when this input steers another Run.
+    app_view: ChatMessage | None = None
+    # Resolve this operator input's immutable Extension profile again as it leaves the Queue.
+    extension_app_chat: bool = False
 
     @property
     def session_message(self) -> bool:

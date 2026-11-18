@@ -33,6 +33,7 @@ const INTERRUPTION_REASONS = new Set([
 
 export function createSwarmPageActivity(host) {
   let history = $state(null);
+  let sessionOpen = $state(false);
 
   const projection = $state(
     ensureSessionState(createChatState(), 'swarm', 'activity'),
@@ -153,6 +154,7 @@ export function createSwarmPageActivity(host) {
     clearProjection();
     reasoningOpen = {};
     inspectedParticipant = null;
+    sessionOpen = false;
     inspectionRequest = null;
     paused = false;
     stale = false;
@@ -201,7 +203,8 @@ export function createSwarmPageActivity(host) {
   }
 
   $effect(() => {
-    if (host.model.activeTab === 'participants') untrack(resume);
+    if (host.model.activeTab === 'participants' && !sessionOpen)
+      untrack(resume);
     else untrack(pause);
   });
 
@@ -515,8 +518,19 @@ export function createSwarmPageActivity(host) {
     if (activate) {
       if (!(await host.model.openTab('participants'))) return;
     }
+    // The host follows the selected Session while its view shows. Only the
+    // Swarm-specific Activity reader needs the enriched Board/Wiki links.
+    if (sessionOpen) {
+      if (activate && inspectedParticipant?.id !== participant.id) {
+        leaveActivity();
+        inspectedParticipant = participant;
+        sessionOpen = true;
+        paused = true;
+      }
+      return;
+    }
     // A hidden Activity catches up when its tab shows again.
-    else if (paused) return;
+    if (!activate && paused) return;
     const background = !activate;
     if (settledRuns.has(participant.lifecycle_run_id))
       participant = { ...participant, run_active: false };
@@ -724,6 +738,12 @@ export function createSwarmPageActivity(host) {
   }
 
   return {
+    get sessionOpen() {
+      return sessionOpen;
+    },
+    toggleSession() {
+      sessionOpen = !sessionOpen;
+    },
     cancelToolCall,
     loadToolCall,
     isReasoningOpen,

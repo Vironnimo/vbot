@@ -192,7 +192,11 @@ def _session_summary(
     runtime = state.runtime
     resolver = runtime.agent_resolver
     agent: RuntimeAgent = resolver.resolve_agent(
-        project_id, agent_id, session_id=session_id, require_model=False
+        project_id,
+        agent_id,
+        session_id=session_id,
+        require_model=False,
+        include_temporary=session_id is not None,
     )
     overrides = (
         resolver.session_overrides(SessionAddress(project_id, agent_id, session_id))

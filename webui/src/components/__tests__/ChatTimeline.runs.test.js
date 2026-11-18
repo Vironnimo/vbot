@@ -48,6 +48,121 @@ const REPORTED_TEXTS = [
 describe('ChatTimeline Runs', () => {
   const timeline = setupChatTimelineSuite();
 
+  it('shows human messages and settled answers in a conversation and opens all details in full', () => {
+    const session = timelineSession();
+    const [question, run] = reportedMultiStepItems();
+    const steer = {
+      id: 'steer-user',
+      type: 'user_message',
+      message: { id: 'steered', role: 'user', content: 'And the exact file?' },
+    };
+    const peer = messageItem({
+      id: 'from-peer',
+      role: 'user',
+      content: 'Background findings.',
+      sender: { kind: 'session' },
+    });
+    const generated = messageItem({
+      id: 'extension-start',
+      role: 'user',
+      content: 'Prepare the internal task.',
+      input_origin: 'extension',
+    });
+    const recovered = outputItem('Exact answer: ', {
+      id: 'interrupted-segment',
+      interrupted: true,
+    });
+    const earlier = [...run.items.slice(0, -1), steer, recovered];
+    const answer = run.items.at(-1);
+    session.timelineItems = [
+      question,
+      peer,
+      generated,
+      assistantRun('inspector', [...earlier, { ...answer, streaming: true }]),
+    ];
+    const props = reactiveProps({
+      sessionState: session,
+      presentation: 'conversation',
+    });
+    timeline.mount(props);
+    const contents = () =>
+      [
+        ...document.querySelectorAll(
+          '.msg.user .msg-user-text, .msg.assistant .msg-markdown',
+        ),
+      ].map((entry) => entry.textContent.trim());
+    expect(contents()).toEqual([
+      question.message.content,
+      steer.message.content,
+    ]);
+    expect(document.querySelector('.run-footer').textContent).toContain(
+      t('chat.working.active'),
+    );
+    props.sessionState.timelineItems = [
+      question,
+      peer,
+      generated,
+      assistantRun(
+        'inspector',
+        [...earlier, { ...answer, finalAnswer: true }],
+        { status: 'completed' },
+      ),
+    ];
+    flushSync();
+    expect(contents()).toEqual([
+      question.message.content,
+      steer.message.content,
+      recovered.content + answer.content,
+    ]);
+    expect(
+      document.querySelector('.reasoning-block, .tool-event, .run-footer'),
+    ).toBeNull();
+    props.presentation = 'compact';
+    flushSync();
+    const work = [...document.querySelectorAll('.working-block')];
+    expect(work.length).toBeGreaterThan(0);
+    expect(work.every((entry) => !entry.open)).toBe(true);
+    expect(document.querySelector('.tool-event')).toBeNull();
+    props.presentation = 'full';
+    flushSync();
+    expect(document.querySelectorAll('.tool-event')).toHaveLength(2);
+    expect(document.body.textContent).toContain(peer.message.content);
+    expect(document.body.textContent).toContain(generated.message.content);
+  });
+
+  it('reserves editing and Run controls for interactive views, with explicit monitor Tool cancellation', () => {
+    const session = timelineSession();
+    session.timelineItems = [
+      messageItem({
+        id: 'question',
+        role: 'user',
+        content: 'Work here',
+        editable: true,
+      }),
+      assistantRun('active', [toolItem({ id: 'shell', name: 'bash' })]),
+    ];
+    const props = reactiveProps({
+      sessionState: session,
+      readOnly: true,
+      presentation: 'compact',
+    });
+    timeline.mount(props);
+    expect(document.querySelector('.working-block')).toBeTruthy();
+    openDisclosures('.working-block');
+    expect(document.querySelector('.tool-event')).toBeTruthy();
+    expect(document.querySelector('.row-cancel, .message-edit')).toBeNull();
+    props.onCancelToolCall = vi.fn();
+    flushSync();
+    document.querySelector('.row-cancel').click();
+    expect(props.onCancelToolCall).toHaveBeenCalledWith({
+      runId: 'active',
+      toolCallId: 'shell',
+    });
+    props.readOnly = false;
+    flushSync();
+    expect(document.querySelector('.message-edit')).toBeTruthy();
+  });
+
   it('marks omitted Run steps for loading without a visible action', () => {
     const session = timelineSession('windowed');
     session.timelineItems = [

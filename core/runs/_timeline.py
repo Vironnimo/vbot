@@ -488,6 +488,14 @@ class RunTimeline:
             child["messageId"] = message_id
             self._text_message_ids.add((kind, message_id))
             if kind == "assistant_output":
+                # A streamed prefix can still be followed by Tool calls. The
+                # settled message is the first shared live/History boundary
+                # which can identify a finished answer to the user.
+                child["finalAnswer"] = (
+                    not message.get("tool_calls")
+                    and not child["interrupted"]
+                    and message.get("phase") != "commentary"
+                )
                 # The public projection signs the answer's delivered files
                 # through this message; its calls and Reasoning have rows.
                 child["messages"] = [

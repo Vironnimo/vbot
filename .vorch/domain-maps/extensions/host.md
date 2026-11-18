@@ -123,3 +123,29 @@ Owned execution's configured `allowed_skills` is a hard registry ceiling in the
 root and all owned descendants. It bounds the Model catalog, trigger activation
 and fresh `skill` Tool reads, including private and Project grants. Details:
 `agent/temporary-agents.md` and `skills/loading.md` -> Owned selection views.
+
+## Operator chats in Extension pages
+
+A Python Extension declares an owner-local specialist with `register_app_chat_profile`.
+A registered page opens it with `client.openSpecialist` (SDK example:
+`sdk/python/README.md`). The server resolves its profile against the current page
+registration. The browser supplies a retry key. An exact retry returns the
+same Session, including after a server restart. Each new conversation captures
+an immutable temporary Agent configuration, the explicit, default or setup Model,
+and the default Permission Rules. Its role, selected prompt blocks, Tools,
+per-Tool settings and Skills come from the profile. Its optional
+`permission_ceiling` has the ordinary temporary-Agent format and semantics.
+The Session's own rules and overrides are applied within that inherited boundary.
+Only selected Tools accept configuration. A profile cannot grant permanent
+Shell environment keys. A change to the declaration requires a fresh
+conversation; the old transcript remains readable.
+
+These are operator conversations. The human's normal Chat input owns receipts,
+Queue, Steer, and Run lifetime. The queued input records that it requires an
+Extension profile. Each execution reopens the exact binding and checks the
+current registration and profile revision before loading the Agent. Private Tool
+grants are limited to explicitly selected Tools of that Extension; a collision,
+missing Tool or retired registration prevents execution. Session-runtime hooks
+for owner-scheduled worker Runs are separate. Other temporary participants
+continue to require their owner's execution group. User-sent view snapshots
+identify a page of the owning Extension and carry no configuration authority.

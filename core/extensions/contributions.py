@@ -12,6 +12,7 @@ from typing import Any
 EXTENSION_FEATURES = frozenset(
     {
         "ui.pages",
+        "ui.session-chats",
         "ui.contributions",
         "ui.preferences",
         "services",

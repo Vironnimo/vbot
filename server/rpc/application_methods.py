@@ -76,7 +76,7 @@ async def _verified_ticket(state: Any, ticket_id: str):
 
 
 async def _update_handoff_mint(state: Any, params: JsonObject) -> JsonObject:
-    # The live Bash token is the whole authorization; identity comes only from
+    # The live Tool call token is the whole authorization; identity comes only from
     # the server-side record of the Tool call that received it.
     _reject_unsupported(params, {"handoff_token"}, "application.update_handoff_mint")
     token = _required_string(params, "handoff_token")

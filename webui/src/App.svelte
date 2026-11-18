@@ -90,12 +90,15 @@
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
+  import SessionPopup from './components/chat/SessionPopup.svelte';
+  import { createAppChats, provideAppChats } from '$lib/appChats.svelte.js';
+  import { qualifyAgentAddress } from '$lib/agentAddress.js';
   import { appearancePrefs } from '$lib/appearancePrefs.svelte.js';
   import { dateTimePrefs } from '$lib/dateTimePrefs.svelte.js';
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
   import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
-  import { onDestroy, onMount, setContext, tick } from 'svelte';
+  import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
   import {
     createSpeechAudio,
     provideSpeechAudio,
@@ -436,6 +439,41 @@
     selection,
     openChat: () => openView('chat'),
   });
+  const appChats = provideAppChats(createAppChats(() => activeViewId));
+  $effect(() => {
+    const deletion = sessionDeletion;
+    if (deletion) untrack(() => appChats.forgetSession(deletion));
+  });
+  $effect(() => {
+    // A popup receives live context from its opening view until that view retires.
+    if (
+      appChats.popup &&
+      (appChats.popup.view !== activeViewId || setup.onboardingActive)
+    ) {
+      appChats.close();
+    }
+  });
+  function openFullSession(address) {
+    return chatNavigation.navigateToSession(
+      qualifyAgentAddress(address.agent_id, address.project_id),
+      address.session_id,
+    );
+  }
+  function expandSessionPopup(address) {
+    const popup = appChats.popup;
+    const moved = openFullSession(address);
+    void Promise.resolve(moved).then((result) => {
+      if (
+        appChats.popup === popup &&
+        (result ||
+          (activeViewId === 'chat' &&
+            navigator.location.place[0] ===
+              qualifyAgentAddress(address.agent_id, address.project_id) &&
+            navigator.location.place[1] === address.session_id))
+      )
+        appChats.close();
+    });
+  }
 
   // The main navigation: a view's last place; the view already shown stays
   // where it is. Leaving first-run setup for another view sets setup aside.
@@ -583,6 +621,7 @@
     onLoadProjects: selection.loadProjects,
     onAgentIdChanged: (oldAgentId, newAgentId) => {
       renameComposerAgent(oldAgentId, newAgentId);
+      appChats.renameAgent(oldAgentId, newAgentId);
       renameWidgetStatesAgent(oldAgentId, newAgentId);
       speechAudio.renameAgent(oldAgentId, newAgentId);
       // Chat areas re-key their Sessions here; the place Chat's first area
@@ -602,6 +641,22 @@
     onComputersChanged: computers.refresh,
   });
   const runEvents = appController.runEvents;
+  const sessionViewEvents = $derived({
+    runEvents,
+    commandStatuses,
+    sessionActivity,
+    terminalsRefreshToken,
+    agentSecretsRefreshToken,
+    connectionSnapshot,
+    sessionsRefreshToken,
+    sessionInvalidations,
+    commandsRefreshToken,
+    queueInvalidation,
+    chatWorkingMode: appearancePrefs.chatWorkingMode,
+    subscribeAgentRenames: selection.subscribeAgentRenames,
+    onNavigateToSession: openFullSession,
+  });
+  setContext('sessionViewEvents', () => sessionViewEvents);
   navigator.start();
 
   onMount(() => {
@@ -741,12 +796,12 @@
       </LazyContent>
     {:else}
       <ChatWorkspace
+        {...sessionViewEvents}
         onToast={desktop.showToast}
         active={activeViewId === 'chat'}
         sharedAgents={selection.agents}
         sharedSelectedAgentId={selection.selectedAgentId}
         chatWidth={appearancePrefs.chatWidth}
-        chatWorkingMode={appearancePrefs.chatWorkingMode}
         projects={selection.projects}
         projectsLoaded={selection.projectsLoaded}
         selectedProjectId={selection.selectedProjectId}
@@ -761,19 +816,8 @@
         navigateToSubAgent={chatNavigation.navigateToSubAgent}
         pendingSessionNavigation={chatNavigation.pendingSessionNavigation}
         onSessionNavigation={chatNavigation.handleSessionNavigation}
-        {runEvents}
-        {commandStatuses}
-        {sessionActivity}
-        {terminalsRefreshToken}
-        {agentSecretsRefreshToken}
-        {connectionSnapshot}
-        {sessionsRefreshToken}
-        {sessionInvalidations}
-        {commandsRefreshToken}
-        {queueInvalidation}
         {sessionDeletion}
         splitRequest={chatNavigation.splitRequest}
-        subscribeAgentRenames={selection.subscribeAgentRenames}
         subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         hasConnectedProvider={setup.settings === null
           ? null
@@ -989,6 +1033,15 @@
       />
     {/if}
   </ToastStack>
+  {#if appChats.popup}
+    {#key appChats.popup}
+      <SessionPopup
+        popup={appChats.popup}
+        onClose={appChats.close}
+        onOpenFull={expandSessionPopup}
+      />
+    {/key}
+  {/if}
 </AppShell>
 
 {#if contributions.customized}

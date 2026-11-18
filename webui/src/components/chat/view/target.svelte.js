@@ -287,7 +287,7 @@ export function createChatViewTarget(context) {
         ? liveAgentName(agentId)
         : agentId === LIBRARIAN_AGENT_ID && !projectId
           ? librarianName()
-          : agentId || agentAddress,
+          : activeSessionState?.agentName || agentId || agentAddress,
       current_session_id: '',
       __overrideAddress: agentAddress,
       __liveCall: liveCall,

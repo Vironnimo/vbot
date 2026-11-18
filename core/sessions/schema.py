@@ -464,7 +464,7 @@ CREATE TABLE user_entry_senders (
   source_kind TEXT NOT NULL DEFAULT 'user'
 ) STRICT;
 
--- How a User entry was entered (dictated, or passed on by Live voice).
+-- Provenance of User entries, including voice and generated Extension inputs.
 CREATE TABLE user_entry_origins (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   input_origin TEXT NOT NULL

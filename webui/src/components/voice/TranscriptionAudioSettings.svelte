@@ -23,7 +23,7 @@
     createAutosaveParticipant,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   let { settings, onCommit, onError } = $props();
 
   let transcriptionAudio = $state(
@@ -35,10 +35,11 @@
   );
 
   let transcriptionSaveState = $state('idle');
-  const audioDraft = createSettingsDraft({
+  const audioDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: normalizeTranscriptionAudio,
     read: () => transcriptionAudio,
     write: (next) => (transcriptionAudio = next),

@@ -98,7 +98,9 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             model=raw["model"],
             cwd=Path(raw["cwd"]),
             tool_access=replace(
-                normalize_tool_access(raw["tool_access"]), fixed=raw.get("fixed_tool_access", False)
+                normalize_tool_access(raw["tool_access"]),
+                fixed=raw.get("fixed_tool_access", False),
+                exact=raw.get("exact_tool_access", bool(raw.get("app_chat_profile"))),
             ),
             allowed_skills=raw["allowed_skills"],
             tools=raw["tools"],

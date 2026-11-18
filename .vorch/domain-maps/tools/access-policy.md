@@ -10,6 +10,11 @@ How `core/tools/availability.py` resolves a Tool Access Policy, how opt-in, foll
 
 Constraint `live_call` (`TOOL_CONSTRAINT_LIVE_CALL`) resolves a Tool only for a policy with `ToolAccess.live_call` set, which is runtime-only like `fixed` and set by the Agent store only for the two built-in Agents of a Live call; the Live Tools (family `live`, `core/tools/live.py`, opt-in) carry it, so no other Agent can get them, whatever its policy names (`model_tasks/live-operator.md` -> Live Tools).
 
+An app chat additionally uses runtime-only `ToolAccess.exact`. Its listed
+Tools form the entire catalog for policy resolution. A follower requires both
+its own selection and an active source. Every eligible Tool is listed directly
+on every Model route.
+
 ## Opt-in Tools
 
 Configurable Tools may declare `requires_opt_in=True`. They require an explicit name in `tool_access.granted` in addition to ordinary policy permission; All mode and selections an owner or the Project converter materialized never grant opt-in. None and denials still win, and companions cannot follow an ungranted parent. Missing Tools retain stored grants. `tool.list` exposes the flag for the shared editor; raw wildcard/unfiltered definition and dispatch paths do not authorize opt-in Tools. Coverage: `tests/core/tools/test_availability.py`, `tests/core/tools/test_tools_registry.py` (registration rules), `tests/core/extensions/test_capabilities.py`.

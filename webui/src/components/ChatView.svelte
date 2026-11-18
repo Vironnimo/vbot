@@ -1,4 +1,5 @@
 <script>
+  import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
   import ExternalHistoryDialog from './chat/ExternalHistoryDialog.svelte';
   import {
@@ -27,6 +28,7 @@
   import { sessionApprovalRequests } from '$lib/permissionApprovals.js';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import { getContext, untrack } from 'svelte';
+  import { provideContributions } from '$lib/contributionContext.js';
   import { listConnections, listModels } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { keepClearOfToasts } from '$lib/toastClearance.js';
@@ -46,6 +48,14 @@
 
   let {
     active = true,
+    // An embedded view stays on its addressed Session throughout its lifetime.
+    // SessionView remounts it when the caller changes the address.
+    boundSession = null,
+    readOnly = false,
+    monitor = null,
+    onOpenFull = null,
+    getUIContext = null,
+    presentation,
     workspaceActions,
     // Open in split view: `{ label, open(target) }` shows a Session or Agent
     // (`{ agentAddress, sessionId?, subAgent? }`) in the workspace's other
@@ -156,6 +166,10 @@
     onPickModel = () => {},
   } = $props();
 
+  // A monitor offers native inspection and the host's explicit monitor
+  // actions. SessionView remounts on mode changes so writable Extension
+  // controls and their action capabilities cannot outlive edit mode.
+  if (untrack(() => readOnly)) provideContributions(null);
   const chatState = $state(createChatState());
   let importTarget = $state('');
   // The Identity Agent's default place for an import: a Project id, '' for its
@@ -205,6 +219,9 @@
     },
   });
   const navigation = createChatViewNavigation({
+    get boundSession() {
+      return boundSession;
+    },
     get active() {
       return active;
     },
@@ -281,6 +298,9 @@
   // Players of this area name its Session as the origin of speech they replay.
   provideSpeechOrigin(() => navigation.shownSession());
   const actions = createChatViewActions({
+    get boundSession() {
+      return boundSession;
+    },
     get chatState() {
       return chatState;
     },
@@ -342,7 +362,7 @@
   // The composer footer's Project, Model and thinking effort.
   const sessionSettings = createSessionSettings({
     get active() {
-      return active;
+      return active && !boundSession;
     },
     get target() {
       return target;
@@ -421,6 +441,7 @@
   // unless a dialog is open over it.
   function handleNewSessionShortcut(event) {
     if (
+      boundSession ||
       !active ||
       !interactive ||
       event.defaultPrevented ||
@@ -483,7 +504,9 @@
   );
 
   let composerDisabled = $derived(
-    !target.activeAgent || chatState.loadingHistory,
+    !target.activeAgent ||
+      chatState.loadingHistory ||
+      (boundSession && !target.activeSessionState?.historyLoaded),
   );
   // A Session of a Live voice call is written only by the call, so it shows a
   // notice in place of the composer.
@@ -644,6 +667,12 @@
     },
   });
   const lifecycle = createChatViewLifecycle({
+    get boundSession() {
+      return boundSession;
+    },
+    get readOnly() {
+      return readOnly;
+    },
     chatState,
     target,
     navigation,
@@ -779,38 +808,50 @@
 <section
   class="view view-chat active chat-view"
   data-chat-width={chatWidth}
-  aria-labelledby={chatTitleId}
+  aria-label={boundSession ? target.activeAgent?.name : undefined}
+  aria-labelledby={boundSession ? undefined : chatTitleId}
   hidden={!active}
 >
-  <ChatHeader
-    uiContext={contributionContext}
-    titleId={chatTitleId}
-    agents={chatState.agents}
-    projectGroups={target.projectGroups}
-    agentActivity={activity.pickerAgentActivity}
-    selectedAddress={target.activeAgentAddress}
-    displayedAgentName={target.activeAgent?.__overrideAddress
-      ? target.activeAgent.name
-      : ''}
-    loadingAgents={chatState.loadingAgents}
-    onSelectAgent={handleSelectPickerAgent}
-    sessionListOpen={showSessionDrawer}
-    sessionListDisabled={!target.activeAgent}
-    onToggleSessionList={() => {
-      showSessionDrawer = !showSessionDrawer;
-      onSessionListOpenChange(showSessionDrawer);
-    }}
-    {newSessionDisabled}
-    onNewSession={navigation.handleNewSession}
-    onImport={() => (importTarget = target.activeAgentAddress)}
-    {otherArea}
-    actions={workspaceActions}
-    infoPanelOpen={activityPanelOpen}
-    infoPanelId={`${componentId}-info`}
-    infoToggleId={`${componentId}-info-toggle`}
-    infoRunningCount={activityRunningCount}
-    onToggleInfoPanel={() => (activityPanelOpen = !activityPanelOpen)}
-  />
+  {#if !boundSession}
+    <ChatHeader
+      uiContext={contributionContext}
+      titleId={chatTitleId}
+      agents={chatState.agents}
+      projectGroups={target.projectGroups}
+      agentActivity={activity.pickerAgentActivity}
+      selectedAddress={target.activeAgentAddress}
+      displayedAgentName={target.activeAgent?.__overrideAddress
+        ? target.activeAgent.name
+        : ''}
+      loadingAgents={chatState.loadingAgents}
+      onSelectAgent={handleSelectPickerAgent}
+      sessionListOpen={showSessionDrawer}
+      sessionListDisabled={!target.activeAgent}
+      onToggleSessionList={() => {
+        showSessionDrawer = !showSessionDrawer;
+        onSessionListOpenChange(showSessionDrawer);
+      }}
+      {newSessionDisabled}
+      onNewSession={navigation.handleNewSession}
+      onImport={() => (importTarget = target.activeAgentAddress)}
+      {otherArea}
+      actions={workspaceActions}
+      infoPanelOpen={activityPanelOpen}
+      infoPanelId={`${componentId}-info`}
+      infoToggleId={`${componentId}-info-toggle`}
+      infoRunningCount={activityRunningCount}
+      onToggleInfoPanel={() => (activityPanelOpen = !activityPanelOpen)}
+    />
+  {:else if onOpenFull}
+    <div class="chat-view__embed-header">
+      <Button
+        variant="tertiary"
+        onClick={() => onOpenFull(navigation.shownSession())}
+      >
+        {t('appChat.openFull')}
+      </Button>
+    </div>
+  {/if}
 
   {#if importTarget}
     <ExternalHistoryDialog
@@ -850,7 +891,7 @@
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
     </Banner>
-  {:else if chatState.agents.length === 0 && target.projectGroups.length === 0}
+  {:else if !boundSession && chatState.agents.length === 0 && target.projectGroups.length === 0}
     <EmptyState
       fill
       title={t('chat.noAgents')}
@@ -901,6 +942,8 @@
             currentRun={target.activeSessionState?.currentRun ?? null}
             agentName={target.activeAgent.name}
             {chatWorkingMode}
+            {presentation}
+            {readOnly}
             loadingHistory={layout.historyLoadingFeedbackVisible}
             historyLoaded={target.activeSessionState?.historyLoaded ??
               !target.activeAddressing().sessionId}
@@ -932,7 +975,9 @@
               chatController.loadToolCall(target.activeSessionState, call)}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
-            onCancelToolCall={actions.handleCancelToolCall}
+            onCancelToolCall={readOnly
+              ? (monitor?.cancelToolCall ?? null)
+              : actions.handleCancelToolCall}
             onStopBackgroundCommand={actions.handleStopBackgroundCommand}
             onBackgroundToolCall={({ runId, toolCallId }) =>
               chatController.controlRun(
@@ -962,6 +1007,19 @@
                   <Banner variant="error">
                     {t('chat.historyLoadError')}
                     {chatState.historyError}
+                    {#if boundSession}
+                      <Button
+                        variant="tertiary"
+                        onClick={() => {
+                          const { agentAddress, sessionId } =
+                            target.activeAddressing();
+                          void actions.loadHistoryForSession(
+                            agentAddress,
+                            sessionId,
+                          );
+                        }}>{t('common.retry')}</Button
+                      >
+                    {/if}
                   </Banner>
                 {/if}
                 {#if chatState.actionError}
@@ -983,240 +1041,261 @@
               </div>
             </div>
           {/if}
-          <div class="chat-view__composer-shell" use:keepClearOfToasts>
-            {#if actions.chatToast}
-              <div
-                class="chat-view__command-toast"
-                role="status"
-                aria-live="polite"
-              >
-                <p class="chat-view__command-toast-message">
-                  {actions.chatToast}
-                </p>
-              </div>
-            {/if}
-            <div class="composer-tray">
-              <ChatPendingApprovals
-                requests={displayedApprovals}
-                sessionKey={target.activeSessionState?.key ?? ''}
-                onOpenSession={navigation.handleNavigateToSubAgentLink}
+          {#if readOnly}
+            <div class="chat-view__monitor-usage">
+              <ContextUsageRing
+                contextUsage={target.activeSessionState?.contextUsage}
+                contextWindow={target.activeSessionState?.contextUsage
+                  ?.context_window}
+                usage={target.activeSessionState?.usage}
+                sessionUsage={target.activeSessionState?.sessionUsage}
+                compactionPolicy={target.activeSessionState?.compactionPolicy}
+                showFigures
               />
-              {#if navigation.subAgentSessionActive}
-                <Banner appearance="tray" aria-live="polite">
-                  {@render returnIcon()}
-                  <p>{t('chat.subagentSessionNotice')}</p>
-                  <Button
-                    variant="tertiary"
-                    class="chat-view__subagent-session-return"
-                    disabled={chatState.loadingHistory}
-                    onClick={navigation.handleReturnToCurrentSession}
-                  >
-                    {navigation.subAgentParentTarget
-                      ? t('chat.returnToParentSession')
-                      : t('chat.returnToCurrentSession')}
-                  </Button>
-                </Banner>
-              {:else if navigation.reflectionSessionActive}
-                <Banner appearance="tray" aria-live="polite">
-                  {@render returnIcon()}
-                  <p>{t('chat.reflectionSessionNotice')}</p>
-                  {#if navigation.reflectionSourceTarget}
+            </div>
+          {:else}
+            <div class="chat-view__composer-shell" use:keepClearOfToasts>
+              {#if actions.chatToast}
+                <div
+                  class="chat-view__command-toast"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <p class="chat-view__command-toast-message">
+                    {actions.chatToast}
+                  </p>
+                </div>
+              {/if}
+              <div class="composer-tray">
+                <ChatPendingApprovals
+                  requests={displayedApprovals}
+                  sessionKey={target.activeSessionState?.key ?? ''}
+                  onOpenSession={navigation.handleNavigateToSubAgentLink}
+                />
+                {#if !boundSession && navigation.subAgentSessionActive}
+                  <Banner appearance="tray" aria-live="polite">
+                    {@render returnIcon()}
+                    <p>{t('chat.subagentSessionNotice')}</p>
                     <Button
                       variant="tertiary"
-                      class="chat-view__reflection-session-return"
+                      class="chat-view__subagent-session-return"
                       disabled={chatState.loadingHistory}
-                      onClick={navigation.handleReturnToReflectionSource}
+                      onClick={navigation.handleReturnToCurrentSession}
                     >
-                      {t('chat.returnToMainSession')}
+                      {navigation.subAgentParentTarget
+                        ? t('chat.returnToParentSession')
+                        : t('chat.returnToCurrentSession')}
                     </Button>
-                  {/if}
+                  </Banner>
+                {:else if !boundSession && navigation.reflectionSessionActive}
+                  <Banner appearance="tray" aria-live="polite">
+                    {@render returnIcon()}
+                    <p>{t('chat.reflectionSessionNotice')}</p>
+                    {#if navigation.reflectionSourceTarget}
+                      <Button
+                        variant="tertiary"
+                        class="chat-view__reflection-session-return"
+                        disabled={chatState.loadingHistory}
+                        onClick={navigation.handleReturnToReflectionSource}
+                      >
+                        {t('chat.returnToMainSession')}
+                      </Button>
+                    {/if}
+                  </Banner>
+                {/if}
+                {#if providerSetupMissing}
+                  <Banner appearance="tray" aria-live="polite">
+                    {@render setupIcon()}
+                    <p>{t('chat.noProvider.title')}</p>
+                    <Button
+                      variant="tertiary"
+                      class="chat-view__no-provider-action"
+                      onClick={onConnectProvider}
+                    >
+                      {t('chat.noProvider.action')}
+                    </Button>
+                  </Banner>
+                {:else if agentModelMissing}
+                  <Banner appearance="tray" aria-live="polite">
+                    {@render setupIcon()}
+                    <p>{t('chat.noModel.title')}</p>
+                    <Button
+                      variant="tertiary"
+                      class="chat-view__no-model-action"
+                      onClick={onPickModel}
+                    >
+                      {t('chat.noModel.action')}
+                    </Button>
+                  </Banner>
+                {/if}
+                <SecretRequests
+                  agentId={displayedSecretAddress.agentId}
+                  projectId={displayedSecretAddress.projectId}
+                  sessionId={target.activeSessionState?.sessionId ?? ''}
+                  refreshToken={agentSecretsRefreshToken}
+                />
+                <QueuedMessages
+                  scopeKey={composerDraftKey}
+                  {subscribeAgentRenames}
+                  queuedMessages={target.activeSessionState?.queue ?? []}
+                  onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
+                  onSteerQueuedMessage={actions.handleSteerQueuedMessage}
+                  canSteer={target.activeSessionState?.status === 'running'}
+                  onEditQueuedMessage={actions.handleEditQueuedMessage}
+                />
+                {#if composerAvailable && !liveCallSession && sessionSettings.view?.goal}
+                  <ComposerGoal
+                    goal={sessionSettings.view.goal}
+                    onCommand={actions.handleGoalCommand}
+                  />
+                {/if}
+              </div>
+              {#if liveCallSession}
+                <Banner appearance="compact" class="chat-view__footer-banner">
+                  <p>
+                    {t('chat.liveCallNotice')}
+                  </p>
+                </Banner>
+              {:else if composerAvailable}
+                <ChatComposer
+                  bind:this={composer}
+                  uiContext={contributionContext}
+                  disabled={composerDisabled}
+                  isRunning={isRunActive(target.activeSessionState)}
+                  cancelling={target.activeSessionState?.cancellingRunIds?.includes(
+                    target.activeSessionState?.currentRun?.runId,
+                  ) ?? false}
+                  draftKey={composerDraftKey}
+                  historyKey={composerHistoryKey}
+                  focusRequest={layout.composerFocusRequest}
+                  availableSkills={chatState.availableSkills}
+                  contextUsage={target.activeSessionState?.contextUsage}
+                  compactionState={composerSendMessage &&
+                  target.activeSessionState
+                    ? contextCompactionState(target.activeSessionState)
+                    : 'unavailable'}
+                  compactionSubmitting={actions.isCompactionSubmitting(
+                    target.activeSessionState,
+                  )}
+                  onForceCompaction={actions.handleCompactContext}
+                  contextWindow={target.activeSessionState?.contextUsage
+                    ?.context_window}
+                  compactionPolicy={target.activeSessionState?.compactionPolicy}
+                  usage={target.activeSessionState?.usage}
+                  sessionUsage={target.activeSessionState?.sessionUsage}
+                  {getUIContext}
+                  onSendError={actions.setSessionActionError}
+                  onSendMessage={composerSendMessage}
+                  onCancelRun={actions.handleCancelRun}
+                  backgroundWorkRunning={activity.backgroundWorkRunning}
+                  stoppingAll={target.activeSessionState?.stoppingAll ?? false}
+                  onStopAll={actions.handleStopAll}
+                  onTranscriptionError={actions.handleTranscriptionError}
+                  onListFiles={composerListFiles}
+                  onLoadModelCatalog={composerLoadModelCatalog}
+                  onOpenSecretForm={composerSendMessage ? openSecretForm : null}
+                >
+                  {#snippet footer(contributions)}
+                    {#if !boundSession && sessionSettings.view}
+                      <ComposerSessionSettings
+                        uiContext={contributions.context}
+                        commands={contributions.commands}
+                        view={sessionSettings.view}
+                        outputSpeed={target.activeSessionState?.outputSpeed}
+                        outputLatency={target.activeSessionState?.outputLatency}
+                        {projects}
+                        {projectsLoaded}
+                        onSelectProject={sessionSettings.selectProject}
+                        onSelectAgent={moveDraftToAgent}
+                        onSelectModel={sessionSettings.selectModel}
+                        onSelectFastMode={sessionSettings.selectFastMode}
+                        onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
+                        onSelectExecution={sessionSettings.selectExecution}
+                        onModelPickerOpen={() =>
+                          void sessionSettings.loadCatalog().catch(() => {})}
+                      />
+                    {/if}
+                  {/snippet}
+                </ChatComposer>
+              {:else}
+                <Banner appearance="compact" class="chat-view__footer-banner">
+                  <p>
+                    {t('split.sameSession')}
+                  </p>
                 </Banner>
               {/if}
-              {#if providerSetupMissing}
-                <Banner appearance="tray" aria-live="polite">
-                  {@render setupIcon()}
-                  <p>{t('chat.noProvider.title')}</p>
-                  <Button
-                    variant="tertiary"
-                    class="chat-view__no-provider-action"
-                    onClick={onConnectProvider}
-                  >
-                    {t('chat.noProvider.action')}
-                  </Button>
-                </Banner>
-              {:else if agentModelMissing}
-                <Banner appearance="tray" aria-live="polite">
-                  {@render setupIcon()}
-                  <p>{t('chat.noModel.title')}</p>
-                  <Button
-                    variant="tertiary"
-                    class="chat-view__no-model-action"
-                    onClick={onPickModel}
-                  >
-                    {t('chat.noModel.action')}
-                  </Button>
-                </Banner>
-              {/if}
-              <SecretRequests
-                agentId={displayedSecretAddress.agentId}
-                projectId={displayedSecretAddress.projectId}
-                sessionId={target.activeSessionState?.sessionId ?? ''}
-                refreshToken={agentSecretsRefreshToken}
-              />
-              <QueuedMessages
-                scopeKey={composerDraftKey}
-                {subscribeAgentRenames}
-                queuedMessages={target.activeSessionState?.queue ?? []}
-                onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
-                onSteerQueuedMessage={actions.handleSteerQueuedMessage}
-                canSteer={target.activeSessionState?.status === 'running'}
-                onEditQueuedMessage={actions.handleEditQueuedMessage}
-              />
-              {#if composerAvailable && !liveCallSession && sessionSettings.view?.goal}
-                <ComposerGoal
-                  goal={sessionSettings.view.goal}
-                  onCommand={actions.handleGoalCommand}
+              {#if secretForm}
+                <SecretGiveForm
+                  agentId={secretForm.agentId}
+                  projectId={secretForm.projectId}
+                  sessionId={secretForm.sessionId}
+                  onSendCommand={secretForm.send}
+                  onGiven={actions.showChatToast}
+                  onClose={() => (secretForm = null)}
                 />
               {/if}
             </div>
-            {#if liveCallSession}
-              <Banner appearance="compact" class="chat-view__footer-banner">
-                <p>
-                  {t('chat.liveCallNotice')}
-                </p>
-              </Banner>
-            {:else if composerAvailable}
-              <ChatComposer
-                bind:this={composer}
-                uiContext={contributionContext}
-                disabled={composerDisabled}
-                isRunning={isRunActive(target.activeSessionState)}
-                cancelling={target.activeSessionState?.cancellingRunIds?.includes(
-                  target.activeSessionState?.currentRun?.runId,
-                ) ?? false}
-                draftKey={composerDraftKey}
-                historyKey={composerHistoryKey}
-                focusRequest={layout.composerFocusRequest}
-                availableSkills={chatState.availableSkills}
-                contextUsage={target.activeSessionState?.contextUsage}
-                compactionState={composerSendMessage &&
-                target.activeSessionState
-                  ? contextCompactionState(target.activeSessionState)
-                  : 'unavailable'}
-                compactionSubmitting={actions.isCompactionSubmitting(
-                  target.activeSessionState,
-                )}
-                onForceCompaction={actions.handleCompactContext}
-                contextWindow={target.activeSessionState?.contextUsage
-                  ?.context_window}
-                compactionPolicy={target.activeSessionState?.compactionPolicy}
-                usage={target.activeSessionState?.usage}
-                sessionUsage={target.activeSessionState?.sessionUsage}
-                onSendMessage={composerSendMessage}
-                onCancelRun={actions.handleCancelRun}
-                backgroundWorkRunning={activity.backgroundWorkRunning}
-                stoppingAll={target.activeSessionState?.stoppingAll ?? false}
-                onStopAll={actions.handleStopAll}
-                onTranscriptionError={actions.handleTranscriptionError}
-                onListFiles={composerListFiles}
-                onLoadModelCatalog={composerLoadModelCatalog}
-                onOpenSecretForm={composerSendMessage ? openSecretForm : null}
-              >
-                {#snippet footer(contributions)}
-                  {#if sessionSettings.view}
-                    <ComposerSessionSettings
-                      uiContext={contributions.context}
-                      commands={contributions.commands}
-                      view={sessionSettings.view}
-                      outputSpeed={target.activeSessionState?.outputSpeed}
-                      outputLatency={target.activeSessionState?.outputLatency}
-                      {projects}
-                      {projectsLoaded}
-                      onSelectProject={sessionSettings.selectProject}
-                      onSelectAgent={moveDraftToAgent}
-                      onSelectModel={sessionSettings.selectModel}
-                      onSelectFastMode={sessionSettings.selectFastMode}
-                      onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
-                      onSelectExecution={sessionSettings.selectExecution}
-                      onModelPickerOpen={() =>
-                        void sessionSettings.loadCatalog().catch(() => {})}
-                    />
-                  {/if}
-                {/snippet}
-              </ChatComposer>
-            {:else}
-              <Banner appearance="compact" class="chat-view__footer-banner">
-                <p>
-                  {t('split.sameSession')}
-                </p>
-              </Banner>
-            {/if}
-            {#if secretForm}
-              <SecretGiveForm
-                agentId={secretForm.agentId}
-                projectId={secretForm.projectId}
-                sessionId={secretForm.sessionId}
-                onSendCommand={secretForm.send}
-                onGiven={actions.showChatToast}
-                onClose={() => (secretForm = null)}
-              />
-            {/if}
-          </div>
+          {/if}
         </div>
-        <ChatActivityPanel
-          bind:open={activityPanelOpen}
-          onRunningCountChange={(count) => (activityRunningCount = count)}
-          id={`${componentId}-info`}
-          toggleId={`${componentId}-info-toggle`}
-          timelineItems={activity.timelineItems}
-          subAgentStatuses={chatState.subAgentStatuses}
-          subAgentWork={chatState.subAgentWork}
-          onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
-          subAgentCommands={activity.subAgentCommands}
-          backgroundCommandStatuses={target.activeSessionState
-            ?.backgroundCommandStatuses}
-          commandStatuses={activity.commandStatuses}
-          reflectionTasks={reflectionTaskRows(target.activeSessionState)}
-          sessionStats={sessionInfo.stats}
-          session={sessionInfo.summary}
-          usage={sessionInfo.usage}
-          subAgentTree={sessionInfo.subAgents}
-          onSessionStatsWanted={sessionInfo.setWanted}
-          parentSession={navigation.sessionParentLink}
-          onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
-          otherArea={subAgentOtherArea}
-          onNavigateToParentSession={navigation.navigateToParentSession}
-          onOpenReflection={navigation.handleOpenReflection}
-          onLoadReflectionChanges={(row) =>
-            chatController.loadReflectionChanges(
-              target.activeSessionState,
-              row.runId,
-            )}
-          onUndoReflection={(row) =>
-            chatController.undoReflection(target.activeSessionState, row.runId)}
-          onCancelSubAgent={actions.handleCancelSubAgent}
-          onStopSubAgentWork={actions.handleStopSubAgentWork}
-          onStopBackgroundCommand={actions.handleStopBackgroundCommand}
-          onLoadCommandOutput={actions.loadCommandOutput}
-        >
-          {#snippet advancedSettings()}
-            {#if target.activeSessionState?.sessionId}
-              {#key target.activeSessionState.key}
-                {@const settingsSession = target.activeSessionState}
-                <SessionAdvancedSettings
-                  agentId={settingsSession.agentId}
-                  sessionId={settingsSession.sessionId}
-                  session={sessionInfo.row}
-                  policy={settingsSession.notificationPolicy ?? 'all'}
-                  onChanged={() => (sessionEdits += 1)}
-                  onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
-                  onCommit={(summary) =>
-                    applySessionCompletionActivity(settingsSession, summary)}
-                />
-              {/key}
-            {/if}
-          {/snippet}
-        </ChatActivityPanel>
+        {#if !boundSession}
+          <ChatActivityPanel
+            bind:open={activityPanelOpen}
+            onRunningCountChange={(count) => (activityRunningCount = count)}
+            id={`${componentId}-info`}
+            toggleId={`${componentId}-info-toggle`}
+            timelineItems={activity.timelineItems}
+            subAgentStatuses={chatState.subAgentStatuses}
+            subAgentWork={chatState.subAgentWork}
+            onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
+            subAgentCommands={activity.subAgentCommands}
+            backgroundCommandStatuses={target.activeSessionState
+              ?.backgroundCommandStatuses}
+            commandStatuses={activity.commandStatuses}
+            reflectionTasks={reflectionTaskRows(target.activeSessionState)}
+            sessionStats={sessionInfo.stats}
+            session={sessionInfo.summary}
+            usage={sessionInfo.usage}
+            subAgentTree={sessionInfo.subAgents}
+            onSessionStatsWanted={sessionInfo.setWanted}
+            parentSession={navigation.sessionParentLink}
+            onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+            otherArea={subAgentOtherArea}
+            onNavigateToParentSession={navigation.navigateToParentSession}
+            onOpenReflection={navigation.handleOpenReflection}
+            onLoadReflectionChanges={(row) =>
+              chatController.loadReflectionChanges(
+                target.activeSessionState,
+                row.runId,
+              )}
+            onUndoReflection={(row) =>
+              chatController.undoReflection(
+                target.activeSessionState,
+                row.runId,
+              )}
+            onCancelSubAgent={actions.handleCancelSubAgent}
+            onStopSubAgentWork={actions.handleStopSubAgentWork}
+            onStopBackgroundCommand={actions.handleStopBackgroundCommand}
+            onLoadCommandOutput={actions.loadCommandOutput}
+          >
+            {#snippet advancedSettings()}
+              {#if target.activeSessionState?.sessionId}
+                {#key target.activeSessionState.key}
+                  {@const settingsSession = target.activeSessionState}
+                  <SessionAdvancedSettings
+                    agentId={settingsSession.agentId}
+                    sessionId={settingsSession.sessionId}
+                    session={sessionInfo.row}
+                    policy={settingsSession.notificationPolicy ?? 'all'}
+                    onChanged={() => (sessionEdits += 1)}
+                    onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
+                    onCommit={(summary) =>
+                      applySessionCompletionActivity(settingsSession, summary)}
+                  />
+                {/key}
+              {/if}
+            {/snippet}
+          </ChatActivityPanel>
+        {/if}
       </div>
     </div>
   {/if}

@@ -35,6 +35,7 @@ from tests.server.rpc.chat_methods_test_support import (
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
+    StubAgent,
     StubProject,
     StubRuntime,
     make_state,
@@ -225,6 +226,19 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
         ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
         ("chat.send", {"session_id": "s1", "content": 123}, None),
         *[
+            ("chat.stream", {"session_id": "s1", "ui_context": value}, "params.ui_context")
+            for value in (
+                {},
+                {"view": "settings", "value": "do not capture arbitrary fields"},
+                {"view": "settings", "options": ["x"] * 33},
+                {"view": "settings", "options": ["x" * 256] * 32},
+                {"view": "settings", "field": ["x"]},
+                {"view": "settings", "docs": "references/../SKILL.md"},
+                {"view": "settings", "docs": "references/missing.md"},
+                {"view": "settings", "docs": ["references/configuration.md"]},
+            )
+        ],
+        *[
             ("chat.stream", {"session_id": "s1", "input_id": value}, "input_id")
             for value in (None, True, "", " ", "has space", "a" * 129)
         ],
@@ -309,7 +323,9 @@ async def test_send_snapshots_mentioned_files_into_the_content(
         loop,
         projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd="")),
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace)),
+            resolve_agent=lambda project_id, agent_id, **_: SimpleNamespace(
+                workspace=str(workspace)
+            ),
             resolve_working_project=lambda project_id, agent, **_: None,
         ),
         storage=SimpleNamespace(data_dir=str(tmp_path)),
@@ -751,6 +767,88 @@ async def test_a_refused_message_for_a_new_session_leaves_no_session(
     assert state.runtime.agents.get("coder").current_session_id == ""
     assert resource_changes(state) == []
     assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_specialist_input_carries_its_view_in_an_attributed_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter(block=True)
+    state = make_state(
+        tmp_path, adapter, initial_agent=StubAgent(id="app-assistant", builtin="app_assistant")
+    )
+    sessions = state.runtime.chat_sessions
+    address = sessions.create("app-assistant").address
+    ui_context = {
+        "view": "settings",
+        "field": "server.timezone",
+        "options": ["</system-reminder>"],
+        "docs": "references/configuration.md",
+    }
+    params = {
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
+        "content": "What does this do?",
+        "ui_context": ui_context,
+    }
+    first = await call(state, "chat.stream", **params, input_id="specialist-message")
+    run = state.chat_runs.get(first["result"]["run_id"])
+    await adapter.request_started.wait()
+    next_context = {"view": "chat", "field": "chat.queue", "docs": "references/chat.md"}
+    try:
+        queued = await call(
+            state,
+            "chat.stream",
+            **{**params, "content": "And this one?", "ui_context": next_context},
+        )
+        assert queued["result"]["queued"]
+        selected = await call(
+            state,
+            "chat.queue_steer",
+            agent_id=address.agent_id,
+            session_id=address.session_id,
+            item_id=queued["result"]["item"]["id"],
+        )
+        assert selected["result"]["item"]["steering"]
+    finally:
+        adapter.release.set()
+        await run.wait()
+    retry = await call(state, "chat.stream", **params, input_id="specialist-message")
+    assert first["result"]["run_id"] == retry["result"]["run_id"]
+    messages = sessions.get(address).load_active()
+    notes = [
+        str(message.content)
+        for message in messages
+        if message.role == "note" and "server.timezone" in str(message.content)
+    ]
+    assert len(notes) == 1 and "</system-reminder>" not in notes[0]
+    assert json.loads(notes[0].split("\n", 1)[1]) == ui_context
+    assert [message.content for message in messages if message.role == "user"] == [
+        params["content"],
+        "And this one?",
+    ]
+    assert any(
+        notes[0] in str(message["content"])
+        for message in (adapter.requests or adapter.stream_requests)[0]["messages"]
+    )
+    assert any(
+        "references/chat.md" in str(message["content"])
+        for message in adapter.requests[-1]["messages"]
+    )
+    assert all(
+        "references/chat.md" not in str(message["content"])
+        for message in adapter.requests[0]["messages"]
+    )
+    state.runtime.agents.create("ordinary")
+    ordinary = sessions.create("ordinary").address
+    refused = await call(
+        state,
+        "chat.stream",
+        **{**params, "agent_id": ordinary.agent_id, "session_id": ordinary.session_id},
+    )
+    assert refused["error"]["code"] == "domain_error"
+    assert not sessions.get(ordinary).load_active()
 
 
 @pytest.mark.asyncio

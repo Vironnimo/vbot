@@ -1,9 +1,11 @@
 """Temporary Agents: immutable configuration, bindings, protected Chat and execution groups."""
 
 import asyncio
+import sqlite3
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -806,10 +808,21 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     await manager.get(first.run_id).wait()
     duplicate = await groups.start(handle, "peer", initial)
     assert duplicate.existing and duplicate.run_id == first.run_id
+    session = sessions.get(binding.address)
+    [seed] = [message for message in session.load() if message.role == "user"]
+    assert seed.input_origin == "extension"
+    session.append(ChatMessage.user("goal"))
     await groups.close_group("group")
     await manager.aclose()
     sessions.close()
 
+    # Reopen the same history as written before Extension input origins existed.
+    with closing(sqlite3.connect(tmp_path / "sessions.db")) as db:
+        db.execute("DELETE FROM user_entry_origins WHERE input_origin = 'extension'")
+        db.execute(
+            "DELETE FROM kernel_migrations WHERE name = 'sessions.0014_extension_input_origin'"
+        )
+        db.commit()
     sessions = ChatSessionManager(tmp_path)
     manager = ChatRunManager(persistence=sessions)
     groups = TemporaryExecutionGroups(
@@ -829,7 +842,10 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
         )
         await manager.get(resumed.run_id).wait()
         messages = sessions.get(binding.address).load()
-        assert [message.content for message in messages if message.role == "user"] == ["goal"]
+        assert [(m.content, m.input_origin) for m in messages if m.role == "user"] == [
+            ("goal", "extension"),
+            ("goal", None),
+        ]
         assert [message.content for message in messages if message.role == "note"] == ["resume"]
         assert len(await groups.list("group")) == 1
         owner = manager.get(resumed.run_id).execution_owner

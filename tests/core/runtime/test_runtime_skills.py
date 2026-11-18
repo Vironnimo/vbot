@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.agents import APP_CHAT_PROFILES
 from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
@@ -82,6 +83,10 @@ def test_identity_skills_layer_the_owners_private_home_over_the_global_pool(
     assert "my-private" not in _names(runtime.skills_for(None, "two"))
     assert runtime.skills_for(None, "ghost") is runtime.skills
     assert "ghost-skill" not in _names(runtime.skills_for(None, "ghost"))
+
+    profile = APP_CHAT_PROFILES["app"]
+    write_agent_skill(data_dir, profile.agent_id, "unselected", "Outside the app profile.")
+    assert _names(runtime.skills_for(None, profile.agent_id)) == {"vbot-docs"}
 
 
 def test_project_skills_layer_between_the_agent_and_the_bundled_pool(
@@ -656,10 +661,18 @@ def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access
             item for item in runtime.skill_inventory()["skills"] if item["name"] == "vbot-docs"
         ]
         assert disabled["disabled"] is True
-        runtime.set_skill_package_disabled(disabled["id"], disabled=False)
         override = write_skill(runtime.global_skills_dir, "vbot-docs", "User documentation.")
+        profile = APP_CHAT_PROFILES["app"]
+        write_agent_skill(config.data_dir, profile.agent_id, "vbot-docs", "Private documentation.")
         runtime.reload_skills()
         assert runtime.skills.get("vbot-docs").path == override / "SKILL.md"
+        assert not runtime.skills_for(None, profile.agent_id).list_all()
+        runtime.set_skill_package_disabled(disabled["id"], disabled=False)
+        runtime.reload_skills()
+        assert runtime.skills.get("vbot-docs").path == override / "SKILL.md"
+        app_registry = runtime.skills_for(None, profile.agent_id)
+        assert runtime.skills_for("p", profile.agent_id) is app_registry
+        assert app_registry.get("vbot-docs") == docs
         bundled_id = _package_id(runtime, "vbot-docs", "Bundled documentation fixture.")
         extension.joinpath("docs/use.md").write_text("# Updated usage sentinel\n", encoding="utf-8")
         asyncio.run(runtime.reload_skills_async(only_if_changed=True))
@@ -667,6 +680,24 @@ def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access
         # The active catalog remains the user override, but inventory and future
         # scoped scans must still use the newly prepared bundled generation.
         assert _package_id(runtime, "vbot-docs", "Bundled documentation fixture.") != bundled_id
+        context = ToolContext(
+            agent_id=profile.agent_id,
+            session_id="app-session",
+            run_id="app-run",
+            tool_call_id="guide",
+            tool_name="skill",
+            tool_call_index=0,
+            workspace=repo,
+            vbot_root=resources,
+            data_root=config.data_dir,
+            skill_project_id="p",
+            allowed_skills=list(profile.skills),
+            permissions=PermissionBoundary.UNRESTRICTED,
+        )
+        result = asyncio.run(
+            runtime.tools.dispatch(context, {"name": "vbot-docs", "file_path": guide}, ["skill"])
+        )
+        assert result["ok"] and "Updated usage sentinel" in result["data"]["content"]
         runtime.set_skill_package_disabled(
             _package_id(runtime, "vbot-docs", "User documentation."), disabled=True
         )

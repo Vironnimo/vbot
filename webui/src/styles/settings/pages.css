@@ -173,10 +173,6 @@
     min-width: 0;
     padding: 0;
   }
-  .settings-search-icon {
-    top: 50%;
-    left: 10px;
-  }
 }
 @media (max-width: 640px) {
   .settings-nav.secondary-pane {

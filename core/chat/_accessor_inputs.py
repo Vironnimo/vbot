@@ -8,9 +8,11 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from core.agents import app_chat_profile
 from core.chat._queued_input import QueuedChatInput
 from core.chat._run_state import _RunRequest
 from core.chat._secret_capture import capture_user_input
+from core.chat.app_view import app_view_note
 from core.chat.content_blocks import ContentBlock, masked_content
 from core.chat.errors import ChatError
 from core.chat.messages import (
@@ -103,6 +105,7 @@ class AccessorInputs:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        ui_context: dict[str, str | list[str]] | None = None,
         sender: MessageSender | None = None,
         expected_generation_id: str | None = None,
         expected_working_project_id: str | None = None,
@@ -133,6 +136,7 @@ class AccessorInputs:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     context_note=context_note,
+                    ui_context=ui_context,
                     sender=sender,
                     expected_generation_id=expected_generation_id,
                     expected_working_project_id=expected_working_project_id,
@@ -162,6 +166,7 @@ class AccessorInputs:
         reply_surface: ReplySurface | None,
         project_id: str | None,
         context_note: str | ChatMessage | None,
+        ui_context: dict[str, str | list[str]] | None,
         sender: MessageSender | None,
         expected_generation_id: str | None,
         expected_working_project_id: str | None,
@@ -181,6 +186,7 @@ class AccessorInputs:
         ) as preparation:
             deps = self.loop._dependencies
             resolver, sessions = deps.agent_resolver, deps.sessions
+            app_chat_binding = None
             new = (
                 _NewSession(
                     session_id=session_id,
@@ -207,10 +213,33 @@ class AccessorInputs:
                     and session.generation_id != expected_generation_id
                 ):
                     raise SessionNotFoundError("Session generation changed before input acceptance")
-                await self.loop._reject_owner_managed_session(project_id, agent_id, session_id)
-                agent = await resolver.resolve_agent_async(
-                    project_id, agent_id, session_id=session_id, run_overrides=run_overrides
+                app_chat_binding = await self.loop._input_binding(
+                    session.address,
+                    allow_app_chat=sender is None
+                    and input_source_id is None
+                    and run_overrides is None,
                 )
+                if app_chat_binding is not None:
+                    if ui_context is not None:
+                        view = ui_context["view"]
+                        prefix = f"extension:{app_chat_binding.owner_name}:"
+                        if (
+                            not isinstance(view, str)
+                            or not view.startswith(prefix)
+                            or view == prefix
+                        ):
+                            raise ChatError(
+                                "UI context must name a page of this Session's Extension."
+                            )
+                    agent = await resolver.resolve_temporary_agent_async(
+                        session.address,
+                        generation_id=app_chat_binding.generation_id,
+                        session=session.address,
+                    )
+                else:
+                    agent = await resolver.resolve_agent_async(
+                        project_id, agent_id, session_id=session_id, run_overrides=run_overrides
+                    )
                 working = await resolver.resolve_working_project_async(
                     project_id, agent, session_id=session_id
                 )
@@ -224,6 +253,12 @@ class AccessorInputs:
                 working = await resolver.resolve_working_project_async(
                     project_id, agent, requested=new.working_project_id
                 )
+            if (
+                ui_context is not None
+                and app_chat_binding is None
+                and app_chat_profile(agent) is None
+            ):
+                raise ChatError("UI context requires a specialist app chat")
             await preparation.bind_working_project(working)
             if expected_working_project_id is not None and working != expected_working_project_id:
                 raise ChatError("The receiving Session is not in the same Working Project.")
@@ -282,10 +317,14 @@ class AccessorInputs:
                 )
             request = _RunRequest(
                 content=content,
+                extension_app_chat=app_chat_binding is not None,
                 sender=sender,
                 input_origin=input_origin,
                 reply_surface=reply_surface,
                 context_note=context_note,
+                app_view=app_view_note(ui_context, mask=deps.secret_masker.mask)
+                if ui_context is not None
+                else None,
                 run_overrides=run_overrides,
             )
             payload = _payload(request, working)
@@ -510,7 +549,9 @@ def _payload(request: _RunRequest, working_project_id: str | None) -> dict[str, 
         ).to_dict(),
         "reply_surface": request.reply_surface.kind if request.reply_surface is not None else None,
         "context_note": note.to_dict() if isinstance(note, ChatMessage) else note,
+        **({"app_view": request.app_view.to_dict()} if request.app_view is not None else {}),
         "working_project_id": working_project_id,
+        **({"extension_app_chat": True} if request.extension_app_chat else {}),
         "steering": request.session_message,
         **(
             {"run_overrides": request.run_overrides.as_dict()}
@@ -536,6 +577,7 @@ def _request(payload: dict[str, Any], *, fallback_notes: Sequence[ChatMessage] =
         note = next((saved for saved in fallback_notes if saved.content == note), note)
     return _RunRequest(
         content=message.content,
+        extension_app_chat=payload.get("extension_app_chat") is True,
         run_overrides=AgentOverrides.from_stored(payload["run_overrides"])
         if "run_overrides" in payload
         else None,
@@ -543,6 +585,7 @@ def _request(payload: dict[str, Any], *, fallback_notes: Sequence[ChatMessage] =
         input_origin=message.input_origin,
         reply_surface=ReplySurface(kind=surface) if surface is not None else None,
         context_note=ChatMessage.from_dict(note) if isinstance(note, dict) else note,
+        app_view=ChatMessage.from_dict(payload["app_view"]) if "app_view" in payload else None,
     )
 
 
@@ -562,9 +605,12 @@ def _attachment_ids(payload: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _fallback_notes(payload: dict[str, Any]) -> tuple[ChatMessage, ...]:
+    notes: list[ChatMessage] = []
     note = payload.get("context_note")
     if isinstance(note, str):
-        return (ChatMessage.note(note),)
-    if isinstance(note, dict):
-        return (ChatMessage.from_dict(note),)
-    return ()
+        notes.append(ChatMessage.note(note))
+    elif isinstance(note, dict):
+        notes.append(ChatMessage.from_dict(note))
+    if "app_view" in payload:
+        notes.append(ChatMessage.from_dict(payload["app_view"]))
+    return tuple(notes)

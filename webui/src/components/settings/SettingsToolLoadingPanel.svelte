@@ -16,7 +16,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildToolLoadingDefaultPayload,
     normalizeToolLoadingDefaultSettings,
@@ -48,10 +48,11 @@
     untrack(() => normalizeToolLoadingDefaultSettings(settings)),
   );
   let saving = $state(false);
-  const draft = createSettingsDraft({
+  const draft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: normalizeToolLoadingDefaultSettings,
     read: () => form,
     write: (next) => (form = next),

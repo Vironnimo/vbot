@@ -71,6 +71,7 @@ from core.skills.authoring import (
 )
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
+from core.utils.config import DEFAULT_HOST
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 
@@ -131,6 +132,7 @@ class Runtime(RuntimeServiceGraph):
         self._extension_notification_publisher: Callable[[dict[str, Any]], None] | None = None
         # The serving port, which restricted Runs may not reach on loopback.
         self._server_port: int | None = None
+        self._server_listen_host = DEFAULT_HOST
         self._server_hosts: Callable[[], tuple[str, ...]] | None = None
         # Every name resolved as an environment credential in this process.
         self._resolved_credential_names: set[str] = set()
@@ -283,7 +285,11 @@ class Runtime(RuntimeServiceGraph):
         self._extension_notification_publisher = publisher
 
     def set_server_port(
-        self, port: int | None, *, own_hosts: Callable[[], tuple[str, ...]] | None = None
+        self,
+        port: int | None,
+        *,
+        listen_host: str = DEFAULT_HOST,
+        own_hosts: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         """Record the port the vBot server listens on (``None`` outside a server).
 
@@ -291,6 +297,7 @@ class Runtime(RuntimeServiceGraph):
         port (blocking; empty while it listens on loopback only).
         """
         self._server_port = port
+        self._server_listen_host = listen_host
         self._server_hosts = own_hosts
 
     def _own_server_hosts(self) -> tuple[str, ...]:

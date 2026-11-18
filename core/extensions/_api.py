@@ -30,6 +30,7 @@ from core.extensions._declarations import (
     _is_page_id,
 )
 from core.extensions._service_exports import description_text, local_name, parameter_schema
+from core.extensions.app_chats import AppChatDeclaration
 from core.extensions.contributions import parse_contribution, validate_icon
 from core.extensions.interactions import (
     InteractionHandlerDeclaration,
@@ -267,6 +268,35 @@ class ExtensionAPI:
                 secret_sinks=dict(secret_sinks) if secret_sinks else None,
             )
         )
+
+    def register_app_chat_profile(
+        self,
+        profile_id: str,
+        *,
+        name: str,
+        instructions: str,
+        tools: Sequence[str] = (),
+        tool_settings: Mapping[str, Any] | None = None,
+        permission_ceiling: Mapping[str, Any] | None = None,
+        skills: Sequence[str] = (),
+        prompt_blocks: Sequence[str] = ("core:tools", "core:system_reminders"),
+        model: str = "",
+    ) -> None:
+        """Declare a lightweight Agent for conversations started in this Extension's pages."""
+        profile = AppChatDeclaration.create(
+            profile_id,
+            name=name,
+            instructions=instructions,
+            tools=tools,
+            tool_settings=tool_settings,
+            permission_ceiling=permission_ceiling,
+            skills=skills,
+            prompt_blocks=prompt_blocks,
+            model=model,
+        )
+        if profile.id in self._declarations.app_chat_profiles:
+            raise ValueError(f"App chat profile already declared: {profile.id}")
+        self._declarations.app_chat_profiles[profile.id] = profile
 
     def register_page(
         self,

@@ -338,6 +338,65 @@ describe('SettingsView editor saving', () => {
     ]);
   });
 
+  it('shows an Agent setting change in place and keeps a different unsaved edit', async () => {
+    const backend = createSettingsRpcMock();
+    let publish;
+    await mountSubAgents(backend, {
+      subscribeExtensionInvalidations: (listener) => {
+        publish = listener;
+        return () => {};
+      },
+    });
+    const inputs = document.querySelectorAll(
+      '[data-settings-section="subagents"] input.s-input',
+    );
+    setInputValue(DEPTH, '6');
+    await backend('settings.update', {
+      subagents: { ...subagents(4).subagents, max_active_subagents: 10 },
+    });
+    publish({ owner: null, change: { resource: 'settings' } });
+    await waitForCondition(() => inputs[1].value === '10');
+    expect(inputs[0]).toBe(document.querySelector(DEPTH));
+    expect(inputs[0].value).toBe('6');
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length === 1);
+    expect(getSettingsUpdateCalls()[0][1].subagents).toMatchObject({
+      max_active_subagents: 10,
+      max_subagent_depth: 6,
+    });
+  });
+
+  it('keeps a later remote change when an earlier local save response arrives last', async () => {
+    const backend = createSettingsRpcMock();
+    let release;
+    let publish;
+    const transport = async (method, params) => {
+      const result = await backend(method, params);
+      if (method === 'settings.update')
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+      return result;
+    };
+    await mountSubAgents(transport, {
+      subscribeExtensionInvalidations: (listener) => {
+        publish = listener;
+        return () => {};
+      },
+    });
+    setInputValue(DEPTH, '6');
+    getButton('Save').click();
+    await waitForCondition(() => Boolean(release));
+    await backend('settings.update', subagents(7));
+    publish({ owner: null, change: { resource: 'settings' } });
+    await flushAsyncUpdates();
+    release();
+    await waitForCondition(() => document.querySelector(DEPTH).value === '7');
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+  });
+
   it.each(['appearance', 'timezone'])(
     'keeps independent Settings saves when the %s response arrives last',
     async (late) => {

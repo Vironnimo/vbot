@@ -346,6 +346,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
             "ephemeral": True,
             "fast_mode": True,
             "input_source_id": "in_source",
+            "app_chat_launch_id": "popup",
             "agent_overrides": {"read_folders": {"server": ["/library"]}, "model": "test"},
         },
     )
@@ -380,6 +381,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
     assert "ephemeral" not in metadata
     assert "fast_mode" not in metadata
     assert "input_source_id" not in metadata
+    assert "app_chat_launch_id" not in metadata
     assert metadata["agent_overrides"] == {"model": "test"}
     # A fork into another Agent's scope starts its own prompt-cache lineage.
     assert manager.prompt_cache_affinity_id(forked.address) != manager.prompt_cache_affinity_id(

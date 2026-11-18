@@ -14,6 +14,7 @@
     getDraft,
     getHistory,
     setDraft,
+    subscribeDraft,
   } from '$lib/composerMemory.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import ContextUsageRing from './chat/ContextUsageRing.svelte';
@@ -44,6 +45,8 @@
     // that created the Session of an unsaved draft resolves `{ draftKey }`,
     // the key the composer continues in.
     onSendMessage,
+    getUIContext = null,
+    onSendError = null,
     onCancelRun = () => {},
     // Known work of this Session that outlives its Run (a running Sub-Agent
     // or background command, or a waiting Session): Stop all stays offered
@@ -142,6 +145,12 @@
     },
     get onListFiles() {
       return onListFiles;
+    },
+    get onSendError() {
+      return onSendError;
+    },
+    get getUIContext() {
+      return getUIContext;
     },
     get onSendMessage() {
       return onSendMessage;
@@ -250,6 +259,20 @@
       }
     });
   });
+
+  $effect(() =>
+    subscribeDraft(draftKey, (value, previous) => {
+      // A recalled entry (or an unpersisted Secret) belongs to the input
+      // editing it. Its live-draft slot still follows the shared draft.
+      if (navWorkingCopies[-1] === previous) navWorkingCopies[-1] = value;
+      if (historyCursor !== -1 || content !== previous) return;
+      content = value;
+      inputOrigin = '';
+      picker.triggerContext = null;
+      picker.activeSkillIndex = 0;
+      tick().then(() => (value ? resizeInput() : resetInputHeight()));
+    }),
+  );
 
   // A new file listing (another draft Project) replaces the cached list.
   let lastListFiles = untrack(() => onListFiles);

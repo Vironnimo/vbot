@@ -22,7 +22,7 @@ function createScope() {
   return scope;
 }
 
-export function createTimelineViewState() {
+export function createTimelineViewState(readOnly = () => false) {
   // sessionKey -> scope, least recently displayed first. Only `scope` is
   // read reactively; this index is bookkeeping.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, not rendered state
@@ -37,6 +37,9 @@ export function createTimelineViewState() {
   const autoplaySources = new Set();
 
   return {
+    get readOnly() {
+      return readOnly();
+    },
     // Selects the displayed Session's state; earlier Sessions keep theirs
     // up to a bound.
     setSession(sessionKey) {

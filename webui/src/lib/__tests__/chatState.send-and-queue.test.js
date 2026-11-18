@@ -248,7 +248,9 @@ describe('send and edit admission', () => {
         operationOverrides: { startChatRun },
       });
       const session = ensureSessionState(chatState, 'alpha', 'same');
-      await controller.sendMessage(session, 'Same text');
+      await controller.sendMessage(session, 'Same text', {
+        uiContext: { view: 'settings', field: submissionScope },
+      });
       controller.destroy();
     }
     const leftId = startChatRun.mock.calls[0][0].input_id;
@@ -267,10 +269,15 @@ describe('send and edit admission', () => {
         operationOverrides: { startChatRun },
       });
       const session = ensureSessionState(chatState, 'alpha', 'same');
-      expect(await controller.sendMessage(session, 'Same text')).toMatchObject({
-        kind: 'accepted',
+      expect(
+        await controller.sendMessage(session, 'Same text', {
+          uiContext: { view: 'settings', field: 'changed' },
+        }),
+      ).toMatchObject({ kind: 'accepted' });
+      expect(startChatRun.mock.lastCall[0]).toMatchObject({
+        input_id: expectedId,
+        ui_context: { view: 'settings', field: submissionScope },
       });
-      expect(startChatRun.mock.lastCall[0].input_id).toBe(expectedId);
       controller.destroy();
     }
     expect(values.size).toBe(0);

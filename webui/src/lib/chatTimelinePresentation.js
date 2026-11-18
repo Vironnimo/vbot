@@ -1,5 +1,6 @@
 // Public Timeline presentation surface; internal files own message, Tool,
 // child-Run and activity projections without changing consumer imports.
+export { conversationTimelineRows } from './chatTimelinePresentation/conversation.js';
 export {
   toolRowFromEvent,
   toolStatusLabel,

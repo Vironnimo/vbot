@@ -18,7 +18,7 @@
     normalizeCompactionPolicy,
   } from '$lib/compactionPolicy.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildModelSelectOptions,
     createModelCatalogLoader,
@@ -40,10 +40,11 @@
     untrack(() => normalizeCompactionPolicy(settings?.compaction)),
   );
   let saving = $state(false);
-  const compactionDraft = createSettingsDraft({
+  const compactionDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: (next) => normalizeCompactionPolicy(next?.compaction),
     read: () => policy,
     write: (next) => (policy = next),

@@ -1,11 +1,17 @@
-# Built-in Agents: Creation, Librarian and Live Agents
+# Built-in Agents
 
 Read when changing how vBot creates its built-in Agents and reports their problems, the Librarian's Skill subject binding, or the Live Agents' Tools, Models and Sessions. Fixed capabilities, lifecycle refusals and hidden surfaces are in `../agent.md` -> Built-in Agents.
 
 ## Creation and problems
 
 - **Creation:** Runtime startup calls `AgentStore.ensure_builtin_agents()` right after `ensure_bootstrap()`; it creates each missing one through the normal create path (Workspace with the bundled `SOUL.md`, no Session yet) with a new Agent's defaults, so its Model is empty and resolves to `defaults.agent.model` until the user picks one; the Live Agents start with their default Tools (below). `builtin_problem(kind)` names why one is unavailable: `missing` (not created yet), `agent_id_taken` (an Agent of the user, or an unfinished rename, holds the id - that Agent stays untouched and keeps working) or `invalid_config`; `builtin_agent(kind)` returns it or `None`. `librarian()` / `librarian_problem()` are the Librarian's shortcuts, and `librarian_problem_message(problem)` says the problem to the user with the way out (`automation/librarian.md` -> Surfaces). Startup logs a WARNING for each unavailable one.
-- **RPC payload:** `agent.get`/`agent.update` responses carry `builtin` (`librarian`, `live_voice`, `live_backend` or `null`).
+- **RPC payload:** `agent.get`/`agent.update` responses carry `builtin` (the built-in kind or `null`).
+
+## App chat profiles
+
+`core/agents/app_chats.py` declares each core app profile's public id, reserved built-in identity, role, Tools, Skills and selected prompt blocks. Adding an entry and its built-in kind creates the identity through ordinary startup. Its runtime configuration and access policy derive from the trusted built-in marker on every load. An earlier user Agent under a reserved id remains ordinary and makes that profile unavailable. Extension-owned app profiles use temporary Agents bound to their owning Extension.
+
+The native profile (`app`, Agent `app-assistant`) handles questions and requests from app views. It uses the `skill` Tool to read the bundled `vbot-docs` package on demand and the private `vbot` Tool to call the local vBot CLI. The profile selects the epoch-pinned role, Tool Call Style and System Reminder framing from packaged blocks. Personal SOUL, Memory and unrelated Tool definitions stay out of Model requests, including after Compaction. Built-in profile Skills resolve by bundled package identity (`skills.md`).
 
 ## Built-in Librarian
 

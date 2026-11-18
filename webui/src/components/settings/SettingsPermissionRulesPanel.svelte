@@ -13,7 +13,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { permissionRulesComplete } from '$lib/permissionRules.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildPermissionRulesDefaultPayload,
     normalizePermissionRulesDefaultSettings,
@@ -30,10 +30,11 @@
     untrack(() => normalizePermissionRulesDefaultSettings(settings)),
   );
   let saving = $state(false);
-  const draft = createSettingsDraft({
+  const draft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: normalizePermissionRulesDefaultSettings,
     read: () => form,
     write: (next) => (form = next),

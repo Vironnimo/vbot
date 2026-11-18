@@ -89,6 +89,7 @@ class RequestToolCatalog:
             context.agent,
             session_tool_grants=_live_session_tool_grants(
                 capability,
+                agent=context.agent,
                 subagent_session=context.subagent_session,
                 goal_session=context.goal_session,
             ),
@@ -267,7 +268,7 @@ class RequestToolCatalog:
             and not await self._dependencies.image_understanding_available()
         ):
             usable.discard(ANALYZE_IMAGE_TOOL_NAME)
-        proxy = not route_on_demand or CALL_TOOL_NAME in told
+        proxy = not agent.tool_access.exact and (not route_on_demand or CALL_TOOL_NAME in told)
         if proxy and agent.tool_access.mode != TOOL_ACCESS_MODE_NONE:
             controls = self._dependencies.tools.provider_definitions(
                 [LOAD_TOOLS_TOOL_NAME, CALL_TOOL_NAME], include_internal=True

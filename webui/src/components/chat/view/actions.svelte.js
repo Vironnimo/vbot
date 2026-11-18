@@ -241,6 +241,15 @@ export function createChatViewActions(context) {
     sessionState,
     focusAfterSend,
   ) => {
+    // Session-changing commands may succeed, but the embedding site owns
+    // which conversation is displayed. Its address never follows a command.
+    if (
+      context.boundSession &&
+      ['move', 'switch', 'draft'].includes(outcome.kind)
+    ) {
+      showChatToast(outcome.reply);
+      return;
+    }
     if (outcome.kind === 'move') {
       await context.navigation.moveSessionToAgent(outcome.move);
       focusAfterSend();

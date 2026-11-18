@@ -12,12 +12,13 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Literal, cast
 
 import psutil  # type: ignore[import-untyped]
 
+from core.tools._python_process import OutputCapture, python_executable
 from core.tools._tool_results import tool_failure, tool_failure_for_exception, tool_success
 from core.tools._tool_workers import run_tool_worker
 from core.tools.contracts import JsonObject
@@ -44,19 +45,6 @@ type ToolInvoker = Callable[[str, JsonObject, list[Any]], Awaitable[JsonObject]]
 type ExecutionStatus = Literal["completed", "failed", "timed_out", "stopped"]
 
 
-def python_executable() -> str:
-    """Use CPython itself when a packaged Windows role hosts this process."""
-    executable = Path(sys.executable)
-    if sys.platform == "win32" and executable.name.casefold() in {
-        "vbot.server.exe",
-        "vbot.desktop.exe",
-        "vbot.update.exe",
-        "vbot.python.exe",
-    }:
-        return str(executable.with_name("python.exe"))
-    return sys.executable
-
-
 @dataclass(frozen=True)
 class CodeExecutionResult:
     status: ExecutionStatus
@@ -75,34 +63,6 @@ class CodeExecutionResult:
     started: bool = True
     # A process/output cleanup error, after execution may already have effects.
     failure: str | None = None
-
-
-@dataclass
-class _Capture:
-    limit: int
-    head: bytearray = field(default_factory=bytearray)
-    tail: bytearray = field(default_factory=bytearray)
-    total: int = 0
-
-    def append(self, chunk: bytes) -> None:
-        self.total += len(chunk)
-        missing = max(0, self.limit // 2 - len(self.head))
-        self.head.extend(chunk[:missing])
-        self.tail.extend(chunk[missing:])
-        if len(self.tail) > self.limit - len(self.head):
-            del self.tail[: len(self.tail) - (self.limit - len(self.head))]
-
-    @property
-    def truncated(self) -> bool:
-        return self.total > self.limit
-
-    def text(self) -> str:
-        marker = (
-            f"\n[... {self.total - self.limit} output bytes omitted ...]\n".encode()
-            if self.truncated
-            else b""
-        )
-        return (bytes(self.head) + marker + bytes(self.tail)).decode("utf-8", errors="replace")
 
 
 class _Bridge:
@@ -266,7 +226,7 @@ async def run_python(
     ``stopped``, with the output captured until then.
     """
     bridge = _Bridge(invoke)
-    stdout, stderr = _Capture(MAX_OUTPUT_BYTES), _Capture(MAX_STDERR_BYTES)
+    stdout, stderr = OutputCapture(MAX_OUTPUT_BYTES), OutputCapture(MAX_STDERR_BYTES)
     log: BinaryIO | None = None
     log_bytes = 0
     log_truncated = False
@@ -287,7 +247,7 @@ async def run_python(
         if message not in failures:
             failures.append(message)
 
-    async def capture(stream: asyncio.StreamReader, retained: _Capture) -> None:
+    async def capture(stream: asyncio.StreamReader, retained: OutputCapture) -> None:
         nonlocal log_bytes, log_truncated
         stage = "Reading Python output failed"
         try:

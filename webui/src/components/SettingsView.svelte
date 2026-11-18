@@ -5,7 +5,8 @@
     modelTasksBySection,
   } from '$lib/settingsView/catalog.js';
   import { createSettingsPageNavigation } from '$lib/settingsView/pageNavigation.svelte.js';
-  import { onMount, tick, untrack } from 'svelte';
+  import { getAppChats } from '$lib/appChats.svelte.js';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
 
   import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
   import ContributionSurface from './extensions/ContributionSurface.svelte';
@@ -93,6 +94,7 @@
   } = $props();
 
   const secretStoreProblem = $derived(describeSecretStoreProblem(secretStore));
+  const appChats = getAppChats();
 
   export function handleProviderAuthCompleted(event) {
     providersPanel?.handleProviderAuthCompleted(event);
@@ -112,6 +114,10 @@
   let settings = $state(null);
   let loading = $state(true);
   let loadError = $state('');
+  let settingsRevision = 0;
+  let refreshingSettings = false;
+  let settingsRefreshPending = false;
+  let disposed = false;
   let providerRefreshGeneration = 0;
   let providerRefreshPending = false;
   let providersPanel = $state(null);
@@ -139,6 +145,59 @@
       return onNavigateToAgentDefaults;
     },
   });
+
+  // Remember where the user was working when focus moves into the chat.
+  // Only explicit field and option metadata can reach the specialist.
+  let lastSettingsTarget = null;
+  let settingsChat = null;
+  onDestroy(() => settingsChat?.close());
+  function trackChatTarget(event) {
+    lastSettingsTarget = event.target;
+  }
+
+  function getUiContext() {
+    const context = { view: 'settings', docs: 'references/configuration.md' };
+    if (pageNavigation.searchActive) return { ...context, page: 'search' };
+    const { page, sectionId, subPlace } = pageNavigation.shownPlace;
+    context.page = page.id;
+    const container = pageNavigation.scrollContainer;
+    const viewport = container?.getBoundingClientRect();
+    const visible = (element) => {
+      if (!container?.contains(element) || element.closest('[hidden]'))
+        return false;
+      const rect = element.getBoundingClientRect();
+      return rect.bottom >= viewport.top && rect.top <= viewport.bottom;
+    };
+    const target =
+      lastSettingsTarget && visible(lastSettingsTarget)
+        ? lastSettingsTarget
+        : null;
+    const section =
+      target?.closest('[data-settings-section]') ??
+      [...(container?.querySelectorAll('[data-settings-section]') ?? [])].find(
+        visible,
+      );
+    context.section =
+      section?.dataset.settingsSection ||
+      sectionId ||
+      (subPlace.length ? page.subPages : page.sections[0]);
+    const field = target?.closest('[data-setting-path]');
+    if (field) {
+      context.field = field.dataset.settingPath;
+      const options = field.dataset.settingOptions?.split(' ').filter(Boolean);
+      if (options?.length) context.options = options;
+    }
+    return context;
+  }
+
+  function openSettingsChat() {
+    settingsChat = appChats.openSpecialist({
+      profile: 'app',
+      key: 'settings',
+      title: t('appChat.settingsTitle'),
+      getUiContext,
+    });
+  }
 
   // Opening a page admits its editors once; hiding it never discards drafts,
   // authentication state, or a save already in flight. Search explicitly needs
@@ -188,14 +247,22 @@
     if (loading) return;
     if (lastModelsRefreshToken !== null && token !== lastModelsRefreshToken) {
       if (!providersPanel)
-        void refreshProviderSettings().catch(reportProviderRefreshError);
+        void refreshProviderSettings().catch(reportSettingsLoadError);
     }
     lastModelsRefreshToken = token;
   });
 
   onMount(() => {
     loadSettings();
+    const unsubscribe = subscribeExtensionInvalidations?.(
+      ({ owner, change }) => {
+        if (owner == null && (!change || change.resource === 'settings'))
+          requestSettingsRefresh();
+      },
+    );
     return () => {
+      unsubscribe?.();
+      disposed = true;
       providerRefreshGeneration += 1;
       providerRefreshPending = false;
     };
@@ -227,6 +294,7 @@
   }
 
   function commitSettings(nextSettings, sections) {
+    settingsRevision += 1;
     // A save owns only these sections or bindings; unrelated response values
     // may predate another editor's completed save.
     const merged = { ...settings };
@@ -240,6 +308,9 @@
     }
     applySettings(merged);
     onSettingsCommit(settings);
+    // The mutation reply may have arrived after a later writer's change
+    // was already published and read. Reconcile after this reply as well.
+    if (subscribeExtensionInvalidations) requestSettingsRefresh();
   }
 
   function commitGeneralSettings(nextSettings, field) {
@@ -252,6 +323,7 @@
   }
 
   function commitProviderSettings(nextSettings) {
+    settingsRevision += 1;
     const refreshAfterCommit = providerRefreshPending;
     providerRefreshGeneration += 1;
     settings = {
@@ -260,14 +332,15 @@
       local_models: nextSettings.local_models,
     };
     onSettingsCommit(settings);
+    if (subscribeExtensionInvalidations) requestSettingsRefresh();
     if (refreshAfterCommit) {
       // A Model-refresh result may predate another Provider change. Re-read
       // after its commit rather than losing the pending invalidation.
-      void refreshProviderSettings().catch(reportProviderRefreshError);
+      void refreshProviderSettings().catch(reportSettingsLoadError);
     }
   }
 
-  function reportProviderRefreshError(error) {
+  function reportSettingsLoadError(error) {
     reportSettingsError(`${t('settings.loadError')} ${error.message}`);
   }
 
@@ -307,6 +380,53 @@
       loadError = `${t('settings.loadError')} ${error.message}`;
     } finally {
       loading = false;
+      void refreshOpenEditors();
+    }
+  }
+
+  function requestSettingsRefresh() {
+    settingsRefreshPending = true;
+    void refreshOpenEditors();
+  }
+
+  async function refreshOpenEditors() {
+    if (loading || disposed || refreshingSettings || !settings) return;
+    refreshingSettings = true;
+    try {
+      while (settingsRefreshPending && !disposed) {
+        settingsRefreshPending = false;
+        const revision = settingsRevision;
+        const providerGeneration = providerRefreshGeneration;
+        let next;
+        try {
+          next = await getSettings();
+        } catch (error) {
+          if (!disposed && !settingsRefreshPending)
+            reportSettingsLoadError(error);
+          continue;
+        }
+        if (disposed) return;
+        // A local save completed after this read began. Read its result and
+        // any other writer's changes together before updating the editors.
+        if (revision !== settingsRevision) settingsRefreshPending = true;
+        if (settingsRefreshPending) continue;
+        if (providerGeneration === providerRefreshGeneration) {
+          // This snapshot supersedes any earlier provider-only read.
+          providerRefreshGeneration++;
+          providerRefreshPending = false;
+        } else {
+          // A provider-only read or save started after this full read.
+          next = {
+            ...next,
+            providers: settings.providers,
+            local_models: settings.local_models,
+          };
+        }
+        applySettings(next);
+        onSettingsCommit(settings);
+      }
+    } finally {
+      refreshingSettings = false;
     }
   }
 </script>
@@ -524,27 +644,50 @@
       </span>
     </div>
     <div class="settings-search secondary-pane__pinned">
-      <svg
-        class="settings-search-icon"
-        viewBox="0 0 16 16"
-        width="16"
-        height="16"
-        fill="none"
-        stroke="currentColor"
-        aria-hidden="true"
-        ><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
-      >
-      <input
-        class="settings-search-input"
-        type="search"
-        spellcheck="false"
-        autocomplete="off"
-        value={pageNavigation.searchQuery}
-        oninput={pageNavigation.handleSearchInput}
-        onkeydown={pageNavigation.handleSearchKeydown}
-        placeholder={t('settings.search.placeholder')}
-        aria-label={t('settings.search.label')}
-      />
+      <div class="settings-search-field">
+        <svg
+          class="settings-search-icon"
+          viewBox="0 0 16 16"
+          width="16"
+          height="16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+          ><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
+        >
+        <input
+          class="settings-search-input"
+          type="search"
+          spellcheck="false"
+          autocomplete="off"
+          value={pageNavigation.searchQuery}
+          oninput={pageNavigation.handleSearchInput}
+          onkeydown={pageNavigation.handleSearchKeydown}
+          placeholder={t('settings.search.placeholder')}
+          aria-label={t('settings.search.label')}
+        />
+      </div>
+      {#if appChats}
+        <Button
+          variant="tertiary"
+          icon
+          ariaLabel={t('appChat.askSettings')}
+          tooltip={t('appChat.askSettings')}
+          onClick={openSettingsChat}
+          ><svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            ><path
+              d="M3 2.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z"
+            /></svg
+          >
+        </Button>
+      {/if}
     </div>
     <div class="settings-desktop-index secondary-pane__scroll secondary-list">
       {#each pages as page (page.id)}
@@ -583,7 +726,11 @@
     onscroll={pageNavigation.handleContentScroll}
     onwheel={pageNavigation.releaseRestore}
     ontouchstart={pageNavigation.releaseRestore}
-    onpointerdown={pageNavigation.releaseRestore}
+    onfocusin={trackChatTarget}
+    onpointerdown={(event) => {
+      pageNavigation.releaseRestore();
+      trackChatTarget(event);
+    }}
     onkeydown={pageNavigation.releaseRestore}
   >
     <div class="s-doc" bind:this={pageNavigation.documentRoot}>

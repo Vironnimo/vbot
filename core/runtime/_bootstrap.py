@@ -170,6 +170,7 @@ from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.update_goal import register_update_goal_tool
+from core.tools.vbot import register_vbot_tool
 from core.tools.watch_checks import WatchCheckRunner
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
@@ -454,6 +455,18 @@ def bootstrap(runtime: Runtime) -> None:
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
         register_edit_tools(runtime._tools, file_state=runtime._file_state)
         register_live_tools(runtime._tools, runtime._live_tool_hosts)
+        register_vbot_tool(
+            runtime._tools,
+            resolve_agent=lambda context: runtime.agent_resolver.resolve_agent_async(
+                context.project_id,
+                context.agent_id,
+                session_id=context.session_id,
+                require_model=False,
+            ),
+            data_dir=runtime._storage.data_dir,
+            server_bind=lambda: (runtime._server_listen_host, runtime._server_port),
+            update_handoffs=runtime._update_handoffs,
+        )
         # The Live backend Agent's guidance names only the Tools it has.
         runtime._tool_prompt_blocks.register(
             LIVE_TOOL_FAMILY,

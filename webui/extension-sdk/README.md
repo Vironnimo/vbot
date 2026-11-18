@@ -8,7 +8,7 @@ built-in UI. An Extension builds its assets independently and ships the resultin
 ## Install the SDK artifact
 
 Packaged vBot servers include the SDK at
-`<vbot_root>/resources/sdk/vbot-extension-sdk-1.0.0.tgz`. Install that artifact in
+`<vbot_root>/resources/sdk/vbot-extension-sdk-1.1.0.tgz`. Install that artifact in
 the Extension's own directory; no vBot checkout is needed. The standard WebUI
 build creates the tarball before application packaging copies `resources/`.
 
@@ -29,7 +29,7 @@ node scripts/extension-sdk.mjs
 npm pack ./extension-sdk --pack-destination .
 ```
 
-This produces `vbot-extension-sdk-1.0.0.tgz`. The build follows only the explicit
+This produces `vbot-extension-sdk-1.1.0.tgz`. The build follows only the explicit
 public exports and their dependencies. The tarball includes source components,
 local fonts, their license, and the page build helper. It contains no imports
 back into the vBot repository. Publishing to a registry is a separate operator
@@ -38,7 +38,7 @@ action; creating this artifact does not publish it.
 In the Extension's own directory:
 
 ```sh
-npm install --save-exact /path/to/vbot-extension-sdk-1.0.0.tgz
+npm install --save-exact /path/to/vbot-extension-sdk-1.1.0.tgz
 npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
 ```
 
@@ -107,7 +107,7 @@ renderers come from the App context and are absent from an isolated page.
 
 The SDK's semantic version describes its public JavaScript imports and component
 contracts. The Extension manifest's `api_version` describes required host
-capabilities; this SDK release targets API 31. UI-only contributions can declare
+capabilities; this SDK release targets API 37. UI-only contributions can declare
 host features without creating a Python module. Optional capabilities must be
 checked against the host's advertised feature set before use. A reload retires
 the old registration and outstanding bridge requests; recreate state from the
@@ -117,6 +117,42 @@ The page context exposes `api.version` and `api.features`. Check optional featur
 inside `onContext`, for example `context.api.features.includes('services')`.
 Required features belong in the manifest's `required_features`; declared page
 services still restrict which calls that page may make.
+
+## Session views and specialist chats
+
+With API 37 and feature `ui.session-chats`, a page can place an owned participant's
+Session alongside its domain controls. The host resolves the exact group and
+participant under the current page registration and renders the shared Session
+view at the size and position of the component. Bound its container's height.
+
+```svelte
+<script>
+  import SessionEmbed from '@vbot/extension-sdk/ui/SessionEmbed.svelte';
+  let { client, groupId, worker } = $props();
+</script>
+
+<div style="height: 420px">
+  <SessionEmbed {client} {groupId} participantId={worker.id} presentation="full" />
+</div>
+```
+
+Choose `conversation` (default), `compact`, or `full` for the amount of detail
+shown inline. Each offers the user the full Session in Chat. The frame receives
+neither its DOM nor its content through the embed.
+
+For a conversation with vBot's built-in App Agent, call
+`await client.openAppChat()` from a user click. This takes no arguments.
+Register an Extension specialist with `api.register_app_chat_profile` in Python.
+From a user click, `await client.openSpecialist('assistant')` opens the host chat
+for that owner-local profile. The optional second argument accepts the same
+`presentation` choices. The host owns the composer and submits each user message.
+After the visible selection changes, publish non-secret labels such as
+`client.setChatContext({ section: 'Jobs', field: 'Status', options: ['Queued', 'Done'] })`.
+Use `selection` for the selected record's label and `{}` to clear the labels.
+Both entry points accept an exact bundled vbot-docs reference in the context,
+such as `docs: 'references/configuration.md'`.
+The host captures the latest labels, page and route when the user sends.
+The frame cannot supply a Tool selection, instructions or credentials.
 
 ## Python Extensions
 

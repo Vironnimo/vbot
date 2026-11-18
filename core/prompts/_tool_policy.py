@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
+from core.agents.app_chats import app_chat_tool_grants
 from core.prompts._types import JsonObject, PromptAgent, PromptAgentStore, ToolPromptRegistry
 from core.prompts.blocks import ToolAvailability
 from core.tools.availability import (
@@ -134,7 +135,7 @@ class PromptToolPolicy:
             agent.memory_prompt_mode,
             workspace=agent.workspace,
             project_memory_enabled=getattr(agent, "project_memory_enabled", False),
-            session_tool_grants=session_tool_grants,
+            session_tool_grants=app_chat_tool_grants(agent, session_tool_grants),
         )
         definitions = self._registry.provider_definitions(
             resolution.allowed_tools,
@@ -172,7 +173,7 @@ class PromptToolPolicy:
             agent.memory_prompt_mode,
             workspace=agent.workspace,
             project_memory_enabled=getattr(agent, "project_memory_enabled", False),
-            session_tool_grants=session_tool_grants,
+            session_tool_grants=app_chat_tool_grants(agent, session_tool_grants),
         )
         definitions = self._registry.prompt_definitions(
             resolution.allowed_tools,

@@ -69,6 +69,7 @@ export function createSessionProvenance(context) {
   }
 
   $effect(() => {
+    if (context.boundSession) return;
     const addressing = context.target.activeAddressing();
     const displayKey = context.target.displayedSessionKey();
     const fetchKey = `${displayKey}::${context.sessionsRefreshToken}::${sessionParentRevision}`;

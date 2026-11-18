@@ -9,6 +9,10 @@ How Tool-, Extension- and temporary-Session blocks enter the System Prompt: On-d
 - The dynamic `tool:subagent` block renders exactly when its Tool is effectively available and agrees with provider visibility and addressing routing; preview supplies the same scope. In Chat its text is pinned per prompt epoch like every contributed dynamic block; previews render live. The `project` catalog lives in its Tool definition, with no dedicated prompt block (`tools/project.md`).
 - The dynamic `tool:bash` block renders only with permanent `tools.bash.allowed_env` grants and lists credential names plus the `env_keys` contract; Skill-derived grants never enter the System Prompt (their payload carries its own notice at load time).
 
+## App chat profiles
+
+Specialist app profiles select an explicit block inventory just as temporary participants do. Both the built-in and Extension app chat Agents use an internal bundled build scope: core text comes from the packaged fragments, contributed blocks from their owner, and the profile role from the epoch-pinned Agent body. The public prompt editor and personal/default text overrides do not affect that scope. Ordinary temporary Agents keep their existing layout and override behavior (`test_prompts_layouts_overrides.py`).
+
 ## Temporary Agents and Sessions
 
 A temporary Agent's optional `prompt_blocks` selection overrides block enablement exhaustively while retaining layout order: `None` inherits the ordinary layout, an explicit list includes only selected active non-empty blocks, and newly registered blocks remain off. `build_system_prompt(block_details=...)` optionally collects rendered content, enabled/active state and actual inclusion for previews; this explicit inspection also renders disabled active blocks to show their content, without including them in the combined prompt. Normal rendering does not read disabled block files or invoke their renderers. Source/tests: `prompts.py`, `blocks.py`, `test_prompts_layouts_overrides.py`.

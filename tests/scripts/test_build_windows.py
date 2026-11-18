@@ -209,7 +209,7 @@ def test_copy_application_respects_shape_and_exclusions(
 ) -> None:
     destination = tmp_path / "app"
     source = _source(tmp_path)
-    sdk_path = Path("resources/sdk/vbot-extension-sdk-1.0.0.tgz")
+    sdk_path = Path("resources/sdk/vbot-extension-sdk-1.1.0.tgz")
     (source / sdk_path).parent.mkdir(parents=True, exist_ok=True)
     (source / sdk_path).write_bytes(b"built extension SDK")
     build_windows.copy_application(

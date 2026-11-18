@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.chat.errors import ChatError
 from core.extensions import (
     ExtensionAPI,
     ExtensionRecord,
@@ -20,6 +21,7 @@ from core.extensions.operations import ExtensionOperations
 from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
 from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError, RunExecutionOwner
 from core.sessions import SessionAddress
+from core.settings.agent_defaults import AgentDefaults
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
@@ -33,6 +35,160 @@ def _value_schema(value_type: str) -> dict[str, Any]:
         "required": ["value"],
         "additionalProperties": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_operator_chat_resolves_its_registered_profile_for_each_accepted_message(tmp_path):
+    from core.tools.call_tool import register_call_tool
+    from core.tools.load_tools import register_load_tools_tool
+
+    tools = ToolRegistry()
+    register_call_tool(tools)
+    register_load_tools_tool(tools)
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI("panel", declarations, config={}, logger=None)
+    calls = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def effect(context, _arguments):
+        calls.append(context.session_id)
+        assert context.tool_settings["profile_tool"] == {"scope": "current"}
+        assert context.permissions.check_host("calendar.example.com") is None
+        assert context.permissions.check_host("other.example.com").source == "extension"
+        assert context.permissions.check_host("denied.example.com").reason == "deny_rule"
+        entered.set()
+        await release.wait()
+        return tool_success({"applied": True})
+
+    for name in ("profile_tool", "worker_tool"):
+        api.register_session_tool(name, "test fixture", {"type": "object"}, effect)
+    settings = {"profile_tool": {"scope": "current"}}
+    ceiling = {
+        "layers": [
+            {
+                "source": "extension",
+                "workdir": str(tmp_path),
+                "read": "anywhere",
+                "write": "anywhere",
+                "commands": "any",
+                "web": "listed",
+                "allow": ["Web(calendar.example.com)", "Web(denied.example.com)"],
+                "deny": [],
+            }
+        ]
+    }
+    api.register_app_chat_profile(
+        "inspector",
+        name="Inspector",
+        instructions="fixture role",
+        tools=["profile_tool"],
+        tool_settings=settings,
+        permission_ceiling=ceiling,
+    )
+    settings["profile_tool"]["scope"] = "later"
+    ceiling["layers"].clear()
+    with pytest.raises(ValueError, match="selected"):
+        api.register_app_chat_profile(
+            "bad", name="Bad", instructions="fixture role", tool_settings=settings
+        )
+    registry = ExtensionRegistry()
+    registry._records.append(  # noqa: SLF001 - registration fixture
+        ExtensionRecord(
+            "panel", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    registry.apply_tools(tools)
+    profile = registry.current_app_chat_profile(
+        registry.registration_identity("panel"), "inspector"
+    )
+    assert profile is not None
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call-1", "name": "profile_tool", "arguments": {}}],
+            },
+            {"content": "done"},
+            {"content": "queued answer"},
+            {"content": "edited"},
+        ],
+        on_demand_tools=False,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="ordinary", model="openai/gpt-5.2"),
+        adapter=adapter,
+        tools=tools,
+    )
+    runtime.extensions = registry
+    temporary = TemporaryAgentRegistry(runtime.chat_sessions)
+    runtime.agent_resolver.temporary_agents = temporary
+    binding = temporary.create(
+        owner_name="panel",
+        group_id="app-chat:key",
+        participant_id="operator",
+        config=profile.configuration(
+            "openai/gpt-5.2",
+            AgentDefaults(permission_rules={"deny": ["Web(denied.example.com)"]}),
+            tmp_path,
+        ),
+    )
+    loop = build_chat_loop(runtime)
+
+    async def submit(key):
+        return await loop.submit_accessor_input(
+            binding.address.agent_id,
+            "do it",
+            session_id=binding.address.session_id,
+            input_id=key,
+            request_hash=f"hash-{key}",
+            ui_context={"view": "extension:panel:inspector", "field": "field-a"},
+        )
+
+    try:
+        accepted = await submit("first")
+        assert accepted.run is not None
+        await asyncio.wait_for(entered.wait(), WAIT_SECONDS)
+        queued = await submit("queued")
+        assert queued.queued_item is not None
+        assert await loop.update_accessor_queued(
+            binding.address, queued.queued_item.item_id, "edited before delivery"
+        )
+        release.set()
+        await accepted.run.wait()
+        queued_run = await queued.queued_item.future
+        await queued_run.wait()
+        assert queued_run.status == "completed"
+        assert "edited before delivery" in str(adapter.requests[2]["messages"])
+        assert "profile_tool" in str(adapter.requests[2]["kwargs"]["tools"])
+        assert accepted.run.status == "completed"
+        assert calls == [binding.address.session_id]
+        assert "profile_tool" in str(adapter.requests[0]["kwargs"]["tools"])
+        assert "worker_tool" not in str(adapter.requests[0]["kwargs"]["tools"])
+        assert "call_tool" not in str(adapter.requests[0]["kwargs"]["tools"])
+        assert "load_tools" not in str(adapter.requests[0]["kwargs"]["tools"])
+        assert "field-a" in str(adapter.requests[0]["messages"])
+        assert (await submit("first")).record.run_id == accepted.run.id
+        assert len(adapter.requests) == 3
+        session = runtime.chat_sessions.get(binding.address)
+        original = next(message for message in session.load() if message.role == "user")
+        edited = await loop.edit_run(
+            binding.address.agent_id,
+            "revised",
+            session_id=binding.address.session_id,
+            message_id=original.id,
+        )
+        await edited.wait()
+        assert edited.status == "completed"
+        assert "profile_tool" in str(adapter.requests[-1]["kwargs"]["tools"])
+        registry.retire_registration()
+        with pytest.raises(ChatError):
+            await submit("second")
+    finally:
+        release.set()
+        await runtime.chat_runs.aclose()
+        runtime.chat_sessions.close()
 
 
 def _dynamic_tool(handler: Any, value_type: str = "string") -> dict[str, Any]:

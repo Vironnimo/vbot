@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from core.agents import AgentStore
+from core.agents import AgentStore, app_chat_profile
 from core.extensions import ExtensionRegistry
 from core.projects import (
     Project,
@@ -26,6 +26,7 @@ from core.skills._global_scanning import (
     _GlobalRoot,
     _origin_layers,
     _package_exclusions,
+    bundled_skill_path,
     load_global_skill_registry,
 )
 from core.skills._inventory import SkillInventory
@@ -498,8 +499,11 @@ class SkillRuntime:
         # An inventory or explicit Project Context read can discover and persist
         # Sources without the Project RPC. Validate that layer before reusing an
         # Agent registry which embeds its packages and grants.
-        project_bundle = self._project_skill_bundle(project_id) if project_id is not None else None
         agent = self._agents.find(identity_agent_id) if identity_agent_id is not None else None
+        profile = app_chat_profile(agent)
+        if profile is not None:
+            return self._agent_skill_registry(None, profile.agent_id, frozenset(), profile.skills)
+        project_bundle = self._project_skill_bundle(project_id) if project_id is not None else None
         if agent is not None:
             exclusions = frozenset(agent.excluded_skills)
             if (
@@ -696,30 +700,67 @@ class SkillRuntime:
             del self._agent_skills[key]
 
     def _agent_skill_registry(
-        self, project_id: str | None, agent_id: str, exclusions: frozenset[str]
+        self,
+        project_id: str | None,
+        agent_id: str,
+        exclusions: frozenset[str],
+        bundled_skills: tuple[str, ...] | None = None,
     ) -> SkillRegistry:
         # A cached registry is reused only while it carries the Agent's current
         # ``excluded_skills``: an Agent update (or a hand edit of agent.json) that
         # changes them replaces the entry without any explicit invalidation.
         key = (project_id, agent_id)
+        ceiling = frozenset(bundled_skills) if bundled_skills is not None else None
+
+        def matching_cached() -> SkillRegistry | None:
+            cached = self._agent_skills.get(key)
+            if (
+                cached is not None
+                and cached.allowlist_exclusions == exclusions
+                and cached.selection_ceiling == ceiling
+            ):
+                return cached
+            return None
+
         while True:
             with self._cache_lock:
-                cached = self._agent_skills.get(key)
-                if cached is not None and cached.allowlist_exclusions == exclusions:
+                if (cached := matching_cached()) is not None:
                     return cached
                 generation = self._cache_generation
-            registry = self._build_agent_skill_registry(project_id, agent_id, exclusions)
+            registry = (
+                self._build_bundled_profile_registry(bundled_skills)
+                if bundled_skills is not None
+                else self._build_agent_skill_registry(project_id, agent_id, exclusions)
+            )
             if project_id is not None:
                 # A Source refresh may have changed the record during this scan
                 # without going through a caller that invalidates our caches.
                 self._project_skill_bundle(project_id)
             with self._cache_lock:
                 if generation == self._cache_generation:
-                    current = self._agent_skills.get(key)
-                    if current is not None and current.allowlist_exclusions == exclusions:
+                    if (current := matching_cached()) is not None:
                         return current
                     self._agent_skills[key] = registry
                     return registry
+
+    def _build_bundled_profile_registry(self, names: tuple[str, ...]) -> SkillRegistry:
+        """App profiles select exact bundled packages, independent of ordinary name precedence."""
+        disabled = self._policy.load().disabled_packages
+        bundled = self._resources_path / _SKILLS_DIRNAME
+        packages = [
+            bundled_skill_path(bundled, name, self._docs_path)
+            for name in names
+            if SkillPackageRef("bundled", name) not in disabled
+        ]
+        if not packages:
+            return SkillRegistry({}).restricted_to(names)
+        return SkillRegistry.load(
+            packages[0],
+            extra_dirs=packages[1:],
+            environment=self._skill_environment(self._storage.load_environment()),
+            origins=[SKILL_ORIGIN_BUNDLED] * len(packages),
+            package_sources=[("bundled", None)] * len(packages),
+        ).restricted_to(names)
 
     def _build_agent_skill_registry(
         self,

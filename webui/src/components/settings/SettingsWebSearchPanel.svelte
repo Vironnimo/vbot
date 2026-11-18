@@ -16,7 +16,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildWebSearchProviderOptions,
     buildWebSearchSettingsPayload,
@@ -33,14 +33,13 @@
     onError = noop,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let webSearchSettings = $state(untrack(() => getWebSearchSettings(settings)));
   let saving = $state(false);
-  const webSearchDraft = createSettingsDraft({
+  const webSearchDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getWebSearchSettings,
     read: () => webSearchSettings,
     write: (next) => (webSearchSettings = next),
