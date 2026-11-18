@@ -334,8 +334,8 @@
               {agentName(
                 member,
               )}{#if member.role && member.role !== agentName(member)}
-                Â· {member.role}{:else if member.id === native.factory.leader_member_id}
-                Â· {t('factory.native.leader')}{/if}
+                &nbsp;· {member.role}{:else if member.id === native.factory.leader_member_id}
+                &nbsp;· {t('factory.native.leader')}{/if}
             </h2>
             <p>
               {member.state === 'active'
@@ -345,7 +345,7 @@
             <p>
               {#if !member.profile_available}{t(
                   'factory.native.profileUnavailable',
-                )} Â·
+                )} ·
               {/if}{member.created_by_factory
                 ? t('factory.native.createdAgent')
                 : t('factory.native.linkedAgent')}
@@ -417,7 +417,7 @@
       <div class="native-actions">
         <Button onClick={() => onNavigate(factoryRoute())}
           >{t('factory.native.back')}</Button
-        ><span>{statusLabel(task.state)} Â· {memberName(task.assignee_id)}</span
+        ><span>{statusLabel(task.state)} · {memberName(task.assignee_id)}</span
         >{#if task.reason}<span>{reasonLabel(task.reason)}</span>{/if}
       </div>
       {#key task.id}<FactoryChat
@@ -486,7 +486,7 @@
                 onClick={() =>
                   onNavigate(`/task/${encodeURIComponent(child.id)}`)}
                 >{child.title}</Button
-              >{memberName(child.assignee_id)} Â· {statusLabel(child.state)}
+              >{memberName(child.assignee_id)} · {statusLabel(child.state)}
             </li>{/each}
         </ul>
       </section>
@@ -527,7 +527,7 @@
           >{/if}
         <ol class="native-posts" data-native-events>
           {#each native.detail.events || [] as event (event.id)}<li>
-              <strong>{eventLabel(event.event)}</strong> Â· {actorName(
+              <strong>{eventLabel(event.event)}</strong> · {actorName(
                 event.actor,
               )}
               <time datetime={event.created_at}

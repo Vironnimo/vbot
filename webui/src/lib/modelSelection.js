@@ -286,8 +286,10 @@ export function buildModelSelectOptions({
       connectionsByProvider[model.provider_id] ?? [],
     );
 
+    const showConnectionLabel =
+      providerConnections.length > 1 || selectedModelOption?.value === model.id;
     return providerConnections.flatMap((connection) =>
-      connectionModelOptions(model, connection, providerConnections.length),
+      connectionModelOptions(model, connection, showConnectionLabel),
     );
   });
 
@@ -431,7 +433,7 @@ export function modelShortName(modelValue) {
   return segments.at(-1) ?? '';
 }
 
-function connectionModelOptions(model, connection, providerConnectionCount) {
+function connectionModelOptions(model, connection, showConnectionLabel) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
   const usableAccounts = usableConnectionAccounts(connection);
   const modelFields = modelOptionFields(model);
@@ -440,7 +442,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
     return [
       {
         value: modelSelectionValue(model.id, localId),
-        label: modelOptionLabel(model, connection, providerConnectionCount),
+        label: modelOptionLabel(model, connection, showConnectionLabel),
         labelLead: modelIdLead(model.id),
         isUnavailable: false,
         ...modelFields,
@@ -457,7 +459,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
       model,
       connection,
       account.id,
-      providerConnectionCount,
+      showConnectionLabel,
     ),
     labelLead: modelIdLead(model.id),
     isUnavailable: false,
@@ -546,8 +548,8 @@ function connectionsAllowedForModel(model, providerConnections) {
   );
 }
 
-function modelOptionLabel(model, connection, providerConnectionCount) {
-  if (providerConnectionCount <= 1) {
+function modelOptionLabel(model, connection, showConnectionLabel) {
+  if (!showConnectionLabel) {
     return model.id;
   }
 
@@ -558,11 +560,11 @@ function accountModelOptionLabel(
   model,
   connection,
   accountId,
-  providerConnectionCount,
+  showConnectionLabel,
 ) {
   const accountName = accountDisplayName(accountId);
 
-  if (providerConnectionCount <= 1) {
+  if (!showConnectionLabel) {
     return `${model.id} (${accountName})`;
   }
 
