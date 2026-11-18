@@ -299,6 +299,18 @@ def _migrate_global_workflows(connection: sqlite3.Connection) -> None:
         )
 
 
+def _remove_model_overrides(connection: sqlite3.Connection) -> None:
+    # Revision changes also fence old Session bindings with a frozen Model.
+    # Native recovery carries pending work over to the new execution epoch.
+    for table in ("native_factories", "native_members"):
+        connection.execute(
+            f"UPDATE {table} SET body_json=json_remove(body_json, "
+            "'$.config.model', '$.config.thinking_effort'), revision=revision+1 "
+            "WHERE json_type(body_json,'$.config.model') IS NOT NULL "
+            "OR json_type(body_json,'$.config.thinking_effort') IS NOT NULL"
+        )
+
+
 # Every migration an earlier Factory recorded stays declared: an undeclared
 # ``breaks_older`` migration makes the database refuse to open. Their data
 # steps are folded into ``global_workflows``, which reads any earlier setup.
@@ -311,6 +323,7 @@ MIGRATIONS = (
     Migration("global_workflows", breaks_older=True, apply=_migrate_global_workflows),
     Migration("native_factory_teams"),
     Migration("factory_budget_changes", apply=_budget_store.backfill),
+    Migration("agent_profile_models", apply=_remove_model_overrides),
 )
 
 _CARD_FIELDS = (
@@ -652,7 +665,33 @@ class FactoryStore:
             )
         )
 
-    async def project_work(self, project_id: str, after: str, limit: int, query: str = "") -> Json:
+    async def project_reply(self, project_id: str, post_id: str) -> Json:
+        def read(connection: sqlite3.Connection) -> Json:
+            row = connection.execute(
+                """SELECT p.text, p.topic_id, p.created_at, m.agent_id,
+                       COALESCE(NULLIF(json_extract(m.body_json,'$.name'),''),
+                                json_extract(m.body_json,'$.role'),m.agent_id) AS author
+                   FROM native_posts p JOIN native_topics t ON t.id=p.topic_id
+                   JOIN native_factories f ON f.id=t.factory_id
+                   JOIN native_members m ON m.id=json_extract(t.body_json,'$.direct_member_id')
+                   WHERE f.project_id=? AND p.id=? AND p.author='member:'||m.id""",
+                (project_id, post_id),
+            ).fetchone()
+            if row is None:
+                raise FactoryError("reply_not_found", "Choose a reply in this Project.")
+            return dict(row)
+
+        return await self.database.read_async(read)
+
+    async def project_work(
+        self,
+        project_id: str,
+        after: str,
+        limit: int,
+        query: str = "",
+        *,
+        include_replies: bool = False,
+    ) -> Json:
         """Page the combined Project work history, with outstanding decisions first."""
 
         def read(connection: sqlite3.Connection) -> Json:
@@ -679,7 +718,8 @@ class FactoryStore:
                       (t.state='review' AND json_extract(t.body_json, '$.user_approval')=1
                        AND COALESCE(json_extract(t.body_json, '$.submission.user_approved'),0)=0
                        OR t.state='blocked' AND json_extract(t.body_json, '$.reason') NOT IN
-                           ('dependencies','children','peer','workflow')) AS attention
+                           ('dependencies','children','peer','workflow')) AS attention,
+                       NULL AS author
                   FROM native_tasks t JOIN native_factories f ON f.id=t.factory_id
                   WHERE f.project_id=? AND NOT EXISTS (
                       SELECT 1 FROM cards c
@@ -687,9 +727,19 @@ class FactoryStore:
                           AND c.state IN ('proposal','waiting'))
                   UNION ALL
                   SELECT c.id, c.title, c.state, 'card', c.updated_at,
-                      c.state IN ('proposal','waiting') FROM cards c WHERE c.project_id=?
+                      c.state IN ('proposal','waiting'), NULL FROM cards c WHERE c.project_id=?
                       AND (c.state IN ('proposal','waiting') OR
                           COALESCE(json_extract(c.runtime_json, '$.native_task_id'),'')='')
+                  UNION ALL
+                  SELECT p.id, COALESCE(NULLIF(substr(trim(p.text, char(9,10,13,32,35)),1,140),''),
+                                            json_extract(t.body_json,'$.title')),
+                      '', 'reply', p.created_at, 0,
+                      COALESCE(NULLIF(json_extract(m.body_json,'$.name'),''),
+                               json_extract(m.body_json,'$.role'),m.agent_id)
+                  FROM native_topics t JOIN native_factories f ON f.id=t.factory_id
+                  JOIN native_members m ON m.id=json_extract(t.body_json,'$.direct_member_id')
+                  JOIN native_posts p ON p.topic_id=t.id AND p.author='member:'||m.id
+                  WHERE ? AND f.project_id=? AND trim(p.text)!=''
                 )
                 SELECT * FROM work WHERE instr(lower(title),lower(?))>0
                     AND (? IS NULL OR (attention, updated_at, id) < (?,?,?))
@@ -697,6 +747,8 @@ class FactoryStore:
                 """,
                     (
                         project_id,
+                        project_id,
+                        include_replies,
                         project_id,
                         query,
                         after or None,
@@ -706,6 +758,11 @@ class FactoryStore:
                 )
             ]
             shown = rows[:limit]
+            for item in shown:
+                if item["kind"] == "reply":
+                    item["title"] = item["title"].partition("\n")[0].strip()
+                else:
+                    item.pop("author")
             last = shown[-1] if len(rows) > limit else None
             return {
                 "work": shown,

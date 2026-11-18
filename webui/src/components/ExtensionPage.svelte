@@ -36,6 +36,11 @@
   const MAX_MESSAGE_BYTES = 64 * 1024;
   const MAX_HOST_MESSAGE_BYTES = 8 * 1024 * 1024;
   const MAX_REQUEST_ID_LENGTH = 128;
+  const safeId = (value) =>
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    !/[\s/\\@?#\p{C}]/u.test(value);
   const METHODS = new Set([
     'operation',
     'history.read',
@@ -43,6 +48,7 @@
     'history.tool_call',
     'link.open',
     'session.open',
+    'agent.open',
     'media.open',
     'route.push',
     'route.replace',
@@ -70,6 +76,7 @@
     subscribeInvalidations = null,
     onToast = () => {},
     onOpenSession = () => {},
+    onOpenAgent = () => {},
     uiContext = {},
     apiCapabilities = { version: null, features: [] },
     onUiCommand = null,
@@ -782,13 +789,13 @@
         if (data.method === 'route.push') navigation.navigate(place);
         else navigation.replace(place);
         result = {};
+      } else if (data.method === 'agent.open') {
+        if (!safeId(data.params.agent_id))
+          throw new Error(t('extensions.page.invalidLink'));
+        onOpenAgent(data.params.agent_id);
+        result = {};
       } else if (data.method === 'session.open') {
         const address = data.params.address;
-        const safeId = (value) =>
-          typeof value === 'string' &&
-          value.length > 0 &&
-          value.length <= 256 &&
-          !/[\s/\\@?#\p{C}]/u.test(value);
         if (
           !isPlainObject(address) ||
           Object.keys(address).some(

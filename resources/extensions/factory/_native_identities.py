@@ -64,34 +64,24 @@ class FactoryIdentities:
         model = reservation.get("identity_config", {}).get("model") or args.get(
             "leader_model" if leader else "model", ""
         )
-        if not model and args.get("factory_id"):
-            factory = await self.store.get_factory(args["factory_id"])
-            leader_member = await self.store.get_member(factory["leader_member_id"])
-            local = {
-                "model": factory.get("config", {}).get("model")
-                or leader_member.get("config", {}).get("model")
-                or ""
-            }
-            preview = await self._preview_identity(
-                await self._identity(leader_member["agent_id"]), factory["project_id"], local
-            )
-            model = preview["model"]
-            self._check_model_boundary(model, factory.get("config", {}).get("allowed_models"))
-        if not model:
-            raise FactoryError(
-                "model_required", "Choose a Model from catalog for this Identity Agent."
-            )
         if args.get("factory_id"):
             factory = await self.store.get_factory(args["factory_id"])
-            self._check_model_boundary(model, factory.get("config", {}).get("allowed_models"))
-            self._check_model_boundary(
-                args.get("config", {}).get("model")
-                or factory.get("config", {}).get("model")
-                or model,
-                factory.get("config", {}).get("allowed_models"),
-            )
+            allowed = factory.get("config", {}).get("allowed_models")
+            if allowed is not None:
+                candidate = model
+                if not candidate:
+                    host = self.service.host
+                    assert host is not None and host.services is not None
+                    default = await host.services.query(
+                        "settings.get_path", {"path": "defaults.agent.model", "allow_missing": True}
+                    )
+                    candidate = default["setting"].get("value") or ""
+                self._check_model_boundary(candidate, allowed)
         reservation = await self.store.reserve_identity(request_id, payload)
-        identity_config = reservation.get("identity_config") or {"name": name, "model": model}
+        identity_config = reservation.get("identity_config") or {
+            "name": name,
+            **({"model": model} if model else {}),
+        }
         await self.store.save_identity_reservation(request_id, {"identity_config": identity_config})
         info = await self._identity(
             reservation["agent_id"], request_id=request_id, **identity_config
@@ -99,16 +89,8 @@ class FactoryIdentities:
         await self.store.save_identity_reservation(request_id, {"proof": info["incarnation"]})
         return info
 
-    async def _validate_effective_model(
-        self, info: Json, project_id: str, local: Json, boundary: Json
-    ) -> None:
-        effective = {
-            "model": local.get("model") or boundary.get("model") or "",
-            "thinking_effort": local.get("thinking_effort")
-            or boundary.get("thinking_effort")
-            or "",
-        }
-        preview = await self._preview_identity(info, project_id, effective)
+    async def _validate_effective_model(self, info: Json, project_id: str, boundary: Json) -> None:
+        preview = await self._preview_identity(info, project_id)
         self._check_model_boundary(preview["model"], boundary.get("allowed_models"))
 
     @staticmethod
@@ -119,7 +101,7 @@ class FactoryIdentities:
                 "Choose a Model allowed by the Factory's configuration boundary.",
             )
 
-    async def _preview_identity(self, info: Json, project_id: str, local: Json) -> Json:
+    async def _preview_identity(self, info: Json, project_id: str) -> Json:
         host = self.service.host
         assert host is not None
         if host.inspect_prompt is not None and host.catalog is not None:
@@ -139,8 +121,6 @@ class FactoryIdentities:
                         cwd=Path(project["cwd"]),
                         identity_agent=info["agent_id"],
                         identity_incarnation=info["incarnation"],
-                        model_override=local.get("model") or None,
-                        thinking_effort_override=local.get("thinking_effort") or None,
                         tool_access=ToolAccess(mode="none"),
                         allowed_skills=[],
                         tools={},
@@ -152,7 +132,7 @@ class FactoryIdentities:
                     "model_unavailable", f"Choose a usable Model for this member. {error}"
                 ) from error
 
-        model = local.get("model") or info.get("model", "")
+        model = info.get("model", "")
         if not model:
             raise FactoryError(
                 "model_required", "Choose a usable Model for this member or its Identity Agent."

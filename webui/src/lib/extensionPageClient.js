@@ -401,6 +401,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       }),
     openLink: (url) => call('link.open', { url }),
     openSession: (address) => call('session.open', { address }),
+    openAgent: (agentId) => call('agent.open', { agent_id: agentId }),
     openMedia: (url) => call('media.open', { url }),
     // The route becomes part of the app's Back/Forward history: `pushRoute`
     // records a user step to another place of the page, `replaceRoute`

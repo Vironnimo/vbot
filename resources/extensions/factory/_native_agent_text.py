@@ -40,14 +40,9 @@ def _definition(resource: str, actions: tuple[str, ...], description: str) -> tu
             "For add: an existing Identity Agent id from the Agent catalog. Omit for "
             "create to allocate an identity."
         )
-        properties["model"]["description"] = (
-            "For create or update: Model id from catalog. "
-            "For create: omit to use the Factory's default Model, otherwise the Leader's Model."
-        )
-    if resource == "member":
+        properties.pop("model", None)
         properties["clear_fields"]["description"] = (
-            "For update: local overrides to remove so the member inherits its "
-            "Identity Agent and Factory settings."
+            "For update: remove these membership access limits."
         )
     if resource == "task":
         properties["outcome"]["description"] = "For complete: what came of the task."
@@ -195,8 +190,6 @@ _CARD_FIELDS = (
     "outputs",
 )
 _BOUNDARY_FIELDS = (
-    "model",
-    "thinking_effort",
     "allowed_models",
     "allowed_tools",
     "denied_tools",

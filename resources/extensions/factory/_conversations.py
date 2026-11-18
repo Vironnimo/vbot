@@ -52,8 +52,26 @@ async def _bootstrap(management: NativeFactoryManagement, project_id: str) -> Js
     return factory
 
 
+async def _stop_discussion(management: NativeFactoryManagement, args: Json) -> Json:
+    store = management.store
+    topic = await store.get_topic(text(args, "topic_id"))
+    factory = await store.get_factory(topic["factory_id"])
+    if factory["project_id"] != text(args, "project_id") or not topic.get("direct_member_id"):
+        raise FactoryError("conversation_mismatch", "Choose a discussion in this Project.")
+    if topic.get("task_id"):
+        raise FactoryError("task_linked", "Pause the linked task or stop the team.")
+    if topic["state"] == "open":
+        closed = await store.update_topic(
+            topic["id"], {"state": "closed"}, expected_revision=topic["revision"], actor="user"
+        )
+        await management.service.native.changed("topics", closed, topic)
+    return {"topic_id": topic["id"], "state": "closed"}
+
+
 async def conversation(management: NativeFactoryManagement, name: str, args: Json) -> Json:
     store = management.store
+    if name == "conversation.stop":
+        return await _stop_discussion(management, args)
     sending = name == "conversation.send"
     project_id = text(args, "project_id")
     body = text(args, "text", maximum=20000).strip() if sending else ""
@@ -150,7 +168,12 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
             )
         await management.service.native.changed("topics", topic)
     if not topic:
-        return {"topic": None, "posts": []}
+        return {
+            "topic": None,
+            "posts": [],
+            "agent_id": member["agent_id"],
+            "member_name": member.get("name") or member["role"],
+        }
     if topic["task_id"] and task is None:
         task = await store.get_task(topic["task_id"])
     recipient_member = await store.get_member(topic["direct_member_id"])
@@ -167,6 +190,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         "replying": bool(current and current["state"] in {"admitting", "running"}),
         "topic": topic,
         **history,
+        "agent_id": recipient_member["agent_id"],
         "member_name": recipient_member.get("name") or recipient_member["role"],
         "task": {
             key: task[key]

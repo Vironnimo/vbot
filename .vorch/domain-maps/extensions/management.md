@@ -23,6 +23,7 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 ## API versions
 
 - v34: owner-scoped revisioned execution Usage changes, with ledger continuity and exact integer cost snapshots (`extensions/host.md`, `usage.md`).
+- v35: Extension pages can open the Identity Agent editor with `client.openAgent(agentId)` (`webui/extension-pages.md`).
 
 - v33: the owner catalog adds `tool_activations`, the complete ordinary follower graph, including catalog-hidden Tools, independently of public selection metadata (`extensions/host.md`).
 

@@ -303,7 +303,14 @@ describe('ExtensionPage frame bridge', () => {
 
   it('opens canonical Session addresses through the shell, never a supplied URL', async () => {
     const onOpenSession = vi.fn();
-    const page = openPage({ onOpenSession });
+    const onOpenAgent = vi.fn();
+    const page = openPage({ onOpenSession, onOpenAgent });
+    page.call('agent', 'agent.open', { agent_id: 'reviewer' });
+    await page.replied('agent');
+    expect(onOpenAgent).toHaveBeenCalledExactlyOnceWith('reviewer');
+    page.call('bad-agent', 'agent.open', { agent_id: '../reviewer' });
+    await page.replied('bad-agent');
+    expect(onOpenAgent).toHaveBeenCalledOnce();
     page.call('open', 'session.open', {
       address: {
         project_id: 'project',

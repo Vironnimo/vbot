@@ -120,8 +120,6 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
             raise _error("invalid_field", "Choose Factory configuration fields to clear.")
         clear_fields = tuple(clear_config_fields)
         allowed = {
-            "model",
-            "thinking_effort",
             "allowed_models",
             "allowed_skills",
             "allowed_tools",
@@ -245,7 +243,7 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
         if isinstance(clear_config_fields, (str, bytes)):
             raise _error("invalid_field", "Choose local configuration fields to clear.")
         clear_fields = tuple(clear_config_fields)
-        allowed = {"model", "thinking_effort", "allowed_skills", "allowed_tools", "denied_tools"}
+        allowed = {"allowed_skills", "allowed_tools", "denied_tools"}
         if any(not isinstance(field, str) or field not in allowed for field in clear_fields):
             raise _error(
                 "invalid_field", "Only known local configuration overrides can be cleared."

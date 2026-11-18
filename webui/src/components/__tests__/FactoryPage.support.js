@@ -411,6 +411,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
     },
     notifyAutosave: vi.fn(),
     openSession: vi.fn().mockResolvedValue({}),
+    openAgent: vi.fn().mockResolvedValue({}),
     openLink: vi.fn().mockResolvedValue({}),
     readModelFavorites: vi.fn().mockResolvedValue({ models: [] }),
     setModelFavorite: vi.fn().mockResolvedValue({ models: [] }),

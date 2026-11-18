@@ -14,8 +14,6 @@ OBJECT = {"type": "object"}
 CONFIG = {
     "type": "object",
     "properties": {
-        "model": S,
-        "thinking_effort": S,
         "allowed_models": A,
         "allowed_skills": A,
         "allowed_tools": A,
@@ -24,8 +22,6 @@ CONFIG = {
     },
 }
 LOCAL = {
-    "model": S,
-    "thinking_effort": S,
     "allowed_skills": A,
     "allowed_tools": A,
     "denied_tools": A,
@@ -68,14 +64,19 @@ ID = {"id": S}
 REV = {**ID, "expected_revision": INTEGER}
 CONVERSATION = {"project_id": S, "member_id": S, "topic_id": S, "task_id": S, "card_id": S}
 OPERATION_SCHEMAS = {
-    "work.list": schema({"project_id": S, "query": S, **PAGING}, ("project_id",)),
+    "work.list": schema(
+        {"project_id": S, "query": S, "include_replies": B, **PAGING}, ("project_id",)
+    ),
+    "work.reply": schema({"project_id": S, "id": S}, ("project_id", "id")),
     "conversation.get": schema({**CONVERSATION, "before": S}, ("project_id",)),
+    "conversation.stop": schema({"project_id": S, "topic_id": S}, ("project_id", "topic_id")),
     "conversation.send": schema(
         {**CONVERSATION, "text": S, "request_id": S, "new_topic": B},
         ("project_id", "text", "request_id"),
     ),
     "factory.list": schema({"project_id": S, **PAGING}),
     "factory.get": schema(ID, ("id",)),
+    "factory.usage": schema(ID, ("id",)),
     "factory.create": schema(
         {
             "project_id": S,
@@ -111,10 +112,6 @@ OPERATION_SCHEMAS = {
             **REV,
             **MEMBER,
             "clear_fields": {"type": "array", "items": {"type": "string", "enum": list(LOCAL)}},
-            "identity_config": {
-                "type": "object",
-                "properties": {"name": S, "model": S, "thinking_effort": S},
-            },
         },
         ("id", "expected_revision"),
     ),
@@ -167,10 +164,7 @@ OPERATION_DESCRIPTIONS = {
     ),
     "member.add": "Add an existing Identity Agent without changing its global configuration.",
     "member.create": "Create a durable Identity Agent and add it to the Factory.",
-    "member.update": (
-        "Change Factory-local member settings; identity_config explicitly edits a"
-        " Factory-created Identity Agent."
-    ),
+    "member.update": "Change the member's role, instructions, capacity or access in this Factory.",
     "task.history": (
         "Find Project tasks and Workflow runs by title. "
         "Use get with a returned id to read its result."

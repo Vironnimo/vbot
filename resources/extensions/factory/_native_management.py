@@ -120,6 +120,15 @@ class NativeFactoryManagement:
         return f"{len(result.get(_PLURALS[resource], []))} {resource} records."
 
     async def _operation(self, name: str, args: Json, actor: Json | None) -> Json:
+        if name == "factory.usage" and actor is None:
+            team = await self.store.get_factory(text(args, "id"))
+            index = self.service.native.limits.index
+            await index.sync(resources=True)
+            return {"usage": index.usage(f"factory:{team['id']}", resources=True)}
+        if name == "work.reply" and actor is None:
+            return await self.service.records().project_reply(
+                text(args, "project_id"), text(args, "id")
+            )
         if (name == "work.list" and actor is None) or name == "task.history":
             if name == "task.history":
                 team = await self.store.get_factory(text(args, "factory_id"))
@@ -132,13 +141,28 @@ class NativeFactoryManagement:
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise FactoryError("invalid_limit", "Choose a page size between 1 and 100.")
             return await self.service.records().project_work(
-                project_id, args.get("after", ""), limit, str(args.get("query", ""))
+                project_id,
+                args.get("after", ""),
+                limit,
+                str(args.get("query", "")),
+                include_replies=name == "work.list" and bool(args.get("include_replies")),
             )
         if name.startswith("conversation.") and actor is None:
             from ._conversations import conversation
 
             return await conversation(self, name, args)
         resource, _, action = name.partition(".")
+        config = args.get("config", {})
+        if not isinstance(config, dict):
+            raise FactoryError("invalid_config", "Supply a configuration object.")
+        if resource in {"member", "factory"} and (
+            {"model", "thinking_effort"} & config.keys()
+            or "identity_config" in args
+            or "thinking_effort" in args
+            or ("model" in args and (name != "member.create" or actor is not None))
+        ):
+            raise FactoryError("agent_settings", "Edit the Identity Agent in Agents settings.")
+
         args = dict(args)
         for key in ("capacity", "limit", "expected_revision", "priority"):
             if key in args:
@@ -325,18 +349,6 @@ class NativeFactoryManagement:
                         "boundaries. Propose that change in a topic."
                     ),
                 )
-        if (
-            resource == "member"
-            and "identity_config" in args
-            and any(
-                key not in {"name", "model", "thinking_effort"} for key in args["identity_config"]
-            )
-        ):
-            raise FactoryError(
-                "configuration_boundary",
-                "Global specialist edits support name, model and thinking_effort. "
-                "Use local member Tool/Skill selections within the Factory ceiling.",
-            )
         if resource == "task":
             if previous and any(
                 key in args and args[key] != previous.get(key)
@@ -493,7 +505,7 @@ class NativeFactoryManagement:
             else:
                 leader = await self.identities._create_identity(args, leader=True)
             boundary = args.get("config", {})
-            preview = await self.identities._preview_identity(leader, project_id, boundary)
+            preview = await self.identities._preview_identity(leader, project_id)
             self.identities._check_model_boundary(preview["model"], boundary.get("allowed_models"))
             settings = {key: deepcopy(args[key]) for key in FACTORY if key in args}
             project = next(
@@ -543,7 +555,7 @@ class NativeFactoryManagement:
                 for member in members:
                     info = await self.identities._identity(member["agent_id"])
                     await self.identities._validate_effective_model(
-                        info, previous["project_id"], member.get("config", {}), boundary
+                        info, previous["project_id"], boundary
                     )
                 if len(members) < 100:
                     break
@@ -598,19 +610,7 @@ class NativeFactoryManagement:
                 created_by_factory=action == "create",
                 name=info.get("name") or info["agent_id"],
                 actor=identity,
-                **{
-                    key: deepcopy(args[key])
-                    for key in MEMBER
-                    if key in args
-                    and key
-                    not in {
-                        "model",
-                        "thinking_effort",
-                        "allowed_skills",
-                        "allowed_tools",
-                        "denied_tools",
-                    }
-                },
+                **{key: deepcopy(args[key]) for key in MEMBER if key in args and key not in LOCAL},
             )
             if action == "create":
                 await self.store.complete_identity_reservation(
@@ -622,8 +622,7 @@ class NativeFactoryManagement:
         if not isinstance(clear_fields, list) or any(field not in LOCAL for field in clear_fields):
             raise FactoryError(
                 "invalid_field",
-                "clear_fields supports model, thinking_effort, allowed_skills, "
-                "allowed_tools and denied_tools.",
+                "clear_fields supports allowed_skills, allowed_tools and denied_tools.",
             )
         effective_previous = {
             **previous,
@@ -637,19 +636,10 @@ class NativeFactoryManagement:
         if action == "update":
             await self._validate_member_model(
                 args,
-                {
-                    **await self.identities._identity(previous["agent_id"]),
-                    **args.get("identity_config", {}),
-                },
+                await self.identities._identity(previous["agent_id"]),
                 effective_previous,
             )
-        patch = {
-            key: deepcopy(args[key])
-            for key in MEMBER
-            if key in args
-            and key
-            not in {"model", "thinking_effort", "allowed_skills", "allowed_tools", "denied_tools"}
-        }
+        patch = {key: deepcopy(args[key]) for key in MEMBER if key in args and key not in LOCAL}
         if "config" in args:
             patch["config"] = {**effective_previous.get("config", {}), **args["config"]}
         if action == "retire":
@@ -660,22 +650,6 @@ class NativeFactoryManagement:
                     "Replace the Factory's Leader before retiring this membership.",
                 )
             patch["state"] = "retired"
-        if "identity_config" in args:
-            if not previous.get("created_by_factory"):
-                raise FactoryError(
-                    "shared_identity",
-                    (
-                        "This existing Identity Agent is shared. Edit its global configuration "
-                        "explicitly in Agents settings."
-                    ),
-                )
-            host = self.service.host
-            assert host is not None and host.identity_agents is not None
-            await host.identity_agents.update(
-                previous["agent_id"],
-                expected_incarnation=previous["agent_proof"],
-                **args["identity_config"],
-            )
         return await self.store.update_member(
             previous["id"],
             patch,
@@ -686,19 +660,16 @@ class NativeFactoryManagement:
 
     async def _member_config(self, args: Json, actor: Json | None) -> None:
         config = deepcopy(args.get("config", {}))
-        for key in ("model", "thinking_effort", "allowed_skills", "allowed_tools", "denied_tools"):
+        for key in LOCAL:
             if key in args:
                 config[key] = deepcopy(args[key])
         if not isinstance(config, dict):
             raise FactoryError(
                 "invalid_config",
-                "Supply named Model, thinking_effort, allowed_skills or tools settings.",
+                "Supply named Skill or Tool settings.",
             )
         if actor:
             boundary = actor["factory"].get("config", {})
-            allowed_models = boundary.get("allowed_models")
-            if config.get("model"):
-                self.identities._check_model_boundary(config["model"], allowed_models)
             allowed_skills = boundary.get("allowed_skills", ["*"])
             if "*" not in allowed_skills and any(
                 skill not in allowed_skills for skill in config.get("allowed_skills", [])
@@ -715,23 +686,10 @@ class NativeFactoryManagement:
                     "configuration_boundary",
                     "Choose Tools allowed by the Factory's configuration boundary.",
                 )
-            if any(
-                key
-                not in {
-                    "model",
-                    "thinking_effort",
-                    "allowed_skills",
-                    "allowed_tools",
-                    "denied_tools",
-                }
-                for key in config
-            ):
+            if config.keys() - LOCAL.keys():
                 raise FactoryError(
                     "configuration_boundary",
-                    (
-                        "Member settings support model, thinking_effort, allowed_skills, "
-                        "allowed_tools and denied_tools."
-                    ),
+                    ("Member settings support allowed_skills, allowed_tools and denied_tools."),
                 )
         if config or "config" in args:
             args["config"] = config
@@ -741,11 +699,10 @@ class NativeFactoryManagement:
     ) -> None:
         host = self.service.host
         assert host is not None
-        local = {**(previous or {}).get("config", {}), **args.get("config", {})}
         factory_id = args.get("factory_id") or (previous or {}).get("factory_id")
         factory = await self.store.get_factory(str(factory_id))
         await self.identities._validate_effective_model(
-            info, factory["project_id"], local, factory.get("config", {})
+            info, factory["project_id"], factory.get("config", {})
         )
 
     async def _task(

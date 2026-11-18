@@ -227,10 +227,6 @@ class NativeWorkflows:
             ),
             allowed_skills=skills,
             permission_ceiling=boundary.get("permission_ceiling"),
-            model_override=config.model_override or boundary.get("model") or None,
-            thinking_effort_override=config.thinking_effort_override
-            or boundary.get("thinking_effort")
-            or None,
             instructions=config.instructions
             + "\n\n"
             + native_workflow_instructions(factory, member),
