@@ -146,7 +146,7 @@ A git-ignored checkout marker selects dev data `vBot-data/dev` beside the reposi
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
 
-**Local deploy:** When the user wants the current state in their installed vBot, commit, then run `python scripts/deploy_local.py` (no push needed): it builds the committed HEAD into the installation's package and installs it through the installation's own `update --package` (`cli/application.md` -> Installers and published packages).
+**Local deploy:** Each update of the user's installed vBot requires their direct request for that revision. Commit, then run `python scripts/deploy_local.py` (no push needed). It builds HEAD and installs it via the installation's own `update --package` (`cli/application.md` -> Installers and published packages).
 
 **Push:** Read `.vorch/workflows/push-workflow.md` when the user asks to push, and push only that way (`python scripts/push.py`, never a plain `git push`). A push is finished only when the `main-build` CI run it starts is green.
 
