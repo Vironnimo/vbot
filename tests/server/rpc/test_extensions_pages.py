@@ -77,9 +77,11 @@ def register(api):
                 setup=SimpleNamespace(read=lambda: SimpleNamespace(agent_id="onboarding")),
             ),
             agents=SimpleNamespace(
-                list=lambda: [
-                    SimpleNamespace(id="onboarding", placement=None, model="fixture/onboarded")
-                ]
+                personal_roster=lambda: SimpleNamespace(
+                    agents=[
+                        SimpleNamespace(id="onboarding", placement=None, model="fixture/onboarded")
+                    ]
+                )
             ),
             agent_resolver=SimpleNamespace(require_chat_model_configured=Mock()),
         )

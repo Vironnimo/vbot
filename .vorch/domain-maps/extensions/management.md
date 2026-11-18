@@ -22,10 +22,10 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 
 ## API versions
 
+- v39: owned identity profiles, catalog ownership metadata and incarnation-bound Agent editing inside an Extension page (`extensions/host.md`, `webui/extension-pages.md`).
 - v38: Extension pages can register clickable references in an embedded Session (see `webui/extension-pages.md` -> Capabilities).
 - v37: `ui.session-chats` for host-rendered participant Session views, the shared App Agent and user-started chats with owner-registered specialist profiles (`webui/extension-pages.md`, `extensions/host.md`).
 
-- v36: owned identity profiles, catalog ownership metadata and incarnation-bound Agent editing inside an Extension page (`extensions/host.md`, `webui/extension-pages.md`).
 - v35: Extension pages can open the Identity Agent editor with `client.openAgent(agentId)` (`webui/extension-pages.md`).
 - v34: owner-scoped revisioned execution Usage changes, with ledger continuity and exact integer cost snapshots (`extensions/host.md`, `usage.md`).
 
@@ -144,7 +144,6 @@ Coverage: `test_lifecycle_handlers_fire_in_load_order_and_fail_open` (`test_regi
 - Serialized lifecycle mutation: `core/extensions/runtime.py`; Runtime readiness and service teardown: `core/runtime/runtime.py`
 - RPC catalog/secrets and Settings persistence: `server/rpc/extensions_methods.py`, `server/rpc/settings_methods.py`; post-write live Settings coordination: `core/runtime/_settings.py`
 - Focused coverage: `tests/core/extensions/test_loader.py`, `test_registration.py`, `test_settings_schema.py`, `test_runtime.py`, `test_deactivate.py`, and Extension RPC/Runtime tests
-
 
 ## Managed operations and live catalogs
 
