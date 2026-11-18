@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from cli._server_target import resolve_instance
 from cli.application import autostart, command, operations, processes
 from cli.application.state import ApplicationError, Installation, Operation, load_installation
 from cli.main import run
@@ -24,6 +26,17 @@ def _install(root: Path) -> Installation:
     )
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
     return install
+
+
+def test_bound_cli_uses_the_live_address_after_an_installation_bind_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = replace(_install(tmp_path), server_host="192.0.2.5")
+    monkeypatch.setattr(command, "discover", lambda: install)
+    target = resolve_instance(host="127.0.0.1", port=8420, data_dir=tmp_path / "data")
+    args = parse_args(["agent", "list"])
+    assert command.dispatch(args, app_instance=target) is None
+    assert args.host == target.host
 
 
 @pytest.mark.parametrize("selector", [None, "1.2.2", "v1.2.2"])

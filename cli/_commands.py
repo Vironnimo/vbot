@@ -46,6 +46,7 @@ __all__ = [
 def run(
     argv: Sequence[str] | None = None,
     *,
+    app_instance: ServerInstance | None = None,
     resolve: Callable[..., ServerInstance] | None = None,
     start: Callable[[ServerInstance], CommandResult] | None = None,
     stop: Callable[[ServerInstance], CommandResult] | None = None,
@@ -126,9 +127,20 @@ def run(
     """Run the CLI and return an automation-safe process exit code."""
 
     args = command_arguments()
+    if app_instance is not None:
+        from cli._server_target import CommandResult
+        from cli.app_agent import bind_target
+
+        try:
+            bind_target(args, app_instance)
+        except ValueError as error:
+            print_management_command_result(
+                CommandResult(ok=False, message=str(error), instance=app_instance, refused=True)
+            )
+            return FAILURE_EXIT_CODE
     from cli.application.command import dispatch as dispatch_application
 
-    application_result = dispatch_application(args)
+    application_result = dispatch_application(args, app_instance=app_instance)
     if application_result is not None:
         return application_result
     if args.area == "home":
@@ -176,7 +188,7 @@ def run(
 
     from cli._server_target import resolve_instance
 
-    instance = (resolve or resolve_instance)(
+    instance = app_instance or (resolve or resolve_instance)(
         host=args.host, port=args.port, data_dir=args.data_dir, url=_server_url(args)
     )
     if args.area == "tui":
