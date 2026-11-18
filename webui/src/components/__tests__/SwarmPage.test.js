@@ -637,7 +637,20 @@ describe('SwarmPage overview', () => {
 
   it('offers the Run and Swarm actions on their pane rows', async () => {
     const { bridge, operation } = createBridge();
+    const other = { ...swarm, id: 'swr-b', prompt: 'Second swarm' };
+    overrideOperations(operation, {
+      'swarms.list': () => ({ entries: [swarm, other] }),
+      'swarms.get': ({ swarm_id }) => ({
+        swarm: structuredClone(swarm_id === other.id ? other : swarm),
+      }),
+    });
     await render(bridge);
+    button('Second swarm').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.swarm-head__title')?.textContent,
+      ).toContain(other.prompt),
+    );
     document.querySelector('[data-run-id="swr-a"]').dispatchEvent(
       new MouseEvent('contextmenu', {
         bubbles: true,
@@ -660,18 +673,40 @@ describe('SwarmPage overview', () => {
     menuItem(t('swarm.run.details')).click();
     // Another Run's details load first; they name its ID with a copy action.
     await vi.waitFor(() => expect(dialog()?.textContent).toContain('swr-a'));
-    expect(callsTo(operation, 'swarms.get')).toHaveLength(1);
+    expect(callsTo(operation, 'swarms.get').at(-1)[1].swarm_id).toBe(swarm.id);
     expect(
       dialog().querySelector(`[aria-label="${t('swarm.details.copyId')}"]`),
     ).not.toBeNull();
-    bridge.back();
-    await tick();
+    const participant = [...dialog().querySelectorAll('button')].find(
+      (node) => node.textContent.trim() === 'Beta',
+    );
+    bridge.pushRoute.mockResolvedValueOnce({});
+    participant.click();
+    await settle();
+    expect(dialog()).not.toBeNull();
+    expect(bridge.route).toBe('/swarms/swr-b');
+    expect(bridge.mountSession).not.toHaveBeenCalled();
+    // The new route is acknowledged before its participant list arrives.
+    let finish;
+    overrideOperations(operation, {
+      'swarms.get': () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    participant.click();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(bridge.mountSession).not.toHaveBeenCalled();
+    finish({ swarm: structuredClone(swarm) });
+    await vi.waitFor(() =>
+      expect(bridge.mountSession.mock.lastCall?.slice(1, 3)).toEqual([
+        'swr-a',
+        'prt-b',
+      ]),
+    );
+    expect(bridge.route).toBe('/swarms/swr-a/participants');
     expect(dialog()).toBeNull();
     // From a shown Run, a Swarm's keyboard menu starts a Run of that Swarm.
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.swarm-head')).not.toBeNull(),
-    );
     document.querySelector('[data-profile-id="prf-a"]').dispatchEvent(
       new KeyboardEvent('keydown', {
         key: 'F10',
@@ -1156,7 +1191,7 @@ describe('Swarm Run controls', () => {
     );
   });
 
-  it('keeps failed participants visible while their peers are running and opens their Activity', async () => {
+  it('keeps failed participants visible while their peers are running and opens their Session', async () => {
     const detail = structuredClone(swarm);
     detail.participants[1].state = 'failed';
     detail.participants.push({
@@ -1184,9 +1219,10 @@ describe('Swarm Run controls', () => {
     ]);
     actions[0].click();
     await vi.waitFor(() =>
-      expect(bridge.pushRoute).toHaveBeenLastCalledWith(
-        '/swarms/swr-a/participants',
-      ),
+      expect(bridge.mountSession.mock.lastCall?.slice(1, 3)).toEqual([
+        swarm.id,
+        'prt-b',
+      ]),
     );
   });
 

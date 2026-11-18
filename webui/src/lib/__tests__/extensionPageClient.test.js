@@ -165,20 +165,67 @@ describe('extension page client', () => {
     const height = vi
       .spyOn(viewport, 'clientHeight', 'get')
       .mockReturnValue(400);
+    const opened = vi.fn();
+    const rules = [
+      { prefix: '#', fragment: '#post/', label: 'Board', first: 0, last: 2 },
+    ];
     const release = client.mountSession(
       slot,
       'group',
       'worker',
       errors,
       'compact',
+      opened,
     );
+    release.setReferences(rules);
     expect(target.postMessage).not.toHaveBeenCalled();
     initialize(target);
+    const header = document.createElement('header');
+    header.id = 'participant-toolbar';
+    slot.dataset.sessionClipBelow = header.id;
+    scroller.prepend(header);
+    document.body.append(scroller);
+    vi.spyOn(header, 'getBoundingClientRect').mockReturnValue({
+      left: 10,
+      right: 210,
+      top: 30,
+      bottom: 75,
+    });
     initialize(target, 'next');
+    const registrations = target.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((request) => request.method === 'session.embed');
+    const notifyReference = (registration, slot) =>
+      dispatchFrom(target, {
+        ...registration,
+        type: 'vbot.extension.session.reference',
+        slot,
+        href: '#post/0',
+      });
+    notifyReference(registrations[0], registrations[0].params.slot);
+    notifyReference(registrations[1], registrations[0].params.slot);
+    expect(opened).not.toHaveBeenCalled();
+    notifyReference(registrations[1], registrations[1].params.slot);
+    expect(opened).toHaveBeenCalledExactlyOnceWith('#post/0');
+    release.setReferences([]);
     release();
+    notifyReference(registrations[1], registrations[1].params.slot);
+    expect(opened).toHaveBeenCalledTimes(1);
     const sent = target.postMessage.mock.calls.map(([data]) => data);
     const mounts = sent.filter((m) => m.method === 'session.embed');
     expect(mounts.map((m) => m.nonce)).toEqual(['nonce-a', 'next']);
+    expect(
+      sent.findLast((m) => m.type === 'vbot.extension.session.references'),
+    ).toMatchObject({
+      nonce: 'next',
+      slot: mounts[1].params.slot,
+      references: [],
+    });
+    expect(
+      sent
+        .filter((m) => m.type === 'vbot.extension.session.references')
+        .map((m) => m.references),
+    ).toEqual([rules, rules, []]);
     expect(mounts[1].params).toMatchObject({
       group_id: 'group',
       participant_id: 'worker',
@@ -193,6 +240,11 @@ describe('extension page client', () => {
       height: 210,
       clip: [40, 0, 70, 0],
     });
+    expect(
+      sent.findLast((m) => m.type === 'vbot.extension.session.bounds')?.bounds
+        .clip,
+    ).toEqual([85, 0, 70, 0]);
+    scroller.remove();
     expect(sent.at(-1)).toMatchObject({
       type: 'vbot.extension.session.release',
       nonce: 'next',

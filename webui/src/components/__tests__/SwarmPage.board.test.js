@@ -1,4 +1,3 @@
-import { assistantRun, outputItem } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
@@ -131,7 +130,7 @@ describe('Swarm Board posts', () => {
     );
     expect(post.querySelectorAll('table tbody td')).toHaveLength(2);
     expect(post.querySelector('p').textContent).not.toContain('**');
-    const links = [...post.querySelectorAll('a')];
+    const links = [...post.querySelectorAll('.msg-markdown a')];
     expect(links.map((link) => link.href)).toEqual([
       'https://example.test/report',
       'https://example.test/game',
@@ -371,9 +370,9 @@ describe('Swarm Board posts', () => {
         colors.set(participant.id, color);
       }
       expect(new Set(colors.values()).size).toBe(2);
-      button('Participant 9').click();
+      board().querySelector('.post-author[href="#participant/prt-a"]').click();
       await vi.waitFor(() =>
-        expect(document.querySelector('.history')).not.toBeNull(),
+        expect(bridge.mountSession).toHaveBeenCalledTimes(pass + 1),
       );
       const activityAvatar = document.querySelector(
         '.participants .participant-avatar',
@@ -595,7 +594,7 @@ describe('Swarm Board posts', () => {
     expect(callsTo(operation, 'link.open')).toHaveLength(0);
   });
 
-  it('links participant mentions to their details card and Activity', async () => {
+  it('links participant mentions to their details card and Session', async () => {
     const { bridge, operation } = createBridge();
     boardPosts(operation, [
       {
@@ -626,11 +625,10 @@ describe('Swarm Board posts', () => {
     expect(tooltipText()).toContain('demo/fallback');
     mentions[0].click();
     await vi.waitFor(() =>
-      expect(bridge.readHistory).toHaveBeenCalledWith(
+      expect(bridge.mountSession.mock.lastCall?.slice(1, 3)).toEqual([
         swarm.id,
         'prt-b',
-        expect.anything(),
-      ),
+      ]),
     );
     expect(callsTo(operation, 'link.open')).toHaveLength(0);
   });
@@ -844,41 +842,55 @@ describe('Swarm Board posts', () => {
     const { bridge, operation } = createBridge(undefined, {
       ...structuredClone(swarm),
       newest_post_sequence: 3,
+      newest_wiki_page_number: 2,
     });
     overrideOperations(operation, { 'board.read': boardStore(posts) });
-    bridge.readHistory.mockResolvedValue({
-      status: 'completed',
-      items: [
-        assistantRun('cite', [outputItem('Builds on #1.')], {
-          source: 'history',
-          status: 'completed',
-        }),
-      ],
-      messages: [
-        {
-          id: 'msg-cite',
-          role: 'assistant',
-          content: 'Builds on #1.',
-          timestamp: '2026-09-08T09:00:00+00:00',
-        },
-      ],
-    });
     await render(bridge);
     button('Investigate').click();
     await vi.waitFor(() => expect(numbers()).toEqual([2, 1]));
-    // Activity shows; the Board, off screen, misses a new post.
+    // The participant's Session shows while the Board receives a new post.
     button('Alpha').click();
-    const cite = () => document.querySelector('.history a[href="#post/1"]');
-    await vi.waitFor(() => expect(cite()).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(bridge.mountSession.mock.lastCall?.[2]).toBe('prt-a'),
+    );
+    expect(
+      bridge.mountSession.mock.results[0].value.setReferences,
+    ).toHaveBeenCalledWith([
+      expect.objectContaining({
+        prefix: '#',
+        fragment: '#post/',
+        first: 0,
+        last: 3,
+      }),
+      expect.objectContaining({
+        prefix: 'w',
+        fragment: '#wiki/w',
+        first: 1,
+        last: 2,
+      }),
+      expect.objectContaining({
+        prefix: '@',
+        fragment: '#participant/',
+        names: expect.arrayContaining([
+          ['Beta', 'prt-b'],
+          ['prt-b', 'prt-b'],
+        ]),
+      }),
+    ]);
+    const openReference = (href) => bridge.mountSession.mock.lastCall[5](href);
+    openReference('#participant/prt-b');
+    await vi.waitFor(() =>
+      expect(bridge.mountSession.mock.lastCall?.[2]).toBe('prt-b'),
+    );
     posts.push({ ...posts[0], id: 'pst-3', sequence: 3, text: 'message-3' });
     const lists = callsTo(operation, 'board.list').length;
     bridge.pushRoute.mockResolvedValueOnce({});
-    cite().click();
+    openReference('#post/1');
     await tick();
     expect(bridge.route).toBe('/swarms/swr-a/participants');
-    expect(cite()).not.toBeNull();
+    expect(bridge.mountSession.mock.lastCall[2]).toBe('prt-b');
     expect(callsTo(operation, 'board.list')).toHaveLength(lists);
-    cite().click();
+    openReference('#post/1');
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('1'),
     );

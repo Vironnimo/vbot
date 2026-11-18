@@ -71,7 +71,6 @@ body {
   font-size: var(--fs-heading-sm);
   font-weight: 600;
 }
-:where(.swarm-page) .history pre:where(:not(.msg-markdown *)),
 :where(.swarm-page) .panel pre:where(:not(.msg-markdown *)) {
   overflow: auto;
   max-height: 420px;

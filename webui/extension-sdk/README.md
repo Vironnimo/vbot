@@ -8,7 +8,7 @@ built-in UI. An Extension builds its assets independently and ships the resultin
 ## Install the SDK artifact
 
 Packaged vBot servers include the SDK at
-`<vbot_root>/resources/sdk/vbot-extension-sdk-1.1.0.tgz`. Install that artifact in
+`<vbot_root>/resources/sdk/vbot-extension-sdk-1.2.0.tgz`. Install that artifact in
 the Extension's own directory; no vBot checkout is needed. The standard WebUI
 build creates the tarball before application packaging copies `resources/`.
 
@@ -29,7 +29,7 @@ node scripts/extension-sdk.mjs
 npm pack ./extension-sdk --pack-destination .
 ```
 
-This produces `vbot-extension-sdk-1.1.0.tgz`. The build follows only the explicit
+This produces `vbot-extension-sdk-1.2.0.tgz`. The build follows only the explicit
 public exports and their dependencies. The tarball includes source components,
 local fonts, their license, and the page build helper. It contains no imports
 back into the vBot repository. Publishing to a registry is a separate operator
@@ -38,7 +38,7 @@ action; creating this artifact does not publish it.
 In the Extension's own directory:
 
 ```sh
-npm install --save-exact /path/to/vbot-extension-sdk-1.1.0.tgz
+npm install --save-exact /path/to/vbot-extension-sdk-1.2.0.tgz
 npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
 ```
 
@@ -107,7 +107,7 @@ renderers come from the App context and are absent from an isolated page.
 
 The SDK's semantic version describes its public JavaScript imports and component
 contracts. The Extension manifest's `api_version` describes required host
-capabilities; this SDK release targets API 37. UI-only contributions can declare
+capabilities; this SDK release targets API 38. UI-only contributions can declare
 host features without creating a Python module. Optional capabilities must be
 checked against the host's advertised feature set before use. A reload retires
 the old registration and outstanding bridge requests; recreate state from the
@@ -139,6 +139,32 @@ view at the size and position of the component. Bound its container's height.
 Choose `conversation` (default), `compact`, or `full` for the amount of detail
 shown inline. Each offers the user the full Session in Chat. The frame receives
 neither its DOM nor its content through the embed.
+
+If a sticky toolbar scrolls over the slot, pass its element ID as `clipBelow`.
+The toolbar stays visible and clickable while the outer page scrolls.
+
+With API 38, a page can make references to its records clickable in the
+embedded conversation. Pass the current ranges or names to `references` and
+route the activated local fragment in `onReference`. For example:
+
+```svelte
+<SessionEmbed
+  {client} {groupId} participantId={worker.id}
+  references={[
+    { prefix: '#', fragment: '#post/', label: 'Board post', first: 0, last: newestPost },
+    { prefix: '@', fragment: '#participant/', label: 'Participant', names: [['Ada', 'p1']] },
+  ]}
+  onReference={openRecord}
+/>
+```
+
+In this example, clicking `#3` calls `openRecord('#post/3')` and clicking
+`@Ada` calls `openRecord('#participant/p1')`. Number ranges include both
+ends. A page can update the rules while the Session stays open. The host
+accepts up to 8 rules, with up to 512 name/ID pairs per rule, within the
+bridge's 64 KiB message limit. Prefixes are 1–8 ASCII letters or characters
+from `@#~!+`. Fragments start with `#` and an ASCII letter, followed by up
+to 63 ASCII letters, digits, underscores, slashes or hyphens.
 
 For a conversation with vBot's built-in App Agent, call
 `await client.openAppChat()` from a user click. This takes no arguments.

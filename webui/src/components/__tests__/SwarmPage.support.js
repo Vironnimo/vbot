@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, expect, vi } from 'vitest';
-import { assistantRun, outputItem } from './timelineItems.support.js';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 
 vi.mock(
@@ -118,7 +117,6 @@ function createBridge(initialProfile = profile, detail = swarm) {
   let storedProfile = structuredClone(initialProfile);
   let autosaveParticipant;
   const invalidationListeners = new Set();
-  const runListeners = new Set();
   const operation = vi.fn((name, args) => {
     if (name === 'profiles.save') {
       storedProfile = {
@@ -290,28 +288,9 @@ function createBridge(initialProfile = profile, detail = swarm) {
       },
       // Back or Forward in the app, which close the page's topmost dialog.
       back: () => layers.at(-1)?.close(),
-      mountSession: vi.fn(() => vi.fn()),
-      readHistory: vi.fn(() =>
-        Promise.resolve({
-          status: 'completed',
-          items: [
-            assistantRun('link', [outputItem('See https://example.test')], {
-              source: 'history',
-              status: 'completed',
-            }),
-          ],
-          messages: [
-            {
-              id: 'msg-link',
-              role: 'assistant',
-              content: 'See https://example.test',
-              timestamp: '2026-09-08T09:00:00+00:00',
-            },
-          ],
-        }),
+      mountSession: vi.fn(() =>
+        Object.assign(vi.fn(), { setReferences: vi.fn() }),
       ),
-      readRunChildren: vi.fn(),
-      cancelToolCall: vi.fn().mockResolvedValue({ ok: true }),
       listDirectory: vi.fn(({ path }) =>
         Promise.resolve({
           path,
@@ -326,8 +305,6 @@ function createBridge(initialProfile = profile, detail = swarm) {
           separator: '/',
         }),
       ),
-      subscribeRun: vi.fn(),
-      unsubscribeRun: vi.fn().mockResolvedValue({}),
       onContext(callback) {
         onContext = callback;
         return () => {};
@@ -335,13 +312,6 @@ function createBridge(initialProfile = profile, detail = swarm) {
       onInvalidation(callback) {
         invalidationListeners.add(callback);
         return () => invalidationListeners.delete(callback);
-      },
-      onRunEvent(callback) {
-        runListeners.add(callback);
-        return () => runListeners.delete(callback);
-      },
-      emitRun(id, event) {
-        for (const listener of runListeners) listener(id, event);
       },
       dispose: vi.fn(),
       updateContext: showContext,
@@ -364,21 +334,6 @@ function overrideOperations(operation, handlers) {
       return Promise.reject(error);
     }
   });
-}
-
-// The Swarm fixture reduced to Alpha, attached to an active lifecycle Run.
-function swarmWithRun(runId, fields = {}) {
-  return {
-    ...structuredClone(swarm),
-    participants: [
-      {
-        ...structuredClone(swarm.participants[0]),
-        lifecycle_run_id: runId,
-        run_active: true,
-        ...fields,
-      },
-    ],
-  };
 }
 
 function callsTo(operation, name) {
@@ -444,20 +399,6 @@ async function openSwarm(bridge) {
   );
 }
 
-// Opens a participant's Activity from the Swarm roster.
-async function openParticipant(bridge, name = 'Alpha') {
-  await render(bridge);
-  button('Investigate').click();
-  await vi.waitFor(() => expect(button(name)).toBeDefined());
-  button(name).click();
-  await vi.dynamicImportSettled();
-  await tick();
-}
-
-function historyText() {
-  return document.querySelector('.history')?.textContent ?? '';
-}
-
 afterEach(async () => {
   if (mounted) mounted = await unmount(mounted);
   document.body.innerHTML = '';
@@ -485,7 +426,6 @@ export {
   saveStateText,
   createBridge,
   overrideOperations,
-  swarmWithRun,
   callsTo,
   settle,
   fill,
@@ -493,8 +433,6 @@ export {
   choose,
   render,
   openSwarm,
-  openParticipant,
-  historyText,
   fixtureState,
 };
 

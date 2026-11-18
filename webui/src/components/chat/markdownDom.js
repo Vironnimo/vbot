@@ -9,6 +9,7 @@ import CopyButton from '../ui/CopyButton.svelte';
 function createMarkdownDom(target) {
   let records = [];
   let previousHtml = null;
+  let previousReferences;
   const sourceByNode = new WeakMap();
 
   function adoptSource(record, source) {
@@ -81,11 +82,13 @@ function createMarkdownDom(target) {
 
   return {
     sourceAttribute: (node, name) => sourceByNode.get(node)?.getAttribute(name),
-    update(html) {
-      if (html === previousHtml) return;
+    update(html, references) {
+      if (html === previousHtml && references === previousReferences) return;
+      previousReferences = references;
       previousHtml = html;
       const template = document.createElement('template');
       template.innerHTML = html;
+      references?.decorate(template.content);
       records = reconcile(target, records, [...template.content.childNodes]);
     },
   };
@@ -134,9 +137,22 @@ export function renderMarkdownDom(target, options) {
   const decorations = new Map();
   let caret;
 
+  let currentReferences;
+  function activateReference(event) {
+    const link = event.target.closest?.('a[data-session-reference]');
+    if (!link || !currentReferences) return;
+    event.preventDefault();
+    currentReferences.open(link.getAttribute('href'));
+  }
+
   function update(options) {
+    if (!currentReferences && options.references)
+      target.addEventListener('click', activateReference);
+    if (currentReferences && !options.references)
+      target.removeEventListener('click', activateReference);
+    currentReferences = options.references;
     const { document: rendered, fileLinks, copyLabel, copiedLabel } = options;
-    dom.update(rendered.html);
+    dom.update(rendered.html, currentReferences);
     const wanted = new Map();
     for (const slot of target.querySelectorAll('[data-markdown-code-index]')) {
       const block = rendered.codeBlocks[Number(slot.dataset.markdownCodeIndex)];
@@ -161,7 +177,18 @@ export function renderMarkdownDom(target, options) {
       const href = link.getAttribute('href') || '';
       // A link within the page leads nowhere to show; its host owns its hint
       // (Swarm's post, Wiki page and participant references).
-      if (href.startsWith('#')) continue;
+      if (href.startsWith('#')) {
+        const label = link.dataset.sessionReference;
+        if (label)
+          wanted.set(link, {
+            signature: JSON.stringify(['reference', label]),
+            mount: () => {
+              const hint = tooltip(link, label);
+              return () => hint.destroy();
+            },
+          });
+        continue;
+      }
       if (!fileLinks || !isDeliveredFile(link)) {
         wanted.set(link, addressHint(link, dom));
         continue;
@@ -257,6 +284,7 @@ export function renderMarkdownDom(target, options) {
   return {
     update,
     destroy() {
+      target.removeEventListener('click', activateReference);
       for (const decoration of decorations.values()) decoration.destroy();
       decorations.clear();
     },

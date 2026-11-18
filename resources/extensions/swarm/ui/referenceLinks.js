@@ -1,3 +1,4 @@
+import { t } from '@vbot/extension-sdk/lib/i18n.js';
 import { tooltip } from '@vbot/extension-sdk/lib/tooltip.js';
 
 // Participants cite a Board post as "#46" and a Wiki page as "w7", and address
@@ -226,4 +227,53 @@ export function referenceLinks(
       hints.clear();
     },
   };
+}
+
+// Leave room in the 64 KiB page message for its envelope and the numeric
+// rules. Human names take priority over ID aliases for very large rosters.
+function mentionRules(roster) {
+  const rules = [];
+  const encoder = new TextEncoder();
+  let remaining = 60 * 1024;
+  for (const field of ['display_name', 'id']) {
+    for (const person of roster) {
+      if (!person[field]) continue;
+      const pair = [person[field], person.id];
+      remaining -= encoder.encode(JSON.stringify(pair)).length + 1;
+      if (remaining < 0) return rules;
+      let rule = rules.at(-1);
+      if (!rule || rule.names.length === 512) {
+        if (rules.length === 6) return rules;
+        rule = {
+          prefix: '@',
+          fragment: '#participant/',
+          label: t('swarm.participant'),
+          names: [],
+        };
+        rules.push(rule);
+      }
+      rule.names.push(pair);
+    }
+  }
+  return rules;
+}
+
+export function sessionReferenceRules(swarm) {
+  return [
+    {
+      prefix: '#',
+      fragment: '#post/',
+      label: t('swarm.tabs.board'),
+      first: 0,
+      last: swarm.newest_post_sequence,
+    },
+    {
+      prefix: 'w',
+      fragment: '#wiki/w',
+      label: t('swarm.tabs.wiki'),
+      first: 1,
+      last: swarm.newest_wiki_page_number,
+    },
+    ...mentionRules(swarm.participants ?? []),
+  ];
 }

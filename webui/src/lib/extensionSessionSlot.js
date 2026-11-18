@@ -1,6 +1,6 @@
 // Report coordinates in the page's viewport. The opaque frame never receives
 // a DOM reference to the Session or any of its messages.
-function slotBounds(element) {
+function slotBounds(element, header) {
   const rect = element.getBoundingClientRect();
   const viewport = document.documentElement;
   let left = Math.max(0, rect.left);
@@ -22,6 +22,10 @@ function slotBounds(element) {
       );
     }
   }
+  if (header) {
+    const box = header.getBoundingClientRect();
+    if (box.left < right && box.right > left) top = Math.max(top, box.bottom);
+  }
   if (left >= right || top >= bottom) return null;
   return {
     x: Math.round(rect.x),
@@ -40,9 +44,17 @@ function slotBounds(element) {
 export function observeSessionSlot(element, publish) {
   let last = '';
   let scheduled = 0;
+  let header = null;
   function measure() {
     scheduled = 0;
-    const bounds = slotBounds(element);
+    const id = element.dataset.sessionClipBelow;
+    const next = id ? element.ownerDocument.getElementById(id) : null;
+    if (next !== header) {
+      if (header) sizes?.unobserve(header);
+      header = next;
+      if (header) sizes?.observe(header);
+    }
+    const bounds = slotBounds(element, header);
     const key = JSON.stringify(bounds);
     if (key !== last) {
       last = key;

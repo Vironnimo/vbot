@@ -5,7 +5,7 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 
 Private Session Tools use owner-selected call repair before scoped execution (`_tool_calls.py`; details under the Board section), including encoded counts and known wrappers. Bound identities remain exact; optional values are not erased merely because their schema rejects them. Field aliases are explicit lists (the `limti` typo among them); there is no general nearest-name matching of field names. Inbox and State accept their single action under common synonyms (`receive`, `status`) and reject other actions with a message naming the Swarm Tool that has them. Recognizable wrappers and explicit identities matching the bound Session are accepted (the identity fields and redundant action labels are declared `unadvertised_parameters`, so dispatch validates them without offering them); unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments, compares them with independently prescribed conformance inputs, and verifies canonical receipts.
 
-Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_stop_resume.py`, `SwarmPage.test.js`, `SwarmPage.activity.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
+Swarm lifecycle controls use the participant's live `run_active` state. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a currently running owned Run counts as active, and host read failures propagate. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_stop_resume.py`, `SwarmPage.test.js`, `SwarmPage.activity.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
 
 ## Terms
 
@@ -59,10 +59,10 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page.
   `SwarmPage.svelte` is the page root; its areas (the shell with sidebar, Run
-  start form, Run view and dialogs; the Board; Activity; Usage) have their own
-  components, model modules and stylesheets (Private UI routing below). The app
+  start form, Run view and dialogs; the Board; Participants; Usage) have their own
+  components and stylesheets (Private UI routing below). The app
   shell and page bridge remain generic; built assets live in generated `web/`.
-  The profile editor, Activity, Usage and Wiki components load on first use
+  The profile editor, Participants, Usage and Wiki components load on first use
   through the shared `LazyContent`; page controllers keep their lifetime and
   bridge subscriptions independently of code loading. The Wiki mounts on its
   first visit and then stays mounted for the selected Swarm. A Board citation
@@ -516,7 +516,7 @@ number), title and member count, the main discussion first
 (`test_swarm_store_board.py`).
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
-open through the same host bridge handler as Activity. Discussion announcements
+open through the page bridge. Discussion announcements
 retain their dedicated navigation action (`SwarmPage.board.test.js`).
 Coverage: `test_swarm_board_tool.py` and the production `swarm_tool` probe.
 
@@ -666,7 +666,7 @@ between the carrier commit and the acknowledgment does not deliver those posts
 again. Batches without a receipt stay pending; a conflicting receipt or a gone
 Session binding is counted and leaves the batch unacknowledged. Evidence:
 `test_swarm_inbox_delivery.py`, `test_swarm_store_delivery.py`,
-`test_swarm_wakes.py`, `SwarmPage.activity.test.js`.
+`test_swarm_wakes.py`.
 Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
@@ -950,7 +950,7 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   The probe purges cached Extension modules before loading its own checkout.
 - Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`
   (overview, Run start and controls) and its `SwarmPage.<area>.test.js`
-  companions for board, activity, streaming, usage, profiles and wiki;
+  companions for Board, participant Sessions, Usage, profiles and Wiki;
   generic iframe isolation is tested by ExtensionPage and server asset tests.
 
 Use the Sessions, Runs, Chat and Statistics maps before changing their owning
@@ -1018,23 +1018,14 @@ browse the server's folders (`webui.md` -> Ownership). The Run directory counts
 as changed only when `sameServerPath` (`lib/pathPicker.js`) says it names another
 folder than the default, so a completed folder's trailing separator, or `/` for
 `\` on a Windows path, keeps the Project selection. The manifest
-requires API 37 for the hosted Session slot (`extension.json`; path listing was added in API 12,
+requires API 38 for references in the hosted Session slot (`extension.json`; path listing was added in API 12,
 slash-command argument hints in API 20; `SwarmPage.test.js`,
 `SwarmPage.profiles.test.js`).
-Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.activity.test.js`, `test_extensions_methods.py`).
-Participant selection opens Activity and disposes the previous Run subscription;
-late history/subscription replies cannot replace a newer participant selection.
-Terminal Run events reload canonical history so non-streamed final output appears
-without reopening Activity. Refresh and reconnect also reload the open History
-and reattach an active Run when its id is unchanged. Activity loads older canonical
-History pages through `next_before`, retaining the loaded page depth on refresh.
-Its reads and the followed Run's stream deliver each Run's latest 100 steps
-(`RUN_STEPS`, `webui/extension-pages.md` -> Run streams and history); a Run's
-history gap loads the earlier steps once it comes within a viewport height of the
-visible area (`loadRunGaps` in `RunActivity.svelte`), and a failed load runs again
-when the gap comes into reach again. Whole Runs broke Activity: in a Swarm running
-for hours, the newest History page of 5 of 18 participants measured 8.7-14.6 MB,
-beyond the bridge's 8 MB reply cap, and at most 3.4 MB windowed (Sessions, 2026-10).
+Selecting a participant opens its Session directly in the Run's participant tab.
+Swarm supplies the Swarm and participant ids to the SDK's `SessionEmbed`. The
+host resolves the address and owns the timeline, paging, live events, Tool
+actions and the link to the full Chat (`webui/extension-pages.md` -> Capabilities).
+The frame never reads the participant's Session history to display it.
 Discussion, audit and Usage replies commit only for the current selection
 and request; delayed reads cannot overwrite newer navigation. Board replies commit
 only for the selected Swarm and discussion and while no newer full load started
@@ -1042,32 +1033,26 @@ only for the selected Swarm and discussion and while no newer full load started
 surroundings). A read of new posts waits for a full load or a requested newer
 page in flight, and one dropped by a newer full load is covered or replaced by
 it, because that load started after the change.
-Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
-`SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
-Within Activity, View Session embeds the selected participant's host-owned Session by Swarm and participant id. While it is open the Swarm reader detaches; returning to Activity catches up and restores its enriched Board, Wiki and participant references. Leaving the tab releases the host slot.
+Evidence: `SwarmPage.board.test.js`, `SwarmPage.usage.test.js` and
+`test_swarm_store_board.py`.
 
-The Activity tab lists the Run's participants as the Board's chips, the inspected
-one pressed; until one is chosen, and only once the participants are loaded, it
-asks to choose one. A chosen participant's header (avatar, name, the shared
-context ring with its figures, Resume participant when resumable, close) shows at
-once (the ring's window is the one the participant's Context names, kept across
-live updates that name none, else the catalog window of its Model), with a loading banner until its History arrives, and sticks below the Run
-view's tab row while the timeline scrolls (`--swarm-run-sticky-top`, as the
-Board's newer-posts bar); in an Activity narrower than 650px the Session and Resume controls move
-to a second row. A participant's Activity opens at its newest entries.
-Below the timeline a banner says why a failed or interrupted participant
-stopped when its timeline does not (`stopReason` in `pageActivity.svelte.js`).
-The lifecycle Run's History status decides, not the participant state: core
-reports an interrupted Run to its owner as an error, so a participant whose Run
-lost the Provider connection is `failed`. An interrupted Run names its summary's
-completion reason (network, timeout, provider, internal, shutdown, process
-restart); a failed Run gets a generic line unless its error entry ends the
-timeline; a lifecycle Run that ended otherwise means the next Run could not
-start (a failed Resume admission keeps the old lifecycle Run and records no
-error, so after an earlier failed Run the banner shows that Run's reason). The
-Swarm keeps no participant error text: a `last_error` would need the error or
-completion reason in the Extension run-finished callback, a stored column and
-its reset when the next Run starts (`SwarmPage.activity.test.js`).
+The Participants tab lists all participants using the Board's chips and marks the selected
+one as pressed. Before selection it asks the user to choose a participant.
+The embedded Session uses the full Chat timeline in read-only mode. Resume
+applies to the selected participant. Its stop notice uses the lifecycle
+field `stop_reason` from `swarms.get`. Its batched owned-Run read supplies the
+durable completion reason even when Swarm records an interrupted Run as a failed
+participant. A failed Run shows a generic stop notice above the Session; the
+timeline can also show its detailed error. An unsuccessful admission can
+leave a participant without a new Run.
+Participant names in Run details also open their Session, including when the
+dialog was opened from another Run's sidebar menu. The embedded slot clips
+below the participant header when scrolling so the tabs and Resume remain
+accessible in short panes. Its bounded reference declaration gives display
+names priority over participant IDs for very large rosters.
+Selecting another chip switches the embedded Session. Closing the selection
+or leaving the tab releases the host slot. Returning to the tab reopens the
+last participant selected for this Swarm.
 
 Board reads retain each post's saved UTC timestamp. A post's header shows the
 author's avatar and name (the user's own posts show a person icon and "You"),
@@ -1090,8 +1075,7 @@ Run ended before anyone posted. Participant chips are outlined
 buttons with an unframed avatar (initials on a soft tint of the identity color),
 the name and, unless the participant is idle, a state dot. A chip's accessible
 name gives name, state and pending messages; its tooltip is a details card with the
-Model (provider path muted), state and pending messages; participant records carry
-neither context use nor a failure reason, which Activity shows from History
+Model (provider path muted), state and pending messages
 (`ParticipantChip.svelte`, `participantCard` in `pagePresentation.js`). The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
@@ -1102,7 +1086,7 @@ on hover or focus, always on touch screens) opens it with "In reply to #N" as a
 removable chip and sends the post's id as `reply_to`. The dialog addresses
 participants through checkboxes by name and identity color, all of the Swarm's
 participants in roster order, sent as `recipients` in that order.
-Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
+Rendered Markdown in posts and Wiki pages links cited `#N` and `wN`
 and `@` mentions of participants (`ui/referenceLinks.js`), never inside code,
 links or controls, never a number in double quotes (a value, as in a Tool
 call's arguments: `"message_id": "#0"`), and never in the user request. A post links only earlier
@@ -1113,14 +1097,17 @@ or participant id in any case, not inside a word, the longest name first. These
 links, Markdown links to `#post/N` or `#wiki/wN` and a reply's target get their
 tooltip on first hover or focus: the post's author and opening, the page's title
 and opening, or the participant's details card. A mention opens the
-participant's Activity, as its chip does. Linking walks only the rendered
+participant's embedded Session, as its chip does. Inside that Session, the host
+matches Swarm references and returns a clicked target to the same page
+navigation. Detailed hover previews belong to the Board and Wiki. Linking in
+the frame walks only the rendered
 Markdown added to the page and text nodes updated in place by the shared
 renderer, skips code, links and controls as whole subtrees and ignores its own
 insertions.
 A post link shows the post on the Board, focused and centered in the room below
 what sticks at the top, and a post taller than that room shows from its top just
 below it. The newer-posts bar (see below) sticks below the Run view's tab row at
-`--swarm-run-sticky-top`, as Activity's header does (without that offset, at the
+`--swarm-run-sticky-top`, as the selected participant's header does (without that offset, at the
 scroller's top edge above its `--page-inset-top`); a reveal or focus keeps a post
 or the goal clear of the same offset. `#0` opens the user request. A post the Board does not show
 takes two round trips: the post by number, which names its discussion, then up
@@ -1171,9 +1158,8 @@ Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
 selected participant, leaving other participants unchanged. The existing group
 admission path starts only the returned targets (test_swarm_store_execution.py,
-test_swarm_operations.py). Activity offers this action for an inactive
-participant and consumes canonical context usage from history and Run events;
-it never substitutes cumulative Session usage.
+test_swarm_operations.py). The participant tab offers this action alongside
+the selected Session when that participant is inactive and resumable.
 
 `SCHEMA_SQL` in `_store_database.py` is the declared schema; the kernel creates it
 and reconciles later additive changes on open. Keep changes additive (new tables,
@@ -1199,7 +1185,7 @@ preparing, running or stopping or any participant runs, otherwise Resume while
 a participant can resume (primary when the Run needs attention or was
 interrupted), so a failed participant beside running peers does not add a
 second button. A notice below the header names failed or interrupted
-participants as links to their Activity and, while others still work, carries
+participants as links to their Sessions and, while others still work, carries
 Resume itself. `Delete…` is disabled with "Stop the Run first" while anything
 works; confirming deletion of an open Run whose participants are all inactive
 stops it first, then deletes. After a deletion, the deleted row's neighbour in
@@ -1222,19 +1208,14 @@ a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.
 Page errors (`pageModel.svelte.js`): a failed user action shows in the page's
 error banner until the next user action starts; refreshes never clear it, so a
 background refresh cannot hide it unseen. Reads the user starts are user
-actions: choosing a participant or the start form's Swarm, opening the Board or
-Usage tab, choosing a discussion, loading more discussions, earlier or newer
-posts, jumping to the newest post, loading earlier Activity, revealing a post,
-cancelling a Tool Call.
+actions, such as choosing the start form's Swarm or a discussion, opening Board
+or Usage, paging posts or revealing a post.
 A failed refresh shows its own banner with Retry, and so does a failed read the
 page starts on its own (`refreshFailed`), which never touches the error banner:
-Activity's reads for a refresh, for a Run that ended on its own and for its tab
-showing again (History, catalog, Run subscription and its release), the
-throttled Usage reload, the start form's default directory a refresh loads, and
+the throttled Usage reload, the start form's default directory a refresh loads, and
 the Swarm re-read after saved communication settings. A refresh that succeeds
 clears that banner unless something failed after it started; a successful read
-outside a refresh does not. Refreshes read again what failed: Activity inspects
-the participant again instead of keeping what it shows, the start form reloads
+outside a refresh does not. Refreshes read again what failed: the start form reloads
 its default directory, and Usage reloads within its interval. Retry is a user
 action: it clears the error banner and runs a full refresh, which also reloads a
 visible Usage report at once. A reply made stale by a newer read or another
@@ -1242,8 +1223,7 @@ selection shows in neither banner. A host that has not initialized the page
 within 10 s shows in the refresh banner as an alert without Retry. Dialog
 actions (communication settings, deletions) keep their failure in the dialog for
 another try. The banners stay above the shown view while it scrolls
-(`SwarmPage.test.js`, `SwarmPage.activity.test.js`, `SwarmPage.usage.test.js`,
-`SwarmPage.board.test.js`).
+(`SwarmPage.test.js`, `SwarmPage.usage.test.js`, `SwarmPage.board.test.js`).
 Every failure text the page shows passes `failureText` (`ui/failureText.js`).
 Swarm operations fail with their stable `SwarmStoreError` code as the message
 (`operation()` raises `ValueError(code)`), which the CLI and the backend tests
@@ -1280,7 +1260,7 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header with state, lifecycle action and menu, the failed participants' notice, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunDetailsDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile; both deletions confirm through the shared `ConfirmDialog`). The tab components `RunBoard.svelte` (with `BoardComposer.svelte`), `RunActivity.svelte` and `RunUsage.svelte` receive their area object plus the page model for cross-area state and actions; `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Activity, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selection, tab and route, lifecycle, refresh dispatch, page errors, focus requests and bridge lifetime - and composes `model.start` (`pageStartForm.svelte.js`: defaults, validation and Run admission), `model.runActions` (`pageRunActions.svelte.js`: Run/profile menus, deletion, communication settings and detail dialogs), and the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links), `model.activity` (`pageActivity.svelte.js`: participant History/replay subscriptions and context projection) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers; `failureText.js` words failed requests (Page errors); `runPresentation.js` holds how the pane, the Run header and the Run dialogs present Runs and Swarms (titles, states in words and colour, grouping and lifecycle eligibility, summaries, details cards, communication-setting changes) and the batching limits of delivery settings (`DELIVERY_LIMITS`: field ids, ranges, error text), which the editor and the communication settings dialog check alike. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root; the Run and Swarm dialogs render outside it, take their geometry from the shared Modal's `size`, and keep their content rules in unscoped `swarm-dialog__*`, `swarm-details__*` and `swarm-communication__*` classes (`runDialogs.css`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels and dialog copy; tables are `DataTable`'s or, in Markdown, styled as in Chat) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `runDialogs.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
+Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page model, provides the navigation layer registry, lays out the sidebar, banners and the shown view, and mounts the dialogs beside `main` (the shared Modal renders in place). Shell components receive the page model: `SwarmSidebar.svelte`, `RunStartForm.svelte`, `RunView.svelte` (Run header with state, lifecycle action and menu, the failed participants' notice, tabs, and the Wiki panel kept mounted per Swarm), `CommunicationDialog.svelte`, `RunDetailsDialog.svelte`, `RunDeleteDialog.svelte` and `SwarmDeleteDialog.svelte` (deletes a saved profile; both deletions confirm through the shared `ConfirmDialog`). The participant tab (`RunActivity.svelte`) reads the selected participant from the page model. Board (`RunBoard.svelte` with `BoardComposer.svelte`) and Usage (`RunUsage.svelte`) also receive their area models. `ParticipantChip.svelte` and `ParticipantAvatar.svelte` serve Board and Participants, and `SwarmIcon.svelte` draws the action icons. `pageModel.svelte.js` (`createSwarmPageModel`) retains the cross-area state - profile and Run lists, selected Run and participant, tab and route, lifecycle, refresh dispatch, page errors, focus requests and bridge lifetime - and composes `model.start` (`pageStartForm.svelte.js`: defaults, validation and Run admission), `model.runActions` (`pageRunActions.svelte.js`: Run/profile menus, deletion, communication settings and detail dialogs), and the areas as `model.board` (`pageBoard.svelte.js`: posts, paging, discussions, reveal, composer, content links) and `model.usage` (`pageUsage.svelte.js`: the group usage report and its throttled reloads), each created with a small host interface from the model. `pagePresentation.js` holds display-only count/avatar helpers; `failureText.js` words failed requests (Page errors); `runPresentation.js` holds how the pane, the Run header and the Run dialogs present Runs and Swarms (titles, states in words and colour, grouping and lifecycle eligibility, summaries, details cards, communication-setting changes) and the batching limits of delivery settings (`DELIVERY_LIMITS`: field ids, ranges, error text), which the editor and the communication settings dialog check alike. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the Board area decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; its section components `ProfileParticipants.svelte`, `ProfileInstructions.svelte` and `ProfileAccess.svelte` edit the bound draft, `DeliverySettings.svelte` edits a delivery value for any caller, and `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Stylesheets are global within the page bundle and scoped by selector to the page root; the Run and Swarm dialogs render outside it, take their geometry from the shared Modal's `size`, and keep their content rules in unscoped `swarm-dialog__*`, `swarm-details__*` and `swarm-communication__*` classes (`runDialogs.css`): `swarmPage.css` holds the rules the areas share (page layout, list rows of the sidebar and the Wiki, section heads, panels and dialog copy; tables are `DataTable`'s or, in Markdown, styled as in Chat) and loads before the area stylesheets, which each component imports after its dependencies (`swarmSidebar.css`, `runStartForm.css`, `runView.css`, `runBoard.css`, `participantChip.css`, `boardComposer.css`, `runActivity.css`, `runUsage.css`, `runDialogs.css`); `profileEditor.css` scopes the editor's own classes under `.swarm-profile-editor`, and the editor's dialogs use the shared Modal styles.
 
 Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile, the start page or a tab pushes the target route and shows the route the host sends back; a refused autosave transition keeps the current tab. Board citations, Wiki links and participant inspection wait for their accepted tab. A profile route outside the loaded list page resolves that profile with `profiles.get`. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, communication settings, Run details, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
 
@@ -1340,19 +1320,10 @@ refresh fully (`SwarmPage.test.js`, `SwarmPage.board.test.js`,
 reads per Board post fell from 7.0 (all four reads per change) to 3.1 with named
 changes and incremental Board reads, and to 1.9 with the 1 s interval;
 `swarms.get` runs once per pass (2026-09-28). The overview reloads Board or Usage data only for the
-visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
-the existing History and live subscription while its participant's Run identity
-and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
-after a failed History, catalog or subscription read, the next refresh inspects
-the participant again (Page errors). Activity reads
-History and follows its participant's Run only while its tab (`participants`)
-shows: hiding the tab ends the Run subscription and drops reads in flight, keeping what
-it shows; showing it again catches up once from the participant's current
-snapshot, with newer History (including a Run that settled meanwhile) and the
-Run if it is still active. In the seeded scale run, 15 s of new posts with the
-Board in view cost 23 History reads and 10 Run calls before, none after. Coverage:
-`pageRefresh.test.js`, `SwarmPage.streaming.test.js`, `SwarmPage.activity.test.js`
-and `SwarmPage.wiki.test.js`.
+visible tab; selecting a tab loads its current data independently of hidden reports.
+Refreshing the Swarm snapshot updates the selected participant's state. The
+host manages the mounted Session independently of these refreshes.
+Coverage: `pageRefresh.test.js`, `SwarmPage.activity.test.js` and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte owns the Wiki tab's state and requests (free page drafts, bounded
 content loading, search, version history and restore); `WikiIndex.svelte` (search,
@@ -1381,19 +1352,6 @@ No saved profile instructions, Swarm snapshots, or Session history are rewritten
 Wiki search uses an input Enter handler and the debounced input callback instead of
 a form because the isolated page sandbox blocks native form submission. The page
 does not require `allow-forms`.
-
-Swarm Activity retains one shared Chat event projection, compresses deltas and
-flushes live updates in 33 ms batches. Initial replay is buffered through the
-server-reported `replay_through_sequence` before replacing displayed History;
-opening a long-running Session therefore does not visibly replay its old steps.
-The shared Chat Timeline uses explicit complete Run descriptors to retire retained live output; stale History or active
-snapshots cannot erase newer output or restart a settled subscription. Older pages prepend into the current live projection, using the active Run identity/sequence from Extension History; late pages from an earlier selection or History generation are discarded. In-flight
-inspection survives peer invalidations, and Thinking disclosure state belongs to
-the inspected Session. Tests: `SwarmPage.streaming.test.js` and
-`SwarmPage.activity.test.js`. The generic bridge only relays the replay
-watermark (`ExtensionPage.test.js`, `test_extensions_methods.py`).
-Activity and Board reuse the same compact participant chips; Activity retains
-all Swarm participants and marks the selected Session with a pressed state.
 
 The human page omits the Delivery audit tab; internal events and canonical receipts
 remain available for diagnosis. Usage requests one combined group report, including
