@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+from contextlib import suppress
 from typing import Any
 
 from core.extensions.databases import Database, Migration
@@ -651,6 +652,70 @@ class FactoryStore:
             )
         )
 
+    async def project_work(self, project_id: str, after: str, limit: int, query: str = "") -> Json:
+        """Page the combined Project work history, with outstanding decisions first."""
+
+        def read(connection: sqlite3.Connection) -> Json:
+            cursor = None
+            if after:
+                with suppress(ValueError):
+                    cursor = json.loads(after)
+                if (
+                    not isinstance(cursor, list)
+                    or len(cursor) != 3
+                    or cursor[0] not in (0, 1)
+                    or not all(isinstance(value, str) for value in cursor[1:])
+                ):
+                    raise FactoryError(
+                        "invalid_cursor", "Use the next cursor returned by the Project history."
+                    )
+            rows = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                WITH work AS (
+                  SELECT t.id, json_extract(t.body_json, '$.title') AS title, t.state,
+                      'task' AS kind, t.updated_at,
+                      (t.state='review' AND json_extract(t.body_json, '$.user_approval')=1
+                       AND COALESCE(json_extract(t.body_json, '$.submission.user_approved'),0)=0
+                       OR t.state='blocked' AND json_extract(t.body_json, '$.reason') NOT IN
+                           ('dependencies','children','peer','workflow')) AS attention
+                  FROM native_tasks t JOIN native_factories f ON f.id=t.factory_id
+                  WHERE f.project_id=? AND NOT EXISTS (
+                      SELECT 1 FROM cards c
+                      WHERE c.id=json_extract(t.body_json,'$.workflow_card_id')
+                          AND c.state IN ('proposal','waiting'))
+                  UNION ALL
+                  SELECT c.id, c.title, c.state, 'card', c.updated_at,
+                      c.state IN ('proposal','waiting') FROM cards c WHERE c.project_id=?
+                      AND (c.state IN ('proposal','waiting') OR
+                          COALESCE(json_extract(c.runtime_json, '$.native_task_id'),'')='')
+                )
+                SELECT * FROM work WHERE instr(lower(title),lower(?))>0
+                    AND (? IS NULL OR (attention, updated_at, id) < (?,?,?))
+                ORDER BY attention DESC, updated_at DESC, id DESC LIMIT ?
+                """,
+                    (
+                        project_id,
+                        project_id,
+                        query,
+                        after or None,
+                        *(cursor or [0, "", ""]),
+                        limit + 1,
+                    ),
+                )
+            ]
+            shown = rows[:limit]
+            last = shown[-1] if len(rows) > limit else None
+            return {
+                "work": shown,
+                "next_after": json.dumps([last["attention"], last["updated_at"], last["id"]])
+                if last
+                else "",
+            }
+
+        return await self.database.read_async(read)
+
     async def list_cards(
         self, project_id: str | None = None, state: str | None = None
     ) -> list[Json]:
@@ -745,6 +810,17 @@ class FactoryStore:
             return _get(connection, card_id)
 
         return await self.database.write_async(write)
+
+    async def recent_outputs(self, card_id: str) -> list[Json]:
+        def read(connection: sqlite3.Connection) -> list[Json]:
+            rows = connection.execute(
+                f"SELECT {', '.join(_OUTPUT_COLUMNS)} FROM outputs WHERE card_id=? "
+                "ORDER BY id DESC LIMIT 5",
+                (card_id,),
+            ).fetchall()
+            return [_output(row) for row in reversed(rows)]
+
+        return await self.database.read_async(read)
 
     async def history(self, card_id: str) -> Json:
         def read(connection: sqlite3.Connection) -> Json:

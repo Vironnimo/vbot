@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 type Json = dict[str, Any]
 
 
-_READ_ACTIONS = {"list", "get"}
+_READ_ACTIONS = {"list", "get", "history"}
 
 
 _PLURALS = {"factory": "factories", "member": "members", "task": "tasks", "topic": "topics"}
@@ -87,6 +87,12 @@ class NativeFactoryManagement:
                 and actor.get("task", {}).get("id") == args.get("id")
             ):
                 context.request_turn_end()
+            if (
+                resource == "task"
+                and action == "create"
+                and result.get("task", {}).get("conversation_id")
+            ):
+                context.request_turn_end()
             if resource == "topic" and action == "post":
                 context.request_turn_end()
             return tool_success({"text": self._tool_result(resource, action, result), **result})
@@ -99,6 +105,12 @@ class NativeFactoryManagement:
 
     @staticmethod
     def _tool_result(resource: str, action: str, result: Json) -> str:
+        if "work" in result:
+            return f"{len(result['work'])} Project work items."
+        if "workflow_run" in result:
+            return (
+                f"Workflow run {result['workflow_run']['id']}: {result['workflow_run']['state']}."
+            )
         record = result.get(resource)
         if isinstance(record, dict):
             return (
@@ -108,6 +120,24 @@ class NativeFactoryManagement:
         return f"{len(result.get(_PLURALS[resource], []))} {resource} records."
 
     async def _operation(self, name: str, args: Json, actor: Json | None) -> Json:
+        if (name == "work.list" and actor is None) or name == "task.history":
+            if name == "task.history":
+                team = await self.store.get_factory(text(args, "factory_id"))
+                if actor and actor["factory"]["id"] != team["id"]:
+                    raise FactoryError("outside_factory", "Read work in your own Project.")
+                project_id = team["project_id"]
+            else:
+                project_id = text(args, "project_id")
+            limit = args.get("limit", 30)
+            if type(limit) is not int or not 1 <= limit <= 100:
+                raise FactoryError("invalid_limit", "Choose a page size between 1 and 100.")
+            return await self.service.records().project_work(
+                project_id, args.get("after", ""), limit, str(args.get("query", ""))
+            )
+        if name.startswith("conversation.") and actor is None:
+            from ._conversations import conversation
+
+            return await conversation(self, name, args)
         resource, _, action = name.partition(".")
         args = dict(args)
         for key in ("capacity", "limit", "expected_revision", "priority"):
@@ -134,7 +164,29 @@ class NativeFactoryManagement:
             else:
                 factory = None
         else:
-            previous = await getattr(self.store, f"get_{resource}")(text(args, "id"))
+            try:
+                previous = await getattr(self.store, f"get_{resource}")(text(args, "id"))
+            except FactoryError as error:
+                if name != "task.get" or error.code != "task_not_found":
+                    raise
+                store = self.service.records()
+                try:
+                    card = await store.get_card(text(args, "id"))
+                except FactoryError as card_error:
+                    if card_error.code != "card_not_found":
+                        raise
+                    raise error from card_error
+                if actor and card["project_id"] != actor["factory"]["project_id"]:
+                    raise FactoryError(
+                        "outside_factory", "Read work in your own Project."
+                    ) from error
+                return {
+                    "workflow_run": {
+                        key: card[key]
+                        for key in ("id", "title", "state", "waiting_reason", "summary")
+                    },
+                    "outputs": await store.recent_outputs(card["id"]),
+                }
             factory_id = previous["id"] if resource == "factory" else previous["factory_id"]
             factory = (
                 previous if resource == "factory" else await self.store.get_factory(factory_id)
@@ -336,7 +388,13 @@ class NativeFactoryManagement:
                                 " as a backlog proposal."
                             ),
                         )
-                if not leader and not parent_id and args.get("assignee_id"):
+                direct = (actor.get("topic") or {}).get("direct_member_id") == member["id"]
+                if (
+                    not leader
+                    and not parent_id
+                    and args.get("assignee_id")
+                    and not (direct and args["assignee_id"] == member["id"])
+                ):
                     raise FactoryError(
                         "outside_remit",
                         (
@@ -717,6 +775,14 @@ class NativeFactoryManagement:
             }
             if "limits" in fields:
                 fields["limits"] = _limits.normalize(fields["limits"])
+            topic = (actor or {}).get("topic") or {}
+            if (
+                actor
+                and topic.get("direct_member_id") == actor["member"]["id"]
+                and not fields.get("parent_id")
+            ):
+                fields["conversation_id"] = topic["id"]
+                fields["assignee_id"] = fields.get("assignee_id") or topic["direct_member_id"]
             return await self.store.create_task(
                 text(args, "factory_id"),
                 text(args, "title", maximum=200),

@@ -61,6 +61,17 @@ class NativeTopicStore(NativeRecordStore):
                 },
                 actor,
             )
+            if task_id and fields.get("direct_member_id"):
+                task = _get(connection, "task", task_id)
+                if not task.get("conversation_id"):
+                    _save(
+                        connection,
+                        "task",
+                        task,
+                        {"conversation_id": topic["id"]},
+                        actor,
+                        "conversation_started",
+                    )
             connection.executemany(
                 "INSERT INTO native_topic_participants (topic_id, member_id, joined_at) "
                 "VALUES (?, ?, ?)",
@@ -68,11 +79,77 @@ class NativeTopicStore(NativeRecordStore):
             )
             if initial_text:
                 self._add_post(
-                    connection, topic["id"], initial_text, actor, participants, "", actor
+                    connection,
+                    topic["id"],
+                    initial_text,
+                    actor,
+                    participants,
+                    fields.get("start_receipt", ""),
+                    actor,
                 )
             return _get(connection, "topic", topic["id"])
 
         return await self.database.write_async(write)
+
+    async def direct_topic(
+        self,
+        factory_id: str,
+        member_id: str,
+        *,
+        task_id: str = "",
+        card_id: str = "",
+        receipt: str = "",
+    ) -> Json | None:
+        def read(connection: sqlite3.Connection) -> Json | None:
+            query = "SELECT id FROM native_topics WHERE factory_id = ?"
+            values = [factory_id]
+            if receipt:
+                query += " AND json_extract(body_json, '$.start_receipt') = ?"
+                values.append(receipt)
+            elif task_id:
+                query += (
+                    " AND task_id = ? AND json_extract(body_json, '$.direct_member_id') IS NOT NULL"
+                )
+                values.append(task_id)
+            elif card_id:
+                query += " AND json_extract(body_json, '$.card_id') = ?"
+                values.append(card_id)
+            else:
+                query += " AND json_extract(body_json, '$.direct_member_id') = ? AND state = 'open'"
+                values.append(member_id)
+            row = connection.execute(
+                query
+                + " ORDER BY json_extract(body_json, '$.last_user_message_at') DESC, id LIMIT 1",
+                values,
+            ).fetchone()
+            return _get(connection, "topic", row[0]) if row else None
+
+        return await self.database.read_async(read)
+
+    async def previous_direct_discussion(
+        self, factory_id: str, member_id: str, topic_id: str = ""
+    ) -> Json | None:
+        """Use an existing one-to-one user discussion when the Project has no newer chat."""
+
+        def read(connection: sqlite3.Connection) -> Json | None:
+            row = connection.execute(
+                """
+                SELECT t.id FROM native_topics t
+                JOIN native_topic_participants p ON p.topic_id=t.id
+                WHERE t.factory_id=? AND p.member_id=? AND t.state='open' AND t.task_id=''
+                AND json_extract(t.body_json,'$.direct_member_id') IS NULL
+                AND (?='' OR t.id=?)
+                AND NOT EXISTS (SELECT 1 FROM native_topic_participants other
+                             WHERE other.topic_id=t.id AND other.member_id!=p.member_id)
+                AND EXISTS (SELECT 1 FROM native_posts initial WHERE initial.topic_id=t.id
+                            AND initial.sequence=1 AND initial.author='user')
+                ORDER BY t.updated_at DESC, t.id LIMIT 1
+                """,
+                (factory_id, member_id, topic_id, topic_id),
+            ).fetchone()
+            return _get(connection, "topic", row[0]) if row else None
+
+        return await self.database.read_async(read)
 
     async def get_topic(self, topic_id: str) -> Json:
         return await self._get("topic", topic_id)
@@ -158,6 +235,20 @@ class NativeTopicStore(NativeRecordStore):
             return _save(connection, "topic", topic, patch, actor, "updated")
 
         return await self.database.write_async(write)
+
+    async def record_answer(self, topic_id: str, member_id: str, run_id: str, answer: str) -> None:
+        """Preserve the canonical final answer in full under a replay-safe Run receipt."""
+        await self.database.write_async(
+            lambda connection: self._add_post(
+                connection,
+                topic_id,
+                answer,
+                f"member:{member_id}",
+                [],
+                f"answer:{run_id}",
+                f"member:{member_id}",
+            )
+        )
 
     async def add_post(
         self,
@@ -250,7 +341,12 @@ class NativeTopicStore(NativeRecordStore):
                 post["created_at"],
             ),
         )
-        _save(connection, "topic", topic, {}, actor or author, "posted")
+        patch = (
+            {"last_user_message_at": post["created_at"]}
+            if author == "user" and topic.get("direct_member_id")
+            else {}
+        )
+        _save(connection, "topic", topic, patch, actor or author, "posted")
         return post
 
     @staticmethod
@@ -276,6 +372,38 @@ class NativeTopicStore(NativeRecordStore):
                     (topic_id, after, limit),
                 )
             ]
+
+        return await self.database.read_async(read)
+
+    async def conversation_history(self, topic: Json, before: str) -> Json:
+        """Page backwards through posts and hand-ins without duplicating either record."""
+
+        def read(connection: sqlite3.Connection) -> Json:
+            stamp, _, identifier = before.partition("|")
+            rows = connection.execute(
+                """
+                WITH messages AS (
+                  SELECT id, created_at, author, text, '' AS evidence FROM native_posts
+                  WHERE topic_id=?
+                  UNION ALL
+                  SELECT 'result-' || id, created_at, actor,
+                    COALESCE(json_extract(body_json,'$.outcome'),json_extract(body_json,'$.comment')),
+                    COALESCE(json_extract(body_json,'$.evidence'),'') FROM native_results
+                  WHERE task_id=?
+                )
+                SELECT msg.*, COALESCE(json_extract(m.body_json,'$.name'),
+                    json_extract(m.body_json,'$.role'),m.agent_id) AS author_name
+                FROM messages msg LEFT JOIN native_members m ON m.id=substr(msg.author,8)
+                WHERE msg.text IS NOT NULL AND (?='' OR (msg.created_at,msg.id)<(?,?))
+                ORDER BY msg.created_at DESC, msg.id DESC LIMIT 51
+                """,
+                (topic["id"], topic["task_id"], before, stamp, identifier),
+            ).fetchall()
+            posts = [dict(row) for row in reversed(rows[:50])]
+            return {
+                "posts": posts,
+                "before": f"{posts[0]['created_at']}|{posts[0]['id']}" if len(rows) > 50 else "",
+            }
 
         return await self.database.read_async(read)
 

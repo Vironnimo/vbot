@@ -219,6 +219,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
         },
         templates: clone(templates),
       };
+    if (name === 'conversation.get') return { topic: null, posts: [] };
+    if (name === 'work.list') return { work: [], next_after: '' };
     if (name === 'board.get')
       return {
         cards: clone(

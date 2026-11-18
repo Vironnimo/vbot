@@ -4,6 +4,7 @@
 
 <script>
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
   import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
   import LazyContent from '@vbot/extension-sdk/ui/LazyContent.svelte';
@@ -59,6 +60,9 @@
 <div class="factory-workflows-page">
   <nav class="factory-workflow-list" aria-label={t('factory.workflows')}>
     <h2>{t('factory.workflows')}</h2>
+    <Button variant="tertiary" onClick={() => onNavigate('/cards')}
+      >{t('factory.native.workflowCards')}</Button
+    >
     <div class="factory-new-workflow">
       <Dropdown
         id="factory-new-workflow"

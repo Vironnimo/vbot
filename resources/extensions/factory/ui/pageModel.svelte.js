@@ -193,6 +193,7 @@ export function createFactoryPageModel(bridgeClient) {
       next === '' ||
       next === '/' ||
       next === '/cards' ||
+      /^\/project\/[^/]+$/.test(next) ||
       /^\/factory\/[^/]+(?:\/(?:team|discussions|settings))?$/.test(next) ||
       /^\/(?:task|topic)\/[^/]+$/.test(next) ||
       /^\/card\/[^/]+$/.test(next) ||

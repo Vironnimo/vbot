@@ -1,11 +1,22 @@
 export default {
+  'factory.chat.overview': 'Overview',
+  'factory.chat.title': 'Chat with {name}',
+  'factory.chat.message': 'Message {name}…',
+  'factory.chat.earlier': 'Earlier messages',
+  'factory.chat.new': 'New topic',
+  'factory.chat.replying': '{name} is replying…',
+  'factory.chat.send': 'Send',
+  'factory.chat.work': 'Project work',
+  'factory.chat.empty': 'No work yet.',
+  'factory.chat.attention': 'Needs you',
+  'factory.chat.member': 'Chat',
   'factory.native.moreResults': 'Load more results',
   'factory.native.moreEvents': 'Load more events',
   'factory.native.archived': 'Archived',
   'factory.native.openSession': 'Open Session',
   'factory.native.readHistory': 'Read execution history',
   'factory.native.inheritedModel': 'Factory Model (default)',
-  'factory.native.factories': 'Factories',
+  'factory.native.factories': 'Projects',
   'factory.native.waitDependencies': 'Waiting for prerequisite tasks',
   'factory.native.waitInput': 'Waiting for information',
   'factory.native.waitReview':
@@ -27,12 +38,12 @@ export default {
   'factory.native.allowedTools': 'Allowed Tools',
   'factory.native.deniedTools': 'Denied Tools',
 
-  'factory.native.workflowCards': 'Workflow cards',
+  'factory.native.workflowCards': 'Workflow runs',
   'factory.native.team': 'Team',
   'factory.native.discussions': 'Discussions',
   'factory.native.settings': 'Factory settings',
   'factory.native.selectProject': 'Select a Project',
-  'factory.native.setup': 'Establish Factory',
+  'factory.native.setup': 'Choose a Leader',
   'factory.native.leader': 'Leader',
   'factory.native.leaderHelp':
     'The Leader coordinates the team and can assign tasks to its members. Choose an existing Agent or create a new one.',
@@ -81,7 +92,7 @@ export default {
   'factory.native.results': 'Results and events',
   'factory.native.history': 'Execution history',
   'factory.native.noFactory':
-    'This Project has no Factory yet. Choose a Leader to establish its permanent team.',
+    'Your first message starts a conversation with the Project Leader.',
   'factory.native.noTasks':
     'Create a task and assign a teammate. Work starts automatically when ready.',
   'factory.native.noTopics': 'Start a discussion and invite teammates.',

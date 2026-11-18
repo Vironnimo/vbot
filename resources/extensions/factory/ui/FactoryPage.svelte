@@ -59,11 +59,6 @@
         onClick={() => navigate('')}>{t('factory.native.factories')}</Button
       >
       <Button
-        variant={model.view === 'board' ? 'secondary' : 'tertiary'}
-        onClick={() => navigate('/cards')}
-        >{t('factory.native.workflowCards')}</Button
-      >
-      <Button
         variant={model.view === 'workflows' ? 'secondary' : 'tertiary'}
         aria-current={model.view === 'workflows' ? 'page' : undefined}
         onClick={() => navigate('/workflows')}>{t('factory.workflows')}</Button

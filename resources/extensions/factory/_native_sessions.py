@@ -424,6 +424,7 @@ class NativeSessions:
                 execution["id"], {"state": "running"}, actor="factory"
             )
             return
+        await self.native.discussions.publish_answer(execution)
         execution = await self.store.change_execution(
             execution["id"], {"state": "idle"}, actor="factory"
         )
@@ -457,4 +458,8 @@ class NativeSessions:
                     event="awaiting_input",
                 )
                 await self.native._publish("tasks", task)
+        if execution["kind"] == "topic":
+            topic = await self.store.get_topic(execution["scope_id"])
+            if topic.get("direct_member_id"):
+                await self.native._publish("topics", topic)
         self.service.request_schedule()

@@ -263,6 +263,72 @@ describe('Factory native work', () => {
     expect(button(t('factory.native.newTask'))).toBeUndefined();
   });
 
+  it('resumes the Leader topic, sends inline and keeps a different Project separate', async () => {
+    const { bridge, state, operation } = nativeBridge();
+    const topic = { id: 'top-current', title: 'Startup time', state: 'open' };
+    const posts = [
+      { id: 'one', author: 'member:mem-leader', text: 'Existing answer' },
+    ];
+    state.handlers['conversation.get'] = ({ project_id }) =>
+      project_id === 'project-a'
+        ? { topic, posts: [...posts] }
+        : { topic: null, posts: [] };
+    state.handlers['conversation.send'] = ({ text }) => {
+      posts.push({ id: 'two', author: 'user', text });
+      return { topic, posts: [...posts] };
+    };
+    state.handlers['work.list'] = ({ project_id }) => ({
+      work:
+        project_id === 'project-a'
+          ? [
+              {
+                kind: 'card',
+                id: 'scheduled',
+                target: 'scheduled',
+                title: 'Review PR 42',
+                attention: true,
+              },
+              {
+                kind: 'task',
+                id: 'task-a',
+                target: 'task-a',
+                title: 'Startup time',
+                state: 'working',
+              },
+            ]
+          : [],
+      next_after: '',
+    });
+    await render(bridge, '');
+    await settle();
+    const log = () => document.querySelector('[role="log"]');
+    expect(log().textContent).toContain('Existing answer');
+    expect(document.querySelector('.project-overview').textContent).toContain(
+      'Review PR 42',
+    );
+    const input = document.querySelector('.project-overview textarea');
+    input.value = 'Continue here';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await settle();
+    expect(calls(operation, 'conversation.send').at(-1)[1]).toMatchObject({
+      project_id: 'project-a',
+      topic_id: topic.id,
+      text: 'Continue here',
+      request_id: expect.any(String),
+    });
+    expect(log().textContent).toContain('Continue here');
+    await choose('native-project', 'Project B');
+    await settle();
+    expect(log().textContent).not.toContain('Continue here');
+    expect(calls(operation, 'conversation.get').at(-1)[1]).toEqual({
+      project_id: 'project-b',
+    });
+  });
+
   it('repairs unknown native destinations and deleted record routes', async () => {
     const { bridge, state } = nativeBridge();
     await render(bridge, '/factory/fac-one/typo');

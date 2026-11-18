@@ -43,6 +43,7 @@ class NativeTaskStore(NativeDispatchStore):
         conditions: str = "",
         priority: float = 0,
         actor: str = "user",
+        conversation_id: str = "",
         **fields: Any,
     ) -> Json:
         title, objective, conditions = (
@@ -61,6 +62,28 @@ class NativeTaskStore(NativeDispatchStore):
             factory = _get(connection, "factory", factory_id)
             if factory["state"] == "archived":
                 raise _error("factory_archived", "This Factory is archived.")
+            topic = _get(connection, "topic", conversation_id) if conversation_id else None
+            if topic:
+                if topic["factory_id"] != factory_id or topic["state"] != "open":
+                    raise _error("outside_factory", "Use an open conversation in this Factory.")
+                if topic["task_id"]:
+                    existing = _get(connection, "task", topic["task_id"])
+                    requested = {
+                        "title": title,
+                        "objective": objective,
+                        "conditions": conditions,
+                        "priority": priority,
+                        "assignee_id": assignee_id,
+                        "parent_id": parent_id,
+                        "dependencies": _ids(dependencies, "dependencies"),
+                        **fields,
+                    }
+                    if all(existing.get(key) == value for key, value in requested.items()):
+                        return existing
+                    raise _error(
+                        "task_exists",
+                        "This conversation already has a task. Read it with factory_tasks get.",
+                    )
             record = {
                 "conditions": conditions,
                 "reason": "",
@@ -87,6 +110,22 @@ class NativeTaskStore(NativeDispatchStore):
             if record["state"] not in {"ready", "backlog"}:
                 raise _error("invalid_state", "New tasks start in backlog or ready.")
             _task_links(connection, record)
+            if topic:
+                record["conversation_id"] = topic["id"]
+                last = (
+                    connection.execute(
+                        "SELECT MAX(sequence) FROM native_posts WHERE topic_id = ?", (topic["id"],)
+                    ).fetchone()[0]
+                    or 0
+                )
+                record["runtime"] = {"topic_sequences": {topic["id"]: last}}
+                _save(connection, "topic", topic, {"task_id": record["id"]}, actor, "task_started")
+                if assignee_id and assignee_id not in topic["participants"]:
+                    connection.execute(
+                        "INSERT INTO native_topic_participants(topic_id, member_id, joined_at) "
+                        "VALUES (?, ?, ?)",
+                        (topic["id"], assignee_id, utc_now_timestamp()),
+                    )
             _insert(connection, "task", record, actor)
             _write_dependencies(connection, record)
             return _get(connection, "task", record["id"])

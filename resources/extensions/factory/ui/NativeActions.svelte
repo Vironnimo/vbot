@@ -76,7 +76,10 @@
       title: '',
       objective: '',
       conditions: '',
-      assignee_id: '',
+      assignee_id:
+        kind === 'task'
+          ? task?.assignee_id || native.factory?.leader_member_id || ''
+          : '',
       parent_id: '',
       dependencies: [],
       priority: 0,
