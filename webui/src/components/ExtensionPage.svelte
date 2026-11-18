@@ -117,7 +117,14 @@
   let pageLayerOpen = $state(false);
   let searchEntries = $state([]);
   const runSubscriptions = new SvelteMap();
-  const embeds = createExtensionSessionEmbeds();
+  const embeds = createExtensionSessionEmbeds((context, slot, href) => {
+    post(context, {
+      ...contextPayload(context),
+      type: 'vbot.extension.session.reference',
+      slot,
+      href,
+    });
+  });
   const unregisterAutosave = useAutosaveContext().register({
     hasPending: () => frameContext?.autosavePending === true,
     flush: flushAutosave,
@@ -528,6 +535,10 @@
     }
     if (context.ready && data.type === 'vbot.extension.session.bounds') {
       embeds.position(data.slot, data.bounds);
+      return;
+    }
+    if (context.ready && data.type === 'vbot.extension.session.references') {
+      embeds.setReferences(data.slot, data.references);
       return;
     }
     if (context.ready && data.type === 'vbot.extension.session.release') {
@@ -1137,6 +1148,7 @@
                 active={Boolean(view.visible && !pageLayerOpen)}
                 readOnly
                 monitor={view.monitor}
+                references={view.references}
               />
             {/snippet}
           </LazyContent>

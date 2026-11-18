@@ -324,6 +324,7 @@ Sentence reasons for the CLI sections added to `resources/extensions/swarm/docs/
 | Text | Reason |
 |---|---|
 | `With API 37 (ui.session-chats)...` | Gives the package import, component props and layout requirement for placing a native Session inline. |
+| `With API 38, pass references and onReference to SessionEmbed...` | Shows how an embedded Session opens the page's numbered or named records, including the fragment the page receives on click. |
 | `Pass the group and participant ids...` | The page grant resolves an owned participant, even when the Agent is outside the roster. |
 | `Choose conversation (default)...` | Authors can choose the requested level of work detail for each surface. |
 | `Each view provides Open in Chat...` | The component supplies promotion to the same Session, so the page can omit its own button. |

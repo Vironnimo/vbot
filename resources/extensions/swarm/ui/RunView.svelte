@@ -57,7 +57,7 @@
     ),
   );
   // The notice names them in the locale's list words, each name a link to
-  // the participant's Activity; Resume's note follows as a second sentence.
+  // the participant's Session; Resume's note follows as a second sentence.
   const failedText = $derived(
     aroundSlot(t('swarm.participants.failed', { names: SLOT })),
   );
@@ -91,7 +91,7 @@
 
   function inspect(participant) {
     void Promise.resolve(
-      model.navigate(() => model.activity.inspectParticipant(participant)),
+      model.navigate(() => model.inspectParticipant(participant)),
     ).catch((cause) => {
       if (!model.disposed) model.error = failureText(cause);
     });
@@ -198,7 +198,7 @@
     />{:else if model.activeTab === 'participants'}
     <LazyContent load={loadActivity}>
       {#snippet children(Component)}
-        <Component activity={model.activity} {model} />
+        <Component {model} />
       {/snippet}
     </LazyContent>
   {:else if model.activeTab === 'usage'}

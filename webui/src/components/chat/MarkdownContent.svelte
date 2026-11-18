@@ -1,4 +1,5 @@
 <script>
+  import { getContext } from 'svelte';
   import { t } from '$lib/i18n.js';
   import {
     renderMarkdownDocument,
@@ -17,6 +18,10 @@
     contentId = undefined,
   } = $props();
 
+  const getReferences = getContext('sessionMarkdownReferences');
+  const message = $derived(
+    !reasoning && className.split(/\s+/).includes('msg-markdown'),
+  );
   let renderedDocument = $derived.by(() => {
     const options = { plainLanguageLabel: t('chat.codeLanguagePlain') };
     if (reasoning) {
@@ -35,7 +40,8 @@
   data-timeline-content-id={contentId}
   use:renderMarkdownDom={{
     document: renderedDocument,
-    fileLinks: !reasoning && className.split(/\s+/).includes('msg-markdown'),
+    fileLinks: message,
+    references: message ? getReferences?.() : null,
     copyLabel: t('chat.copyCode'),
     copiedLabel: t('chat.codeCopied'),
     previewHint: t('chat.fileLink.previewHint'),

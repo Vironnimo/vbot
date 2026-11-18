@@ -29,7 +29,11 @@ const tableRows = () => [...document.querySelectorAll('.usage-table tbody tr')];
 const cells = (row) => {
   const [participant, ...rest] = row.cells;
   return [
-    participant.querySelector('.usage-participant__name').textContent.trim(),
+    participant
+      .querySelector(
+        '.usage-participant__name, .usage-participant__name--repeat',
+      )
+      .textContent.trim(),
     ...rest.map((cell) => cell.textContent.trim()),
   ];
 };
@@ -92,6 +96,13 @@ describe('Swarm Usage', () => {
     });
     expect(callsTo(operation, 'swarms.usage')).toHaveLength(1);
     expect(callsTo(operation, 'swarms.events')).toHaveLength(0);
+    tableRows()[1].querySelector('a[href="#participant/prt-b"]').click();
+    await vi.waitFor(() =>
+      expect(bridge.mountSession.mock.lastCall?.slice(1, 3)).toEqual([
+        swarm.id,
+        'prt-b',
+      ]),
+    );
   });
 
   it('shows participant tool calls once across Models and without token usage', async () => {

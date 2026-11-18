@@ -53,7 +53,7 @@ export default Object.freeze({
   'swarm.details.copyId': 'Copy Run ID',
   'swarm.details.copySnapshot': 'Copy snapshot',
   'swarm.participants.failed':
-    'Participants need attention: {names}. Open their Activity for details.',
+    'Participants need attention: {names}. Open their Sessions for details.',
   'swarm.participants.failedResume': 'Resume retries their work.',
   'swarm.board.discussionPicker': 'Discussion: {title}',
   'swarm.board.mainDiscussion': 'Main discussion',
@@ -102,8 +102,6 @@ export default Object.freeze({
   'swarm.participant.state.failed': 'Failed',
   'swarm.participant.state.cancelled': 'Cancelled',
   'swarm.participant.state.interrupted': 'Interrupted',
-  'swarm.activity.showSession': 'View Session',
-  'swarm.activity.showActivity': 'View Swarm activity',
   'swarm.activity.empty': 'Choose a participant',
   'swarm.activity.emptyHint':
     'Their messages and Tool calls show here, live while they work.',
@@ -124,8 +122,6 @@ export default Object.freeze({
   'swarm.activity.stop.notStarted':
     'A new Run could not start. Check the application logs for details.',
   'swarm.resumeParticipant': 'Resume participant',
-  'swarm.loadOlderMessages': 'Load older messages',
-  'swarm.noActivity': 'No retained activity yet.',
   'swarm.usage.tokensUsed': 'Tokens used',
   'swarm.usage.toolCalls': 'Tool calls',
   'swarm.usage.table': 'Usage by participant and Model',
@@ -173,7 +169,6 @@ export default Object.freeze({
   'swarm.runs.noInactive': 'No inactive Runs',
   'swarm.tabs.board': 'Board',
   'swarm.tabs.wiki': 'Wiki',
-  'swarm.tabs.activity': 'Activity',
   'swarm.tabs.usage': 'Usage',
   'swarm.loadError': 'The Swarm page could not load.',
   'swarm.refreshError': 'The page could not refresh: {error}',

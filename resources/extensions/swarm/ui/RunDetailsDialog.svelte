@@ -24,6 +24,16 @@
   const snapshot = $derived(
     run ? JSON.stringify(run.profile_snapshot ?? {}, null, 2) : '',
   );
+
+  function inspect(participant) {
+    const details = run;
+    return model.navigate(async () => {
+      if (model.runActions.detailsRun !== details) return;
+      const opened = await model.inspectParticipant(participant, details.id);
+      if (opened && model.runActions.detailsRun === details)
+        model.runActions.closeDetails();
+    });
+  }
 </script>
 
 {#if run}<Modal
@@ -76,9 +86,9 @@
             {#each run.participants as participant (participant.id)}<li
                 class="swarm-details__participant"
               >
-                <span>{participant.display_name}</span><ModelId
-                  id={participant.model}
-                />
+                <Button variant="tertiary" onClick={() => inspect(participant)}
+                  >{participant.display_name}</Button
+                ><ModelId id={participant.model} />
               </li>{/each}
           </ul>{/if}
         <details class="swarm-details__snapshot">

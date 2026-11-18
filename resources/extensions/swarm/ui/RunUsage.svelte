@@ -15,7 +15,7 @@
   // The Usage tab: the Run's tokens, tool calls and Runs, then one table row
   // per participant and Model. Token counts are compact, with the exact
   // count on hover or focus, as in Statistics.
-  let { usage } = $props();
+  let { usage, model } = $props();
 
   const locale = $derived(activeLocaleTag());
   const activity = $derived(usage.report?.usage?.activity);
@@ -102,12 +102,15 @@
      readers only. A narrow table shows the Model below the name. -->
 {#snippet participantCell(row)}
   <span class="usage-participant">
-    <span
-      class={[
-        'usage-participant__name',
-        !row.first && 'usage-participant__name--repeat',
-      ]}>{row.participant}</span
-    >
+    {#if row.first}
+      <a
+        class="usage-participant__name"
+        href="#participant/{encodeURIComponent(row.participantId)}"
+        >{row.participant}</a
+      >
+    {:else}
+      <span class="usage-participant__name--repeat">{row.participant}</span>
+    {/if}
     <span class="usage-participant__model">{@render modelName(row.model)}</span>
   </span>
 {/snippet}
@@ -125,6 +128,7 @@
   id="swarm-run-panel-usage"
   role="tabpanel"
   aria-labelledby="swarm-run-tab-usage"
+  use:model.board.contentLinks
 >
   {#if usage.report?.usage}
     <dl class="usage-summary">

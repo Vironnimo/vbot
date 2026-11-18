@@ -9,7 +9,7 @@
   import ParticipantAvatar from './ParticipantAvatar.svelte';
   import './participantChip.css';
 
-  // A participant of the Board's discussion or of the Activity list: its
+  // A participant of the Board's discussion or the Participants tab: its
   // avatar, name and, unless it is idle, a state dot. Its tooltip is the
   // participant's details card. `selected` marks the inspected participant;
   // undefined omits the pressed state. `onInspect` receives the participant.

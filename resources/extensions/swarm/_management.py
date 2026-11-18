@@ -36,9 +36,26 @@ from .store import SwarmStoreError
 from .wiki_text import WIKI_ERRORS
 
 if TYPE_CHECKING:
+    from core.sessions import OwnedRunRecord
+
     from .extension import SwarmExtension
 
 _LOGGER = get_logger("extensions.swarm")
+
+
+def _stop_reason(state: str, run_active: bool, record: OwnedRunRecord | None) -> str | None:
+    """Explain an unsuccessful participant from its last admission and durable Run outcome."""
+    if run_active or state not in {"failed", "interrupted"}:
+        return None
+    if record is not None:
+        if record.terminal_status is None:
+            return None  # The Run has not settled yet.
+        if record.terminal_status == "interrupted":
+            return record.completion_reason or "interrupted"
+        if record.terminal_status == "failed":
+            return "failed"
+    # A participant can fail to start a new Run after an earlier one succeeded.
+    return "not_started" if state == "failed" else "interrupted"
 
 
 def _changed_profile_fields(previous: Json | None, saved: Json, expected_revision: int) -> str:
@@ -273,6 +290,11 @@ class SwarmManagement:
                 inspection is not None
                 and inspection.run is not None
                 and inspection.run.status.value == "running"
+            )
+            participant["stop_reason"] = _stop_reason(
+                participant["state"],
+                participant["run_active"],
+                inspection.record if inspection else None,
             )
         # The page links "#46" and "w7" in Markdown only when they name a post or page.
         swarm["newest_post_sequence"] = await self._extension._store().newest_post_number(

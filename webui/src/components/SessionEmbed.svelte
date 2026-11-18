@@ -7,27 +7,49 @@
     groupId,
     participantId,
     presentation = 'conversation',
+    clipBelow = undefined,
+    references = [],
+    onReference = null,
   } = $props();
   let element = $state.raw(null);
   let error = $state('');
   let attempt = $state(0);
+  let binding = $state.raw(null);
+  // Projected group/participant records can refresh without changing the
+  // Session. Only the slot identity and presentation drive the mount.
+  const group = $derived(groupId);
+  const participant = $derived(participantId);
+  const openReference = $derived(onReference);
   $effect(() => {
     void attempt;
-    if (!element || !groupId || !participantId) return;
+    if (!element || !group || !participant) return;
     error = '';
-    return client.mountSession(
+    const release = client.mountSession(
       element,
-      groupId,
-      participantId,
+      group,
+      participant,
       (cause) => {
         error = cause.message;
       },
       presentation,
+      ...(openReference ? [openReference] : []),
     );
+    binding = release;
+    return () => {
+      binding = null;
+      release();
+    };
+  });
+  $effect(() => {
+    binding?.setReferences?.(references);
   });
 </script>
 
-<div class="session-slot" bind:this={element}>
+<div
+  class="session-slot"
+  data-session-clip-below={clipBelow}
+  bind:this={element}
+>
   {#if error}
     <Banner variant="error" role="alert">
       {error}

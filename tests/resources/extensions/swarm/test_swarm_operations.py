@@ -10,6 +10,7 @@ from core.agents.temporary import TemporaryAgentConfig
 from core.agents.temporary_execution import TemporaryExecutionGroups
 from core.chat import ChatMessage
 from core.extensions import ExtensionRegistrationIdentity
+from core.runs import Run
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 
@@ -35,42 +36,60 @@ async def test_editor_catalog_delivers_default_without_replacing_saved_instructi
 
 @pytest.mark.asyncio
 async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
-    participant = board.swarm["participants"][0]
-    lookups: list[tuple[str, list[str]]] = []
-
-    def inspections(run: object) -> object:
-        async def owned_runs(swarm_id, run_ids):
-            lookups.append((swarm_id, list(run_ids)))
-            return {run_id: SimpleNamespace(run=run) for run_id in run_ids}
-
-        return owned_runs
-
+    swarm_id = board.swarm["id"]
+    peer, waiting, idle = board.swarm["participants"]
+    context = board.contexts[0]
+    run = Run(
+        run_id=context.run_id,
+        agent_id=context.agent_id,
+        session_id=context.session_id,
+        execution_owner=context.execution_owner,
+    )
+    await board.sessions.start_run(run)
+    await board.store.record_run_started(swarm_id, peer["id"], run_id=run.id, expected_epoch=0)
+    await board.store.set_participant_state(swarm_id, peer["id"], "failed")
     await board.store.record_run_started(
-        board.swarm["id"], participant["id"], run_id="run-active", expected_epoch=0
+        swarm_id, waiting["id"], run_id="unknown-run", expected_epoch=0
     )
-    running = SimpleNamespace(status=SimpleNamespace(value="running"))
-    monkeypatch.setattr(board.groups, "owned_runs", inspections(running))
-    projected = await board.service.management.operation(
-        "swarms.get", {"swarm_id": board.swarm["id"]}
-    )
-    assert projected["swarm"]["participants"][0]["run_active"] is True
-    # All participants resolve through one batched ownership read.
-    assert lookups == [(board.swarm["id"], ["run-active"])]
+    await board.store.set_participant_state(swarm_id, waiting["id"], "failed")
+    lookups: list[tuple[str, list[str]]] = []
+    owned_runs = board.groups.owned_runs
 
-    monkeypatch.setattr(board.groups, "owned_runs", inspections(None))
-    projected = await board.service.management.operation(
-        "swarms.get", {"swarm_id": board.swarm["id"]}
-    )
-    assert projected["swarm"]["participants"][0]["run_active"] is False
+    async def active_inspection(group_id, run_ids):
+        lookups.append((group_id, list(run_ids)))
+        inspections = await owned_runs(group_id, run_ids)
+        inspections[run.id] = replace(inspections[run.id], run=run)
+        return inspections
 
-    async def unknown(_swarm_id, _run_ids):
-        return {}
+    async def participants():
+        data = await board.service.management.operation("swarms.get", {"swarm_id": swarm_id})
+        return {person["id"]: person for person in data["swarm"]["participants"]}
 
-    monkeypatch.setattr(board.groups, "owned_runs", unknown)
-    projected = await board.service.management.operation(
-        "swarms.get", {"swarm_id": board.swarm["id"]}
+    with monkeypatch.context() as live:
+        live.setattr(board.groups, "owned_runs", active_inspection)
+        people = await participants()
+    assert lookups == [(swarm_id, [run.id, "unknown-run"])]
+    assert people[peer["id"]]["run_active"] is True
+    assert people[peer["id"]]["stop_reason"] is None
+    assert people[waiting["id"]]["run_active"] is False
+    assert people[waiting["id"]]["stop_reason"] == "not_started"
+    assert people[idle["id"]]["stop_reason"] is None
+
+    await board.sessions.finish_run(
+        run,
+        "interrupted",
+        {
+            "timing": {
+                "started_at": "2026-09-07T12:00:00Z",
+                "completed_at": "2026-09-07T12:00:01Z",
+                "duration_ms": 1000,
+            }
+        },
+        completion_reason="network",
     )
-    assert projected["swarm"]["participants"][0]["run_active"] is False
+    person = (await participants())[peer["id"]]
+    assert person["run_active"] is False
+    assert person["stop_reason"] == "network"
 
 
 @pytest.mark.asyncio

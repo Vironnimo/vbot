@@ -22,7 +22,6 @@ import {
   everythingChanged,
   swarmChanged,
 } from './pageRefresh.js';
-import { createSwarmPageActivity } from './pageActivity.svelte.js';
 import { createSwarmPageBoard } from './pageBoard.svelte.js';
 import { createSwarmPageUsage } from './pageUsage.svelte.js';
 import { failureText } from './failureText.js';
@@ -38,9 +37,7 @@ function appendNew(list, more) {
 
 // The page's state across its areas: the profile and Run lists, the shown
 // Swarm or profile with its route and tab, refreshes and the bridge lifetime.
-// The start form and Run actions own their state. The Board,
-// Activity and Usage areas keep their own state and requests in `board`,
-// `activity` and `usage`.
+// The start form, Run actions, Board and Usage own their state and requests.
 export function createSwarmPageModel(host) {
   // Exists from the start, so the page root can hand its layer registry to
   // the page's dialogs before any of them mounts.
@@ -82,6 +79,12 @@ export function createSwarmPageModel(host) {
   let catalog = $state({});
 
   let selectedSwarm = $state(null);
+
+  let participantId = $state(null);
+  let participantRequest = 0;
+  const selectedParticipant = $derived(
+    selectedSwarm?.participants?.find((item) => item.id === participantId),
+  );
 
   let profilesCursor = $state(null);
 
@@ -139,6 +142,9 @@ export function createSwarmPageModel(host) {
   let route = '';
 
   let routeRequest = 0;
+
+  // A route change can acknowledge navigation before the requested Run has loaded.
+  let routeDisplay = null;
 
   // The newest route whose target is shown; until then corrections wait,
   // since the target may still be loading.
@@ -276,9 +282,7 @@ export function createSwarmPageModel(host) {
         if (!disposed) error = failureText(cause);
       }
     },
-    // A mention shows the participant's Activity, as its chip does.
-    inspectParticipant: (participant) =>
-      activity.inspectParticipant(participant),
+    inspectParticipant,
     refresh,
     showResumeFailures,
   });
@@ -369,7 +373,8 @@ export function createSwarmPageModel(host) {
     if (routeSettled !== routeRequest) selectionRequest += 1;
     const request = ++routeRequest;
     routeWaits = false;
-    const shown = await showRoute(routeTarget(next));
+    routeDisplay = showRoute(routeTarget(next));
+    const shown = await routeDisplay;
     if (disposed || request !== routeRequest) return;
     if (!shown) {
       routeWaits = true;
@@ -440,7 +445,7 @@ export function createSwarmPageModel(host) {
     editor = null;
     selectedSwarm = null;
     start.startErrors = {};
-    activity.leaveActivity();
+    closeParticipant();
     void start.selectRunProfile(start.selectedProfile);
   }
 
@@ -468,6 +473,31 @@ export function createSwarmPageModel(host) {
     return activeTab === tab;
   }
 
+  async function inspectParticipant(participant, swarmId = selectedSwarm?.id) {
+    if (!swarmId) return false;
+    const request = ++participantRequest;
+    const next = swarmRoute(swarmId, 'participants');
+    if (shownRoute() !== next) {
+      await stepTo(next);
+      if (route !== next) return false;
+      await routeDisplay;
+    }
+    if (
+      disposed ||
+      request !== participantRequest ||
+      shownRoute() !== next ||
+      !selectedSwarm?.participants?.some((item) => item.id === participant.id)
+    )
+      return false;
+    participantId = participant.id;
+    return true;
+  }
+
+  function closeParticipant() {
+    participantRequest += 1;
+    participantId = null;
+  }
+
   // Open Runs (working, waiting for messages or needing the user) come
   // first, so a Run that needs attention never hides among finished ones.
   const runGroups = $derived(projectRunGroups(swarms));
@@ -486,7 +516,7 @@ export function createSwarmPageModel(host) {
   const tabs = $derived([
     { id: 'board', label: t('swarm.tabs.board') },
     { id: 'wiki', label: t('swarm.tabs.wiki') },
-    { id: 'participants', label: t('swarm.tabs.activity') },
+    { id: 'participants', label: t('swarm.participants') },
     { id: 'usage', label: t('swarm.tabs.usage') },
   ]);
 
@@ -641,7 +671,6 @@ export function createSwarmPageModel(host) {
     const request = ++selectionRequest;
     if (!silent) {
       error = '';
-      activity.leaveActivity();
       board.composeOpen = false;
     }
     try {
@@ -657,23 +686,13 @@ export function createSwarmPageModel(host) {
       if (disposed || request !== selectionRequest) return;
       const swarm = retained ? { ...retained, ...snapshot } : snapshot;
       if (selectedSwarm?.id !== id) {
+        participantId = null;
         board.reset(swarm);
         usage.reset();
       }
       selectedSwarm = swarm;
       if (tab) activeTab = tab;
       if (!silent) editor = null;
-      // The inspected participant, also before its History loaded, so a
-      // refresh reads again what a failed read left out.
-      const inspected = swarm.participants?.find(
-        (item) => item.id === activity.selectedParticipant?.id,
-      );
-      if (silent && inspected) {
-        void activity.inspectParticipant(inspected, {
-          activate: false,
-          preserve: true,
-        });
-      }
       await loadVisibleTab(swarm, { background, changes });
     } catch (cause) {
       if (disposed || request !== selectionRequest) return;
@@ -775,7 +794,7 @@ export function createSwarmPageModel(host) {
       const nextCatalog = (await call('catalog'))?.catalog ?? {};
       if (disposed || request !== selectionRequest) return;
       catalog = nextCatalog;
-      activity.leaveActivity();
+      closeParticipant();
       selectedSwarm = null;
       if (profile !== 'new') start.selectedProfile = profile;
       editorKey += 1;
@@ -873,7 +892,6 @@ export function createSwarmPageModel(host) {
       backgroundRefresh.destroy();
       usage.destroy();
       selectionRequest += 1;
-      activity.destroy();
       clearTimeout(startupTimeout);
       clearInterval(clock);
       offContext();
@@ -881,12 +899,7 @@ export function createSwarmPageModel(host) {
       client.dispose();
     };
   });
-  const activity = createSwarmPageActivity({
-    get model() {
-      return model;
-    },
-  });
-  const model = {
+  return {
     start,
     runActions,
     get client() {
@@ -904,7 +917,6 @@ export function createSwarmPageModel(host) {
     get refreshError() {
       return refreshError;
     },
-    refreshFailed,
     get connected() {
       return connected;
     },
@@ -917,12 +929,14 @@ export function createSwarmPageModel(host) {
     get catalog() {
       return catalog;
     },
-    set catalog(value) {
-      catalog = value;
-    },
     get selectedSwarm() {
       return selectedSwarm;
     },
+    get selectedParticipant() {
+      return selectedParticipant;
+    },
+    inspectParticipant,
+    closeParticipant,
     get selectedRun() {
       return selectedRun;
     },
@@ -978,7 +992,6 @@ export function createSwarmPageModel(host) {
     },
     navigate,
     openStart,
-    call,
     get runGroups() {
       return runGroups;
     },
@@ -1001,8 +1014,6 @@ export function createSwarmPageModel(host) {
     startRunWith,
     lifecycle,
     board,
-    activity,
     usage,
   };
-  return model;
 }

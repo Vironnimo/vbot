@@ -325,6 +325,7 @@ class OwnedRunRecord:
     terminal_status: str | None
     terminal_sequence: int | None
     input_id: str | None = None
+    completion_reason: str | None = None
 
 
 @dataclass(frozen=True)

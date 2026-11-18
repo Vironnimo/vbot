@@ -1,5 +1,5 @@
 <script>
-  import { getContext } from 'svelte';
+  import { getContext, setContext } from 'svelte';
   import ChatView from './ChatView.svelte';
   import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
 
@@ -10,10 +10,12 @@
     active = true,
     readOnly = false,
     monitor = null,
+    references = null,
     hideOpenFull = false,
     getUIContext = null,
     presentation = 'conversation',
   } = $props();
+  setContext('sessionMarkdownReferences', () => references);
   const getEvents = getContext('sessionViewEvents');
   const events = $derived(getEvents?.() ?? {});
   const agentAddress = $derived(

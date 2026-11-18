@@ -476,7 +476,7 @@ _OWNED_RUN_SQL = (
     "o.participant_generation_id, o.epoch, s.project_id, s.agent_id, s.session_id, "
     "s.generation_id, r.start_seq, "
     "CASE WHEN r.status = 'running' THEN NULL ELSE r.status END AS terminal_status, "
-    "t.seq AS terminal_seq "
+    "t.seq AS terminal_seq, r.completion_reason "
     "FROM run_execution_owners AS o JOIN runs AS r ON r.run_key = o.run_key "
     "JOIN sessions AS s ON s.session_key = o.session_key "
     "LEFT JOIN entries AS t ON t.entry_key = r.end_entry_key WHERE "
@@ -502,6 +502,7 @@ def _owned_run_record(row: sqlite3.Row) -> OwnedRunRecord:
         terminal_status=row["terminal_status"],
         terminal_sequence=row["terminal_seq"],
         input_id=row["input_id"],
+        completion_reason=row["completion_reason"],
     )
 
 

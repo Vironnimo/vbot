@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { compileSessionReferences } from '../../../lib/sessionReferences.js';
 import { init, t } from '../../../lib/i18n.js';
 import { reactiveProps } from '../../__tests__/reactiveProps.support.svelte.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
@@ -45,6 +46,68 @@ describe('MarkdownContent', () => {
     });
     flushSync();
   }
+
+  it('links only registered Session references in message prose and keeps them current during streaming', () => {
+    const open = vi.fn();
+    const numeric = {
+      prefix: '#',
+      fragment: '#post/',
+      label: 'Board',
+      first: 0,
+      last: 1,
+    };
+    const named = {
+      prefix: '@',
+      fragment: '#member/',
+      label: 'Participant',
+      names: [
+        ['Áda $', 'id-á'],
+        ['Áda', 'id-a'],
+      ],
+    };
+    const invalid = { ...named, names: [['bad', '\ud800']] };
+    const options = reactiveProps({
+      references: compileSessionReferences([numeric, named, invalid], open),
+    });
+    const props = reactiveProps({
+      source:
+        'See #0 @ÁDA $ @Áda. [earlier](#post/001) [outside #0](https://example.com) `#0` "#1" noise#1 id@Áda #2',
+      streaming: true,
+      class: 'msg-markdown',
+    });
+    mountedComponent = mount(MarkdownContent, {
+      target: document.body,
+      props,
+      context: new Map([
+        ['sessionMarkdownReferences', () => options.references],
+      ]),
+    });
+    flushSync();
+    const links = () => [
+      ...document.querySelectorAll('[data-session-reference]'),
+    ];
+    expect(links().map((link) => link.textContent)).toEqual([
+      '#0',
+      '@ÁDA $',
+      '@Áda',
+      'earlier',
+    ]);
+    links()[1].dispatchEvent(new Event('pointerover', { bubbles: true }));
+    expect(open).not.toHaveBeenCalled();
+    links()[1].click();
+    expect(open).toHaveBeenCalledExactlyOnceWith('#member/id-%C3%A1');
+    links()[3].click();
+    expect(open).toHaveBeenLastCalledWith('#post/1');
+    props.source += ' then #2';
+    options.references = compileSessionReferences(
+      [{ ...numeric, first: 2, last: 2 }],
+      open,
+    );
+    flushSync();
+    expect(links().map((link) => link.textContent)).toEqual(['#2', '#2']);
+    links()[1].click();
+    expect(open).toHaveBeenLastCalledWith('#post/2');
+  });
 
   it.each([
     [

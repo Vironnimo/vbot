@@ -24,10 +24,10 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 37
-SDK_VERSION: Final[str] = "37.0.0"
+API_VERSION: Final[int] = 38
+SDK_VERSION: Final[str] = "38.0.0"
 
-def require_api(minimum: int = 37, *, maximum: int | None = None) -> int: ...
+def require_api(minimum: int = API_VERSION, *, maximum: int | None = None) -> int: ...
 
 @dataclass(frozen=True)
 class TemporaryAgentConfig:

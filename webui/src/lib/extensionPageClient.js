@@ -17,6 +17,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const runEventListeners = new Set();
   const searchListeners = new Set();
   const sessionSlots = new Set();
+  const sessionReferenceListeners = new Map();
   let autosaveParticipant = null;
   let chatContext = null;
   // The dialogs and menus the page shows over its content, the topmost last.
@@ -228,6 +229,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       return;
     }
     if (!matchesContext(data)) return;
+    if (data.type === 'vbot.extension.session.reference') {
+      if (typeof data.href === 'string')
+        sessionReferenceListeners.get(data.slot)?.(data.href);
+      return;
+    }
     if (data.type === 'vbot.extension.layers.close') {
       layers.at(-1)?.close();
       return;
@@ -360,16 +366,28 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     participantId,
     onError,
     presentation = 'conversation',
+    onReference = null,
   ) {
+    let referenceRules = [];
+    let lastRules = '';
     let nonce = null;
     let id;
     let stop;
     let mounted = true;
+    function publishReferences() {
+      if (id && nonce === context?.nonce && onReference)
+        hostMessage('vbot.extension.session.references', {
+          slot: id,
+          references: referenceRules,
+        });
+    }
     function attach(current) {
       if (!current || current.nonce === nonce) return;
       stop?.();
+      sessionReferenceListeners.delete(id);
       nonce = current.nonce;
       id = String(++nextId);
+      if (onReference) sessionReferenceListeners.set(id, onReference);
       const captured = id;
       void call('session.embed', {
         slot: id,
@@ -379,6 +397,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       }).catch((cause) => {
         if (mounted && id === captured) onError(cause);
       });
+      if (referenceRules.length) publishReferences();
       stop = observeSessionSlot(element, (bounds) => {
         hostMessage('vbot.extension.session.bounds', {
           slot: captured,
@@ -392,9 +411,20 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       stop?.();
       contextListeners.delete(attach);
       sessionSlots.delete(release);
+      sessionReferenceListeners.delete(id);
       if (id && nonce === context?.nonce)
         hostMessage('vbot.extension.session.release', { slot: id });
     }
+    release.setReferences = (rules) => {
+      if (!mounted || !onReference) return;
+      // Snapshot reactive page data for postMessage. A refreshed participant
+      // projection with identical rules leaves the host Markdown untouched.
+      const serialized = JSON.stringify(rules ?? []);
+      if (lastRules === serialized) return;
+      lastRules = serialized;
+      referenceRules = JSON.parse(serialized);
+      publishReferences();
+    };
     sessionSlots.add(release);
     contextListeners.add(attach);
     attach(context);

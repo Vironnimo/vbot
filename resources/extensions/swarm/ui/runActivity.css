@@ -1,24 +1,16 @@
-/* The Activity tab (RunActivity.svelte): the participant chips, then the
-   inspected participant's activity. Its header stays at the top of the view
-   while the timeline scrolls: one row, or two on a narrow view where Resume
-   participant moves below the name. */
 .swarm-page .activity-view {
   container: swarm-activity / inline-size;
   display: grid;
   gap: 16px;
   min-width: 0;
 }
-/* The header sticks below what the Run shell makes stick above the panels
-   (--swarm-run-sticky-top, an offset below the scroller's top padding, as
-   the Board's newer-posts bar uses it); without that, at the scroller's top
-   edge, above the page's --page-inset-top. */
 .swarm-page .activity-head {
   position: sticky;
   top: var(--swarm-run-sticky-top, calc(-1 * var(--page-inset-top, 0px)));
   z-index: 1;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-  grid-template-areas: 'avatar name context session close';
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name close';
   align-items: center;
   gap: 8px 12px;
   padding-block: 10px;
@@ -26,8 +18,8 @@
   background: var(--bg);
 }
 .swarm-page .activity-head:has(.activity-head__resume) {
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
-  grid-template-areas: 'avatar name context session resume close';
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: 'avatar name resume close';
 }
 .swarm-page .activity-head > .participant-avatar {
   grid-area: avatar;
@@ -39,16 +31,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.swarm-page .activity-head__context {
-  grid-area: context;
-  display: flex;
-}
 .swarm-page .activity-head__resume {
   grid-area: resume;
-  justify-self: start;
-}
-.swarm-page .activity-head__session {
-  grid-area: session;
   justify-self: start;
 }
 .swarm-page .activity-session {
@@ -57,25 +41,11 @@
 .swarm-page .activity-head__close {
   grid-area: close;
 }
-.swarm-page .activity-older {
-  justify-self: center;
-}
-.swarm-page .history {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-/* Why the participant stopped lines up with the timeline's text, as Chat's
-   composer does. */
-.swarm-page .activity-stop {
-  margin-inline: var(--chat-msg-gutter);
-}
-@container swarm-activity (max-width: 650px) {
-  .swarm-page .activity-head,
+@container swarm-activity (max-width: 420px) {
   .swarm-page .activity-head:has(.activity-head__resume) {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'avatar name context close'
-      '. session resume resume';
+      'avatar name close'
+      '. resume resume';
   }
 }

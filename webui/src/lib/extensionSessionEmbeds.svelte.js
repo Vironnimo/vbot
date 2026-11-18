@@ -4,6 +4,7 @@ import {
   resolveExtensionPageSession,
 } from './api.js';
 import { t } from './i18n.js';
+import { compileSessionReferences } from './sessionReferences.js';
 import { sessionPresentations } from './extensionChatContext.js';
 
 function validBounds(value) {
@@ -19,7 +20,7 @@ function validBounds(value) {
   );
 }
 
-export function createExtensionSessionEmbeds() {
+export function createExtensionSessionEmbeds(onReference) {
   const slots = new SvelteMap();
 
   async function mount(context, params) {
@@ -40,7 +41,22 @@ export function createExtensionSessionEmbeds() {
     };
     const { owner } = context.descriptor;
     const pending = Symbol();
-    slots.set(slot, { pending, address: null, bounds: null });
+    const openReference = (href) => {
+      const current = slots.get(slot);
+      if (
+        current?.openReference === openReference &&
+        current.visible &&
+        current.address
+      )
+        onReference(context, slot, href);
+    };
+    slots.set(slot, {
+      pending,
+      address: null,
+      bounds: null,
+      openReference,
+      references: null,
+    });
     try {
       const address = await resolveExtensionPageSession(
         owner,
@@ -61,9 +77,8 @@ export function createExtensionSessionEmbeds() {
           ),
       };
       slots.set(slot, {
+        ...current,
         address,
-        bounds: current.bounds,
-        visible: current.visible,
         monitor,
         presentation,
       });
@@ -85,5 +100,14 @@ export function createExtensionSessionEmbeds() {
     }
   }
 
-  return { slots, mount, position };
+  function setReferences(slot, rules) {
+    const current = slots.get(slot);
+    if (current)
+      slots.set(slot, {
+        ...current,
+        references: compileSessionReferences(rules, current.openReference),
+      });
+  }
+
+  return { slots, mount, position, setReferences };
 }

@@ -813,34 +813,7 @@ export function createSwarmPageBoard(host) {
     if (!link) return;
     event.preventDefault();
     const href = link.getAttribute('href') ?? '';
-    const post = /^#post\/(\d+)$/.exec(href);
-    if (post) {
-      void Promise.resolve(
-        host.navigate(() => revealPost(Number(post[1]))),
-      ).catch((cause) => {
-        if (!host.disposed) host.error = failureText(cause);
-      });
-      return;
-    }
-    const wiki = /^#wiki\/([^/]+)$/.exec(href);
-    if (wiki) {
-      void host.navigate(() => host.openWikiPage(wiki[1]));
-      return;
-    }
-    // A mention shows the participant's Activity, as its chip does.
-    const mention = /^#participant\/(.+)$/.exec(href);
-    if (mention) {
-      const participant = host.selectedSwarm?.participants?.find(
-        (item) => encodeURIComponent(item.id) === mention[1],
-      );
-      if (participant)
-        void Promise.resolve(
-          host.navigate(() => host.inspectParticipant(participant)),
-        ).catch((cause) => {
-          if (!host.disposed) host.error = failureText(cause);
-        });
-      return;
-    }
+    if (openReference(href)) return;
     // A discussion announcement opens the discussion it announces.
     const discussion = /^#discussion\/(.+)$/.exec(href);
     if (discussion) {
@@ -861,6 +834,39 @@ export function createSwarmPageBoard(host) {
     void (
       isMedia ? host.client.openMedia(url) : host.client.openLink(url)
     ).catch((cause) => (host.error = failureText(cause)));
+  }
+
+  // Both Board Markdown and embedded Sessions use these local destinations.
+  function openReference(href) {
+    const post = /^#post\/(\d+)$/.exec(href);
+    if (post) {
+      void Promise.resolve(
+        host.navigate(() => revealPost(Number(post[1]))),
+      ).catch((cause) => {
+        if (!host.disposed) host.error = failureText(cause);
+      });
+      return true;
+    }
+    const wiki = /^#wiki\/([^/]+)$/.exec(href);
+    if (wiki) {
+      void host.navigate(() => host.openWikiPage(wiki[1]));
+      return true;
+    }
+    // A mention shows the participant's Session, as its chip does.
+    const mention = /^#participant\/(.+)$/.exec(href);
+    if (mention) {
+      const participant = host.selectedSwarm?.participants?.find(
+        (item) => encodeURIComponent(item.id) === mention[1],
+      );
+      if (participant)
+        void Promise.resolve(
+          host.navigate(() => host.inspectParticipant(participant)),
+        ).catch((cause) => {
+          if (!host.disposed) host.error = failureText(cause);
+        });
+      return true;
+    }
+    return false;
   }
 
   return {
@@ -933,6 +939,7 @@ export function createSwarmPageBoard(host) {
     compose,
     post,
     contentLinks,
+    openReference,
     // Marks the Board panel on screen while it is mounted.
     panel() {
       panels += 1;

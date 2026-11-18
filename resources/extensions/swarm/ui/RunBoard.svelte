@@ -208,10 +208,7 @@
     </p>
     <div class="participant-row">
       {#each board.discussionParticipants as participant (participant.id)}
-        <ParticipantChip
-          {participant}
-          onInspect={model.activity.inspectParticipant}
-        />
+        <ParticipantChip {participant} onInspect={model.inspectParticipant} />
       {:else}
         <span class="muted">{t('swarm.board.noParticipants')}</span>
       {/each}
@@ -269,7 +266,15 @@
                 name={post.author?.name}
                 kind={post.author?.kind}
               />
-              <span class="post-author">{authorName(post)}</span>
+              {#if post.author?.kind === 'participant' && post.author.id}
+                <a
+                  class="post-author"
+                  href="#participant/{encodeURIComponent(post.author.id)}"
+                  >{authorName(post)}</a
+                >
+              {:else}
+                <span class="post-author">{authorName(post)}</span>
+              {/if}
               {#if post.sequence != null}<span class="post-number"
                   >#{post.sequence}</span
                 >{/if}

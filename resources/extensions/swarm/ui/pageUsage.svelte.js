@@ -38,6 +38,7 @@ export function createSwarmPageUsage(host) {
       const models = activity?.models ?? [];
       return (models.length ? models : [null]).map((model, index) => ({
         id: `${participant.id}:${index}`,
+        participantId: participant.id,
         participant: participant.display_name,
         first: index === 0,
         model: model ? model.model : participant.model,
