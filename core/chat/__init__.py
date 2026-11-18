@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     )
     from core.chat.commands import (
         AgentArgument,
+        CommandAccessorInput,
         CommandDispatcher,
         CommandExecutionContext,
         CommandFeedback,
@@ -101,6 +102,7 @@ _EXPORT_MODULES = {
     "ChatSessionManager": "core.sessions",
     "CompactionUnavailableError": "core.chat.errors",
     "CommandDispatcher": "core.chat.commands",
+    "CommandAccessorInput": "core.chat.commands",
     "CommandExecutionContext": "core.chat.commands",
     "CommandFeedback": "core.chat.commands",
     "CommandNavigation": "core.chat.commands",
@@ -157,6 +159,7 @@ __all__ = [
     "ChatSessionManager",
     "CompactionUnavailableError",
     "CommandDispatcher",
+    "CommandAccessorInput",
     "CommandExecutionContext",
     "CommandFeedback",
     "CommandNavigation",

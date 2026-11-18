@@ -551,6 +551,19 @@ CREATE TABLE checkpoint_projections (
   projection_json TEXT NOT NULL CHECK (json_valid(projection_json) AND json_type(projection_json) = 'array')
 ) STRICT;
 
+-- A side question chooses its exact fork before ordinary Accessor admission.
+-- Keep the choice with its source if the child is removed between retries.
+CREATE TABLE session_side_chat_requests (
+  input_id TEXT PRIMARY KEY,
+  request_hash TEXT NOT NULL,
+  source_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  target_key INTEGER REFERENCES sessions (session_key) ON DELETE SET NULL,
+  source_session_id TEXT NOT NULL,
+  target_session_id TEXT NOT NULL
+) STRICT, WITHOUT ROWID;
+CREATE INDEX session_side_chat_requests_source ON session_side_chat_requests (source_key);
+CREATE INDEX session_side_chat_requests_target ON session_side_chat_requests (target_key);
+
 -- Ordinary Accessor acceptance receipts and recoverable queued inputs. They
 -- belong to this exact Session generation, never a fork or materialized copy.
 CREATE TABLE session_accessor_inputs (

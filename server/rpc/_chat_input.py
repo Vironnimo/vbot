@@ -8,6 +8,8 @@ from typing import Any
 
 from core.agents import AgentNotFoundError, app_chat_profile
 from core.chat import (
+    ChatLoop,
+    CommandAccessorInput,
     CommandDispatcher,
     CommandExecutionContext,
     CommandOutcome,
@@ -24,6 +26,7 @@ from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     SESSION_EPHEMERAL_META_KEY,
     SESSION_ID_PATTERN,
+    SESSION_SIDE_CHAT_META_KEY,
     SessionAddress,
     WorkingProjectChoice,
 )
@@ -97,6 +100,13 @@ def _command_outcome_response(outcome: CommandOutcome, session_id: str | None) -
                 "kind": navigation.kind,
                 "agent_id": format_agent_address(navigation.agent_id, navigation.project_id),
             }
+        elif navigation.kind == "open_side_chat":
+            data["navigation"] = {
+                "kind": navigation.kind,
+                "agent_id": navigation.agent_id,
+                "project_id": navigation.project_id,
+                "session_id": navigation.session_id,
+            }
         else:
             data.setdefault("session_id", navigation.session_id)
             data.setdefault(
@@ -137,9 +147,36 @@ async def _execute_chat_command(
     prepared: PreparedCommand,
     *,
     reply_surface: ReplySurface,
+    input_id: str,
+    request_hash: str,
 ) -> Run | JsonObject:
     dispatcher: CommandDispatcher = state.command_dispatcher
     on_change = _command_change_publisher(state)
+    chat_loop: ChatLoop = state.chat_loop
+
+    async def submit_follow_up(
+        child: SessionAddress, text: str, generation: str | None
+    ) -> Run | None:
+        submission = await chat_loop.submit_accessor_input(
+            child.agent_id,
+            text,
+            session_id=child.session_id,
+            project_id=child.project_id,
+            input_id=input_id,
+            request_hash=request_hash,
+            reply_surface=reply_surface,
+            expected_generation_id=generation,
+        )
+        if (
+            not submission.record.live
+            or submission.record.address != child
+            or (generation is not None and generation != submission.record.generation_id)
+        ):
+            raise SessionNotFoundError(
+                "The original side conversation is no longer at this address."
+            )
+        return submission.run
+
     try:
         outcome = await dispatcher.execute(
             prepared,
@@ -149,6 +186,7 @@ async def _execute_chat_command(
                 project_id=address.project_id,
                 reply_surface=reply_surface,
                 on_change=on_change,
+                accessor_input=CommandAccessorInput(input_id, request_hash, submit_follow_up),
             ),
         )
     except Exception as exc:
@@ -285,15 +323,12 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
     Skipped when the session is already current: re-marking the same session on
     every message would emit a redundant ``resource_changed(kind="agents")``
     signal that tears down the chat view in every connected window. An
-    Ephemeral Session never becomes current: the user returns to the
-    conversation they had before.
+    Ephemeral Session or a side conversation keeps the user's main Session current.
     """
     runtime = state.runtime
     agents = runtime.agents
     # Agent reads verify, and updates validate, the pointer against Sessions.
     chat_sessions = runtime.chat_sessions
-    if await session_is_ephemeral(state, address):
-        return
     try:
         agent = await chat_sessions.run_async(agents.get, address.agent_id)
     except AgentNotFoundError:
@@ -309,9 +344,17 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
     if app_chat_profile(agent) is not None or agent.current_session_id == address.session_id:
         return
     try:
+        metadata = await chat_sessions.get_metadata_async(address)
+        if (
+            metadata.get(SESSION_EPHEMERAL_META_KEY) is True
+            or metadata.get(SESSION_SIDE_CHAT_META_KEY) is True
+        ):
+            return
         await chat_sessions.run_async(
             agents.update, address.agent_id, current_session_id=address.session_id
         )
+    except SessionNotFoundError:
+        return
     except Exception as exc:
         _LOGGER.warning(
             "Failed to mark current session (agent=%s session=%s): %s",

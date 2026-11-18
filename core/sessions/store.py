@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.errors import ChatSessionError
 from core.database import Database, DatabaseError, open_database
@@ -367,9 +367,12 @@ class SessionStore:
         *,
         title: str | None = None,
         run_kind: str | None = None,
+        side_chat: Literal["new", "resume"] | None = None,
+        side_chat_note: str | None = None,
+        side_chat_request: tuple[str, str] | None = None,
         allow_owner_managed_source: bool = False,
-    ) -> SessionAddress:
-        """Fork *source* into a fresh id in *target_scope*; see ``_store_mutations.fork``."""
+    ) -> tuple[SessionAddress, bool, str]:
+        """Return the fork, whether this call created it, and its exact generation."""
         return self._execute_write(
             lambda connection: _store_mutations.fork(
                 connection,
@@ -377,6 +380,9 @@ class SessionStore:
                 target_scope,
                 title=title,
                 run_kind=run_kind,
+                side_chat=side_chat,
+                side_chat_note=side_chat_note,
+                side_chat_request=side_chat_request,
                 allow_owner_managed_source=allow_owner_managed_source,
             )
         )
@@ -820,6 +826,7 @@ class SessionStore:
         complete_runs: bool = False,
         after: tuple[str, int] | None = None,
         skip_unchanged: bool = False,
+        include_inherited: bool = True,
     ) -> SessionChatHistorySnapshot:
         return self._read_decoded(
             lambda connection: _store_timeline.chat_history_snapshot(
@@ -836,6 +843,7 @@ class SessionStore:
                 background_note_marker=background_note_marker,
                 after=after,
                 skip_unchanged=skip_unchanged,
+                include_inherited=include_inherited,
             )
         )
 

@@ -1,5 +1,6 @@
 export default Object.freeze({
   'appChat.openFull': 'Open in Chat',
+  'appChat.sideTitle': 'Side conversation',
   'appChat.askSettings': 'Ask about these settings',
   'appChat.settingsTitle': 'Settings chat',
   'external.open': 'Import',

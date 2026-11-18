@@ -9,12 +9,13 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 - One predicate decides visibility for every range: `session_key = source AND from_seq <= seq < upto_seq AND (superseded_at_seq IS NULL OR superseded_at_seq >= as_of_seq)`. Own ranges admit only non-superseded entries; an inherited range also admits ancestor entries superseded at or after the ancestor's `next_seq` at fork time. `_store_lineage.admits` is its one SQL fragment: `range_predicate` (bound parameters), `VIEW_MATCH` (a `VALUES` CTE), `segment_admits` (a `session_lineage` row: search candidates and attribution, FTS membership) and `copy_entries` all build on it, and `own_current` is its own-range case (`superseded_at_seq IS NULL`). Do not restate the predicate in SQL.
 - `ordered_rows` reads a view in seq order with one `(session_key, seq)` index range scan per range and stops at `limit`; `view_query` builds one set-wise statement that joins a `VALUES` CTE of the ranges to `entries` (`VIEW_MATCH`); `clip` restricts ranges to a seq window. `entry_id_at` returns the id stored at one seq of the range holding it, superseded or not (cursor anchors, a fork's `last_entry_id`).
 - Own audit (`_store_history._own_audit`): own entries with `seq >= fork_point_seq` (0 without a fork), superseded ones included. Own spend (`session_usage`) sums the same range's Assistant usage.
-- A fork owns no row for an ancestor's Runs; inherited entries reference the ancestor's Runs, so the fork can neither append to nor settle them.
+- Shared entries reference the ancestor's Runs. A fork can neither append to nor settle those Runs. A side conversation freezes in-progress entries as described under Fork.
 
 ## Fork
 
-`fork(source, *, target_agent_id, target_project_id, title, run_kind)` (`_store_mutations.fork`) creates a new generation under a fresh id in one write transaction and copies no entries; `target_project_id=None` places the fork outside any Project:
-- Fork point: `MIN(start_seq)` of the source's running non-inherited Runs, else the source's `next_seq`. A fork therefore never contains a running Run's partial output.
+An ordinary fork (`_store_mutations.fork`) creates a new generation under a fresh id in one write transaction and shares inherited entries. `target_project_id=None` places the fork outside any Project.
+
+- Fork point: `MIN(start_seq)` of the source's running non-inherited Runs, else the source's `next_seq`. An ordinary fork stops before any running Run.
 - `create_fork_lineage` clips the source's view to `[0, fork point)`: the source's own ranges become segments on the source with `as_of_seq` = the source's current `next_seq`; the source's own segments are copied with their `as_of_seq`. The result is flat, so a fork of a fork references the storing Session directly and no read follows lineage recursively.
 - The new row: fresh id and generation, `next_seq` and `fork_point_seq` = fork point, `last_entry_id` = the id at `fork point - 1`, `created_at` and `last_activity_at` copied from the source, `forked_at` = now, `fork_parent_key` = the source's key.
 - A fork drops the requesting Session's folder-read exceptions from `agent_overrides`. Its other permission overrides carry over.
@@ -22,6 +23,25 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 - Prompt state follows `carry_prompt_state`, the scope rule `move` applies too: within one scope (same Project and Agent) pins, seen Skills and the effective affinity id carry over; into another scope the Agent-bound pins (`AGENT_BOUND_PROMPT_PIN_SLOTS`: `pinned_skill_catalog`, `pinned_soul_context`, `pinned_memory_files`, `pinned_tool_definitions`, `pinned_dynamic_blocks`, `pinned_thinking_effort`, `pinned_agent_body`) and seen Skills stay behind and a new affinity id starts, so the destination Agent renders its own Skill catalog, SOUL, memory, Tool definitions, dynamic block texts, thinking effort and Agent body; the Project-qualified Working Project Context pin carries over and re-renders on its own qualifier (`tests/core/sessions/test_sessions_lifecycle.py`). Pins share their content-addressed blobs.
 - Working Project: fork and move carry it. Into an Identity scope the Session keeps working where it worked (a Project Session's address Project becomes its stored Working Project), into a Project scope it works in that Project (`sessions/ownership.md` -> Working Project).
 - An owner-managed source is rejected unless the manager passes `allow_owner_managed_source` (a named target Agent in another scope). Temporary bindings, receipts and execution owners never carry over.
+
+A side conversation is a persistent fork in the source's Agent and Project scope.
+It uses the same Agent, configured Tools and working directory. Files changed
+there by either conversation are shared. Its history snapshot ends at the
+source's current `next_seq`, including the entries already committed by a running Run. The settled prefix uses lineage as above.
+The Store freezes the committed tail locally because an open Tool Call or
+Run can still change in the source. Stream drafts and subsequent source
+output stay with the source. Each Session's later input starts its own Runs.
+
+`side_chat="resume"` looks up the most recently created live side conversation
+of the same source generation and scope, creating one when none exists.
+Lookup and creation share the fork transaction. A new side question creates a fresh
+branch. Its transaction reserves the input id for the source and child generations.
+Recovery after an interruption between the fork and ordinary Accessor admission
+uses that exact child. Moving or deleting the child cannot redirect a retry to
+a replacement at its former address. Purging the source drops its fork reservations.
+
+The creation transaction appends the note distinguishing the two conversations
+once, before the first question. Compaction handles it like any other conversation note (`chat/commands.md` -> Agent-facing text).
 
 `move` retargets one live generation by updating the one row's address; lineage references `session_key`, so its history, forks, relations, descendants and ancestors stay attached. It rejects owner-managed Sessions and an occupied destination and applies the same prompt-state scope rule. Archive and restore: Delete below.
 

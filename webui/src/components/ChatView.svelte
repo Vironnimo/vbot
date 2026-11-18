@@ -298,6 +298,9 @@
   // Players of this area name its Session as the origin of speech they replay.
   provideSpeechOrigin(() => navigation.shownSession());
   const actions = createChatViewActions({
+    get active() {
+      return active;
+    },
     get boundSession() {
       return boundSession;
     },

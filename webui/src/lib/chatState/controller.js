@@ -20,10 +20,7 @@ import { truncateSessionForEdit } from './history.js';
 import { startRun } from './runEvents.js';
 import { takeSessionInvalidations } from '../sessionInvalidation.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
-import {
-  createChatSubmissions,
-  isSlashCommandCandidate,
-} from './submissions.js';
+import { createChatSubmissions, namesKnownCommand } from './submissions.js';
 
 // Own Chat's asynchronous lifecycle end-to-end. ChatView supplies only the few
 // navigation/display facts the controller cannot derive from Chat state; RPC
@@ -799,26 +796,6 @@ export function createChatController({
   };
 }
 
-// Whether `content` starts with a command of the loaded catalog, the way
-// the server recognizes one: its only text begins with `/<name>`.
-function namesKnownCommand(content, availableSkills) {
-  if (!isSlashCommandCandidate(content)) return false;
-  const texts =
-    typeof content === 'string'
-      ? [content]
-      : (Array.isArray(content) ? content : [])
-          .filter((block) => block?.type === 'text')
-          .map((block) => block.text);
-  const text = texts.length === 1 ? String(texts[0] ?? '').trim() : '';
-  if (!text.startsWith('/')) {
-    return false;
-  }
-  const name = text.slice(1).split(/\s/, 1)[0].toLowerCase();
-  return (Array.isArray(availableSkills) ? availableSkills : []).some(
-    (item) => item?.type === 'command' && item.name === name,
-  );
-}
-
 function normalizeBuiltInCommandName(value) {
   if (typeof value !== 'string') {
     return '';
@@ -864,15 +841,29 @@ function messageParams(content, options = {}) {
 // sent in an existing Session can navigate: from a draft, the server answers
 // navigation commands with a notice.
 function commandOutcome(response, agentAddress, { navigation = true } = {}) {
-  const extensionNavigation = response?.data?.navigation;
+  const action = response?.data?.navigation;
   if (
     response.output === 'action' &&
-    extensionNavigation?.kind === 'open_extension_page' &&
-    typeof extensionNavigation.extension === 'string' &&
-    typeof extensionNavigation.page === 'string' &&
-    typeof extensionNavigation.route === 'string'
+    action?.kind === 'open_side_chat' &&
+    trimmedText(action.agent_id) &&
+    trimmedText(action.session_id)
   ) {
-    return { kind: 'extension_page', navigation: extensionNavigation };
+    const { agent_id, project_id, session_id } = action;
+    return {
+      kind: 'side_chat',
+      address: { agent_id, project_id, session_id },
+      questionDraft: response.data.question_draft,
+      reply: response.reply,
+    };
+  }
+  if (
+    response.output === 'action' &&
+    action?.kind === 'open_extension_page' &&
+    typeof action.extension === 'string' &&
+    typeof action.page === 'string' &&
+    typeof action.route === 'string'
+  ) {
+    return { kind: 'extension_page', navigation: action };
   }
   if (navigation) {
     const move = resolveMoveActionFromResponse(response);

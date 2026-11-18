@@ -9,6 +9,7 @@ from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
+from core.chat._command_types import CommandAccessorInput as CommandAccessorInput
 from core.chat._command_types import CommandArgumentMode as CommandArgumentMode
 from core.chat._command_types import CommandCatalogResult as CommandCatalogResult
 from core.chat._command_types import CommandExecutionMode as CommandExecutionMode
@@ -190,6 +191,15 @@ class CommandDispatcher:
             argument_execution_mode="serialized",
             unavailable_surfaces=frozenset({"channel"}),
         ),
+        "btw": CommandSpec(
+            "btw",
+            "Ask a side question in a separate chat while this session continues.",
+            argument="optional",
+            argument_hint="a question, or leave blank to open the latest side chat",
+            catalog_result="state_change",
+            execution_mode="immediate",
+            unavailable_surfaces=frozenset({"channel", "tui"}),
+        ),
         "compact": CommandSpec(
             "compact",
             "Compact the current session's context immediately.",
@@ -348,6 +358,7 @@ class CommandDispatcher:
                 trigger_service=trigger_service,
                 goals=goals,
             ),
+            "btw": partial(_command_builtin._execute_btw, sessions=sessions),
             "compact": partial(_command_builtin._execute_compact, trigger_service=trigger_service),
             "handoff": partial(
                 _command_builtin._execute_handoff,

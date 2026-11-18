@@ -1074,15 +1074,14 @@
       />
     {/if}
   </ToastStack>
-  {#if appChats.popup}
-    {#key appChats.popup}
-      <SessionPopup
-        popup={appChats.popup}
-        onClose={appChats.close}
-        onOpenFull={expandSessionPopup}
-      />
-    {/key}
-  {/if}
+  {#each appChats.popups as popup (popup.instance)}
+    <SessionPopup
+      {popup}
+      active={popup === appChats.popup}
+      onClose={() => appChats.dismiss(popup.instance)}
+      onOpenFull={expandSessionPopup}
+    />
+  {/each}
 </AppShell>
 
 {#if contributions.customized}

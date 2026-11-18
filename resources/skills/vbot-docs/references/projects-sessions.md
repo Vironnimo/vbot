@@ -49,6 +49,8 @@ vbot session channel link <agent-id> <session-id> --channel <channel-id> --conve
 - `delete` moves the Session into the archive and prints how to restore it; `--permanent --yes` deletes it permanently.
 - `channel link` sends the Session's replies to a platform conversation, such as a Telegram chat id.
 
+In an existing WebUI Chat, send `/btw <question>` to ask about the conversation in a separate popup. The same Agent sees the history saved up to that moment, including saved steps of a running Run, and answers in a new Session. Send `/btw` without a question to reopen the latest side conversation for this Chat or create one. Open in Chat shows its full history, including the copied context.
+
 ## Archive
 
 ```bash

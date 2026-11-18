@@ -85,6 +85,124 @@ def _rows(connection: sqlite3.Connection, sql: str, *params: object) -> list[tup
 
 
 @pytest.mark.asyncio
+async def test_side_chat_freezes_live_history_and_resumes_the_latest_live_fork(manager):
+    source = manager.create("coder", project_id="work")
+    earlier = ChatMessage.user("Settled question")
+    source.append(earlier)
+    active = source.start_run("live")
+    assistant = ChatMessage.assistant(
+        model="test",
+        content="Unique active output",
+        usage={"input_tokens": 20, "output_tokens": 8},
+        tool_calls=[ToolCall(id="call", name="read", arguments={})],
+    )
+    active.append(assistant)
+
+    async def resume():
+        return await manager.fork(source.address, side_chat="resume", side_chat_note="Context")
+
+    side, concurrent = await asyncio.gather(resume(), resume())
+    assert side.address == concurrent.address
+    (note,) = side.load()
+    assert note.role == "note" and note.content == "Context"
+    assert manager.get_metadata(side.address)["side_chat"] is True
+    assert side.address.project_id == source.address.project_id
+    assert [m.id for m in side.load_active()] == [earlier.id, assistant.id, note.id]
+    assert side.run_records() == ()
+    with pytest.raises(ChatSessionError, match="inherited Run"):
+        side.start_run("live")
+    active.assistant_message_id = assistant.id
+    active.append(ChatMessage.tool(tool_call_id="call", name="read", content="Later result"))
+    complete_run(active, _summary("live"))
+    whole = side.read_chat_history_snapshot(limit=50)
+    assert [r["status"] for r in whole.runs] == ["interrupted"]
+    assert [m.id for m in whole.page.messages] == [earlier.id, assistant.id, note.id]
+    assert earlier.id in whole.page.editable_message_ids
+    hits = manager.search_messages(
+        "Unique active", project_id="work", agent_id="coder", session_id=side.id
+    ).hits
+    assert [hit.message_id for hit in hits] == [assistant.id]
+    assert manager.fts_health().state == "healthy"
+
+    question = ChatMessage.user("Side question")
+    reply = ChatMessage.assistant(model="test", content="Side answer")
+    side.append_many([question, reply])
+    page = side.read_chat_history_snapshot(limit=1, include_inherited=False)
+    assert page.page.has_more and [m.id for m in page.page.messages] == [reply.id]
+    before = side.read_chat_history_snapshot(
+        limit=2, before=page.page.before_cursor, include_inherited=False
+    )
+    assert not before.page.has_more
+    assert [m.id for m in before.page.messages] == [note.id, question.id]
+    assert before.page.editable_message_ids == {question.id}
+    assert page.context_messages == side.read_chat_history_snapshot(limit=1).context_messages
+    assert side.read_chat_history_snapshot(limit=50).page.record_sequences == tuple(range(5))
+
+    later = await manager.fork(source.address, side_chat="new", side_chat_note="Next context")
+    assert (await resume()).address == later.address
+    await manager.archive(later.address)
+    assert (await resume()).address == side.address
+    nested = await manager.fork(side.address, side_chat="new", side_chat_note="Nested context")
+    assert manager.get_metadata(nested.address)["side_chat"] is True
+    assert [m.content for m in nested.load()] == ["Nested context"]
+    assert "side_chat" not in manager.get_metadata(
+        (await manager.fork(side.address, target_project_id="work")).address
+    )
+    side.apply_edit(earlier.id, [ChatMessage.user("Edit in the full fork")])
+    assert source.load_active()[0].id == earlier.id
+    with pytest.raises(ChatSessionError, match="same|source Agent"):
+        await manager.fork(
+            source.address, target_agent_id="other", side_chat="new", side_chat_note="n"
+        )
+
+
+@pytest.mark.asyncio
+async def test_side_chat_keeps_session_settings_and_uses_its_first_own_input_for_titles(manager):
+    source = manager.create(
+        "coder",
+        working_project_id="project",
+        metadata={
+            "title": "Parent",
+            "auto_title": "Generated title",
+            "auto_title_initialized": True,
+            "fast_mode": True,
+            "goal": {"objective": "Important task", "status": "active"},
+            "agent_overrides": {
+                "model": "other/model",
+                "permission_rules": {"mode": "strict"},
+                "read_folders": [{"computer_id": "local", "folder": "one"}],
+            },
+        },
+    )
+    source.append(ChatMessage.user("Parent input"))
+    side = await manager.fork(
+        source.address, side_chat="new", side_chat_note="Branch context", title=""
+    )
+    meta = manager.get_metadata(side.address)
+    assert meta["fast_mode"] and meta["working_project_id"] == "project"
+    assert meta["agent_overrides"] == {
+        "model": "other/model",
+        "permission_rules": {"mode": "strict"},
+    }
+    assert not {"title", "auto_title", "auto_title_initialized", "goal", "ephemeral"} & meta.keys()
+    assert side.single_active_user_message() is None
+    own = ChatMessage.user("Side input")
+    side.append(own)
+    seq, message = side.single_active_user_message()
+    assert message.id == own.id
+    manager.set_auto_title(side.address, "Own title", expected_first_user_sequence=seq)
+    next_message = ChatMessage.user("New side input")
+    side.apply_edit(own.id, [next_message])
+    assert [m.content for m in side.load_active() if m.role == "note"] == ["Branch context"]
+    assert side.single_active_user_message()[1].id == next_message.id
+    assert "auto_title" not in manager.get_metadata(side.address)
+    with pytest.raises(ChatSessionError, match="managed"):
+        manager.set_metadata(side.address, {"side_chat": "invalid"})
+    manager.set_metadata(side.address, {"title": "Named"})
+    assert manager.get_metadata(side.address)["side_chat"] is True
+
+
+@pytest.mark.asyncio
 async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
     manager: ChatSessionManager,
 ) -> None:

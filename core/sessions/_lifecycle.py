@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
@@ -176,6 +176,9 @@ class SessionLifecycle:
         target_project_id: str | None = None,
         title: str | None = None,
         run_kind: RunKind | None = None,
+        side_chat: Literal["new", "resume"] | None = None,
+        side_chat_note: str | None = None,
+        side_chat_request: tuple[str, str] | None = None,
     ) -> ChatSession:
         """Fork a Session under a fresh id in one write.
 
@@ -185,8 +188,14 @@ class SessionLifecycle:
         Project). Channel, Sub-Agent and reflection bindings stay behind;
         ``title`` and ``run_kind`` label the fork instead. The fork works where
         the source works, by the scope rules of :meth:`move`.
+
+        A side chat belongs to the same Agent and Project, freezes the committed
+        active Run at the fork point, and starts with the supplied Note. Resume
+        returns the newest live side chat of this source or creates one.
         """
         _validate_session_id(source.session_id)
+        if side_chat is not None and target_project_id is None:
+            target_project_id = source.project_id
         agent_id = target_agent_id or source.agent_id
         _validate_agent_id(agent_id)
         if target_project_id is not None and not is_valid_project_id(target_project_id):
@@ -196,18 +205,21 @@ class SessionLifecycle:
         normalized_title = None if title is None else _normalize_session_title(title) or ""
         same_scope = agent_id == source.agent_id and target_project_id == source.project_id
         async with self.write_lock(source):
-            target = await self._store.run_async(
+            target, created, generation_id = await self._store.run_async(
                 lambda: self._store.fork(
                     source,
                     SessionAddress(target_project_id, agent_id, ""),
                     title=normalized_title,
                     run_kind=None if run_kind is None else run_kind.value,
+                    side_chat=side_chat,
+                    side_chat_note=side_chat_note,
+                    side_chat_request=side_chat_request,
                     allow_owner_managed_source=target_agent_id is not None and not same_scope,
                 )
             )
-        if title is not None:
+        if created and title is not None:
             self._notify_callbacks("title_changed", self.title_changed_callbacks, target)
-        return ChatSession(self._store, target)
+        return ChatSession(self._store, target, generation_id=generation_id)
 
     async def archive(
         self,

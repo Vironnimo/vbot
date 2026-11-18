@@ -8,6 +8,7 @@ from typing import Any
 
 from core.agents.agents import Agent
 from core.chat import (
+    CommandAccessorInput,
     CommandDispatcher,
     CommandExecutionContext,
     CommandOutcome,
@@ -32,6 +33,7 @@ async def _execute(
     session_id: str = "session-one",
     project_id: str | None = None,
     on_change: Callable[[CommandResourceChange], None] | None = None,
+    accessor_input: CommandAccessorInput | None = None,
 ) -> CommandOutcome:
     return await dispatcher.execute(
         _prepared(dispatcher, message),
@@ -41,6 +43,7 @@ async def _execute(
             project_id=project_id,
             reply_surface=ReplySurface.webui(),
             on_change=on_change,
+            accessor_input=accessor_input,
         ),
     )
 

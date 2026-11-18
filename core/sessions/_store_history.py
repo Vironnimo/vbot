@@ -256,10 +256,15 @@ def active_user_message_count(
 def single_active_user_message(
     connection: sqlite3.Connection, address: SessionAddress
 ) -> Callable[[], tuple[int, ChatMessage] | None]:
-    """Read the sole current User entry's position and content in one snapshot."""
-    _state, ranges = current_view(connection, address)
+    """Read the single current User entry eligible for the Session title."""
+    state, ranges = current_view(connection, address)
     rows = _store_lineage.ordered_rows(
-        connection, ranges, columns=_store_codec.ENTRY_COLUMNS, where="e.role = 'user'", limit=2
+        connection,
+        ranges,
+        columns=_store_codec.ENTRY_COLUMNS,
+        where="e.role = 'user'",
+        lower=_store_values.title_source_floor(state),
+        limit=2,
     )
     if len(rows) != 1:
         return lambda: None

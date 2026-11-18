@@ -235,10 +235,14 @@ export function assistantHistory(id, content) {
   return {
     messages: [message],
     items: [
-      assistantRun(id, [outputItem(content, { id, messages: [message] })], {
-        status: 'completed',
-        source: 'history',
-      }),
+      assistantRun(
+        id,
+        [outputItem(content, { id, messages: [message], finalAnswer: true })],
+        {
+          status: 'completed',
+          source: 'history',
+        },
+      ),
     ],
   };
 }

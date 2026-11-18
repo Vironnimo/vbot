@@ -136,6 +136,30 @@ def accept(
     if existing is not None:
         return existing, False
     state = _store_values._require_live(connection, address)
+    # A command's chosen fork and an ordinary input share the Accessor id
+    # namespace, even if the server stopped between fork and acceptance.
+    choice = connection.execute(
+        "SELECT q.request_hash, q.target_key, q.target_session_id, q.source_session_id, "
+        "s.session_id, s.agent_id, s.project_id, s.state "
+        "FROM session_side_chat_requests AS q JOIN sessions AS s ON s.session_key = q.source_key "
+        "WHERE q.input_id = ?",
+        (input_id,),
+    ).fetchone()
+    if choice is not None:
+        if choice["request_hash"] != request_hash:
+            raise AccessorInputConflictError(
+                "Accessor input id conflicts with its original request"
+            )
+        if (
+            choice["target_key"] != state["session_key"]
+            or choice["state"] != "live"
+            or choice["source_session_id"] != choice["session_id"]
+            or (choice["project_id"], choice["agent_id"], choice["target_session_id"])
+            != _store_values._scope(address)
+        ):
+            raise SessionNotFoundError(
+                "The original side conversation is no longer at this address."
+            )
     if expected_generation_id is not None and state["generation_id"] != expected_generation_id:
         raise ChatSessionError("Session generation changed before Accessor input acceptance")
     if source is not None:

@@ -1,12 +1,13 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, setContext, tick } from 'svelte';
   import { t } from '$lib/i18n.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
   import SessionView from '../SessionView.svelte';
 
-  let { popup, onClose, onOpenFull } = $props();
+  let { popup, active, onClose, onOpenFull } = $props();
+  setContext('chatPopupOrigin', () => popup);
   const navigation = useNavigation();
   let panel;
   let created = $state.raw(null);
@@ -27,15 +28,25 @@
 
   onMount(() => {
     alive = true;
-    const opener = document.activeElement;
+    const opener = popup.opener;
     panel.focus({ preventScroll: true });
     const unregister = navigation?.registerLayer({ close: onClose });
     if (!popup.address) void load();
     return () => {
       alive = false;
       unregister?.();
-      if (panel?.contains(document.activeElement) && opener?.isConnected) {
-        opener.focus({ preventScroll: true });
+      if (
+        panel?.contains(document.activeElement) ||
+        document.activeElement === document.body
+      ) {
+        void tick().then(() => {
+          if (
+            document.activeElement === document.body &&
+            opener?.isConnected &&
+            !opener.closest('[hidden], [inert]')
+          )
+            opener.focus({ preventScroll: true });
+        });
       }
     };
   });
@@ -59,6 +70,8 @@
   aria-label={title}
   tabindex="-1"
   bind:this={panel}
+  hidden={!active}
+  inert={!active}
   onkeydown={keydown}
 >
   <header>
@@ -88,9 +101,11 @@
   {#if address}
     <div class="session-popup-body">
       <SessionView
+        {active}
         {address}
         hideOpenFull
         readOnly={popup.readOnly ?? false}
+        includeInherited={popup.includeInherited ?? true}
         getUIContext={popup.getUiContext}
         presentation={popup.presentation ?? 'conversation'}
       />
@@ -106,6 +121,9 @@
 </div>
 
 <style>
+  .session-popup[hidden] {
+    display: none;
+  }
   .session-popup {
     position: fixed;
     inset-inline-end: var(--space-md);

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,11 +21,13 @@ from core.automation.reflection import (
 )
 from core.chat import (
     ChatMessage,
+    CommandAccessorInput,
     CommandDispatcher,
     CommandNavigation,
     CommandResourceChange,
     ReplySurface,
 )
+from core.chat.errors import ChatSessionError
 from core.projects import ResolutionAgentNotFoundError, format_agent_address
 from core.prompts.briefs import learn_brief, reflection_brief
 from core.runs import RunKind
@@ -158,6 +161,77 @@ class _Agents:
 def _runs(*, active: bool) -> Any:
     active_run = object() if active else None
     return SimpleNamespace(active_run=lambda **_address: active_run)
+
+
+# ---------------------------------------------------------------------------
+# /btw
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("question", [None, "Where is the config file?"])
+async def test_btw_opens_a_separate_chat_while_the_source_run_is_active(
+    question: str | None,
+) -> None:
+    side = SessionAddress("project", "coder", "side-session")
+    fork = AsyncMock(
+        return_value=SimpleNamespace(id=side.session_id, address=side, generation_id="gen")
+    )
+    submit = AsyncMock()
+    dispatcher = CommandDispatcher(
+        _runs(active=True), sessions=cast(Any, SimpleNamespace(fork=fork))
+    )
+    command = "/btw" if question is None else f"/btw {question}"
+    prepared = dispatcher.prepare(command)
+    assert prepared is not None and prepared.execution_mode == "immediate"
+
+    outcome = await _execute(
+        dispatcher,
+        command,
+        project_id="project",
+        accessor_input=CommandAccessorInput("id", "hash", submit),
+    )
+    assert fork.await_args is not None
+    assert fork.await_args.args == (SessionAddress("project", "coder", "session-one"),)
+    assert fork.await_args.kwargs["side_chat"] == ("new" if question else "resume")
+    assert fork.await_args.kwargs["side_chat_note"]
+    assert outcome.navigation == CommandNavigation(
+        kind="open_side_chat", agent_id="coder", project_id="project", session_id="side-session"
+    )
+    if question is None:
+        submit.assert_not_awaited()
+        assert not outcome.runs
+    else:
+        submit.assert_awaited_once_with(side, question, "gen")
+        assert [r.role for r in outcome.runs] == ["follow_up"]
+
+
+async def test_btw_returns_the_fork_when_the_first_question_cannot_start() -> None:
+    dispatcher = CommandDispatcher(
+        _runs(active=False),
+        sessions=cast(
+            Any,
+            SimpleNamespace(
+                fork=AsyncMock(
+                    return_value=SimpleNamespace(
+                        id="child",
+                        address=SessionAddress(None, "coder", "child"),
+                        generation_id="gen",
+                    )
+                )
+            ),
+        ),
+    )
+    outcome = await _execute(
+        dispatcher,
+        "/btw question",
+        accessor_input=CommandAccessorInput(
+            "id", "hash", AsyncMock(side_effect=ChatSessionError("reason"))
+        ),
+    )
+    assert outcome.navigation is not None and outcome.navigation.session_id == "child"
+    assert outcome.facts == {"question_draft": "question"}
+    assert outcome.feedback is not None and "reason" in outcome.feedback.text
+    assert not outcome.runs
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { onDestroy } from 'svelte';
+import { getContext, onDestroy, onMount } from 'svelte';
 import {
   isRunActive,
   renameAgentInKey,
@@ -10,8 +10,14 @@ import {
   resolveMentionFiles,
 } from '$lib/fileMentions.js';
 import { t } from '$lib/i18n.js';
+import { getAppChats } from '$lib/appChats.svelte.js';
+import { qualifyAgentAddress } from '$lib/agentAddress.js';
+import { getDraft, setDraft } from '$lib/composerMemory.js';
+import { sessionKey } from '$lib/chatState/sessionState.js';
 
 export function createChatViewActions(context) {
+  const appChats = getAppChats();
+  const getPopupOrigin = getContext('chatPopupOrigin');
   // Chat-local bottom toast for transient command replies and lifecycle notices.
   // Operation errors stay beside the composer until their owner clears them.
   let chatToast = $state('');
@@ -120,6 +126,10 @@ export function createChatViewActions(context) {
       chatToastTimeoutId = null;
     }, CHAT_TOAST_TIMEOUT_MS);
   };
+  onMount(() => {
+    const notice = getPopupOrigin?.().notice;
+    if (notice) showChatToast(notice);
+  });
 
   const clearSessionActionError = (
     sessionState = context.target.activeSessionState,
@@ -171,7 +181,9 @@ export function createChatViewActions(context) {
   };
 
   const isSent = (outcome) =>
-    outcome.kind !== 'failed' && outcome.kind !== 'ignored';
+    outcome.kind !== 'failed' &&
+    outcome.kind !== 'ignored' &&
+    !outcome.questionDraft;
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
     const presentation = captureDisplayedSession(sessionState?.key ?? '');
@@ -190,7 +202,7 @@ export function createChatViewActions(context) {
       });
     }
     if (isDisplayedSessionCurrent(presentation)) {
-      await presentSendOutcome(outcome, agent, sessionState, focusAfterSend);
+      return presentSendOutcome(outcome, agent, sessionState, focusAfterSend);
     }
     return isSent(outcome);
   };
@@ -226,10 +238,10 @@ export function createChatViewActions(context) {
           sessionState.sessionId,
         )
       : isDisplayedSessionCurrent(presentation);
-    if (shown) {
-      await presentSendOutcome(outcome, agent, sessionState, focusAfterSend);
-    }
-    if (!isSent(outcome)) {
+    const sent = shown
+      ? await presentSendOutcome(outcome, agent, sessionState, focusAfterSend)
+      : isSent(outcome);
+    if (!sent) {
       return false;
     }
     return sessionState ? { draftKey: sessionState.key } : true;
@@ -248,7 +260,7 @@ export function createChatViewActions(context) {
       ['move', 'switch', 'draft'].includes(outcome.kind)
     ) {
       showChatToast(outcome.reply);
-      return;
+      return true;
     }
     if (outcome.kind === 'move') {
       await context.navigation.moveSessionToAgent(outcome.move);
@@ -270,6 +282,29 @@ export function createChatViewActions(context) {
       } else {
         showChatToast(outcome.reply);
       }
+    } else if (outcome.kind === 'side_chat') {
+      if (!context.active || !appChats) return isSent(outcome);
+      const { address, questionDraft, reply } = outcome;
+      appChats.openSession(
+        {
+          address,
+          title: t('appChat.sideTitle'),
+          notice: reply,
+          presentation: 'conversation',
+          includeInherited: false,
+        },
+        getPopupOrigin?.().instance,
+      );
+      if (questionDraft) {
+        const key = sessionKey(
+          qualifyAgentAddress(address.agent_id, address.project_id),
+          address.session_id,
+        );
+        if (!getDraft(key)) setDraft(key, questionDraft);
+        // Keep the source input when the target already has a different draft
+        // or composer memory excludes this text (e.g. a potential API key).
+        return getDraft(key) === questionDraft;
+      }
     } else if (outcome.kind === 'extension_page') {
       window.dispatchEvent(
         new CustomEvent('vbot-extension-page', { detail: outcome.navigation }),
@@ -281,6 +316,7 @@ export function createChatViewActions(context) {
     } else if (outcome.kind === 'started') {
       submittedTurnScrollKey += 1;
     }
+    return isSent(outcome);
   };
 
   // The goal bar's buttons send `/goal pause|resume|clear` like typed commands.
