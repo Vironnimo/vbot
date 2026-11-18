@@ -204,7 +204,7 @@ class NativeSessions:
                                         "kind": execution["kind"],
                                     }
                                 )
-                                await self.store.change_task(
+                                scope = await self.store.change_task(
                                     scope["id"],
                                     {"runtime": scope_runtime},
                                     actor="factory",
@@ -231,6 +231,9 @@ class NativeSessions:
                         actor="factory",
                     )
                     await self.native.limits.observe_run(execution, admission.run_id)
+                    await self.native._publish(
+                        "topics" if execution["kind"] == "topic" else "tasks", scope
+                    )
                     if admission.existing and admission.status != "running":
                         await self._finished(
                             await self.store.get_execution(execution_id),

@@ -125,6 +125,17 @@ class NativeDispatchStore(NativeRecordStore):
     async def get_execution(self, execution_id: str) -> Json:
         return await self._get("execution", execution_id)
 
+    async def latest_execution(self, kind: str, scope_id: str, member_id: str) -> Json | None:
+        def read(connection: sqlite3.Connection) -> Json | None:
+            row = connection.execute(
+                "SELECT id FROM native_executions WHERE kind = ? AND scope_id = ? "
+                "AND member_id = ? ORDER BY epoch DESC LIMIT 1",
+                (kind, scope_id, member_id),
+            ).fetchone()
+            return _get(connection, "execution", row[0]) if row else None
+
+        return await self.database.read_async(read)
+
     async def list_executions(
         self,
         factory_id: str | None = None,

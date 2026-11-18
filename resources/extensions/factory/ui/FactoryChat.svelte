@@ -153,13 +153,29 @@
       <h2>{t('factory.chat.title', { name })}</h2>
       {#if chat?.topic}<span>{chat.topic.title}</span>{/if}
     </div>
-    {#if !taskId && !cardId && !topicId && chat?.topic}
-      <Button
-        variant="tertiary"
-        disabled={sending || Boolean(draft.trim())}
-        onClick={newTopic}>{t('factory.chat.new')}</Button
-      >
-    {/if}
+    <div class="actions">
+      {#if chat?.session}
+        <Button
+          variant="tertiary"
+          onClick={() => model.openSession(chat.session)}
+          >{t('factory.native.openSession')}</Button
+        >
+      {/if}
+      {#if chat?.task_session}
+        <Button
+          variant="tertiary"
+          onClick={() => model.openSession(chat.task_session)}
+          >{t('factory.chat.openTaskSession')}</Button
+        >
+      {/if}
+      {#if !taskId && !cardId && !topicId && chat?.topic}
+        <Button
+          variant="tertiary"
+          disabled={sending || Boolean(draft.trim())}
+          onClick={newTopic}>{t('factory.chat.new')}</Button
+        >
+      {/if}
+    </div>
   </header>
   <div class="messages" role="log" bind:this={log}>
     {#if chat?.before}<Button
@@ -248,6 +264,14 @@
   h2 {
     font-size: 15px;
     margin: 0;
+  }
+  header,
+  .actions {
+    flex-wrap: wrap;
+  }
+  .actions {
+    display: flex;
+    gap: 4px;
   }
   header span {
     color: var(--text-med);

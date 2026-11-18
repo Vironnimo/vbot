@@ -1018,16 +1018,26 @@ async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
             "conversation.send", **scope, text="Discuss this first", request_id="first"
         )
         discussion = first["topic"]["id"]
-        await harness.drive(
-            lambda _: {
+        leader_request = await harness.request()
+        leader_context = leader_request["kwargs"]["test_context"]
+        live = await harness.operation("conversation.get", **scope)
+        assert live["replying"] and live["session"] == {
+            "project_id": None,
+            "agent_id": leader_context["agent_id"],
+            "session_id": leader_context["session_id"],
+        }
+        leader_request["answer"].set_result(
+            {
                 "content": "An idea",
                 "tool_calls": None,
                 "usage": {"input_tokens": 10, "output_tokens": 2},
             }
         )
+        await harness.settle()
         replay = await harness.operation(
             "conversation.send", **scope, text="Discuss this first", request_id="first"
         )
+        assert replay["session"] == live["session"] and not replay["replying"]
         assert [m["text"] for m in replay["posts"]] == ["Discuss this first", "An idea"]
         assert not (await harness.operation("work.list", **scope))["work"]
         member = runtime.agents.create("engineer", model=MODEL, librarian_enabled=False)
@@ -1054,6 +1064,10 @@ async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
         items = (await harness.operation("work.list", **scope))["work"]
         assert len(items) == 1
         task_id = items[0]["id"]
+        working = await harness.operation("conversation.get", **scope, task_id=task_id)
+        assert working["task_session"]["session_id"] == req["kwargs"]["test_context"]["session_id"]
+        assert working["session"]["agent_id"] == working["task_session"]["agent_id"] == member.id
+        assert working["session"] != working["task_session"]
         assert "Please implement this" in str(req["messages"])
         harness.model.tool(
             "factory_tasks",

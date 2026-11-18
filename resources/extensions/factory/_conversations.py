@@ -155,17 +155,15 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         task = await store.get_task(topic["task_id"])
     recipient_member = await store.get_member(topic["direct_member_id"])
     history = await store.conversation_history(topic, args.get("before", ""))
-    executions = await store.list_executions(factory_id, scope_id=topic["id"])
+    discussion = await store.latest_execution("topic", topic["id"], recipient_member["id"])
     epoch = management.service.native.topic_epoch(factory, recipient_member)
-    current = next(
-        (
-            item
-            for item in executions
-            if item["member_id"] == recipient_member["id"] and item["epoch"] == epoch
-        ),
-        None,
-    )
+    current = discussion if discussion and discussion["epoch"] == epoch else None
+    work = None
+    if task and recipient_member["id"] == task["assignee_id"]:
+        work = await store.latest_execution("task", task["id"], recipient_member["id"])
     return {
+        "session": discussion["runtime"].get("address") if discussion else None,
+        "task_session": work["runtime"].get("address") if work else None,
         "replying": bool(current and current["state"] in {"admitting", "running"}),
         "topic": topic,
         **history,

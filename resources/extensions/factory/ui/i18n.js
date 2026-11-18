@@ -4,6 +4,7 @@ export default {
   'factory.chat.message': 'Message {name}…',
   'factory.chat.earlier': 'Earlier messages',
   'factory.chat.new': 'New topic',
+  'factory.chat.openTaskSession': 'Open task Session',
   'factory.chat.replying': '{name} is replying…',
   'factory.chat.send': 'Send',
   'factory.chat.work': 'Project work',

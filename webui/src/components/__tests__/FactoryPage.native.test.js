@@ -266,12 +266,24 @@ describe('Factory native work', () => {
   it('resumes the Leader topic, sends inline and keeps a different Project separate', async () => {
     const { bridge, state, operation } = nativeBridge();
     const topic = { id: 'top-current', title: 'Startup time', state: 'open' };
+    const address = {
+      project_id: null,
+      agent_id: 'planner',
+      session_id: 'live',
+    };
+    const taskAddress = { ...address, session_id: 'task-run' };
+    let session = null;
     const posts = [
       { id: 'one', author: 'member:mem-leader', text: 'Existing answer' },
     ];
     state.handlers['conversation.get'] = ({ project_id }) =>
       project_id === 'project-a'
-        ? { topic, posts: [...posts] }
+        ? {
+            topic,
+            posts: [...posts],
+            session,
+            task_session: session && taskAddress,
+          }
         : { topic: null, posts: [] };
     state.handlers['conversation.send'] = ({ text }) => {
       posts.push({ id: 'two', author: 'user', text });
@@ -303,6 +315,14 @@ describe('Factory native work', () => {
     await settle();
     const log = () => document.querySelector('[role="log"]');
     expect(log().textContent).toContain('Existing answer');
+    expect(button(t('factory.native.openSession'))).toBeUndefined();
+    session = address;
+    bridge.invalidate({ resource: 'topics' });
+    await settle();
+    button(t('factory.native.openSession')).click();
+    expect(bridge.openSession).toHaveBeenLastCalledWith(address);
+    button(t('factory.chat.openTaskSession')).click();
+    expect(bridge.openSession).toHaveBeenLastCalledWith(taskAddress);
     expect(document.querySelector('.project-overview').textContent).toContain(
       'Review PR 42',
     );
@@ -324,6 +344,7 @@ describe('Factory native work', () => {
     await choose('native-project', 'Project B');
     await settle();
     expect(log().textContent).not.toContain('Continue here');
+    expect(button(t('factory.native.openSession'))).toBeUndefined();
     expect(calls(operation, 'conversation.get').at(-1)[1]).toEqual({
       project_id: 'project-b',
     });
