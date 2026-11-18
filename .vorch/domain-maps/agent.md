@@ -16,7 +16,7 @@ Where an Identity Agent lives: Chat, Helper or Private (`agent/placement.md`).
 
 ### Chat Agent
 
-An Identity Agent with no stored placement, shown in ordinary conversation selection (`agent/placement.md`).
+An Identity Agent with no stored placement. Personal Chat Agents appear in ordinary conversation selection (`agent/placement.md`, `agent/configuration.md` -> Roster order).
 
 ### Rooting
 

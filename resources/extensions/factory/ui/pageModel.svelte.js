@@ -291,6 +291,18 @@ export function createFactoryPageModel(bridgeClient) {
     }
   }
 
+  async function openAgentProfile(agentId, incarnation, factoryId) {
+    if (!agentId || !incarnation) return;
+    try {
+      await client.openAgent(agentId, {
+        expectedIncarnation: incarnation,
+        ...(factoryId ? { relatedScope: factoryId } : {}),
+      });
+    } catch (cause) {
+      error = failureText(cause);
+    }
+  }
+
   async function openSession(address) {
     try {
       await client.openSession(address);
@@ -370,6 +382,7 @@ export function createFactoryPageModel(bridgeClient) {
     pickerOpen,
     acceptSavedCard,
     acceptSavedWorkflow,
+    openAgentProfile,
     openSession,
     get route() {
       return route;

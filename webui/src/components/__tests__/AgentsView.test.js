@@ -146,6 +146,76 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
+  it('edits an explicitly bound profile outside the personal roster and never falls back to another Agent', async () => {
+    const personal = baseAgent();
+    let member = {
+      ...personal,
+      id: 'member',
+      name: 'Reviewer',
+      extension_owner: 'factory',
+    };
+    const expected = { id: member.id, expected_incarnation: member.created_at };
+    const fallback = createAgentsRpcMock({ agents: [personal] });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'agent.get') return { ...member };
+      if (method === 'agent.update') {
+        member = { ...member, name: params.name };
+        return { ...member };
+      }
+      return fallback(method, params);
+    });
+    const readRelatedAgents = vi.fn(async (after) =>
+      after
+        ? {
+            agents: [
+              { id: 'worker', name: 'Worker', placement: { kind: 'helper' } },
+            ],
+            next_after: null,
+          }
+        : { agents: [], next_after: 'page-two' },
+    );
+    const props = reactiveProps({
+      profile: {
+        agentId: member.id,
+        expectedIncarnation: member.created_at,
+        readRelatedAgents,
+      },
+      agentsRefreshToken: 0,
+      onAgentSelected: vi.fn(),
+    });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    await waitForCondition(
+      () => document.querySelector('#agent-name')?.value === 'Reviewer',
+    );
+    expect(rpcMock).toHaveBeenCalledWith('agent.get', expected);
+    expect(readRelatedAgents.mock.calls).toEqual([[null], ['page-two']]);
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'agent.soul.get'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('agent.soul.get', expected);
+    expect(document.querySelector('.agent-list')).toBeNull();
+    expect(document.querySelector('#agent-placement')).toBeNull();
+    expect(document.querySelector('#agent-model')).toBeTruthy();
+    expect(hasButton(t('agents.rename.action'))).toBe(false);
+    expect(hasButton(t('agents.delete'))).toBe(false);
+    expect(props.onAgentSelected).not.toHaveBeenCalled();
+    setTextInputValue('agent-name', 'Reviewer updated');
+    await submitAgentForm();
+    expect(getAgentUpdateCalls().at(-1)[1]).toMatchObject({
+      ...expected,
+      name: 'Reviewer updated',
+    });
+    member = { ...member, created_at: 'replacement' };
+    props.agentsRefreshToken++;
+    await waitForCondition(() =>
+      document
+        .querySelector('[role="alert"]')
+        ?.textContent.includes(t('agents.profile.unavailable')),
+    );
+    expect(document.querySelector('#agent-name')).toBeNull();
+    expect(document.querySelector('form.agent-detail-pane')).toBeNull();
+  });
+
   it('shows the placement tree, reorders private siblings only, and names them before deleting the owner', async () => {
     localStorage.clear();
     const agents = [
@@ -169,6 +239,16 @@ describe('AgentsView', () => {
         name: 'Helper',
         placement: { kind: 'helper' },
       },
+      {
+        ...baseAgent(),
+        id: 'personal-child',
+        name: 'Personal child',
+        placement: {
+          kind: 'private',
+          owner_id: 'factory-leader',
+          orphaned: false,
+        },
+      },
     ];
     rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
     mountedComponent = mount(AgentsView, {
@@ -188,7 +268,25 @@ describe('AgentsView', () => {
     expect(
       rpcMock.mock.calls.find(([method]) => method === 'agent.reorder')[1]
         .agent_ids,
-    ).toEqual(['alpha', 'sibling', 'bravo', 'child', 'helper']);
+    ).toEqual([
+      'alpha',
+      'sibling',
+      'bravo',
+      'child',
+      'helper',
+      'personal-child',
+    ]);
+    document.querySelector('.agent-placement-helper-toggle').click();
+    await waitForCondition(() =>
+      expect(agentButton('personal-child')).toBeTruthy(),
+    );
+    agentButton('personal-child').click();
+    await waitForCondition(() =>
+      expect(agentButton('personal-child').classList.contains('active')).toBe(
+        true,
+      ),
+    );
+    expect(agentButton('factory-leader')).toBeNull();
     const menu = openRowMenu(agentButton('alpha'));
     menu
       .find((item) => item.textContent.includes(t('agents.menu.delete')))

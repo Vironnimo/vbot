@@ -313,6 +313,13 @@ class NativeFactoryExecution:
         self.service.spawn(self.sessions._close(saved, final_state="failed"))
         self.service.request_schedule()
 
+    async def check_member_profile(self, execution: Json, member: Json) -> bool:
+        (profile,) = await self.service.native_management.identities.member_profiles([member])
+        if profile["profile_available"]:
+            return True
+        await self.block(execution, "member_profile_unavailable")
+        return False
+
     async def _prepare(self, kind: str, scope: Json, member: Json, content: str) -> Json:
         factory = await self.store.get_factory(scope["factory_id"])
         epoch = scope["epoch"] if kind in {"task", "review"} else self.topic_epoch(factory, member)
@@ -542,6 +549,9 @@ class NativeFactoryExecution:
                         execution["id"], {"state": "draining"}, actor="factory"
                     )
                     self.service.spawn(self.sessions._close(execution))
+                    continue
+                member = await self.store.get_member(execution["member_id"])
+                if not await self.check_member_profile(execution, member):
                     continue
                 await self.sessions._acknowledge(execution)
                 execution = await self.store.get_execution(execution["id"])

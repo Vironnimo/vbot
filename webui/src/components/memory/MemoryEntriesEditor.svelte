@@ -1,5 +1,9 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import {
+    agentProfileParams,
+    useAgentProfileBinding,
+  } from '$lib/agentProfileBinding.js';
   import { onDestroy } from 'svelte';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -28,6 +32,7 @@
     viewErrorMessage = (error, fallback) => error?.message || fallback,
   } = $props();
   const editorId = $props.id();
+  const binding = useAgentProfileBinding();
 
   let memoryPanelOpen = $state(false);
 
@@ -79,7 +84,7 @@
     try {
       const result = await (projectId
         ? listProjectMemories(ownerId)
-        : listAgentMemories(ownerId));
+        : listAgentMemories(ownerId, agentProfileParams(binding, ownerId)));
       if (destroyed || requestId !== memoryRequestId) {
         return;
       }
@@ -198,7 +203,12 @@
     try {
       const result = await (projectId
         ? addProjectMemory(ownerId, content)
-        : addAgentMemory(ownerId, scope, content));
+        : addAgentMemory(
+            ownerId,
+            scope,
+            content,
+            agentProfileParams(binding, ownerId),
+          ));
       if (destroyed) {
         return;
       }
@@ -243,7 +253,13 @@
     try {
       const result = await (projectId
         ? replaceProjectMemory(ownerId, edit.id, content)
-        : replaceAgentMemory(ownerId, edit.scope, edit.id, content));
+        : replaceAgentMemory(
+            ownerId,
+            edit.scope,
+            edit.id,
+            content,
+            agentProfileParams(binding, ownerId),
+          ));
       if (destroyed) {
         return;
       }
@@ -287,7 +303,12 @@
     try {
       const result = await (projectId
         ? removeProjectMemory(ownerId, target.id)
-        : removeAgentMemory(ownerId, target.scope, target.id));
+        : removeAgentMemory(
+            ownerId,
+            target.scope,
+            target.id,
+            agentProfileParams(binding, ownerId),
+          ));
       if (destroyed) {
         return;
       }

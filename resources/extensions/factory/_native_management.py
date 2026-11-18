@@ -13,7 +13,8 @@ from core.tools.contracts import ToolContractError
 from core.utils.workers import settle_before_cancelling
 
 from . import _limits
-from ._native_identities import FactoryIdentities
+from ._native_identities import FactoryIdentities, personal_agents
+from ._native_records import _capacity, _text
 from ._native_values import CONFIG, FACTORY, LOCAL, MEMBER, OPERATION_SCHEMAS, TASK
 from ._values import text
 from .store import FactoryError
@@ -120,6 +121,24 @@ class NativeFactoryManagement:
         return f"{len(result.get(_PLURALS[resource], []))} {resource} records."
 
     async def _operation(self, name: str, args: Json, actor: Json | None) -> Json:
+        if name == "agent.profile_targets" and actor is None:
+            team = await self.store.get_factory(text(args, "scope"))
+            members = await self.store.list_members(
+                team["id"], state="active", after=args.get("after", "")
+            )
+            profiles = await self.identities.member_profiles(members)
+            return {
+                "agents": [
+                    {
+                        "id": row["agent_id"],
+                        "name": row["agent_name"],
+                        "placement": row["agent_placement"],
+                    }
+                    for row in profiles
+                    if row["created_by_factory"] and row["profile_available"]
+                ],
+                "next_after": members[-1]["id"] if len(members) == 100 else None,
+            }
         if name == "factory.usage" and actor is None:
             team = await self.store.get_factory(text(args, "id"))
             index = self.service.native.limits.index
@@ -161,7 +180,9 @@ class NativeFactoryManagement:
             or "thinking_effort" in args
             or ("model" in args and (name != "member.create" or actor is not None))
         ):
-            raise FactoryError("agent_settings", "Edit the Identity Agent in Agents settings.")
+            raise FactoryError(
+                "agent_settings", "Open the team member's Agent profile to change its settings."
+            )
 
         args = dict(args)
         for key in ("capacity", "limit", "expected_revision", "priority"):
@@ -260,13 +281,26 @@ class NativeFactoryManagement:
                 and self.service.host is not None
                 and self.service.host.catalog is not None
             ):
+                if actor is None:
+                    result["members"] = await self.identities.member_profiles(records)
                 catalog = await self.service.host.catalog()
                 result["catalog"] = {
-                    key: catalog.get(key, []) for key in ("agents", "models", "skills", "tools")
+                    "agents": personal_agents(catalog),
+                    **{key: catalog.get(key, []) for key in ("models", "skills", "tools")},
                 }
             return result
         if action == "get":
             assert previous is not None
+            if resource == "factory" and actor is None:
+                leader = await self.store.get_member(previous["leader_member_id"])
+                (profile,) = await self.identities.member_profiles([leader])
+                return {
+                    "factory": {
+                        **previous,
+                        "leader_available": leader["state"] == "active"
+                        and profile["profile_available"],
+                    }
+                }
             if resource == "task":
                 return await self._task_detail(previous, args)
             if resource == "topic":
@@ -339,7 +373,15 @@ class NativeFactoryManagement:
                 action != "update"
                 or any(
                     key in args
-                    for key in ("state", "limits", "config", "capacity", "remit", "clear_fields")
+                    for key in (
+                        "state",
+                        "limits",
+                        "config",
+                        "capacity",
+                        "remit",
+                        "clear_fields",
+                        "leader_member_id",
+                    )
                 )
             ):
                 raise FactoryError(
@@ -466,7 +508,7 @@ class NativeFactoryManagement:
     ) -> Json:
         if action == "create":
             self._validate_permission_ceiling(args.get("config", {}))
-            project_id = text(args, "project_id")
+            project_id = text(args, "project_id", maximum=200)
             host = self.service.host
             assert host is not None and host.catalog is not None
             catalog = await host.catalog()
@@ -475,15 +517,16 @@ class NativeFactoryManagement:
             existing = await self.store.list_factories(project_id=project_id)
             if existing:
                 if args.get("request_id") and not args.get("leader_agent_id"):
-                    reservation = await self.store.reserve_identity(
-                        text(args, "request_id"),
-                        {key: value for key, value in args.items() if key != "expected_revision"},
-                    )
+                    reservation = await self.store.identity_reservation(text(args, "request_id"))
                     leader_member = await self.store.get_member(existing[0]["leader_member_id"])
-                    if (
-                        reservation.get("proof") == leader_member.get("agent_proof")
-                        and reservation["agent_id"] == leader_member["agent_id"]
+                    if reservation and (
+                        reservation.get("resource_id") == existing[0]["id"]
+                        or (
+                            reservation.get("proof") == leader_member.get("agent_proof")
+                            and reservation["agent_id"] == leader_member["agent_id"]
+                        )
                     ):
+                        await self.identities._create_identity(args, leader=True)
                         await self.store.complete_identity_reservation(
                             text(args, "request_id"), existing[0]["id"]
                         )
@@ -492,6 +535,18 @@ class NativeFactoryManagement:
                     "factory_exists",
                     "This Project already has a Factory. Read it instead of creating another.",
                 )
+            settings = {key: deepcopy(args[key]) for key in FACTORY if key in args}
+            project = next(
+                project for project in catalog["projects"] if project["id"] == project_id
+            )
+            settings.setdefault(
+                "name", project.get("display_name") or project.get("name") or project_id
+            )
+            _text(settings["name"], "name", 200)
+            _text(settings.get("remit", ""), "remit")
+            _capacity(settings.get("capacity", 2))
+            if "limits" in settings:
+                settings["limits"] = _limits.normalize(settings["limits"])
             if args.get("leader_agent_id"):
                 if args.get("leader_name") or args.get("leader_model"):
                     raise FactoryError(
@@ -501,24 +556,18 @@ class NativeFactoryManagement:
                             "leader_model, not both."
                         ),
                     )
-                leader = await self.identities._identity(text(args, "leader_agent_id"))
+                leader = await self.identities.for_link(
+                    text(args, "leader_agent_id"), project_id=project_id
+                )
             else:
                 leader = await self.identities._create_identity(args, leader=True)
             boundary = args.get("config", {})
             preview = await self.identities._preview_identity(leader, project_id)
             self.identities._check_model_boundary(preview["model"], boundary.get("allowed_models"))
-            settings = {key: deepcopy(args[key]) for key in FACTORY if key in args}
-            project = next(
-                project for project in catalog["projects"] if project["id"] == project_id
-            )
-            settings.setdefault(
-                "name", project.get("display_name") or project.get("name") or project_id
-            )
-            if "limits" in settings:
-                settings["limits"] = _limits.normalize(settings["limits"])
             saved = await self.store.create_factory(
                 project_id,
-                leader_created_by_factory=not bool(args.get("leader_agent_id")),
+                leader_created_by_factory=not args.get("leader_agent_id")
+                or bool(leader.get("pending_receipt")),
                 leader_agent_id=leader["agent_id"],
                 leader_name=leader.get("name") or leader["agent_id"],
                 leader_agent_proof=leader["incarnation"],
@@ -529,9 +578,26 @@ class NativeFactoryManagement:
                 await self.store.complete_identity_reservation(
                     text(args, "request_id"), saved["id"]
                 )
+            elif pending := leader.get("pending_receipt"):
+                await self.store.complete_identity_reservation(pending["request_id"], saved["id"])
             return saved
         assert previous is not None
         patch = {key: deepcopy(args[key]) for key in (*FACTORY, "state") if key in args}
+        if "leader_member_id" in args:
+            current = await self.store.get_member(previous["leader_member_id"])
+            candidate = await self.store.get_member(text(args, "leader_member_id"))
+            if candidate["factory_id"] != previous["id"] or candidate["state"] != "active":
+                raise FactoryError("outside_factory", "Choose an active member of this Factory.")
+            old, new = await self.identities.member_profiles([current, candidate])
+            if current["state"] == "active" and old["profile_available"]:
+                raise FactoryError(
+                    "leader_available", "The current Leader's Agent profile is available."
+                )
+            if not new["profile_available"]:
+                raise FactoryError(
+                    "member_profile_unavailable", "Choose a member with an available Agent profile."
+                )
+            patch["leader_member_id"] = candidate["id"]
         if action == "archive":
             patch["state"] = "archived"
         clear_fields = args.get("clear_fields", [])
@@ -587,27 +653,35 @@ class NativeFactoryManagement:
     ) -> Json:
         if action in {"add", "create"}:
             await self._member_config(args, actor)
+            _text(args.get("role", ""), "role", 200)
+            _text(args.get("instructions", ""), "instructions")
+            _capacity(args.get("capacity", 1))
             info = (
                 await self.identities._create_identity(args)
                 if action == "create"
-                else await self.identities._identity(text(args, "agent_id"))
+                else await self.identities.for_link(
+                    text(args, "agent_id"), text(args, "factory_id")
+                )
             )
             if action == "create":
-                for member in await self.store.list_members(text(args, "factory_id")):
-                    if (
-                        member["agent_id"] == info["agent_id"]
-                        and member.get("agent_proof") == info["incarnation"]
-                    ):
-                        await self.store.complete_identity_reservation(
-                            text(args, "request_id"), member["id"]
+                member = await self.store.identity_creation_member(
+                    info["agent_id"], info["incarnation"]
+                )
+                if member:
+                    if member["factory_id"] != text(args, "factory_id"):
+                        raise FactoryError(
+                            "identity_conflict", "The creation record belongs to another Factory."
                         )
-                        return member
+                    await self.store.complete_identity_reservation(
+                        text(args, "request_id"), member["id"]
+                    )
+                    return member
             await self._validate_member_model(args, info)
             saved = await self.store.add_member(
                 text(args, "factory_id"),
                 info["agent_id"],
                 agent_proof=info["incarnation"],
-                created_by_factory=action == "create",
+                created_by_factory=action == "create" or bool(info.get("pending_receipt")),
                 name=info.get("name") or info["agent_id"],
                 actor=identity,
                 **{key: deepcopy(args[key]) for key in MEMBER if key in args and key not in LOCAL},
@@ -615,6 +689,11 @@ class NativeFactoryManagement:
             if action == "create":
                 await self.store.complete_identity_reservation(
                     text(args, "request_id"), saved["id"]
+                )
+            elif pending := info.get("pending_receipt"):
+                await self.store.complete_identity_reservation(
+                    pending["request_id"],
+                    saved["id"] if pending["payload"].get("factory_id") else saved["factory_id"],
                 )
             return saved
         assert previous is not None

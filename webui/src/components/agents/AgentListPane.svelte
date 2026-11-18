@@ -130,6 +130,11 @@
 
   let chatAgents = $derived(agents.filter(isChatAgent));
   let helpers = $derived(helperAgents(agents));
+  let helperGroupLabel = $derived(
+    helpers.some((agent) => agentPlacement(agent).kind === 'private')
+      ? t('agents.list.helperAndPrivateAgents')
+      : t('agents.list.helperAgents'),
+  );
   let expansion = $state(readExpansion());
   function readExpansion() {
     try {
@@ -155,12 +160,11 @@
     const selected = agents.find((agent) => agent.id === selectedAgentId);
     if (!selected) return;
     const placement = agentPlacement(selected);
-    const group =
-      placement.kind === 'private' && !placement.orphaned
+    const group = helpers.some((agent) => agent.id === selected.id)
+      ? '~helpers'
+      : placement.kind === 'private'
         ? placement.owner_id
-        : !isChatAgent(selected)
-          ? '~helpers'
-          : '';
+        : '';
     if (group)
       untrack(() => {
         if (!expansion[group]) expansion = { ...expansion, [group]: true };
@@ -320,8 +324,7 @@
                 stroke-linejoin="round"
               /></svg
             >
-            <span class="agent-placement-group-name"
-              >{t('agents.list.helperAgents')}</span
+            <span class="agent-placement-group-name">{helperGroupLabel}</span
             ><span class="agent-placement-group-count">{helpers.length}</span>
           </button>
           <button
@@ -389,7 +392,7 @@
     getLabel={(agent) => agent.name || agent.id}
     disabled={isReordering}
     aria-label={id === '~helpers'
-      ? t('agents.list.helperAgents')
+      ? helperGroupLabel
       : t('agents.list.privateCount', { count: group.length })}
     onReorder={(from, to) => reorderGroup(group, from, to)}
     onDragActiveChange={onReorderInteractionChange}

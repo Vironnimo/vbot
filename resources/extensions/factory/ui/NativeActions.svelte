@@ -1,4 +1,5 @@
 <script>
+  import { SvelteMap } from 'svelte/reactivity';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
@@ -31,7 +32,9 @@
     id ||
     t('factory.native.unassigned');
   const active = $derived(
-    native.members.filter((item) => item.state === 'active'),
+    native.members.filter(
+      (item) => item.state === 'active' && item.profile_available,
+    ),
   );
   const memberOptions = $derived([
     { value: '', label: t('factory.native.unassigned') },
@@ -54,12 +57,41 @@
       selectedModelValue: form.model,
     }),
   );
-  const agents = $derived(
-    (model.catalog.agents || []).map((item) => ({
-      value: item.id,
-      label: item.name || item.id,
-    })),
+  const pendingAgents = $derived(
+    model.catalog.projects?.find((project) => project.id === currentProject)
+      ?.pending_factory_agents ?? [],
   );
+  const pendingProfile = $derived(
+    pendingAgents.find(
+      (agent) =>
+        agent.id === (modal === 'setup' ? form.leader_agent_id : form.agent_id),
+    ),
+  );
+  const agents = $derived.by(() => {
+    const candidates = new SvelteMap(
+      (model.catalog.agents ?? []).map((agent) => [
+        agent.id,
+        agent.name || agent.id,
+      ]),
+    );
+    for (const agent of pendingAgents)
+      candidates.set(agent.id, agent.name || agent.id);
+    if (modal === 'member') {
+      for (const member of native.members) {
+        if (
+          member.profile_available &&
+          member.created_by_factory &&
+          member.state === 'retired'
+        )
+          candidates.set(
+            member.agent_id,
+            member.agent_name || member.name || member.agent_id,
+          );
+      }
+      for (const member of active) candidates.delete(member.agent_id);
+    }
+    return [...candidates].map(([value, label]) => ({ value, label }));
+  });
   export function open(kind, values = {}) {
     modal = kind;
     formError = '';
@@ -263,6 +295,20 @@
   );
 </script>
 
+{#snippet pendingProfileEditor()}
+  {#if pendingProfile}
+    <Button
+      variant="tertiary"
+      onClick={() =>
+        model.openAgentProfile(
+          pendingProfile.id,
+          pendingProfile.incarnation,
+          modal === 'member' ? native.factoryId : null,
+        )}>{t('factory.native.editAgent')}</Button
+    >
+  {/if}
+{/snippet}
+
 {#if modal}<Modal
     title={modalTitle}
     onClose={() => (modal = '')}
@@ -287,6 +333,7 @@
               />
             {/snippet}
           </FormField>
+          {@render pendingProfileEditor()}
           {#if !form.leader_agent_id}<label for="native-leader-name"
               >{t('factory.native.agentName')}</label
             ><TextField
@@ -329,6 +376,7 @@
               value={form.agent_id}
               onValueChange={(value) => (form.agent_id = value)}
             />{/if}
+          {@render pendingProfileEditor()}
           <label for="native-member-role">{t('factory.native.role')}</label
           ><TextField
             id="native-member-role"

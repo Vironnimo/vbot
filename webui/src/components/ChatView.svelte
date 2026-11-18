@@ -434,7 +434,9 @@
   };
 
   let newSessionDisabled = $derived(
-    !target.activeAgent || chatState.loadingHistory,
+    !target.activeOwnAgentAddress() ||
+      !target.activeAgent ||
+      chatState.loadingHistory,
   );
 
   // Ctrl+Shift+O (Cmd+Shift+O) starts a new Session in the focused Chat area,
@@ -473,7 +475,8 @@
   $effect(() => {
     const request = openRequest;
     if (!request || request.requestId === handledOpenRequestId) return;
-    if (!active || chatState.agents.length === 0) return;
+    if (!active || (!request.target.sessionId && chatState.agents.length === 0))
+      return;
     handledOpenRequestId = request.requestId;
     untrack(() => {
       const { agentAddress, sessionId, subAgent } = request.target;
@@ -891,7 +894,7 @@
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
     </Banner>
-  {:else if !boundSession && chatState.agents.length === 0 && target.projectGroups.length === 0}
+  {:else if !boundSession && !target.activeAgent && chatState.agents.length === 0 && target.projectGroups.length === 0}
     <EmptyState
       fill
       title={t('chat.noAgents')}

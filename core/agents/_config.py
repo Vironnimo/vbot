@@ -807,6 +807,7 @@ def _agent_from_dict(
         ),
         current_session_id=data.get("current_session_id") or "",
         created_at=data.get("created_at") or timestamp_default,
+        creation_time_persisted=bool(data.get("created_at")),
         updated_at=data.get("updated_at") or timestamp_default,
         builtin=data.get("builtin"),
         extension_owner=data.get("extension_owner"),
@@ -890,6 +891,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
     if not persisted["description"]:
         persisted.pop("description")
     persisted.pop("skill_agent_id")
+    if not persisted.pop("creation_time_persisted"):
+        persisted.pop("created_at")
     persisted["workspace"] = workspace
     return persisted
 

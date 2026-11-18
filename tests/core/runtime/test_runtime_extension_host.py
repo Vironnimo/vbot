@@ -417,6 +417,12 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     project = runtime.projects.update("project-a", skills_global_enabled=["global-skill"])
     host = _owner_host(runtime, "swarm")
     assert host.catalog is not None
+    runtime.agents.create("factory-leader", extension_owner="factory")
+    runtime.agents.create("legacy")
+    legacy_path = runtime.agents.data_dir / "agents" / "legacy" / "agent.json"
+    legacy_config = json.loads(legacy_path.read_bytes())
+    del legacy_config["created_at"]
+    legacy_path.write_text(json.dumps(legacy_config), encoding="utf-8")
 
     catalog = await host.catalog()
 
@@ -429,12 +435,27 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             "allowed_skills": ["global-skill", "project-skill"],
         }
     ]
-    # Every roster Agent can be chosen; built-in Agents stay out.
+    # Existing workflows can still resolve owned profiles. Link pickers can match
+    # their owner and incarnation. Personal profiles have no Extension owner.
     assert [agent["id"] for agent in catalog["agents"]] == [
         agent.id for agent in runtime.agents.list()
     ]
     assert all(
-        set(agent) == {"id", "name", "description", "placement"} for agent in catalog["agents"]
+        set(agent) == {"id", "name", "description", "placement", "incarnation"}
+        for agent in catalog["agents"]
+        if agent["id"] != "factory-leader"
+    )
+    leader = next(agent for agent in catalog["agents"] if agent["id"] == "factory-leader")
+    assert all(
+        row["incarnation"] == runtime.agents.get(row["id"]).created_at
+        for row in catalog["agents"]
+        if row["id"] != "legacy"
+    )
+    assert next(row for row in catalog["agents"] if row["id"] == "legacy")["incarnation"] is None
+    assert "created_at" not in json.loads(legacy_path.read_bytes())
+    assert (leader["extension_owner"], leader["incarnation"]) == (
+        "factory",
+        runtime.agents.get("factory-leader").created_at,
     )
     assert "librarian" not in {agent["id"] for agent in catalog["agents"]}
     assert {"name": "global-skill", "description": "global sentinel"} in catalog["skills"]

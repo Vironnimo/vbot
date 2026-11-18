@@ -75,14 +75,14 @@ actual identity bindings, so another Session cannot inherit one accidentally.
 Group receipts, epochs, archive and owned Run attribution stay unchanged.
 
 `host.identity_agents` is registration-bound trusted Extension integration.
-`get` returns identity/proof and creation ownership; `create` creates a durable
+`get` returns identity/proof and creation ownership. `profiles(agent_ids)` reads up to 100 exact ids in one worker call and returns a mapping of live non-built-in profiles with name, incarnation, resolved placement, registration-relative `created_by_owner` and nullable `extension_owner`. It omits missing or invalid Agents and performs no Workspace or Session repair. `create` creates a durable
 Agent; `update` requires its exact incarnation and that this Extension created
 it. Scope/remit checks belong to the Extension before calling this capability.
 There is no delete, Workspace relocation, placement or identity-change surface.
 A stable `create(request_id=...)` persists its owner/request/configuration hash
 with the initial Agent document. Exact retries return the original; conflicts
 refuse. Owner and creation-request markers are immutable through ordinary Agent
-updates, survive archive/restore and do not confer human authority.
+updates and survive archive/restore. Technical id changes are refused for Extension-owned identities because Extension records address them by that id. An installed Extension owner (also disabled or failed) prevents ordinary Agent archival. A confirmed uninstall releases this archive reference.
 
 The canonical owned binding's `allowed_skills` is a hard Skill ceiling for its
 Runs and owned descendants, including ordinary delegated target Agents. Chat

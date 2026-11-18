@@ -142,6 +142,7 @@ class FactoryExtension:
         self.host = host
         self.store = FactoryStore(await host.open_database(DATABASE_NAME, SCHEMA_SQL, MIGRATIONS))
         self._states = {card["id"]: card["state"] for card in await self.store.list_cards()}
+        await self.native_management.identities.acknowledge_memberships()
         await self.native.reconcile()
         await self.execution.sessions.reconcile()
         if host.triggers is not None:

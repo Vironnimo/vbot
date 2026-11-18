@@ -9,6 +9,13 @@ import { accessLossFromClose } from '../../lib/api/accessLoss.js';
 export function rpcBackedApiMock(rpcMock, overrides = {}) {
   const call = (method, params) =>
     params === undefined ? rpcMock(method) : rpcMock(method, params);
+  const profileCall = (method, params, { expected_incarnation } = {}) =>
+    call(
+      method,
+      expected_incarnation === undefined
+        ? params
+        : { ...params, expected_incarnation },
+    );
   const providerParams = (providerId, connectionId, account) => ({
     provider_id: providerId,
     connection_id: connectionId,
@@ -89,10 +96,13 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         agent_ids: agentIds,
         expected_revision: expectedRevision,
       }),
-    getAgent: (id) => call('agent.get', { id }),
-    getAgentSoul: (id) => call('agent.soul.get', { id }),
-    setAgentSoul: (id, content, revision) =>
-      call('agent.soul.set', { id, content, revision }),
+    getAgent: (id, options) => profileCall('agent.get', { id }, options),
+    suggestAgentDescription: (id, options) =>
+      profileCall('agent.suggest_description', { id }, options),
+    getAgentSoul: (id, options) =>
+      profileCall('agent.soul.get', { id }, options),
+    setAgentSoul: (id, content, revision, options) =>
+      profileCall('agent.soul.set', { id, content, revision }, options),
     createAgent: (params) => call('agent.create', params),
     updateAgent: (params) => call('agent.update', params),
     renameAgent: (id, newId) => call('agent.rename', { id, new_id: newId }),
@@ -153,12 +163,13 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     createSkill: (params) => call('skill.create', params),
     installSkill: (params) => call('skill.install', params),
     updateSkill: (params) => call('skill.update', params),
-    deleteSkill: (scope, name) => call('skill.delete', { scope, name }),
+    deleteSkill: (scope, name, binding) =>
+      call('skill.delete', { scope, name, ...binding }),
     skillInventory: () => call('skill.inventory', { include_usage: false }),
     skillUsage: () => call('skill.usage'),
-    inspectSkill: (id) => call('skill.inspect', { id }),
-    setSkillDisabled: (id, disabled) =>
-      call('skill.set_disabled', { id, disabled }),
+    inspectSkill: (id, binding) => call('skill.inspect', { id, ...binding }),
+    setSkillDisabled: (id, disabled, binding) =>
+      call('skill.set_disabled', { id, disabled, ...binding }),
     setSkillPinned: (scope, name, pinned) =>
       call('skill.set_pinned', { scope, name, pinned }),
     skillHistory: (scope, name, limit) =>

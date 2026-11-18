@@ -192,6 +192,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
             id: `project-${id}`,
             name: `Project ${id.toUpperCase()}`,
             cwd: `C:/project-${id}`,
+            pending_factory_agents:
+              state.pendingAgents?.[`project-${id}`] ?? [],
             agent_profiles: [
               { id: 'builder', name: 'Builder', source: 'agents' },
               { id: 'critic', name: 'Critic', source: 'agents' },

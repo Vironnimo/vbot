@@ -191,8 +191,8 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
                 raise _error("factory_archived", "This Factory is archived.")
             if connection.execute(
                 "SELECT 1 FROM native_members WHERE factory_id = ? AND agent_id = ? AND "
-                "state = 'active'",
-                (factory_id, agent_id),
+                "state = 'active' AND (? = '' OR json_extract(body_json, '$.agent_proof') = ?)",
+                (factory_id, agent_id, agent_proof, agent_proof),
             ).fetchone():
                 raise _error(
                     "member_exists", "This Agent is already an active member of the Factory."
@@ -220,6 +220,47 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
 
     async def get_member(self, member_id: str) -> Json:
         return await self._get("member", member_id)
+
+    async def identity_creation_member(self, agent_id: str, proof: str) -> Json | None:
+        """The membership created with this incarnation, even after retirement or archive."""
+
+        def read(connection: sqlite3.Connection) -> Json | None:
+            rows = connection.execute(
+                "SELECT id FROM native_members WHERE agent_id = ? "
+                "AND json_extract(body_json, '$.agent_proof') = ? "
+                "AND json_extract(body_json, '$.created_by_factory') = 1 LIMIT 2",
+                (agent_id, proof),
+            ).fetchall()
+            if len(rows) > 1:
+                raise _error("identity_conflict", "The Agent has conflicting creation records.")
+            return _get(connection, "member", rows[0][0]) if rows else None
+
+        return await self.database.read_async(read)
+
+    async def workflow_profile_projects(self) -> dict[tuple[str, str], str]:
+        """Index active Factory profiles by exact identity for Workflow Project pickers."""
+
+        def read(connection: sqlite3.Connection) -> dict[tuple[str, str], str]:
+            rows = connection.execute(
+                """SELECT origin.agent_id, json_extract(origin.body_json, '$.agent_proof') AS proof,
+                          MAX(f.project_id)
+                   FROM native_members AS origin
+                   JOIN native_factories AS f ON f.id = origin.factory_id
+                   WHERE json_extract(origin.body_json, '$.created_by_factory') = 1
+                     AND f.state != 'archived'
+                     AND EXISTS (
+                         SELECT 1 FROM native_members AS member
+                         WHERE member.agent_id = origin.agent_id AND member.state = 'active'
+                           AND member.factory_id = origin.factory_id
+                           AND json_extract(member.body_json, '$.agent_proof') =
+                               json_extract(origin.body_json, '$.agent_proof')
+                     )
+                   GROUP BY origin.agent_id, proof
+                   HAVING COUNT(*) = 1"""
+            )
+            return {(agent, proof): project for agent, proof, project in rows}
+
+        return await self.database.read_async(read)
 
     async def list_members(
         self,
@@ -254,7 +295,7 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
             _revision(previous, expected_revision)
             if any(
                 key in patch and patch[key] != previous.get(key)
-                for key in ("agent_id", "agent_proof")
+                for key in ("agent_id", "agent_proof", "factory_id", "created_by_factory")
             ):
                 raise _error(
                     "immutable_field",
@@ -307,6 +348,20 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
                 (request_id,),
             ).fetchone()
             return self._reservation(row) if row else None
+
+        return await self.database.read_async(read)
+
+    async def pending_identities(self, *, agent_id: str | None = None) -> list[Json]:
+        """Creation receipts still needing a membership commit or its acknowledgement."""
+
+        def read(connection: sqlite3.Connection) -> list[Json]:
+            query = "SELECT * FROM native_identity_reservations WHERE state != 'complete'"
+            if agent_id is not None:
+                query += " AND agent_id = ?"
+            return [
+                self._reservation(row)
+                for row in connection.execute(query, (agent_id,) if agent_id is not None else ())
+            ]
 
         return await self.database.read_async(read)
 

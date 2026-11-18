@@ -503,6 +503,17 @@
 
   // Open chat on an Agent row: Chat shows that Agent, at its last place when
   // the Agent was already selected, else at its current Session.
+  let extensionProfile = $state.raw(null);
+
+  function editExtensionAgent(agentId, options) {
+    const revision = navigator.location.revision;
+    autosave.requestTransition(() => {
+      if (revision === navigator.location.revision) {
+        extensionProfile = { agentId, ...options, revision };
+      }
+    });
+  }
+
   const openAgentChat = (agentId) => {
     if (!agentId) return false;
     selectAgentFromView(agentId);
@@ -846,10 +857,40 @@
                 desktop.showToast({ title: message, variant })}
               onOpenSession={(address) =>
                 chatNavigation.openSessionLink(address)}
-              onOpenAgent={(id) => navigator.navigate('agents', [id])}
+              onOpenAgent={editExtensionAgent}
             />
           {/snippet}
         </LazyContent>
+        {#if extensionProfile && extensionProfile.revision === navigator.location.revision}
+          {#key extensionProfile}
+            <Modal
+              title={t('agents.profile.edit')}
+              size="xl"
+              variant="sheet"
+              onClose={() =>
+                autosave.requestTransition(() => (extensionProfile = null))}
+            >
+              {#snippet body()}
+                <LazyContent load={loadAgentsView}>
+                  {#snippet children(Component)}
+                    <Component
+                      profile={extensionProfile}
+                      agentsRefreshToken={selection.agentsRefreshToken}
+                      {memoriesRefreshToken}
+                      {modelsRefreshToken}
+                      {projectsRefreshToken}
+                      {skillsRefreshToken}
+                      onToast={desktop.showToast}
+                      onNavigateToSettingsPanel={navigateToSettingsPanel}
+                      onNavigateToAgentPrompt={navigateToAgentPromptScope}
+                      onOpenSkill={navigateToAgentSkill}
+                    />
+                  {/snippet}
+                </LazyContent>
+              {/snippet}
+            </Modal>
+          {/key}
+        {/if}
       {:else if activeViewId === 'agents'}
         <LazyContent load={loadAgentsView}>
           {#snippet children(Component)}

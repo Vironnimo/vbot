@@ -31,10 +31,16 @@ export function automaticAgentTargets(agents = [], caller) {
   return [];
 }
 export function helperAgents(agents = []) {
-  return agents.filter(
-    (agent) =>
-      placementKind(agent) === 'helper' || agentPlacement(agent).orphaned,
-  );
+  const owners = new Set(agents.filter(isChatAgent).map((agent) => agent.id));
+  return agents.filter((agent) => {
+    const placement = agentPlacement(agent);
+    // A verified Private Agent may have an owner outside this roster.
+    return (
+      placement.kind === 'helper' ||
+      (placement.kind === 'private' &&
+        (placement.orphaned || !owners.has(placement.owner_id)))
+    );
+  });
 }
 export function agentDisplayOrder(agents = []) {
   return [

@@ -458,6 +458,43 @@ async def test_card_detail_reports_participants_of_every_step(
     assert detail["card"]["runtime"] == card["runtime"]
 
 
+async def test_workflow_profiles_follow_their_project_and_retain_saved_references(
+    factory: FactoryHarness,
+) -> None:
+    # A Workflow may already reference a managed identity. Only its home
+    # Project offers it as a new choice, but the saved reference remains valid.
+    await factory.service.records().native.create_factory(
+        "project",
+        leader_agent_id="worker",
+        leader_agent_proof="original",
+        leader_created_by_factory=True,
+    )
+    factory.host.catalog_data["agents"][0].update(extension_owner="factory", incarnation="original")
+    catalog = (await factory.operation("catalog"))["catalog"]
+    assert [item["id"] for item in catalog["agents"]] == ["reviewer"]
+    assert {p["id"]: [a["id"] for a in p["factory_agents"]] for p in catalog["projects"]} == {
+        "project": ["worker"],
+        "other": [],
+    }
+    home = await factory.operation(
+        "workflow.save", workflow=implement_workflow(name="Home workflow")
+    )
+    assert home["workflow"]["steps"][0]["agent"] == "worker"
+    with pytest.raises(FactoryError, match="choose an available Agent"):
+        await factory.operation("workflow.save", workflow=implement_workflow(project_id="other"))
+    legacy = await factory.store.save_workflow(
+        normalize(implement_workflow(id="legacy", name="Legacy", project_id="other")),
+        expected_revision=0,
+    )
+    edited = await factory.operation(
+        "workflow.save", workflow={**legacy, "name": "Renamed"}, expected_revision=1
+    )
+    assert edited["workflow"]["steps"] == legacy["steps"]
+    factory.host.catalog_data["agents"][0]["extension_owner"] = "other-extension"
+    catalog = (await factory.operation("catalog"))["catalog"]
+    assert all(not project["factory_agents"] for project in catalog["projects"])
+
+
 async def test_workflow_saves_are_revision_checked_and_published(factory: FactoryHarness) -> None:
     listed = await factory.operation("workflow.list")
     assert [item["id"] for item in listed["workflows"]] == ["implement"]

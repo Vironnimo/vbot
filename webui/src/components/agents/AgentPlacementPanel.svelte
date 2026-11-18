@@ -1,5 +1,9 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import {
+    agentProfileParams,
+    useAgentProfileBinding,
+  } from '$lib/agentProfileBinding.js';
   import { updateAgent } from '$lib/api.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
@@ -16,6 +20,7 @@
   import AgentSelectionGroup from './AgentSelectionGroup.svelte';
 
   let { agent, agents = [], onChanged = async () => {} } = $props();
+  const profileBinding = useAgentProfileBinding();
   const autosave = useAutosaveContext();
   let saving = $state(false);
   let error = $state('');
@@ -85,7 +90,11 @@
     saving = true;
     error = '';
     try {
-      await updateAgent({ id: agent.id, placement: next });
+      await updateAgent({
+        id: agent.id,
+        ...agentProfileParams(profileBinding, agent.id),
+        placement: next,
+      });
       await onChanged();
     } catch (failure) {
       error = errorText(failure);
@@ -193,7 +202,7 @@
     {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
   </div>
 </section>
-{#if placement.kind === 'helper'}
+{#if placement.kind === 'helper' && !profileBinding?.()}
   <section class="s-section" aria-labelledby="agent-used-by-title">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-used-by-title">

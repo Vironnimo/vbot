@@ -104,6 +104,8 @@ class NativeSessions:
                     ):
                         return
                     factory, member, scope = await self.native._scope(execution)
+                    if not await self.native.check_member_profile(execution, member):
+                        return
                     runtime = deepcopy(execution["runtime"])
                     pending = runtime["pending"]
                     if await self.native.limits.check(execution, check_runs=True):

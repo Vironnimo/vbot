@@ -148,8 +148,13 @@ def transition(
         roster = store.list()
         if private_agents(agent_id, roster):
             raise AgentPlacementError("has_private_agents", "Move its private Agents first")
-        if previous.placement is None and not any(
-            agent.id != agent_id and agent.placement is None for agent in roster
+        if (
+            previous.placement is None
+            and previous.extension_owner is None
+            and not any(
+                agent.id != agent_id and agent.extension_owner is None and agent.placement is None
+                for agent in roster
+            )
         ):
             raise AgentPlacementError("last_chat_agent", "At least one Agent stays in chat")
     if placement is None:

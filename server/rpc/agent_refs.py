@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
+from core.agents import AgentStore
 from server.rpc._mutations import JsonObject, MutationHandler, serialized_mutation
+from server.rpc.validation import _required_string
+
+
+def agent_profile_guard(
+    agents: AgentStore, agent_id: str, params: JsonObject
+) -> AbstractContextManager[None]:
+    """Hold an optional Agent profile binding for the complete blocking operation."""
+    if "expected_incarnation" not in params:
+        return nullcontext()
+    return agents.incarnation_guard(agent_id, _required_string(params, "expected_incarnation"))
 
 
 def _agent_reference_lock(state: Any) -> asyncio.Lock:

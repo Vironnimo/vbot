@@ -152,7 +152,7 @@ async def test_native_project_membership_and_revision_contract(factory_store: Fa
         await native.create_factory("project", leader_agent_id="another")
     assert duplicate.value.code == "factory_exists"
     with pytest.raises(FactoryError):
-        await native.add_member(factory["id"], "worker", agent_proof="different-incarnation")
+        await native.add_member(factory["id"], "worker", agent_proof=worker["agent_proof"])
     saved = await native.update_member(
         worker["id"], {"config": {"future": {"x": 1}}, "unknown": 7}, expected_revision=1
     )

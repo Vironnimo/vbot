@@ -64,11 +64,12 @@ ID = {"id": S}
 REV = {**ID, "expected_revision": INTEGER}
 CONVERSATION = {"project_id": S, "member_id": S, "topic_id": S, "task_id": S, "card_id": S}
 OPERATION_SCHEMAS = {
+    "agent.profile_targets": schema({"scope": S, "after": S}, ("scope",)),
     "work.list": schema(
         {"project_id": S, "query": S, "include_replies": B, **PAGING}, ("project_id",)
     ),
     "work.reply": schema({"project_id": S, "id": S}, ("project_id", "id")),
-    "conversation.get": schema({**CONVERSATION, "before": S}, ("project_id",)),
+    "conversation.get": schema({**CONVERSATION, "before": S, "new_topic": B}, ("project_id",)),
     "conversation.stop": schema({"project_id": S, "topic_id": S}, ("project_id", "topic_id")),
     "conversation.send": schema(
         {**CONVERSATION, "text": S, "request_id": S, "new_topic": B},
@@ -92,6 +93,7 @@ OPERATION_SCHEMAS = {
         {
             **REV,
             **FACTORY,
+            "leader_member_id": S,
             "state": S,
             "clear_fields": {
                 "type": "array",

@@ -114,7 +114,7 @@ class BuiltinAgents:
         first free ``main-N`` id.
         """
         with self._owner._snapshot_barrier.compound_mutation(), self._owner._change():
-            if self._owner.list():
+            if self._owner.personal_roster().agents:
                 return None
 
             candidate = _BOOTSTRAP_AGENT_ID

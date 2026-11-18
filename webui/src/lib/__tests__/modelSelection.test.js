@@ -152,11 +152,23 @@ describe('createModelCatalogLoader', () => {
 
 describe('buildModelSelectOptions', () => {
   it('keeps one unpinned option per connection without account data', () => {
-    const options = buildModelSelectOptions({
+    const catalog = {
       models: [catalogModel('openai/gpt-5.2', 'openai')],
       connections: [usableConnection('openai:api-key', 'openai', 'API Key')],
       emptyLabel: 'None',
-    });
+    };
+    const options = buildModelSelectOptions(catalog);
+    expect(
+      valuesAndLabels(
+        buildModelSelectOptions({
+          ...catalog,
+          selectedModelValue: 'openai/gpt-5.2',
+        }),
+      ),
+    ).toEqual([
+      ['openai/gpt-5.2', 'openai/gpt-5.2'],
+      ['openai/gpt-5.2::api-key', 'openai/gpt-5.2 (API Key)'],
+    ]);
 
     expect(options).toEqual([
       { value: '', label: 'None', isUnavailable: false },

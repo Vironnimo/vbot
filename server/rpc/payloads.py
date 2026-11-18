@@ -206,7 +206,7 @@ def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
 
 
 def _agent_response(
-    state: Any, agent: Any, persisted: Any = None, *, roster: Any = None
+    state: Any, agent: Any, persisted: Any = None, *, placement: Any = None
 ) -> JsonObject:
     """Build an Identity Agent's payload.
 
@@ -221,7 +221,10 @@ def _agent_response(
     return {
         "id": agent.id,
         "name": agent.name,
-        "placement": state.runtime.agents.resolved_placement(agent, roster),
+        "placement": placement
+        if placement is not None
+        else state.runtime.agents.resolved_placement(agent),
+        "extension_owner": agent.extension_owner,
         # What the Agent is for, written by the user; empty when none is set.
         "description": getattr(agent, "description", ""),
         "model": agent.model,

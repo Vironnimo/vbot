@@ -872,7 +872,12 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
-  it('edits, deletes and opens Skills from their row menu', async () => {
+  it('edits private Skills of the bound Agent and global Skills from their row menu', async () => {
+    const profile = {
+      agentId: 'alpha',
+      expectedIncarnation: baseAgent().created_at,
+    };
+    const binding = { expected_incarnation: profile.expectedIncarnation };
     const own = {
       id: 'pkg-own',
       name: 'notes',
@@ -923,6 +928,7 @@ describe('AgentsView behavior and access', () => {
     };
     const agentsRpc = createAgentsRpcMock({ skills: inventory });
     rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'agent.get') return baseAgent();
       if (method === 'skill.inspect')
         return { id: params.id, content: 'content-sentinel' };
       if (method === 'skill.update' || method === 'skill.delete') return {};
@@ -951,7 +957,7 @@ describe('AgentsView behavior and access', () => {
 
     mountedComponent = mount(AgentsView, {
       target: document.body,
-      props: { onOpenSkill },
+      props: { onOpenSkill, profile },
     });
     flushSync();
     await waitForText('notes');
@@ -969,6 +975,7 @@ describe('AgentsView behavior and access', () => {
 
     // Edit reads the Skill and saves it at once.
     await pick('Edit instructions');
+    expect(calls('skill.inspect')).toEqual([{ id: 'pkg-own', ...binding }]);
     const editor = getDialog('Edit notes');
     const textarea = editor.querySelector('textarea');
     expect(textarea.value).toBe('content-sentinel');
@@ -978,7 +985,12 @@ describe('AgentsView behavior and access', () => {
     dialogButton(editor, 'Save').click();
     await flushAsyncUpdates(8);
     expect(calls('skill.update')).toEqual([
-      { scope: 'agent:alpha', name: 'notes', content: 'content-changed' },
+      {
+        scope: 'agent:alpha',
+        name: 'notes',
+        content: 'content-changed',
+        ...binding,
+      },
     ]);
 
     // Turning it off edits the Agent draft like the row's checkbox.
@@ -990,6 +1002,7 @@ describe('AgentsView behavior and access', () => {
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
       excluded_skills: ['notes'],
+      ...binding,
     });
 
     // Delete asks first.
@@ -1000,7 +1013,7 @@ describe('AgentsView behavior and access', () => {
     dialogButton(document.querySelector('[role="dialog"]'), 'Delete').click();
     await flushAsyncUpdates(8);
     expect(calls('skill.delete')).toEqual([
-      { scope: 'agent:alpha', name: 'notes' },
+      { scope: 'agent:alpha', name: 'notes', ...binding },
     ]);
 
     // Open skill leads to the Skill's page in the Skills manager.
@@ -1017,7 +1030,7 @@ describe('AgentsView behavior and access', () => {
     dialogButton(document.querySelector('[role="dialog"]'), 'Delete').click();
     await flushAsyncUpdates(8);
     expect(calls('skill.delete')).toEqual([
-      { scope: 'agent:alpha', name: 'notes' },
+      { scope: 'agent:alpha', name: 'notes', ...binding },
       { scope: 'global', name: 'sample-skill' },
     ]);
   });

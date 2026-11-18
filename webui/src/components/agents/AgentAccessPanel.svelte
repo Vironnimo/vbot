@@ -4,6 +4,10 @@
     automaticAgentTargets,
   } from '$lib/agentPlacement.js';
   import { t } from '$lib/i18n.js';
+  import {
+    agentProfileParams,
+    useAgentProfileBinding,
+  } from '$lib/agentProfileBinding.js';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -82,7 +86,9 @@
   // place: the on/off item edits the draft like the row's checkbox, Edit and
   // Delete (the Agent's own Skills) and Turn this skill off write at once,
   // and Open skill shows the Skill's page in the Skills manager.
+  const profileBinding = useAgentProfileBinding();
   const skillActions = createSkillActions({
+    ownerBinding: (agentId) => agentProfileParams(profileBinding, agentId),
     get agents() {
       return skillCatalog.agents;
     },

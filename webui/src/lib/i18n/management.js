@@ -1,4 +1,8 @@
 export default Object.freeze({
+  'agents.profile.edit': 'Edit Agent',
+  'agents.profile.targetsUnavailable':
+    'Could not load this team’s Agent targets.',
+  'agents.profile.unavailable': 'This Agent profile is no longer available.',
   'agents.placement.title': 'Placement',
   'agents.placement.chat': 'In chat',
   'agents.placement.helper': 'Helper',
@@ -19,6 +23,7 @@ export default Object.freeze({
   'agents.placement.privateConfirmTitle': 'Make “{name}” private to {owner}?',
   'agents.placement.privateConfirm': '{holders} will lose access to it.',
   'agents.list.helperAgents': 'Helper Agents',
+  'agents.list.helperAndPrivateAgents': 'Helper and private Agents',
   'agents.list.newPrivateAgent': 'New private Agent',
   'agents.list.privateCount': '{count} private Agents',
   'agents.usedBy.title': 'Used by',

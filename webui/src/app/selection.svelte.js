@@ -64,6 +64,7 @@ export function createAppSelection() {
   };
 
   let agents = $state([]);
+  let agentsLoaded = $state(false);
   let agentsLoadRequestId = 0;
   let agentsSnapshotVersion = 0;
 
@@ -253,6 +254,7 @@ export function createAppSelection() {
     // the baseline of any older read still in flight from this owner.
     agentsSnapshotVersion += 1;
     agents = Array.isArray(nextAgents) ? nextAgents : [];
+    agentsLoaded = true;
     if (
       selectedAgentId &&
       !agents.some((agent) => agent.id === selectedAgentId)
@@ -352,6 +354,9 @@ export function createAppSelection() {
     destroy,
     get agents() {
       return agents;
+    },
+    get agentsLoaded() {
+      return agentsLoaded;
     },
     get selectedAgentId() {
       return selectedAgentId;

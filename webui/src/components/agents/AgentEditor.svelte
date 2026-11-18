@@ -1,4 +1,8 @@
 <script>
+  import {
+    useAgentProfileBinding,
+    agentProfileParams,
+  } from '$lib/agentProfileBinding.js';
   import { canDeleteAgent } from '$lib/agentPlacement.js';
   import {
     AGENT_DESCRIPTION_MAX_LENGTH,
@@ -36,6 +40,7 @@
 
   let {
     agent = null,
+    standaloneProfile = false,
     agents = [],
     onPlacementChanged = async () => {},
     // The view deletes this Agent after its confirmation.
@@ -45,6 +50,7 @@
     availableTools = [],
     skillCatalog = undefined,
     availableAgentTargets = [],
+    delegationAgents = null,
     agentTargetCatalogError = '',
     projectOptions = [],
     projectCatalogError = '',
@@ -133,6 +139,7 @@
       : {},
   );
 
+  const boundProfile = useAgentProfileBinding();
   const autosaveContext = useAutosaveContext();
   const agentSave = createDebouncedAutosave({
     getSnapshot: () => cloneAgentFormValues(formValues),
@@ -264,9 +271,13 @@
     errorMessage = '';
 
     try {
-      const saveAgent =
-        saveMode === AGENT_FORM_MODE_CREATE ? createAgent : updateAgent;
-      const savedAgent = await saveAgent(result.payload);
+      const savedAgent =
+        saveMode === AGENT_FORM_MODE_CREATE
+          ? await createAgent(result.payload)
+          : await updateAgent({
+              ...result.payload,
+              ...agentProfileParams(boundProfile, saveAgentId),
+            });
       if (saveMode === AGENT_FORM_MODE_CREATE) {
         showAgentToast(t('agents.created'));
         await onAgentCreated(savedAgent.id ?? result.payload.id);
@@ -668,7 +679,7 @@
     {/snippet}
     {#snippet accessSection()}
       <AgentAccessPanel
-        {agents}
+        agents={delegationAgents ?? agents}
         {availableTools}
         {skillCatalog}
         {availableAgentTargets}
@@ -699,6 +710,7 @@
         {fieldError}
         {workspaceIsCustom}
         {canDeleteSelectedAgent}
+        showLifecycleActions={!standaloneProfile}
       />
     {/snippet}
     <ContributionSurface

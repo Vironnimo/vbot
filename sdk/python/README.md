@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-38.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-39.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-38.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-39.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,14 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `38.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 38` in `extension.json` for Extensions using the new
+The SDK version is `39.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 39` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 39 adds `host.identity_agents.profiles(agent_ids)` for batch profile reads. A page can open the standard Agent editor in place and bind edits to the intended Agent incarnation. The host catalog identifies Extension-owned profiles.
 
 API 38 lets a page register clickable references in a hosted Session view.
 
@@ -104,7 +106,7 @@ The ceiling applies alongside the operator's default Permission Rules captured
 at creation and any Session overrides. Delegated Runs inherit the effective
 boundary. Editing a profile's Tool settings or ceiling requires a new conversation.
 
-API 35 adds `client.openAgent(agentId)` to the page bridge for opening an Identity Agent in the regular Agents editor.
+API 35 adds `client.openAgent(agentId)` to the page bridge for opening the regular Agent editor.
 
 API 34 adds `host.execution_usage_changes` for incremental, owner-scoped settled
 Usage snapshots. Carry its `ledger_id` and `revision` cursor between reads; a
@@ -116,6 +118,7 @@ including Tools hidden from configuration pickers. API 32 adds actual Identity
 Agent execution in owner-managed Sessions and
 `host.identity_agents` for creating/configuring an Extension's own specialists.
 The original `identity_profile` remains a temporary configuration snapshot.
+For explicit membership pages, `await host.identity_agents.profiles(agent_ids)` returns up to 100 addressed profiles keyed by id, with their names, ownership, placement and persisted incarnation (null for an unstamped legacy profile). Missing ids are omitted. Only the creating Extension receives its original `creation_request_id` when one exists.
 Owner-bound identity creation accepts a stable `request_id`; retrying the exact
 owner, Agent id, request and configuration returns the original identity.
 
@@ -143,7 +146,6 @@ and `extension:<percent-encoded-directory-name>:list`.
 ```python
 from typing import Any
 from vbot_extension_sdk import ExtensionAPI, ExtensionHost
-
 
 def register(api: ExtensionAPI) -> None:
     api.register_resource("entries", description="Current entries")

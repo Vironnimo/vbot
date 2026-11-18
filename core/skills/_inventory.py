@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -104,12 +105,30 @@ class SkillInventory:
                     return source, path, name
         raise ValueError("Skill is no longer present in the inventory")
 
-    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
-        """Read exactly one currently inventoried package without activating it."""
-        _, path, _ = self._inventoried_package(entry_id)
-        return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
+    @contextmanager
+    def _package_for_edit(
+        self, entry_id: str, expected_incarnation: str | None, *, loadable_only: bool = False
+    ) -> Iterator[tuple[_ManagerSource, Path, str]]:
+        package = self._inventoried_package(entry_id, loadable_only=loadable_only)
+        if expected_incarnation is None:
+            yield package
+            return
+        source, _, _ = package
+        if source.owner_id is None:
+            raise ValueError("An Agent incarnation requires a private Skill package.")
+        with self._owner._agents.incarnation_guard(source.owner_id, expected_incarnation):
+            yield package
 
-    def set_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
+    def inspect_skill(
+        self, entry_id: str, *, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
+        """Read exactly one currently inventoried package without activating it."""
+        with self._package_for_edit(entry_id, expected_incarnation) as (_, path, _):
+            return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
+
+    def set_package_disabled(
+        self, entry_id: str, *, disabled: bool, expected_incarnation: str | None = None
+    ) -> dict[str, Any]:
         """Turn the inventoried package ``entry_id`` off, or on again.
 
         Only that package changes: a same-named package of another source stays
@@ -121,18 +140,22 @@ class SkillInventory:
         change. Raises ``ValueError`` for an unknown or unloadable package, and
         ``SkillPolicyError`` or ``ProjectError`` when the change cannot be saved.
         """
-        source, _, name = self._inventoried_package(entry_id, loadable_only=True)
-        ref = source.package_ref(name)
-        if ref is None and source.project_id is not None:
-            project = self._owner._projects.get(source.project_id)
-            names = [entry for entry in project.skills_project_disabled if entry != name]
-            if disabled:
-                names.append(name)
-            self._owner._projects.update(project.project_id, skills_project_disabled=names)
-            self._owner.invalidate_project_skills(project.project_id)
-        elif ref is not None:
-            self._owner._policy.set_package_disabled(ref, disabled=disabled)
-        return {"name": name, "disabled": disabled, "project_id": source.project_id}
+        with self._package_for_edit(entry_id, expected_incarnation, loadable_only=True) as (
+            source,
+            _,
+            name,
+        ):
+            ref = source.package_ref(name)
+            if ref is None and source.project_id is not None:
+                project = self._owner._projects.get(source.project_id)
+                names = [entry for entry in project.skills_project_disabled if entry != name]
+                if disabled:
+                    names.append(name)
+                self._owner._projects.update(project.project_id, skills_project_disabled=names)
+                self._owner.invalidate_project_skills(project.project_id)
+            elif ref is not None:
+                self._owner._policy.set_package_disabled(ref, disabled=disabled)
+            return {"name": name, "disabled": disabled, "project_id": source.project_id}
 
     def skill_inventory(self) -> dict[str, Any]:
         """One pass over every Skill source for the human manager (no exclusions).

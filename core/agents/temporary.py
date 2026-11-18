@@ -418,7 +418,7 @@ class TemporaryAgentRegistry:
         if self._resolve_identity is None:
             raise ValueError("Identity execution is unavailable")
         agent = self._resolve_identity(agent_id)
-        if agent.builtin is not None or not incarnation or agent.created_at != incarnation:
+        if agent.builtin is not None or not incarnation or agent.incarnation != incarnation:
             raise ValueError("Identity Agent incarnation no longer matches")
         return agent
 

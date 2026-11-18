@@ -108,6 +108,10 @@ class AgentRenames:
                 raise BuiltinAgentError(
                     f"The {source.name} is built into vBot and cannot be renamed"
                 )
+            if source.extension_owner is not None:
+                raise AgentError(
+                    f"{source.extension_owner} owns this Agent's id. Edit its display name instead."
+                )
             case_only = _paths_are_same_location(source_dir, destination_dir)
             if exists_strict(destination_dir) and not case_only:
                 raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")

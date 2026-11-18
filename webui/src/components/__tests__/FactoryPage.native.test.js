@@ -41,6 +41,8 @@ function nativeBridge({ established = true } = {}) {
             agent_id: 'planner',
             role: 'Leader',
             instructions: 'Lead',
+            agent_proof: 'leader-stamp',
+            profile_available: true,
             config: {},
             capacity: 1,
             state: 'active',
@@ -52,6 +54,8 @@ function nativeBridge({ established = true } = {}) {
             agent_id: 'drafter',
             role: 'Builder',
             instructions: 'Build',
+            agent_proof: 'builder-stamp',
+            profile_available: true,
             config: {},
             capacity: 1,
             state: 'active',
@@ -80,9 +84,17 @@ function nativeBridge({ established = true } = {}) {
   fixture.state.handlers['factory.list'] = () => ({
     factories: clone(data.factories),
   });
-  fixture.state.handlers['factory.get'] = ({ id }) => ({
-    factory: clone(find(data.factories, id)),
-  });
+  fixture.state.handlers['factory.get'] = ({ id }) => {
+    const factory = find(data.factories, id);
+    return {
+      factory: {
+        ...clone(factory),
+        leader_available:
+          find(data.members, factory.leader_member_id)?.profile_available ===
+          true,
+      },
+    };
+  };
   fixture.state.handlers['factory.create'] = (args) => ({
     factory: put(data.factories, {
       id: 'fac-one',
@@ -106,6 +118,10 @@ function nativeBridge({ established = true } = {}) {
         ...args,
         id: 'mem-added',
         agent_id: args.agent_id || 'specialist',
+        created_by_factory: op === 'member.create',
+        agent_proof: 'specialist-stamp',
+        agent_placement: { kind: 'chat' },
+        profile_available: true,
         state: 'active',
         config: {},
         capacity: 1,
@@ -282,8 +298,18 @@ describe('Factory native work', () => {
     const posts = [
       { id: 'one', author: 'member:mem-leader', text: 'Existing answer' },
     ];
-    state.handlers['conversation.get'] = ({ project_id }) =>
-      project_id === 'project-a'
+    state.handlers['conversation.get'] = ({ project_id, new_topic }) => {
+      if (new_topic)
+        return {
+          topic: null,
+          posts: [],
+          member_name: 'Current Leader',
+          agent_id: 'planner',
+          factory_id: 'fac-one',
+          profile_available: true,
+          agent_proof: 'leader-proof',
+        };
+      return project_id === 'project-a'
         ? {
             topic,
             posts: [...posts],
@@ -300,6 +326,7 @@ describe('Factory native work', () => {
             replying: Boolean(session),
           }
         : { topic: null, posts: [] };
+    };
     state.handlers['conversation.send'] = ({ text }) => {
       posts.push({ id: 'two', author: 'user', text });
       return { topic, posts: [...posts] };
@@ -399,6 +426,19 @@ describe('Factory native work', () => {
       project_id: 'project-a',
     });
     expect(input.disabled).toBe(true);
+    button(t('factory.chat.new')).click();
+    await settle();
+    expect(calls(operation, 'conversation.get').at(-1)[1]).toEqual({
+      project_id: 'project-a',
+      new_topic: true,
+    });
+    expect(input.getAttribute('aria-label')).toContain('Current Leader');
+    expect(log().textContent.trim()).toBe('');
+    button(t('factory.native.editAgent')).click();
+    expect(bridge.openAgent).toHaveBeenCalledWith('planner', {
+      expectedIncarnation: 'leader-proof',
+      relatedScope: 'fac-one',
+    });
     await choose('native-project', 'Project B');
     await settle();
     expect(log().textContent).not.toContain('Continue here');
@@ -444,6 +484,8 @@ describe('Factory native work', () => {
       factory_id: 'fac-one',
       agent_id: 'planner',
       role: 'Leader',
+      agent_proof: 'leader-stamp',
+      profile_available: true,
       state: 'active',
       revision: 1,
     });
@@ -467,7 +509,12 @@ describe('Factory native work', () => {
   });
 
   it('creates a new Leader with the Model selected through search', async () => {
-    const { bridge, operation } = nativeBridge({ established: false });
+    const { bridge, operation, state } = nativeBridge({ established: false });
+    state.pendingAgents = {
+      'project-a': [
+        { id: 'pending', name: 'Pending leader', incarnation: 'pending-stamp' },
+      ],
+    };
     await render(bridge, '');
     await choose('native-project', 'Project A');
     button(t('factory.native.setup')).click();
@@ -477,6 +524,13 @@ describe('Factory native work', () => {
         document.querySelector(`label[for="${id}"] button[data-help-text]`),
       ).not.toBeNull();
     }
+    await choose('native-leader', 'Pending leader');
+    button(t('factory.native.editAgent'), modal()).click();
+    await tick();
+    expect(bridge.openAgent).toHaveBeenCalledWith('pending', {
+      expectedIncarnation: 'pending-stamp',
+    });
+    await choose('native-leader', t('factory.native.newLeader'));
     fill('native-leader-name', 'Coordinator');
 
     document.getElementById('native-new-model').click();
@@ -551,12 +605,47 @@ describe('Factory native work', () => {
     });
     expect(data.tasks.at(-1).state).toBe('done');
   });
-  it('adds a real Agent, opens an independent topic, directly invites a peer and lets the user post', async () => {
-    const { bridge, operation } = nativeBridge();
+  it('repairs an unavailable Leader with a new identity, invites a peer and lets the user post', async () => {
+    const { bridge, operation, data } = nativeBridge();
+    Object.assign(data.members[0], {
+      profile_available: false,
+      name: 'Earlier Leader',
+    });
+    const retired = {
+      ...data.members[1],
+      id: 'retired-1',
+      agent_id: 'worker',
+      name: 'Worker',
+      created_by_factory: true,
+      state: 'retired',
+    };
+    data.members.push(
+      retired,
+      { ...retired, id: 'retired-2' },
+      { ...retired, id: 'retired-3', agent_id: 'drafter' },
+    );
     await render(bridge, '/factory/fac-one/team');
     button(t('factory.native.addMember')).click();
     await tick();
-    await choose('native-agent', 'Planner');
+    expect(
+      document.querySelector('.native-members section h2').textContent,
+    ).toContain('Earlier Leader');
+    expect(
+      document.querySelector('.native-members section h2').textContent,
+    ).not.toContain('Planner');
+    document.getElementById('native-agent').click();
+    await tick();
+    const choices = [...document.querySelectorAll('[role="option"]')];
+    expect(
+      choices.filter((node) => node.textContent.trim() === 'Worker'),
+    ).toHaveLength(1);
+    expect(choices.some((node) => node.textContent.trim() === 'Drafter')).toBe(
+      false,
+    );
+    choices
+      .find((node) => node.textContent.trim().startsWith('Planner'))
+      .click();
+    await tick();
     fill('native-member-role', 'Reviewer');
     await saveModal(t('factory.native.addMember'));
     expect(calls(operation, 'member.add').at(-1)[1]).toMatchObject({
@@ -564,6 +653,17 @@ describe('Factory native work', () => {
       agent_id: 'planner',
       role: 'Reviewer',
     });
+    const added = [
+      ...document.querySelectorAll('.native-members section'),
+    ].find((row) => row.textContent.includes('Reviewer'));
+    button(t('factory.native.makeLeader'), added).click();
+    await settle();
+    expect(calls(operation, 'factory.update').at(-1)[1]).toMatchObject({
+      id: 'fac-one',
+      expected_revision: 1,
+      leader_member_id: 'mem-added',
+    });
+    expect(button(t('factory.native.makeLeader'))).toBeUndefined();
     button(t('factory.native.discussions')).click();
     await settle();
     await settle();
@@ -625,7 +725,10 @@ describe('Factory native work', () => {
       ...document.querySelectorAll('.native-members section'),
     ].find((item) => item.textContent.includes('Implementer'));
     button(t('factory.native.editAgent'), panel).click();
-    expect(bridge.openAgent).toHaveBeenLastCalledWith('specialist');
+    expect(bridge.openAgent).toHaveBeenLastCalledWith('specialist', {
+      expectedIncarnation: 'specialist-stamp',
+      relatedScope: 'fac-one',
+    });
     button(t('factory.native.editMembership'), panel).click();
     await settle();
     fill('native-instructions', 'Local member remit');

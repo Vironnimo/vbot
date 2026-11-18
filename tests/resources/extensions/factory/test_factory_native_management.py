@@ -273,6 +273,8 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
     }
     with pytest.raises(FactoryError, match="interruption"):
         await harness.operation("factory.create", **args)
+    await harness.service.native_management.identities.acknowledge_memberships()
+    assert not await factory_store.native.pending_identities()
     retried = await harness.operation("factory.create", **args)
     assert len(created) == 1
     assert len(await factory_store.native.list_factories()) == 1
@@ -319,13 +321,14 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
 
     harness.host.inspect_prompt = preview
     factory = retried["factory"]
-    with pytest.raises(FactoryError, match="Agents settings"):
+    with pytest.raises(FactoryError) as wrong_settings:
         await harness.operation(
             "factory.update",
             id=factory["id"],
             expected_revision=factory["revision"],
             config={"model": "factory-model"},
         )
+    assert wrong_settings.value.code == "agent_settings"
     configured = (
         await harness.operation(
             "factory.update",
@@ -417,6 +420,9 @@ async def test_member_creation_validates_before_identity_and_reconciles_membersh
     async def create(agent_id: str, **config: Any) -> Json:
         assert agent_id not in created
         created[agent_id] = {
+            "created_by_owner": True,
+            "extension_owner": "factory",
+            "placement": {"kind": "chat"},
             "agent_id": agent_id,
             "incarnation": "proof",
             "name": config["name"],
@@ -427,7 +433,12 @@ async def test_member_creation_validates_before_identity_and_reconciles_membersh
     async def get(agent_id: str) -> Json:
         return created[agent_id]
 
-    cast(Any, harness.host).identity_agents = SimpleNamespace(create=create, get=get)
+    async def profiles(ids: list[str]) -> dict[str, Json]:
+        return {agent_id: created[agent_id] for agent_id in ids if agent_id in created}
+
+    cast(Any, harness.host).identity_agents = SimpleNamespace(
+        create=create, get=get, profiles=profiles
+    )
     factory = await factory_store.native.create_factory(
         "project", leader_agent_id="leader", config={"allowed_models": ["allowed"]}
     )
@@ -438,6 +449,13 @@ async def test_member_creation_validates_before_identity_and_reconciles_membersh
         "model": "outside",
     }
     try:
+        for malformed in ({"role": "x" * 201}, {"capacity": 10001}):
+            with pytest.raises(FactoryError):
+                await harness.operation(
+                    "member.create", **{**args, "model": "allowed", **malformed}
+                )
+            assert created == {}
+            assert await factory_store.native.identity_reservation(args["request_id"]) is None
         with pytest.raises(FactoryError) as refused:
             await harness.operation("member.create", **args)
         assert refused.value.code == "configuration_boundary"
@@ -462,6 +480,43 @@ async def test_member_creation_validates_before_identity_and_reconciles_membersh
         assert len(created) == 1
         assert len(await factory_store.native.list_members(factory["id"])) == 2
         assert (await harness.operation("member.create", **args))["member"] == member
+        agent_id = member["agent_id"]
+        with pytest.raises(FactoryError) as foreign_leader:
+            await harness.operation("factory.create", project_id="other", leader_agent_id=agent_id)
+        assert foreign_leader.value.code == "identity_outside_factory"
+        native = factory_store.native
+        other = await native.create_factory("other", leader_agent_id="another-leader")
+        retired = (await harness.operation("member.retire", id=member["id"], expected_revision=1))[
+            "member"
+        ]
+        with pytest.raises(FactoryError) as foreign_member:
+            await harness.operation("member.add", factory_id=other["id"], agent_id=agent_id)
+        assert foreign_member.value.code == "identity_outside_factory"
+        rejoined = (
+            await harness.operation("member.add", factory_id=factory["id"], agent_id=agent_id)
+        )["member"]
+        created[agent_id]["name"] = "Edited name"
+        projected = (await harness.operation("member.list", factory_id=factory["id"]))["members"]
+        owned = [m for m in projected if m["agent_id"] == agent_id]
+        assert {m["id"] for m in owned} == {retired["id"], rejoined["id"]}
+        assert all(m["profile_available"] and m["created_by_factory"] for m in owned)
+        assert all(m["agent_name"] == "Edited name" for m in owned)
+        targets = await harness.operation("agent.profile_targets", scope=factory["id"])
+        assert targets == {
+            "agents": [{"id": agent_id, "name": "Edited name", "placement": {"kind": "chat"}}],
+            "next_after": None,
+        }
+        # An already stored cross-Factory link retains its history, but its team
+        # has no profile access. A replacement at the same id inherits neither.
+        foreign = await native.add_member(other["id"], agent_id, agent_proof=member["agent_proof"])
+        historical = (await harness.operation("member.list", factory_id=other["id"]))["members"]
+        assert not next(m for m in historical if m["id"] == foreign["id"])["profile_available"]
+        created[agent_id]["incarnation"] = "replacement"
+        stale = (await harness.operation("member.list", factory_id=factory["id"]))["members"]
+        assert not any(m["profile_available"] for m in stale if m["agent_id"] == agent_id)
+        with pytest.raises(FactoryError) as unproven:
+            await harness.operation("member.add", factory_id=other["id"], agent_id=agent_id)
+        assert unproven.value.code == "identity_outside_factory"
     finally:
         await harness.service.close()
 

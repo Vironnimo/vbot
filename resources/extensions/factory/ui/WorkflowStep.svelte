@@ -29,6 +29,7 @@
     step = $bindable(),
     index,
     project = null,
+    agents = [],
     workflows = [],
     model,
     resolve,
@@ -40,7 +41,6 @@
   const count = $derived(workflow.steps.length);
   const earlier = $derived(workflow.steps.slice(0, index));
   const targets = $derived(returnTargets(workflow.steps, index));
-  const agents = $derived(model.catalog.agents ?? []);
   const team = $derived(project?.agent_profiles ?? []);
   const models = $derived(model.catalog.models ?? []);
   const name = $derived(stepName(step, index));
@@ -122,7 +122,7 @@
       options.push({
         value: agentValue,
         label: step.agent,
-        secondaryLabel: t('factory.agentUnavailable'),
+        secondaryLabel: t('factory.agentOutsideChoices'),
         disabled: true,
       });
     return options;

@@ -419,9 +419,29 @@ describe('ExtensionPage frame bridge', () => {
     const onOpenSession = vi.fn();
     const onOpenAgent = vi.fn();
     const page = openPage({ onOpenSession, onOpenAgent });
-    page.call('agent', 'agent.open', { agent_id: 'reviewer' });
+    page.call('agent', 'agent.open', {
+      agent_id: 'reviewer',
+      expected_incarnation: 'stamp',
+      related_scope: 'team',
+    });
     await page.replied('agent');
-    expect(onOpenAgent).toHaveBeenCalledExactlyOnceWith('reviewer');
+    expect(onOpenAgent).toHaveBeenCalledExactlyOnceWith('reviewer', {
+      expectedIncarnation: 'stamp',
+      readRelatedAgents: expect.any(Function),
+    });
+    const readRelated = onOpenAgent.mock.calls[0][1].readRelatedAgents;
+    const targets = {
+      agents: [{ id: 'helper', name: 'Helper', placement: { kind: 'helper' } }],
+      next_after: null,
+    };
+    operation.mockResolvedValueOnce(targets);
+    await expect(readRelated('member-100')).resolves.toEqual(targets);
+    expect(operation).toHaveBeenLastCalledWith(
+      'alpha',
+      'agent.profile_targets',
+      { scope: 'team', after: 'member-100' },
+      pageRef,
+    );
     page.call('bad-agent', 'agent.open', { agent_id: '../reviewer' });
     await page.replied('bad-agent');
     expect(onOpenAgent).toHaveBeenCalledOnce();

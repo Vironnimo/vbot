@@ -4,6 +4,8 @@ Task-gated reference for the human Skill manager's read model: `skill.inventory`
 
 ## Inventory shape
 
+When editing a bound Identity Agent profile, the editor sends the member's creation stamp as `expected_incarnation` for its own private packages on `skill.inspect`, `skill.update`, `skill.delete` and `skill.set_disabled`. The write scope or resolved inventory entry identifies the owner. The Agent's lifecycle guard covers the file or policy operation, so reusing its id and package name cannot redirect a pending edit.
+
 Agent rows include the public resolved `placement` from AgentStore, without its owner binding, so the manager can group Private Agents under their owner while retaining every Identity Agent (`agent/placement.md`).
 
 Each inventory builds fresh Agent and Project projections from one operation-local `SkillScan`, shared with Project Source discovery, packages, dependencies and stale shares, so all projections use its fresh source reads rather than cached runtime registries. Each source path is enumerated and each metadata input path parsed once, including paths reused by shared receivers or several Projects. Different aliases retain separate reads because fallback names and diagnostics depend on the input path. The scan expires with the call: external edits appear at the next refresh, and the manager neither consumes nor populates the longer-lived runtime scope caches. Package exclusions, collisions, origins and grants are still evaluated separately for each projection.

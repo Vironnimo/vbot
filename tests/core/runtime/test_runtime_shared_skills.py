@@ -34,6 +34,7 @@ from core.tools import ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
+from server.rpc.errors import RpcError
 from tests.core.runtime.runtime_test_support import (
     call_rpc,
     write_agent_skill,
@@ -98,6 +99,7 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
             agent_delete_lock=asyncio.Lock(),
             event_bus=ServerEventBus(),
         )
+        incarnation = runtime.agents.identify("main").created_at
 
         async def mutate(operation: str) -> None:
             """Apply one owner mutation; every receiver scope refreshes, nothing else."""
@@ -109,6 +111,8 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
                 )
             else:
                 params = {"scope": "agent:main", "name": "deploy"}
+                if operation in {"update", "delete"}:
+                    params["expected_incarnation"] = incarnation
                 if operation != "delete":
                     params["content"] = (
                         f"---\nname: deploy\ndescription: After {operation}\n---\n\nSteps.\n"
@@ -128,7 +132,35 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
         write_agent_skill(config.data_dir, "main", "deploy", "Before the owner leaves")
         runtime.invalidate_agent_skills("main")
         assert "deploy" in _names(runtime.skills_for(None, "receiver"))
+        package = next(
+            entry
+            for entry in runtime.skill_inventory()["skills"]
+            if entry["owner_id"] == "main" and entry["name"] == "deploy"
+        )
         await mutate("delete_owner")
+
+        replacement = runtime.agents.create("main")
+        write_agent_skill(config.data_dir, "main", "deploy", "Replacement's Skill")
+        scope = {"scope": "agent:main", "name": "deploy"}
+        handlers = skill_methods.method_handlers()
+        for method, params in [
+            ("skill.inspect", {"id": package["id"]}),
+            ("skill.set_disabled", {"id": package["id"], "disabled": True}),
+            ("skill.update", {**scope, "content": "---\nname: deploy\n---\n\nStale edit."}),
+            ("skill.delete", scope),
+        ]:
+            with pytest.raises(RpcError) as error:
+                await call_rpc(
+                    handlers, method, state, {**params, "expected_incarnation": incarnation}
+                )
+            assert error.value.code == "agent_not_found"
+        current = await call_rpc(
+            handlers,
+            "skill.inspect",
+            state,
+            {"id": package["id"], "expected_incarnation": replacement.created_at},
+        )
+        assert "Replacement's Skill" in current["content"]
     finally:
         await runtime.aclose()
 

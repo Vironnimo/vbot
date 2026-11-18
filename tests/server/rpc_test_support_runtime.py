@@ -757,8 +757,12 @@ class StubRuntime:
     def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
 
-    async def suggest_agent_description(self, agent_id: str) -> str:
-        return await Runtime.suggest_agent_description(cast(Any, self), agent_id)
+    async def suggest_agent_description(
+        self, agent_id: str, *, expected_incarnation: str | None = None
+    ) -> str:
+        return await Runtime.suggest_agent_description(
+            cast(Any, self), agent_id, expected_incarnation=expected_incarnation
+        )
 
     def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
         try:

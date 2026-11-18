@@ -156,7 +156,7 @@ def _stamp(store: AgentStore, target: str) -> str | None:
         # A read-time fallback is never evidence of a persisted incarnation.
         agent = store._read_agent_config(store._agent_path(target))
         stamp = new_creation_timestamp(store)
-        store._write_agent(replace(agent, created_at=stamp))
+        store._write_agent(replace(agent, created_at=stamp, creation_time_persisted=True))
     return cast(str, stamp)
 
 
