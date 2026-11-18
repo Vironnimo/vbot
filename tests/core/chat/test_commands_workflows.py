@@ -168,17 +168,22 @@ def _runs(*, active: bool) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("question", [None, "Where is the config file?"])
+@pytest.mark.parametrize(
+    ("question", "has_side_chat"),
+    [(None, False), (None, True), ("Where is the config file?", False)],
+)
 async def test_btw_opens_a_separate_chat_while_the_source_run_is_active(
-    question: str | None,
+    question: str | None, has_side_chat: bool
 ) -> None:
+    source = SessionAddress("project", "coder", "session-one")
     side = SessionAddress("project", "coder", "side-session")
     fork = AsyncMock(
         return_value=SimpleNamespace(id=side.session_id, address=side, generation_id="gen")
     )
     submit = AsyncMock()
+    latest = AsyncMock(return_value=("gen", side) if has_side_chat else ("source-gen", None))
     dispatcher = CommandDispatcher(
-        _runs(active=True), sessions=cast(Any, SimpleNamespace(fork=fork))
+        _runs(active=True), sessions=cast(Any, SimpleNamespace(fork=fork, latest_side_chat=latest))
     )
     command = "/btw" if question is None else f"/btw {question}"
     prepared = dispatcher.prepare(command)
@@ -190,17 +195,24 @@ async def test_btw_opens_a_separate_chat_while_the_source_run_is_active(
         project_id="project",
         accessor_input=CommandAccessorInput("id", "hash", submit),
     )
-    assert fork.await_args is not None
-    assert fork.await_args.args == (SessionAddress("project", "coder", "session-one"),)
-    assert fork.await_args.kwargs["side_chat"] == ("new" if question else "resume")
-    assert fork.await_args.kwargs["side_chat_note"]
+    draft = question is None and not has_side_chat
     assert outcome.navigation == CommandNavigation(
-        kind="open_side_chat", agent_id="coder", project_id="project", session_id="side-session"
+        kind="open_side_chat_draft" if draft else "open_side_chat",
+        agent_id="coder",
+        project_id="project",
+        session_id=source.session_id if draft else side.session_id,
+        generation_id="source-gen" if draft else "gen",
     )
     if question is None:
+        latest.assert_awaited_once_with(source)
+        fork.assert_not_awaited()
         submit.assert_not_awaited()
-        assert not outcome.runs
+        assert not outcome.runs and not outcome.resource_changes
     else:
+        latest.assert_not_awaited()
+        assert fork.await_args is not None and fork.await_args.args == (source,)
+        assert fork.await_args.kwargs["side_chat_request"] == ("id", "hash")
+        assert fork.await_args.kwargs["side_chat_note"]
         submit.assert_awaited_once_with(side, question, "gen")
         assert [r.role for r in outcome.runs] == ["follow_up"]
 

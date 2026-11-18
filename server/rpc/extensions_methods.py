@@ -552,6 +552,7 @@ async def _extension_page_open_specialist(state: Any, params: JsonObject) -> Jso
             "agent_id": binding.address.agent_id,
             "session_id": binding.address.session_id,
             "project_id": binding.address.project_id,
+            "generation_id": binding.generation_id,
         }
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error

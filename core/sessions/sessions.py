@@ -6,7 +6,7 @@ import builtins
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from core.runs import RunKind
 from core.sessions._archive_types import ArchiveEntryRef
@@ -201,6 +201,10 @@ class ChatSessionManager:
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         return await self._lifecycle.move(source, target)
 
+    async def latest_side_chat(self, source: SessionAddress) -> tuple[str, SessionAddress | None]:
+        """Read the latest child and its generation, or the source generation for a draft."""
+        return await self._store.run_async(self._store.latest_side_chat, source)
+
     async def fork(
         self,
         source: SessionAddress,
@@ -209,9 +213,9 @@ class ChatSessionManager:
         target_project_id: str | None = None,
         title: str | None = None,
         run_kind: RunKind | None = None,
-        side_chat: Literal["new", "resume"] | None = None,
         side_chat_note: str | None = None,
         side_chat_request: tuple[str, str] | None = None,
+        expected_source_generation_id: str | None = None,
     ) -> ChatSession:
         return await self._lifecycle.fork(
             source,
@@ -219,9 +223,9 @@ class ChatSessionManager:
             target_project_id=target_project_id,
             title=title,
             run_kind=run_kind,
-            side_chat=side_chat,
             side_chat_note=side_chat_note,
             side_chat_request=side_chat_request,
+            expected_source_generation_id=expected_source_generation_id,
         )
 
     async def archive(

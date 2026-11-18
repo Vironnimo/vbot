@@ -186,6 +186,7 @@ describe('ExtensionPage frame bridge', () => {
       const [config] = appChats.openSpecialist.mock.calls[1];
       expect(config.profile).toBe('extension:alpha:assistant');
       expect(config.presentation).toBe('compact');
+      expect(api.openExtensionPageSpecialist).not.toHaveBeenCalled();
       for (const field of ['one', 'two']) {
         page.message({
           ...page.init,

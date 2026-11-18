@@ -23,10 +23,12 @@ import {
   resetAppHarness,
   returnToCurrentSessionButton,
   rpcMock,
+  uploadAttachmentMock,
   selectPersonalAgent,
   selectedAgentName,
   sendConnectionReady,
   settingsPanelButton,
+  subscribeServerEventsMock,
   sidebarNavButton,
   viewSessionButton,
   waitForCondition,
@@ -310,6 +312,183 @@ describe('App navigation', () => {
     });
   });
 
+  it('starts a side draft on its first input and sends attachments and retries only to its child', async () => {
+    const source = { agent_id: 'builder@work', session_id: 'source' };
+    const child = {
+      agent_id: 'builder',
+      project_id: 'work',
+      session_id: 'side',
+      generation_id: 'side-gen',
+    };
+    const launches = [];
+    const requests = [];
+    let hasChild = false;
+    const attachment = {
+      attachment_id: 'file-1',
+      filename: 'note.txt',
+      media_type: 'text/plain',
+    };
+    uploadAttachmentMock.mockResolvedValue(attachment);
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [baseAgent()],
+        history: () => ({ items: [], messages: [] }),
+        methods: {
+          'session.get': ({ session_id }) => ({ session: { id: session_id } }),
+          'files.list': () => ({ files: ['README.md'] }),
+          'session.create_side_chat': (params) => {
+            launches.push(params);
+            hasChild = true;
+            return child;
+          },
+          'chat.stream': (params) => {
+            if (params.content === '/btw')
+              return {
+                command_handled: true,
+                output: 'action',
+                data: {
+                  navigation: hasChild
+                    ? { ...child, kind: 'open_side_chat' }
+                    : {
+                        agent_id: 'builder',
+                        project_id: 'work',
+                        session_id: 'source',
+                        source_generation_id: 'source-gen',
+                        kind: 'open_side_chat_draft',
+                      },
+                },
+              };
+            requests.push(params);
+            if (requests.length <= 2)
+              throw Object.assign(new Error('Missing acknowledgement'), {
+                code: 'network_error',
+              });
+            return { accepted: true, session_available: true };
+          },
+        },
+      }),
+    );
+    window.history.replaceState(null, '', '#chat/builder@work/source');
+    mountApp();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('.chat-view textarea:enabled'),
+      ).toBeTruthy(),
+    );
+    const main = document.querySelector('.chat-view');
+    typeInto(main.querySelector('textarea'), '/btw');
+    main.querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup .msg-input')).toBeTruthy(),
+    );
+    let popup = document.querySelector('.session-popup');
+    const input = popup.querySelector('textarea');
+    typeInto(input, '/secret');
+    popup.querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('.modal-dialog')?.textContent ??
+          document.body.textContent,
+      ).toContain(t('chat.secretForm.title')),
+    );
+    expect(launches).toHaveLength(0);
+    buttonWithText('button', t('common.cancel')).click();
+    await tick();
+    const picker = popup.querySelector('input[type="file"]');
+    Object.defineProperty(picker, 'files', {
+      value: [new File(['note'], 'note.txt', { type: 'text/plain' })],
+    });
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    typeInto(input, 'Question about @README.md');
+    await waitForCondition(() =>
+      expect(popup.querySelector('button[type="submit"]').disabled).toBe(false),
+    );
+    expect(launches).toEqual([]);
+    expect(popup.querySelector('.chat-view')).toBeNull();
+    popup.querySelector('button[type="submit"]').click();
+    await waitForCondition(() => {
+      expect(popup.textContent).toContain('Missing acknowledgement');
+      expect(input.value).toBe('Question about @README.md');
+    });
+    // The fork succeeded. A fresh /btw now opens the actual Session, whose
+    // composer must recover the same draft and retry the original envelope.
+    const reopen = async () => {
+      popup.querySelector(`button[aria-label="${t('common.close')}"]`).click();
+      await tick();
+      typeInto(main.querySelector('textarea'), '/btw');
+      main.querySelector('button[type="submit"]').click();
+      await waitForCondition(() => {
+        popup = document.querySelector('.session-popup');
+        expect(popup?.querySelector('textarea:enabled')).toBeTruthy();
+      });
+    };
+    await reopen();
+    expect(popup.querySelector('.chat-view textarea').value).toBe(
+      'Question about @README.md',
+    );
+    popup.querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(popup.querySelector('.chat-view textarea:enabled')?.value).toBe(
+        '',
+      ),
+    );
+    expect(launches).toEqual([
+      {
+        ...source,
+        source_generation_id: 'source-gen',
+        launch_id: expect.any(String),
+      },
+    ]);
+    expect(requests).toHaveLength(3);
+    expect(requests).toEqual(
+      Array(3).fill({
+        agent_id: 'builder@work',
+        session_id: 'side',
+        input_id: expect.any(String),
+        expected_generation_id: 'side-gen',
+        file_mentions: ['README.md'],
+        content: [
+          { type: 'text', text: 'Question about @README.md' },
+          { type: 'file', ...attachment },
+        ],
+      }),
+    );
+    expect(new Set(requests.map((request) => request.input_id)).size).toBe(1);
+    expect(popup.querySelector('.chat-view textarea').value).toBe('');
+    expect(popup.querySelector('.attachment-name')).toBeNull();
+    typeInto(popup.querySelector('textarea'), 'Follow up');
+    popup.querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(requests.at(-1)).toMatchObject({
+        agent_id: 'builder@work',
+        session_id: 'side',
+        content: 'Follow up',
+      }),
+    );
+    expect(launches).toHaveLength(1);
+    expect(document.querySelectorAll('.session-popup')).toHaveLength(1);
+    expect(window.location.hash).toBe('#chat/builder@work/source');
+    hasChild = false; // The previous fork was archived independently.
+    await reopen();
+    expect(popup.querySelector('.chat-view')).toBeNull();
+    expect(launches).toHaveLength(1);
+    await subscribeServerEventsMock.mock.calls[0][0].onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: {
+        kind: 'sessions',
+        scope: {
+          agent_id: 'builder',
+          project_id: 'work',
+          deleted_session_id: 'source',
+        },
+      },
+    });
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup')).toBeNull(),
+    );
+  });
+
   it.each([
     ['Please check this detail', true],
     ['Check ' + 'sk-proj-' + 'x'.repeat(48), false],
@@ -412,14 +591,12 @@ describe('App navigation', () => {
     );
     labelledButton('appChat.askSettings').click();
     await waitForCondition(() =>
-      expect(document.querySelector('.session-popup')?.textContent).toContain(
-        'Lost the response',
-      ),
-    );
-    buttonWithText('.session-popup button', t('common.retry')).click();
-    await waitForCondition(() =>
       expect(document.querySelector('.session-popup textarea')).toBeTruthy(),
     );
+    expect(opens).toBe(0);
+    expect(
+      buttonWithText('.session-popup button', t('appChat.openFull')),
+    ).toBeFalsy();
     document
       .querySelector(
         '.session-popup button[aria-label="' + t('common.close') + '"]',
@@ -437,8 +614,19 @@ describe('App navigation', () => {
       '[data-setting-path="server.keep_awake"] [role="switch"]',
     );
     control.focus();
-    const input = document.querySelector('.session-popup textarea');
-    typeInto(input, 'What does this do?');
+    const draft = document.querySelector('.session-popup textarea');
+    typeInto(draft, 'What does this do?');
+    expect(opens).toBe(0);
+    document.querySelector('.session-popup button[type="submit"]').click();
+    await waitForCondition(() => {
+      expect(document.querySelector('.session-popup')?.textContent).toContain(
+        'Lost the response',
+      );
+      expect(draft.value).toBe('What does this do?');
+    });
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'chat.stream'),
+    ).toHaveLength(0);
     document.querySelector('.session-popup button[type="submit"]').click();
     await waitForCondition(() =>
       expect(rpcMock).toHaveBeenCalledWith(
@@ -458,7 +646,13 @@ describe('App navigation', () => {
     );
     expect(opens).toBe(2);
     expect(window.location.hash).toBe('#settings/system');
-    const settingsPopup = input.closest('.session-popup');
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('.session-popup .chat-view textarea:enabled'),
+      ).toBeTruthy(),
+    );
+    const settingsPopup = document.querySelector('.session-popup');
+    const input = settingsPopup.querySelector('textarea');
     function openNested() {
       input.focus();
       typeInto(input, '/btw');
@@ -495,6 +689,7 @@ describe('App navigation', () => {
     await waitForCondition(() =>
       expect(nested()?.querySelector('.msg-input')).toBeTruthy(),
     );
+    expect(opens).toBe(2);
     buttonWithText('.session-popup button', t('appChat.openFull')).click();
     await waitForCondition(() => {
       expect(document.querySelector('.session-popup')).toBeNull();
@@ -506,6 +701,72 @@ describe('App navigation', () => {
           ?.textContent,
       ).toBe('App Agent');
     });
+  });
+
+  it('keeps the first command identity when an uncertain Settings popup is closed and reopened', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    const commands = [];
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'session.create_app_chat')
+        return {
+          agent_id: 'app-assistant',
+          session_id: params.session_id,
+          generation_id: 'app-gen',
+        };
+      if (method === 'chat.stream') {
+        commands.push(params);
+        if (commands.length === 1)
+          throw Object.assign(new Error('Missing command reply'), {
+            code: 'network_error',
+          });
+        return {
+          command_handled: true,
+          output: 'notice',
+          reply: 'Already admitted',
+        };
+      }
+      return settingsRpc(method, params);
+    });
+    mountApp();
+    sidebarNavButton('settings').click();
+    await waitForCondition(() =>
+      expect(labelledButton('appChat.askSettings')).toBeTruthy(),
+    );
+    labelledButton('appChat.askSettings').click();
+    const popup = () => document.querySelector('.session-popup');
+    await waitForCondition(() =>
+      expect(popup()?.querySelector('textarea')).toBeTruthy(),
+    );
+    typeInto(popup().querySelector('textarea'), '/btw Please clarify');
+    popup().querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(popup().textContent).toContain('Missing command reply'),
+    );
+    popup()
+      .querySelector(`button[aria-label="${t('common.close')}"]`)
+      .click();
+    await tick();
+    labelledButton('appChat.askSettings').click();
+    await waitForCondition(() =>
+      expect(popup()?.querySelector('textarea:enabled')?.value).toBe(
+        '/btw Please clarify',
+      ),
+    );
+    popup().querySelector('button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(popup().textContent).toContain('Already admitted'),
+    );
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).toMatchObject({
+      expected_generation_id: 'app-gen',
+      content: '/btw Please clarify',
+    });
+    expect(commands[1]).toEqual(commands[0]);
+    expect(
+      rpcMock.mock.calls.filter(
+        ([method]) => method === 'session.create_app_chat',
+      ),
+    ).toHaveLength(1);
   });
 
   it('returns to shared defaults from the Main menu and stays there on a second click', async () => {

@@ -100,13 +100,19 @@ def _command_outcome_response(outcome: CommandOutcome, session_id: str | None) -
                 "kind": navigation.kind,
                 "agent_id": format_agent_address(navigation.agent_id, navigation.project_id),
             }
-        elif navigation.kind == "open_side_chat":
+        elif navigation.kind in ("open_side_chat", "open_side_chat_draft"):
             data["navigation"] = {
                 "kind": navigation.kind,
                 "agent_id": navigation.agent_id,
                 "project_id": navigation.project_id,
                 "session_id": navigation.session_id,
             }
+            generation_field = (
+                "source_generation_id"
+                if navigation.kind == "open_side_chat_draft"
+                else "generation_id"
+            )
+            data["navigation"][generation_field] = navigation.generation_id
         else:
             data.setdefault("session_id", navigation.session_id)
             data.setdefault(
@@ -149,6 +155,7 @@ async def _execute_chat_command(
     reply_surface: ReplySurface,
     input_id: str,
     request_hash: str,
+    expected_generation_id: str | None = None,
 ) -> Run | JsonObject:
     dispatcher: CommandDispatcher = state.command_dispatcher
     on_change = _command_change_publisher(state)
@@ -187,6 +194,7 @@ async def _execute_chat_command(
                 reply_surface=reply_surface,
                 on_change=on_change,
                 accessor_input=CommandAccessorInput(input_id, request_hash, submit_follow_up),
+                expected_generation_id=expected_generation_id,
             ),
         )
     except Exception as exc:

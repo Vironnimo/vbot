@@ -92,6 +92,20 @@ export function createAppChat(profile, sessionId) {
   return rpc('session.create_app_chat', { profile, session_id: sessionId });
 }
 
+export function createSideChat(
+  agentId,
+  sessionId,
+  sourceGenerationId,
+  launchId,
+) {
+  return rpc('session.create_side_chat', {
+    agent_id: agentId,
+    session_id: sessionId,
+    source_generation_id: sourceGenerationId,
+    launch_id: launchId,
+  });
+}
+
 export function editChatMessage(params = {}, options = {}) {
   requirePlainObject(params, 'Chat edit must be an object', 'chat.edit');
   return rpc('chat.edit', params, options);

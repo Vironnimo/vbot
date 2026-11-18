@@ -42,7 +42,12 @@
       {monitor}
       {presentation}
       {getUIContext}
-      boundSession={{ agentAddress, sessionId, includeInherited }}
+      boundSession={{
+        agentAddress,
+        sessionId,
+        includeInherited,
+        generationId: address.generation_id,
+      }}
       onOpenFull={!hideOpenFull && events.onNavigateToSession
         ? openSession
         : null}

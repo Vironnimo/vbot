@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,104 @@ from tests.server.rpc_test_support import (
     rpc_error,
     rpc_result,
 )
+
+
+@pytest.mark.asyncio
+async def test_side_chat_launch_retries_one_fork_and_binds_it_to_its_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    parent = sessions.create("coder", session_id="s1").address
+    other = sessions.create("coder", session_id="s2")
+    other_generation = other.generation_id
+    draft = await rpc_result(
+        state, "chat.stream", agent_id="coder", session_id=parent.session_id, content="/btw"
+    )
+    generation = draft["data"]["navigation"]["source_generation_id"]
+    params = {
+        "agent_id": "coder",
+        "session_id": parent.session_id,
+        "launch_id": "launch-1",
+        "source_generation_id": generation,
+    }
+
+    async def launch():
+        return await rpc_result(state, "session.create_side_chat", **params)
+
+    first, second = await asyncio.gather(launch(), launch())
+    assert first == second
+    child = SessionAddress(first["project_id"], first["agent_id"], first["session_id"])
+    assert first["generation_id"] == sessions.get(child).generation_id
+    assert (first["generation_id"], child) == await sessions.latest_side_chat(parent)
+    assert [message.role for message in sessions.get(child).load()] == ["note"]
+    assert not sessions.get(child).run_records()
+    renamed = await rpc_result(
+        state,
+        "chat.stream",
+        agent_id=child.agent_id,
+        session_id=child.session_id,
+        content="/rename Separate topic",
+        expected_generation_id=first["generation_id"],
+    )
+    assert renamed["command_handled"] and renamed["session_id"] == child.session_id
+    assert sessions.metadata_value(child, "title") == "Separate topic"
+    assert not sessions.metadata_value(parent, "title")
+    sent = await rpc_result(
+        state,
+        "chat.send",
+        agent_id=child.agent_id,
+        session_id=child.session_id,
+        content="Question",
+        input_id="first-question",
+        expected_generation_id=first["generation_id"],
+    )
+    receipt = await sessions.lookup_accessor_input_async("first-question")
+    assert receipt is not None and receipt.generation_id == first["generation_id"]
+    assert sent["session_id"] == child.session_id
+
+    state.runtime.chat_sessions.close()
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    assert await launch() == first
+    conflict = await rpc_error(
+        state,
+        "session.create_side_chat",
+        **{**params, "session_id": "s2", "source_generation_id": other_generation},
+    )
+    assert conflict["code"] == "input_conflict"
+    await sessions.archive(child)
+    vanished = await rpc_error(state, "session.create_side_chat", **params)
+    assert vanished["code"] == "domain_error"
+    assert await sessions.latest_side_chat(parent) == (generation, None)
+    replacement_child = sessions.create(child.agent_id, session_id=child.session_id)
+    assert replacement_child.generation_id != first["generation_id"]
+    for method, content, input_id in (
+        ("chat.send", "/rename Unrelated", "new-command"),
+        ("chat.stream", "Question", "new-question"),
+        ("chat.send", "Question", "first-question"),
+    ):
+        error = await rpc_error(
+            state,
+            method,
+            agent_id=child.agent_id,
+            session_id=child.session_id,
+            content=content,
+            input_id=input_id,
+            expected_generation_id=first["generation_id"],
+        )
+        assert error["code"] == "domain_error" and "original Session" in error["message"]
+    assert sessions.get(child).load() == []
+    assert not sessions.metadata_value(child, "title")
+    assert state.runtime.agents.get(child.agent_id).current_session_id != child.session_id
+    await sessions.archive(parent)
+    replacement = sessions.create("coder", session_id=parent.session_id)
+    refused = await rpc_error(
+        state, "session.create_side_chat", **{**params, "launch_id": "unsubmitted-draft"}
+    )
+    assert refused["code"] == "domain_error"
+    assert await sessions.latest_side_chat(parent) == (replacement.generation_id, None)
 
 
 @pytest.mark.asyncio

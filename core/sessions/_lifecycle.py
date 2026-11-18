@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any
 
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
@@ -176,9 +176,9 @@ class SessionLifecycle:
         target_project_id: str | None = None,
         title: str | None = None,
         run_kind: RunKind | None = None,
-        side_chat: Literal["new", "resume"] | None = None,
         side_chat_note: str | None = None,
         side_chat_request: tuple[str, str] | None = None,
+        expected_source_generation_id: str | None = None,
     ) -> ChatSession:
         """Fork a Session under a fresh id in one write.
 
@@ -190,11 +190,10 @@ class SessionLifecycle:
         the source works, by the scope rules of :meth:`move`.
 
         A side chat belongs to the same Agent and Project, freezes the committed
-        active Run at the fork point, and starts with the supplied Note. Resume
-        returns the newest live side chat of this source or creates one.
+        active Run at the fork point, and starts with the supplied Note.
         """
         _validate_session_id(source.session_id)
-        if side_chat is not None and target_project_id is None:
+        if side_chat_note is not None and target_project_id is None:
             target_project_id = source.project_id
         agent_id = target_agent_id or source.agent_id
         _validate_agent_id(agent_id)
@@ -211,9 +210,9 @@ class SessionLifecycle:
                     SessionAddress(target_project_id, agent_id, ""),
                     title=normalized_title,
                     run_kind=None if run_kind is None else run_kind.value,
-                    side_chat=side_chat,
                     side_chat_note=side_chat_note,
                     side_chat_request=side_chat_request,
+                    expected_source_generation_id=expected_source_generation_id,
                     allow_owner_managed_source=target_agent_id is not None and not same_scope,
                 )
             )

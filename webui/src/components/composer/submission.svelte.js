@@ -38,7 +38,8 @@ export function createComposerSubmission(context) {
             : [];
           picker.fileListTruncated = Boolean(result?.truncated);
         }
-      } catch {
+      } catch (error) {
+        if (snapshot.requiresFileScope) throw error;
         files = [];
       }
     }
@@ -69,7 +70,9 @@ export function createComposerSubmission(context) {
     fileCandidates:
       picker.fileCandidates === null ? null : Array.from(picker.fileCandidates),
     listedEntries: picker.listedEntries(),
-    listFiles: context.onListFiles,
+    listFiles: context.onListFilesForSubmit ?? context.onListFiles,
+    requiresFileScope:
+      !context.onListFiles && Boolean(context.onListFilesForSubmit),
     sendMessage: context.onSendMessage,
     // The changed widget states of the Session this draft writes to, which
     // the send attaches; the controller marks them sent once accepted.
@@ -118,6 +121,8 @@ export function createComposerSubmission(context) {
           ? []
           : await collectFileMentions(snapshot);
       await finishSubmit(snapshot, fileMentions);
+    } catch (error) {
+      context.onSendError?.(String(error?.message ?? error));
     } finally {
       inFlight = false;
     }
@@ -198,7 +203,7 @@ export function createComposerSubmission(context) {
 
     // Only successful admission makes this a sent-history entry. A failed RPC
     // leaves both the draft and its recall history untouched.
-    pushHistory(snapshot.historyKey, snapshot.content);
+    pushHistory(result?.historyKey ?? snapshot.historyKey, snapshot.content);
 
     const submittedAttachmentSources = snapshot.attachments.map(
       (attachment) => attachment.source,

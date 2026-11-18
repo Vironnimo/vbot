@@ -1,164 +1,129 @@
 <script>
-  import { onMount, setContext, tick } from 'svelte';
+  import { onDestroy, setContext } from 'svelte';
   import { t } from '$lib/i18n.js';
-  import { useNavigation } from '$lib/navigation.svelte.js';
-  import Button from '../ui/Button.svelte';
+  import { listFiles } from '$lib/api.js';
+  import { qualifyAgentAddress } from '$lib/agentAddress.js';
+  import { sessionKey } from '$lib/chatState/sessionState.js';
   import Banner from '../ui/Banner.svelte';
+  import ChatComposer from '../ChatComposer.svelte';
   import SessionView from '../SessionView.svelte';
+  import SecretGiveForm from './SecretGiveForm.svelte';
+  import SessionPopupWindow from './SessionPopupWindow.svelte';
 
   let { popup, active, onClose, onOpenFull } = $props();
   setContext('chatPopupOrigin', () => popup);
-  const navigation = useNavigation();
-  let panel;
-  let created = $state.raw(null);
   let error = $state('');
-  let alive = false;
-  const address = $derived(popup.address ?? created);
+  let composer = $state(null);
+  let closed = false;
+  let sending = false;
+  let secretForm = $state(false);
+  const address = $derived(popup.address ?? popup.launch?.admitted);
   const title = $derived(popup.title || t('navigation.chat'));
-
-  async function load() {
-    error = '';
-    try {
-      const address = await popup.resolve();
-      if (alive) created = address;
-    } catch (cause) {
-      if (alive) error = cause.message || t('common.viewLoadError');
-    }
-  }
-
-  onMount(() => {
-    alive = true;
-    const opener = popup.opener;
-    panel.focus({ preventScroll: true });
-    const unregister = navigation?.registerLayer({ close: onClose });
-    if (!popup.address) void load();
-    return () => {
-      alive = false;
-      unregister?.();
-      if (
-        panel?.contains(document.activeElement) ||
-        document.activeElement === document.body
-      ) {
-        void tick().then(() => {
-          if (
-            document.activeElement === document.body &&
-            opener?.isConnected &&
-            !opener.closest('[hidden], [inert]')
-          )
-            opener.focus({ preventScroll: true });
-        });
-      }
-    };
+  const draftKey = $derived(popup.launch && `~popup:${popup.launch.id}`);
+  const listDraftFiles = $derived.by(() => {
+    const source = popup.launch?.source;
+    if (!source) return null;
+    const agent = qualifyAgentAddress(source.agent_id, source.project_id);
+    return (request = {}) =>
+      listFiles(agent, { ...request, sessionId: source.session_id });
   });
 
-  function keydown(event) {
-    if (
-      event.key === 'Escape' &&
-      !event.defaultPrevented &&
-      !event.isComposing
-    ) {
-      event.preventDefault();
-      onClose();
+  function sendSecret(command) {
+    return sendFirst(command, {
+      uiContext: $state.snapshot(popup.getUiContext?.()),
+    });
+  }
+
+  function saveRemainingDraft(input) {
+    const target = popup.launch?.address;
+    // A side fork can already exist when its first send fails. The next
+    // /btw then opens its canonical address. Keyed specialist launches keep
+    // their own draft until their first input is acknowledged.
+    if (!target || !popup.launch.source) return;
+    const agent = qualifyAgentAddress(target.agent_id, target.project_id);
+    input?.moveDraft(draftKey, sessionKey(agent, target.session_id));
+  }
+
+  async function sendFirst(content, options) {
+    error = '';
+    popup.launch.error = '';
+    sending = true;
+    const input = composer;
+    try {
+      const result = await popup.sendFirst(content, options);
+      return {
+        draftKey: result.draftKey,
+        historyKey: qualifyAgentAddress(
+          result.address.agent_id,
+          result.address.project_id,
+        ),
+      };
+    } catch (cause) {
+      popup.launch.error = cause.message || t('chat.sendError');
+      if (closed) saveRemainingDraft(input);
+      return false;
+    } finally {
+      sending = false;
     }
   }
+
+  onDestroy(() => {
+    closed = true;
+    if (!sending && !address) saveRemainingDraft(composer);
+  });
 </script>
 
-<!-- Nonmodal: the user can continue to navigate and edit the originating view. -->
-<div
-  class="session-popup"
-  role="dialog"
-  aria-label={title}
-  tabindex="-1"
-  bind:this={panel}
-  hidden={!active}
-  inert={!active}
-  onkeydown={keydown}
+<SessionPopupWindow
+  {title}
+  {active}
+  opener={popup.opener}
+  {onClose}
+  onOpenFull={address ? () => onOpenFull(address) : null}
 >
-  <header>
-    <h2>{title}</h2>
+  {#snippet children(visible)}
     {#if address}
-      <Button variant="tertiary" onClick={() => onOpenFull(address)}>
-        {t('appChat.openFull')}
-      </Button>
+      <div class="session-popup-body">
+        <SessionView
+          active={visible}
+          {address}
+          hideOpenFull
+          readOnly={popup.readOnly ?? false}
+          includeInherited={popup.includeInherited ?? true}
+          getUIContext={popup.getUiContext}
+          presentation={popup.presentation ?? 'conversation'}
+        />
+      </div>
+    {:else}
+      <div class="session-popup-draft">
+        {#if error || popup.launch.error}<Banner variant="error" role="alert"
+            >{error || popup.launch.error}</Banner
+          >{/if}
+        <ChatComposer
+          bind:this={composer}
+          {draftKey}
+          getUIContext={popup.getUiContext}
+          onListFiles={listDraftFiles}
+          onListFilesForSubmit={listDraftFiles ?? popup.listFilesOnSend}
+          onOpenSecretForm={() => (secretForm = true)}
+          onSendMessage={sendFirst}
+          onSendError={(message) => (error = message)}
+          onTranscriptionError={(message) => (error = message)}
+        />
+        {#if secretForm}
+          <SecretGiveForm
+            onSendCommand={sendSecret}
+            onClose={() => (secretForm = false)}
+          />
+        {/if}
+      </div>
     {/if}
-    <Button
-      variant="tertiary"
-      icon
-      ariaLabel={t('common.close')}
-      tooltip={t('common.close')}
-      onClick={onClose}
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg
-      >
-    </Button>
-  </header>
-  {#if address}
-    <div class="session-popup-body">
-      <SessionView
-        {active}
-        {address}
-        hideOpenFull
-        readOnly={popup.readOnly ?? false}
-        includeInherited={popup.includeInherited ?? true}
-        getUIContext={popup.getUiContext}
-        presentation={popup.presentation ?? 'conversation'}
-      />
-    </div>
-  {:else if error}
-    <Banner variant="error" role="alert"
-      >{error}
-      <Button variant="tertiary" onClick={load}>{t('common.retry')}</Button>
-    </Banner>
-  {:else}
-    <p role="status">{t('common.loading')}</p>
-  {/if}
-</div>
+  {/snippet}
+</SessionPopupWindow>
 
 <style>
-  .session-popup[hidden] {
-    display: none;
-  }
-  .session-popup {
-    position: fixed;
-    inset-inline-end: var(--space-md);
-    inset-block-end: max(var(--space-md), env(safe-area-inset-bottom));
-    width: min(32rem, calc(100% - 2 * var(--space-md)));
-    height: min(36rem, 76dvh);
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    box-shadow: var(--modal-elevation);
-    background: var(--surface);
-    overflow: hidden;
-    z-index: var(--z-overlay);
-  }
-  header {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    border-bottom: 1px solid var(--border);
-  }
-  h2 {
-    margin: 0 auto 0 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-hi);
-    font-size: var(--fs-body-md);
-  }
-  p {
-    margin: var(--space-md);
-    color: var(--text-med);
+  .session-popup-draft {
+    margin-top: auto;
+    padding: var(--space-sm);
   }
   .session-popup-body {
     display: flex;

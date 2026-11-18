@@ -32,10 +32,10 @@ The Store freezes the committed tail locally because an open Tool Call or
 Run can still change in the source. Stream drafts and subsequent source
 output stay with the source. Each Session's later input starts its own Runs.
 
-`side_chat="resume"` looks up the most recently created live side conversation
-of the same source generation and scope, creating one when none exists.
-Lookup and creation share the fork transaction. A new side question creates a fresh
-branch. Its transaction reserves the input id for the source and child generations.
+A bare `/btw` looks up the most recently created live side conversation of
+the same source generation and scope. An empty lookup leaves the Store
+unchanged. Sending a new side question creates the branch at that moment.
+Its transaction reserves the input id for the source and child generations.
 Recovery after an interruption between the fork and ordinary Accessor admission
 uses that exact child. Moving or deleting the child cannot redirect a retry to
 a replacement at its former address. Purging the source drops its fork reservations.

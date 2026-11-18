@@ -10,7 +10,7 @@ With API 37 (`ui.session-chats`), import `SessionEmbed` from `@vbot/extension-sd
 
 With API 38, pass `references` and `onReference` to `SessionEmbed` to open records mentioned in a message. For example, `{prefix: '#', fragment: '#post/', label: 'Board post', first: 0, last: 12}` makes `#3` clickable. When the user clicks it, `onReference` receives `'#post/3'`. For named records, replace `first` and `last` with `names` pairs such as `[['Ada', 'p1']]` and use a prefix such as `'@'`. Pass the rules as an array and update it when the available records change.
 
-From a user click, call `client.openAppChat()` to open the shared App Agent for the current page. The user writes the message in the host popup.
+From a user click, call `client.openAppChat()` to open the shared App Agent for the current page. For both App and specialist chats, the host creates a new Session when the user sends the first message in the popup.
 
 For a specialist, declare its role and Tools in the server Extension, for example `api.register_app_chat_profile("inventory", name="Inventory", instructions="Explain the selected inventory item.", tools=["inventory_lookup"])` if your Extension registers `inventory_lookup`. Call `client.openSpecialist("inventory")` from the user's click. As the user moves, publish visible labels with `client.setChatContext({ section: "Inventory", field: "Status", options: ["Available", "Reserved"] })`, or clear them with `client.setChatContext({})`. The host attaches the current context when the user sends; keep credentials and private form contents out of these labels.
 

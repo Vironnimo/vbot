@@ -44,6 +44,24 @@ def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
     )
 
 
+def latest_side_chat(
+    connection: sqlite3.Connection, source: SessionAddress
+) -> tuple[str, SessionAddress | None]:
+    """Return the latest child and its generation, or the source generation for a draft."""
+    state = _store_values._require_live(connection, source)
+    _store_values._reject_owner_managed_mutation(connection, state)
+    child = connection.execute(
+        "SELECT project_id, agent_id, session_id, generation_id FROM sessions WHERE fork_parent_key = ? "
+        "AND state = 'live' AND project_id = ? AND agent_id = ? "
+        "AND json_type(metadata_json, '$.side_chat') = 'true' "
+        "ORDER BY session_key DESC LIMIT 1",
+        (state["session_key"], source.project_id or "", source.agent_id),
+    ).fetchone()
+    if child is None:
+        return str(state["generation_id"]), None
+    return str(child["generation_id"]), _store_values._address(child)
+
+
 def working_project(
     connection: sqlite3.Connection, address: SessionAddress
 ) -> SessionWorkingProject:

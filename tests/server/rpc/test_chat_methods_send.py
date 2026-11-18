@@ -224,6 +224,16 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
         ("chat.stream", {"session_id": "s1", "reply_surface": "channel"}, "reply_surface"),
         ("chat.stream", {"session_id": "s1", "reply_surface": None}, "reply_surface"),
         ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
+        (
+            "chat.send",
+            {"session_id": "s1", "expected_generation_id": None},
+            "expected_generation_id",
+        ),
+        (
+            "chat.stream",
+            {"new_session": {}, "expected_generation_id": "gen1"},
+            "expected_generation_id",
+        ),
         ("chat.send", {"session_id": "s1", "content": 123}, None),
         *[
             ("chat.stream", {"session_id": "s1", "ui_context": value}, "params.ui_context")

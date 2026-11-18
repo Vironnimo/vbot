@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from time import monotonic
 from typing import Any
 
@@ -14,9 +15,11 @@ from core.chat.widget_states import widget_state_note
 from core.projects import format_agent_address
 from core.runs import Run, RunKind
 from core.sessions import (
+    SESSION_ID_PATTERN,
     SessionAddress,
     new_session_id,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.tools import builtin_payload_owner
 from core.tools.command_manager import (
     COMMAND_RECENT_LINES,
@@ -119,6 +122,22 @@ async def _submit_chat(
     file_mentions = _optional_file_mentions(params)
     widget_states = _optional_widget_states(params)
     ui_context = _optional_ui_context(params)
+    expected_generation = (
+        _required_string(params, "expected_generation_id")
+        if "expected_generation_id" in params
+        else None
+    )
+    if (
+        expected_generation is not None
+        and SESSION_ID_PATTERN.fullmatch(expected_generation) is None
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.expected_generation_id must be a generation id"
+        )
+    if expected_generation is not None and isinstance(target, _NewSessionTarget):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.expected_generation_id requires an existing Session"
+        )
 
     chat_loop: ChatLoop = state.chat_loop
     dispatcher: CommandDispatcher = state.command_dispatcher
@@ -156,6 +175,16 @@ async def _submit_chat(
     if prepared_command is None:
         try:
             previous = await chat_loop.lookup_accessor_input(input_id, request_hash=request_hash)
+            if (
+                previous is not None
+                and expected_generation is not None
+                and (
+                    not previous.record.live
+                    or previous.record.address != target
+                    or previous.record.generation_id != expected_generation
+                )
+            ):
+                raise SessionNotFoundError("The original Session is no longer at this address.")
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         if previous is not None:
@@ -191,34 +220,48 @@ async def _submit_chat(
             reply_surface=reply_surface,
             input_id=input_id,
             request_hash=request_hash,
+            expected_generation_id=expected_generation,
         )
 
-    run_options: JsonObject = {}
-    if ui_context is not None:
-        run_options["ui_context"] = ui_context
-    if input_origin is not None:
-        run_options["input_origin"] = input_origin
-    if widget_states and (note := await _widget_state_note(state, address, widget_states)):
-        run_options["context_note"] = note
-    file_reads: list[FileRead] = []
-    content = await _expand_content_file_mentions(
-        state, address, content, file_mentions, file_reads=file_reads
-    )
-
-    if project_id is None and ui_context is None:
-        await _mark_current_session(state, address)
     try:
-        submission = await chat_loop.submit_accessor_input(
-            agent_id,
-            content,
-            input_id=input_id,
-            request_hash=request_hash,
-            file_reads=file_reads,
-            session_id=address.session_id,
-            reply_surface=reply_surface,
-            project_id=project_id,
-            **run_options,
+        # Guard even the pre-admission reads (widget state, file mentions, current mark).
+        preparation = (
+            state.chat_runs.prepare_admission(
+                agent_id, project_id=project_id, session_id=address.session_id
+            )
+            if expected_generation is not None
+            else nullcontext()
         )
+        async with preparation:
+            run_options: JsonObject = {}
+            if expected_generation is not None:
+                session = await state.runtime.chat_sessions.get_async(address)
+                if session.generation_id != expected_generation:
+                    raise SessionNotFoundError("The original Session is no longer at this address.")
+                run_options["expected_generation_id"] = expected_generation
+            if ui_context is not None:
+                run_options["ui_context"] = ui_context
+            if input_origin is not None:
+                run_options["input_origin"] = input_origin
+            if widget_states and (note := await _widget_state_note(state, address, widget_states)):
+                run_options["context_note"] = note
+            file_reads: list[FileRead] = []
+            content = await _expand_content_file_mentions(
+                state, address, content, file_mentions, file_reads=file_reads
+            )
+            if project_id is None and ui_context is None:
+                await _mark_current_session(state, address)
+            submission = await chat_loop.submit_accessor_input(
+                agent_id,
+                content,
+                input_id=input_id,
+                request_hash=request_hash,
+                file_reads=file_reads,
+                session_id=address.session_id,
+                reply_surface=reply_surface,
+                project_id=project_id,
+                **run_options,
+            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return submission

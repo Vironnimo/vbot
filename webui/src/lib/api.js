@@ -233,6 +233,7 @@ export {
   inspectSubAgentWork,
   startChatRun,
   createAppChat,
+  createSideChat,
   editChatMessage,
   listSessions,
   listSessionProjectGroups,

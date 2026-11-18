@@ -270,12 +270,25 @@ async def test_side_chat_action_names_its_own_address_and_keeps_the_source_curre
     adapter = StubAdapter(block=True)
     state = make_state(tmp_path, adapter)
     source = state.runtime.chat_sessions.create("coder", session_id="main", project_id=project_id)
+    agent = "coder@vbot" if project_id else "coder"
     if project_id is None:
         state.runtime.agents.update("coder", current_session_id=source.id)
+    draft = await call(state, "chat.stream", agent_id=agent, session_id=source.id, content="/btw")
+    assert draft["result"]["data"]["navigation"] == {
+        "kind": "open_side_chat_draft",
+        "source_generation_id": source.generation_id,
+        "agent_id": "coder",
+        "project_id": project_id,
+        "session_id": source.id,
+    }
+    assert state.runtime.chat_sessions.list_addresses(project_id) == [source.address]
+    assert not resource_changes(state)
+    if project_id:
+        await state.runtime.chat_sessions.fork(source.address, side_chat_note="Side context")
     response = await call(
         state,
         "chat.stream",
-        agent_id="coder@vbot" if project_id else "coder",
+        agent_id=agent,
         session_id=source.id,
         content="/btw" if project_id else "/btw Side question?",
     )
@@ -284,15 +297,22 @@ async def test_side_chat_action_names_its_own_address_and_keeps_the_source_curre
         navigation = result["data"]["navigation"]
         assert result["command_handled"] and result["output"] == "action"
         assert result["session_id"] == source.id
+        side = SessionAddress(project_id, "coder", navigation["session_id"])
         assert navigation == {
             "kind": "open_side_chat",
             "agent_id": "coder",
             "project_id": project_id,
-            "session_id": navigation["session_id"],
+            "session_id": side.session_id,
+            "generation_id": state.runtime.chat_sessions.get(side).generation_id,
         }
-        side = SessionAddress(project_id, "coder", navigation["session_id"])
         assert side.session_id != source.id
         assert state.runtime.chat_sessions.metadata_value(side, "side_chat") is True
+        changes = resource_changes(state, "sessions")
+        reopened = await call(
+            state, "chat.stream", agent_id=agent, session_id=source.id, content="/btw"
+        )
+        assert reopened["result"]["data"]["navigation"] == navigation
+        assert resource_changes(state, "sessions") == changes
         if project_id is None:
             await adapter.request_started.wait()
             assert state.runtime.agents.get("coder").current_session_id == source.id

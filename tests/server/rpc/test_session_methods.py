@@ -73,6 +73,16 @@ def _assert_store_untouched(sessions: FakeSessions) -> None:
         ),
         ("session.get", {"agent_id": "builder", "session_id": "s1", "limit": 1}, "limit"),
         ("session.fork", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
+        (
+            "session.create_side_chat",
+            {"agent_id": "builder", "session_id": "s1", "launch_id": "?"},
+            "launch_id",
+        ),
+        (
+            "session.create_side_chat",
+            {"agent_id": "builder", "session_id": "s1", "launch_id": "first"},
+            "source_generation_id",
+        ),
         ("session.delete", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
         # An invalid permanent flag archives nothing either.
         (
@@ -260,12 +270,22 @@ async def test_app_chat_launch_requires_its_builtin_and_retries_its_own_session(
             rpc_result(state, "session.create_app_chat", **params),
             rpc_result(state, "session.create_app_chat", **params),
         )
-        assert first == second == {"agent_id": "app-assistant", "session_id": "popup-one"}
+        address = SessionAddress(None, "app-assistant", "popup-one")
+        assert (
+            first
+            == second
+            == {
+                "agent_id": "app-assistant",
+                "session_id": "popup-one",
+                "generation_id": runtime.sessions.get(address).generation_id,
+            }
+        )
         assert len(resource_changes(state)) == 1
         assert runtime.agents.get("app-assistant").current_session_id == ""
-        assert runtime.sessions.metadata_value(
-            SessionAddress(None, "app-assistant", "popup-one"), "agent_overrides"
-        ) == {"model": "openai/gpt-5.2", "thinking_effort_default": True}
+        assert runtime.sessions.metadata_value(address, "agent_overrides") == {
+            "model": "openai/gpt-5.2",
+            "thinking_effort_default": True,
+        }
         runtime.sessions.create("app-assistant", session_id="other-session")
         refused = await rpc_error(
             state, "session.create_app_chat", profile="app", session_id="other-session"

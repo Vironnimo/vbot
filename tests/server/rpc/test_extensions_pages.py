@@ -96,6 +96,7 @@ def register(api):
             owner_name="fixture", group_id="app-chat:window-1", participant_id="operator"
         )
         assert binding.address.session_id == address["session_id"]
+        assert address["generation_id"] == binding.generation_id
         assert binding.config["instructions"] == "fixture-role"
         assert binding.config["model"] == "fixture/onboarded"
         resolver = AgentResolver(

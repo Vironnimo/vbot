@@ -576,13 +576,17 @@
     if (!sessionState) {
       return null;
     }
+    const expectedGenerationId = boundSession?.generationId;
     return async (content, options = {}) => {
       if (
         sessionSettings.hasPending(sessionState.key) &&
         !(await sessionSettings.flush(sessionState.key))
       )
         return false;
-      return await actions.sendStream(agent, sessionState, content, options);
+      return await actions.sendStream(agent, sessionState, content, {
+        ...options,
+        expectedGenerationId,
+      });
     };
   });
   // The Secret form a bare `/secret` opened, for the Agent and Session (or

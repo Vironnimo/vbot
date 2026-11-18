@@ -21,6 +21,8 @@ from core.chat.commands import (
     _extract_text,
     _notice,
     _require_dependency,
+    _verify_command_session,
+    create_side_chat,
     parse_agent_argument,
     parse_handoff_argument,
 )
@@ -62,12 +64,6 @@ HANDOFF_INSTRUCTION_NOTE = (
     "Follow it while writing, without dropping anything else that genuinely matters."
 )
 
-SIDE_CHAT_NOTE = (
-    "This side conversation is a copy of another Session. The earlier task belongs to that "
-    "Session. Answer the user's questions here, looking up information as needed. Start work "
-    "on a task here only when the user asks you to take it on in this conversation."
-)
-
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
 
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
@@ -105,33 +101,38 @@ async def _execute_btw(
 ) -> CommandOutcome:
     sessions = _require_dependency(sessions, "ChatSessionManager")
     source = SessionAddress(context.project_id, context.agent_id, context.session_id)
-    accessor = context.accessor_input if argument else None
-    if argument and accessor is None:
+    if not argument:
+        generation, latest = await sessions.latest_side_chat(source)
+        destination = latest or source
+        return CommandOutcome(
+            command="btw",
+            navigation=CommandNavigation(
+                kind="open_side_chat" if latest is not None else "open_side_chat_draft",
+                agent_id=destination.agent_id,
+                project_id=destination.project_id,
+                session_id=destination.session_id,
+                generation_id=generation,
+            ),
+        )
+    accessor = context.accessor_input
+    if accessor is None:
         raise ChatSessionError("A WebUI side question requires an Accessor input.")
-    child = await sessions.fork(
-        source,
-        target_project_id=source.project_id,
-        title="",
-        side_chat="new" if argument else "resume",
-        side_chat_note=SIDE_CHAT_NOTE,
-        side_chat_request=(accessor.input_id, accessor.request_hash) if accessor else None,
+    child = await create_side_chat(
+        sessions, source, request_id=accessor.input_id, request_hash=accessor.request_hash
     )
     change = _session_change(source.project_id, source.agent_id, child.id)
     context.report_change(change)
     runs: tuple[CommandRun, ...] = ()
     feedback = None
-    if argument and accessor is not None:
-        try:
-            run = await accessor.submit(child.address, argument, child.generation_id)
-        except AccessorInputConflictError, SessionNotFoundError:
-            raise
-        except VBotError as exc:
-            feedback = CommandFeedback(
-                kind="notice", text=f"Could not send the side question. {exc}"
-            )
-        else:
-            if run is not None:
-                runs = (CommandRun(role="follow_up", run=run),)
+    try:
+        run = await accessor.submit(child.address, argument, child.generation_id)
+    except AccessorInputConflictError, SessionNotFoundError:
+        raise
+    except VBotError as exc:
+        feedback = CommandFeedback(kind="notice", text=f"Could not send the side question. {exc}")
+    else:
+        if run is not None:
+            runs = (CommandRun(role="follow_up", run=run),)
     return CommandOutcome(
         command="btw",
         feedback=feedback,
@@ -141,6 +142,7 @@ async def _execute_btw(
             agent_id=source.agent_id,
             project_id=source.project_id,
             session_id=child.id,
+            generation_id=child.generation_id,
         ),
         runs=runs,
         resource_changes=(change,),
@@ -487,6 +489,7 @@ async def _execute_agent(
                 references.lock,
                 chat_runs.session_admission_guard(source_address, target_address),
             ):
+                await _verify_command_session(context, sessions)
                 metadata = await _command_session_io(
                     sessions,
                     "get_metadata_async",

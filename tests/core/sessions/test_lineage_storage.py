@@ -21,6 +21,7 @@ from core.sessions import (
     SessionAddress,
     ToolResultFacts,
 )
+from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import admit_run, complete_run, history_revision
 
 
@@ -85,7 +86,7 @@ def _rows(connection: sqlite3.Connection, sql: str, *params: object) -> list[tup
 
 
 @pytest.mark.asyncio
-async def test_side_chat_freezes_live_history_and_resumes_the_latest_live_fork(manager):
+async def test_side_chat_freezes_live_history_and_finds_the_latest_live_fork(manager):
     source = manager.create("coder", project_id="work")
     earlier = ChatMessage.user("Settled question")
     source.append(earlier)
@@ -98,11 +99,18 @@ async def test_side_chat_freezes_live_history_and_resumes_the_latest_live_fork(m
     )
     active.append(assistant)
 
-    async def resume():
-        return await manager.fork(source.address, side_chat="resume", side_chat_note="Context")
-
-    side, concurrent = await asyncio.gather(resume(), resume())
-    assert side.address == concurrent.address
+    generation = source.generation_id
+    assert await manager.latest_side_chat(source.address) == (generation, None)
+    with pytest.raises(SessionNotFoundError):
+        await manager.latest_side_chat(SessionAddress(None, "coder", source.id))
+    owned = SessionAddress(None, "workflow", "participant")
+    manager.create_bound_temporary_session(
+        owned, owner_name="workflow", group_id="group", participant_id="one", config={}
+    )
+    with pytest.raises(ChatSessionError):
+        await manager.latest_side_chat(owned)
+    side = await manager.fork(source.address, side_chat_note="Context")
+    assert await manager.latest_side_chat(source.address) == (side.generation_id, side.address)
     (note,) = side.load()
     assert note.role == "note" and note.content == "Context"
     assert manager.get_metadata(side.address)["side_chat"] is True
@@ -138,11 +146,11 @@ async def test_side_chat_freezes_live_history_and_resumes_the_latest_live_fork(m
     assert page.context_messages == side.read_chat_history_snapshot(limit=1).context_messages
     assert side.read_chat_history_snapshot(limit=50).page.record_sequences == tuple(range(5))
 
-    later = await manager.fork(source.address, side_chat="new", side_chat_note="Next context")
-    assert (await resume()).address == later.address
+    later = await manager.fork(source.address, side_chat_note="Next context")
+    assert await manager.latest_side_chat(source.address) == (later.generation_id, later.address)
     await manager.archive(later.address)
-    assert (await resume()).address == side.address
-    nested = await manager.fork(side.address, side_chat="new", side_chat_note="Nested context")
+    assert await manager.latest_side_chat(source.address) == (side.generation_id, side.address)
+    nested = await manager.fork(side.address, side_chat_note="Nested context")
     assert manager.get_metadata(nested.address)["side_chat"] is True
     assert [m.content for m in nested.load()] == ["Nested context"]
     assert "side_chat" not in manager.get_metadata(
@@ -151,9 +159,7 @@ async def test_side_chat_freezes_live_history_and_resumes_the_latest_live_fork(m
     side.apply_edit(earlier.id, [ChatMessage.user("Edit in the full fork")])
     assert source.load_active()[0].id == earlier.id
     with pytest.raises(ChatSessionError, match="same|source Agent"):
-        await manager.fork(
-            source.address, target_agent_id="other", side_chat="new", side_chat_note="n"
-        )
+        await manager.fork(source.address, target_agent_id="other", side_chat_note="n")
 
 
 @pytest.mark.asyncio
@@ -175,9 +181,7 @@ async def test_side_chat_keeps_session_settings_and_uses_its_first_own_input_for
         },
     )
     source.append(ChatMessage.user("Parent input"))
-    side = await manager.fork(
-        source.address, side_chat="new", side_chat_note="Branch context", title=""
-    )
+    side = await manager.fork(source.address, side_chat_note="Branch context", title="")
     meta = manager.get_metadata(side.address)
     assert meta["fast_mode"] and meta["working_project_id"] == "project"
     assert meta["agent_overrides"] == {

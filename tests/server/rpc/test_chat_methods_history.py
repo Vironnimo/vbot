@@ -718,7 +718,7 @@ async def test_side_chat_pages_its_own_messages_and_defaults_to_the_full_convers
 ) -> None:
     parent = history.session()
     parent.append(_user(1))
-    side = await history.sessions.fork(parent.address, side_chat="new", side_chat_note="Side chat")
+    side = await history.sessions.fork(parent.address, side_chat_note="Side chat")
     side.append_many([_user(2), _user(3)])
     full = await history.read(method=method, session_id=side.id)
     assert [row["id"] for row in full["messages"]] == ["message-001", "message-002", "message-003"]

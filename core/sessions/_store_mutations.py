@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
 from core.sessions import (
@@ -454,12 +454,12 @@ def fork(
     *,
     title: str | None = None,
     run_kind: str | None = None,
-    side_chat: Literal["new", "resume"] | None = None,
     side_chat_note: str | None = None,
     side_chat_request: tuple[str, str] | None = None,
+    expected_source_generation_id: str | None = None,
     allow_owner_managed_source: bool = False,
 ) -> tuple[SessionAddress, bool, str]:
-    """Create or resume a fork of *source*; report whether it was created.
+    """Fork *source*, recovering the original fork on a retried side-chat request.
 
     The fork inherits the source's current view up to the fork point through
     lineage. A side chat also freezes the committed entries of an active Run
@@ -468,22 +468,24 @@ def fork(
     *title* replaces the source's title, and an empty one clears it. Prompt
     state and the working Project carry over by the scope rules of a move.
     """
-    if side_chat not in (None, "new", "resume"):
-        raise ChatSessionError("side_chat must be new or resume")
-    if side_chat is None and side_chat_note is not None:
-        raise ChatSessionError("side_chat_note requires a side chat")
-    if side_chat is not None and (
-        not isinstance(side_chat_note, str) or not side_chat_note.strip()
-    ):
+    side_chat = side_chat_note is not None
+    if side_chat and (not isinstance(side_chat_note, str) or not side_chat_note.strip()):
         raise ChatSessionError("a side chat requires an initial note")
+    if side_chat and not _same_scope(source, target_scope):
+        raise ChatSessionError("A side chat belongs to its source Agent and Project.")
     if run_kind is not None and run_kind not in _RUN_KIND_VALUES:
         raise ChatSessionError(f"unknown run kind: {run_kind}")
     state = _store_values._live_metadata_row(connection, source)
+    if (
+        expected_source_generation_id is not None
+        and state["generation_id"] != expected_source_generation_id
+    ):
+        raise SessionNotFoundError("The original source Session is no longer at this address.")
     if not allow_owner_managed_source:
         _store_values._reject_owner_managed_mutation(connection, state)
     source_key = int(state["session_key"])
     if side_chat_request is not None:
-        if side_chat != "new" or not _same_scope(source, target_scope):
+        if not side_chat:
             raise ChatSessionError("An Accessor question must fork in its source scope.")
         input_id, request_hash = side_chat_request
         prior = connection.execute(
@@ -515,19 +517,6 @@ def fork(
             raise SessionNotFoundError(
                 "The source of the original side conversation is no longer available."
             )
-    if side_chat:
-        if not _same_scope(source, target_scope):
-            raise ChatSessionError("A side chat belongs to its source Agent and Project.")
-        if side_chat == "resume":
-            previous = connection.execute(
-                "SELECT project_id, agent_id, session_id, generation_id FROM sessions WHERE fork_parent_key = ? "
-                "AND state = 'live' AND project_id = ? AND agent_id = ? "
-                "AND json_type(metadata_json, '$.side_chat') = 'true' "
-                "ORDER BY session_key DESC LIMIT 1",
-                (source_key, source.project_id or "", source.agent_id),
-            ).fetchone()
-            if previous is not None:
-                return _store_values._address(previous), False, str(previous["generation_id"])
     target = _store_values._allocate_address(connection, target_scope)
     settled = fork_point(connection, state)
     point = int(state["next_seq"]) if side_chat else settled

@@ -21,7 +21,12 @@ CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
 CommandNavigationKind = Literal[
-    "continue_in_session", "offer_session", "open_extension_page", "open_side_chat", "new_session"
+    "continue_in_session",
+    "offer_session",
+    "open_extension_page",
+    "open_side_chat",
+    "open_side_chat_draft",
+    "new_session",
 ]
 # How a command sent for a new Session (one the conversation has not created yet)
 # runs: ``session_less`` runs without a Session; ``create_session`` creates the
@@ -112,6 +117,7 @@ class CommandNavigation:
     extension: str | None = None
     page: str | None = None
     route: str = ""
+    generation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +162,7 @@ class CommandExecutionContext:
     # The command as the user wrote it; ``execute`` supplies it from the prepared command.
     command_text: str = ""
     accessor_input: CommandAccessorInput | None = None
+    expected_generation_id: str | None = None
 
     def report_change(self, change: CommandResourceChange) -> None:
         if self.on_change is not None:
