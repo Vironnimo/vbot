@@ -118,6 +118,29 @@ export function cancelExtensionPageToolCall(
   });
 }
 
+export function resolveExtensionPageSession(
+  name,
+  page,
+  groupId,
+  participantId,
+) {
+  return rpc('extensions.page_session', {
+    name,
+    page,
+    group_id: groupId,
+    participant_id: participantId,
+  });
+}
+
+export function openExtensionPageSpecialist(name, page, profile, requestId) {
+  return rpc('extensions.page_open_specialist', {
+    name,
+    page,
+    profile,
+    request_id: requestId,
+  });
+}
+
 export function readExtensionPageHistory(
   name,
   page,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from core.prompts._types import (
     BLOCK_OWNER_SKILL,
     BLOCK_OWNER_SKILL_MANAGE,
     BLOCK_OWNER_SUBAGENT_SESSION,
+    BUILTIN_SCOPE_KEY,
     CHANNEL_LIST_PRODUCER,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
@@ -48,6 +50,7 @@ from core.prompts.blocks import (
     BlockRenderContext,
     BlockStore,
     LayoutEntry,
+    MappingOverrideResolver,
     PromptError,
     dedupe_definitions,
     load_layout_entries,
@@ -379,14 +382,18 @@ class PromptBlockCatalog:
                 # Every scope reads the bundled text: the Model needs it to trust
                 # vBot's reminders, and custom-prompt Agent copies predate it.
                 # A scope still edits or disables it like any other block.
-                default_text=self._storage.read_prompt_fragment("system_reminders.md"),
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent_id, "system_reminders.md", shared=True
+                ),
             ),
             BlockDefinition(
                 id=CORE_SUBAGENT_ROLE_BLOCK_ID,
                 owner=BLOCK_OWNER_SUBAGENT_SESSION,
                 # Every scope reads the bundled text, like the System reminders
                 # block: custom-prompt Agent copies predate it.
-                default_text=self._storage.read_prompt_fragment("subagent_role.md"),
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent_id, "subagent_role.md", shared=True
+                ),
             ),
             BlockDefinition(
                 id=CORE_TOOLS_LIST_BLOCK_ID,
@@ -638,6 +645,8 @@ class PromptBlockCatalog:
         Either way, a definition absent from the layout still defaults in at its
         rank (the assembly engine handles that), and an inert entry is skipped.
         """
+        if scope_key == BUILTIN_SCOPE_KEY:
+            return self._default_layout
         saved = self._block_store.read_layout(scope_key)
         return saved if saved else self._default_layout
 
@@ -650,6 +659,9 @@ class PromptBlockCatalog:
         agent layer. With the empty store no override exists, so every block uses
         its owner default text (its scope-aware fragment / data content).
         """
+
+        if prompt_scope.type == BUILTIN_SCOPE_KEY:
+            return MappingOverrideResolver()
 
         def resolve(definition: BlockDefinition, _scope: str) -> str | None:
             override, _inheritance = self._resolve_override(definition, prompt_scope)
@@ -667,17 +679,27 @@ class PromptBlockCatalog:
         """
         if prompt_scope.type == "agent" and prompt_scope.agent_id:
             return f"{AGENT_SCOPE_KEY_PREFIX}{prompt_scope.agent_id}"
-        return DEFAULT_SCOPE_KEY
+        return BUILTIN_SCOPE_KEY if prompt_scope.type == BUILTIN_SCOPE_KEY else DEFAULT_SCOPE_KEY
 
     def _read_prompt_fragment(
         self,
         scope: PromptScope,
         agent_id: str,
         fragment_name: str,
+        *,
+        shared: bool = False,
     ) -> str:
-        if scope.type == "agent":
+        if scope.type == BUILTIN_SCOPE_KEY:
+            return _bundled_fragment(fragment_name)
+        if scope.type == "agent" and not shared:
             return self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
         return self._storage.read_prompt_fragment(fragment_name)
+
+
+@cache
+def _bundled_fragment(name: str) -> str:
+    """A packaged fragment from the fixed core catalog, immutable for this process."""
+    return (_RESOURCES_PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
 def _normalize_prompt_scope(scope: Any = None) -> PromptScope:

@@ -290,6 +290,7 @@ function createBridge(initialProfile = profile, detail = swarm) {
       },
       // Back or Forward in the app, which close the page's topmost dialog.
       back: () => layers.at(-1)?.close(),
+      mountSession: vi.fn(() => vi.fn()),
       readHistory: vi.fn(() =>
         Promise.resolve({
           status: 'completed',

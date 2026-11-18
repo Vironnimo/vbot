@@ -16,7 +16,6 @@
   let { model, onNavigate } = $props();
   const native = createNativeFactoryModel(untrack(() => model));
   let actions = $state(null),
-    historyError = $state(''),
     editor = $state(null),
     memberEdit = $state(''),
     chatMember = $state(''),
@@ -192,8 +191,7 @@
   {#if native.cursors.factory}<Button onClick={() => native.more('factory')}
       >{t('factory.native.more')}</Button
     >{/if}
-  {#if historyError}<Banner variant="error" role="alert">{historyError}</Banner
-    >{/if}
+
   {#if native.error}<Banner variant="error" role="alert"
       >{native.error}<Button variant="tertiary" onClick={native.refresh}
         >{t('common.retry')}</Button
@@ -594,13 +592,6 @@
       onClick={() => native.more('post')}>{t('factory.native.more')}</Button
     >{/if}
 </div>
-{#if inspected}<CardSession
-    client={model.client}
-    groupId={inspected.group_id}
-    participant={inspected}
-    onError={(value) => (historyError = value)}
-    onClose={() => (inspected = null)}
-  />{/if}
 <NativeActions
   bind:this={actions}
   {model}
@@ -608,16 +599,25 @@
   {currentProject}
   {onNavigate}
 />
-{#snippet historyLink(session)}<div class="native-actions">
+{#snippet historyLink(session)}
+  <div class="native-actions">
     <span>{sessionName(session)}</span><Button
-      onClick={() => model.openSession(session.session)}
-      >{t('factory.native.openSession')}</Button
-    >{#if session.group_id && session.participant_id}<Button
-        variant="tertiary"
-        onClick={() => (inspected = session)}
-        >{t('factory.native.readHistory')}</Button
-      >{/if}
-  </div>{/snippet}
+      aria-expanded={inspected === session.group_id}
+      onClick={() =>
+        (inspected = inspected === session.group_id ? null : session.group_id)}
+    >
+      {t('factory.native.openSession')}
+    </Button>
+  </div>
+  {#if inspected === session.group_id}
+    <CardSession
+      client={model.client}
+      groupId={session.group_id}
+      participant={{ ...session, display_name: sessionName(session) }}
+      onClose={() => (inspected = null)}
+    />
+  {/if}
+{/snippet}
 
 <style>
   .native-factory {

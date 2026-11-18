@@ -18,7 +18,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildModelSelectOptions,
     createModelCatalogLoader,
@@ -68,16 +68,15 @@
     modelsRefreshToken = 0,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let agentDefaults = $state(
     untrack(() => normalizeAgentDefaultsFormValues(settings)),
   );
   let saving = $state(false);
-  const agentDefaultsDraft = createSettingsDraft({
+  const agentDefaultsDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: normalizeAgentDefaultsFormValues,
     read: () => agentDefaults,
     write: (next) => (agentDefaults = next),

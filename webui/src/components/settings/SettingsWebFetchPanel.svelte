@@ -16,7 +16,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t, tOr } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildWebFetchSettingsPayload,
     getWebFetchSettings,
@@ -33,10 +33,11 @@
   } = $props();
   let draft = $state(untrack(() => getWebFetchSettings(settings)));
   let saving = $state(false);
-  const webFetchDraft = createSettingsDraft({
+  const webFetchDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: getWebFetchSettings,
     read: () => draft,
     write: (next) => (draft = next),

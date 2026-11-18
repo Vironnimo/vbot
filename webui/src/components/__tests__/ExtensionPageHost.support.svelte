@@ -2,6 +2,7 @@
   import ExtensionPage from '../ExtensionPage.svelte';
   import { provideAutosaveContext } from '../../lib/autosave.js';
   import { provideNavigation } from '../../lib/navigation.svelte.js';
+  import { provideAppChats } from '../../lib/appChats.svelte.js';
 
   let {
     initialDescriptor,
@@ -15,6 +16,7 @@
     onUiCommand = null,
     embedded = false,
     autosaveContext = null,
+    appChats = null,
   } = $props();
   let descriptor = $state(initialDescriptor);
   let theme = $state(initialContext.theme ?? {});
@@ -27,6 +29,7 @@
   const invalidationListeners = [];
   if (autosaveContext) provideAutosaveContext(autosaveContext);
   if (shell) provideNavigation(shell);
+  if (appChats) provideAppChats(appChats);
 
   function subscribeInvalidations(listener) {
     invalidationListeners.push(listener);

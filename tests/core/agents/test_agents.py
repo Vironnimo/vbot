@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.agents import (
+    APP_CHAT_PROFILES,
     LIBRARIAN_AGENT_ID,
     LIVE_BACKEND_AGENT_ID,
     LIVE_VOICE_AGENT_ID,
@@ -272,6 +273,7 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
         "librarian",
         LIVE_VOICE_AGENT_ID,
         LIVE_BACKEND_AGENT_ID,
+        APP_CHAT_PROFILES["app"].agent_id,
     ]
     assert json.loads((store.data_dir / "agents" / "order.json").read_text())["agent_ids"] == [
         "main"
@@ -296,7 +298,8 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
         live_call=True,
     )
     # Later starts find them; offline edits never widen what they can do.
-    for agent_id in ("librarian", LIVE_VOICE_AGENT_ID):
+    profile = APP_CHAT_PROFILES["app"]
+    for agent_id in ("librarian", LIVE_VOICE_AGENT_ID, profile.agent_id):
         rewrite(
             store,
             agent_id,
@@ -317,7 +320,17 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
     assert voice_again.tool_access == ToolAccess(
         mode="all", granted=LIVE_TOOL_NAMES, fixed=True, live_call=True
     )
-    for agent in (again, voice_again):
+    app_agent = store.builtin_agent(profile.builtin)
+    assert app_agent is not None and app_agent.id == "app-assistant"
+    assert app_agent.tool_access == ToolAccess(
+        mode="selected", allowed=("skill", "vbot"), fixed=True, exact=True
+    )
+    assert app_agent.allowed_skills == ["vbot-docs"]
+    assert app_agent.instructions == profile.role
+    assert app_agent.bundled_prompt
+    with pytest.raises(BuiltinAgentError):
+        store.update(app_agent.id, tool_access={"mode": "all"})
+    for agent in (again, voice_again, app_agent):
         assert (
             agent.memory_prompt_mode,
             agent.project_memory_enabled,
@@ -355,6 +368,7 @@ def test_an_agent_holding_the_librarian_id_stays_and_the_librarian_is_unavailabl
         *(["librarian"] if problem == "agent_id_taken" else []),
         LIVE_VOICE_AGENT_ID,
         LIVE_BACKEND_AGENT_ID,
+        APP_CHAT_PROFILES["app"].agent_id,
     ]
 
 

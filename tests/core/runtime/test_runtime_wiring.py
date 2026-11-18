@@ -6,6 +6,7 @@ import asyncio
 import os
 import threading
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -30,6 +31,7 @@ from core.sessions import (
     SessionAddress,
     SubagentLinkSnapshot,
 )
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
@@ -45,6 +47,7 @@ from core.tools.terminal_manager import TerminalInfo, TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.tools.update_handoff import UpdateHandoffs
 from core.utils.version import detect_vbot_version
+from tests.core.runtime.runtime_test_support import write_skill
 
 CANONICAL_BUILTIN_TOOLS = [
     "analyze_image",
@@ -90,7 +93,7 @@ COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
 FACTORY_TOOLS = ["factory_card"]
 
 # Built-in Tools that only a Session grant or a Live call offers; they stay out of the catalog.
-SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "update_goal", "vbot_request"]
+SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "update_goal", "vbot", "vbot_request"]
 CANONICAL_REGISTERED_TOOLS = sorted(
     CANONICAL_BUILTIN_TOOLS
     + list(LIVE_TOOL_NAMES)
@@ -182,6 +185,15 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(
     assert sorted(definitions) == sorted(
         [name for name in CANONICAL_BUILTIN_TOOLS if name != "classify"] + FACTORY_TOOLS
     )
+    specialist = shared_runtime.agents.get("app-assistant")
+    assert [
+        tool["name"] for tool in shared_runtime.system_prompts.provider_tool_definitions(specialist)
+    ] == ["skill", "vbot"]
+    same_id_without_builtin = replace(specialist, builtin=None)
+    assert [
+        tool["name"]
+        for tool in shared_runtime.system_prompts.provider_tool_definitions(same_id_without_builtin)
+    ] == ["skill"]
     for tool_name, definition in definitions.items():
         tool = shared_runtime.tools.get(tool_name)
         assert definition == {
@@ -555,6 +567,17 @@ def test_start_creates_the_hidden_librarian_that_can_only_maintain_skills(
 def test_start_loads_the_bundled_skills_without_diagnostics(shared_runtime: Runtime) -> None:
     assert [skill.name for skill in shared_runtime.skills.list_all()] == BUNDLED_SKILLS
     assert shared_runtime.skills.invalid_diagnostics() == []
+
+
+def test_app_agent_uses_bundled_documentation_when_a_home_skill_has_the_same_name(
+    runtime: Runtime,
+) -> None:
+    write_skill(runtime.storage.data_dir / "skills", "vbot-docs", "A home package.")
+    app_skills = runtime.refresh_skills_for(None, "app-assistant")
+    assert runtime.skills.get("vbot-docs").package_ref == SkillPackageRef("home", "vbot-docs")
+    assert [skill.package_ref for skill in app_skills.filter_allowed(["*"])] == [
+        SkillPackageRef("bundled", "vbot-docs")
+    ]
 
 
 def test_playwright_replaces_archived_browser_extension(shared_runtime: Runtime) -> None:

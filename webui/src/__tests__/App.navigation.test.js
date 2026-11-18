@@ -155,6 +155,102 @@ describe('App navigation', () => {
     });
   });
 
+  it('resumes the App Agent in Settings, sends the current field and expands its exact Session', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    let address;
+    let opens = 0;
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'agent.list') return { agents: [baseAgent()] };
+      if (method === 'session.create_app_chat') {
+        opens++;
+        expect(params.profile).toBe('app');
+        if (!address) {
+          address = {
+            agent_id: 'app-assistant',
+            session_id: params.session_id,
+          };
+          throw new Error('Lost the response');
+        }
+        expect(params.session_id).toBe(address.session_id);
+        return address;
+      }
+      if (method === 'session.get')
+        return { session: { ...address, title: 'Settings' } };
+      if (method === 'chat.timeline' && params.agent_id === 'app-assistant')
+        return {
+          ...assistantHistory('greeting', 'How can I help?'),
+          agent_name: 'App Agent',
+        };
+      if (method === 'chat.stream')
+        return { ...address, run_id: 'run-settings' };
+      return settingsRpc(method, params);
+    });
+    mountApp();
+    sidebarNavButton('settings').click();
+    await waitForCondition(() =>
+      expect(labelledButton('appChat.askSettings')).toBeTruthy(),
+    );
+    labelledButton('appChat.askSettings').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup')?.textContent).toContain(
+        'Lost the response',
+      ),
+    );
+    buttonWithText('.session-popup button', t('common.retry')).click();
+    await waitForCondition(() =>
+      expect(document.querySelector('.session-popup textarea')).toBeTruthy(),
+    );
+    document
+      .querySelector(
+        '.session-popup button[aria-label="' + t('common.close') + '"]',
+      )
+      .click();
+    await tick();
+    labelledButton('appChat.askSettings').click();
+    settingsPanelButton('system').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('[data-setting-path="server.keep_awake"]'),
+      ).toBeTruthy(),
+    );
+    const control = document.querySelector(
+      '[data-setting-path="server.keep_awake"] [role="switch"]',
+    );
+    control.focus();
+    const input = document.querySelector('.session-popup textarea');
+    typeInto(input, 'What does this do?');
+    document.querySelector('.session-popup button[type="submit"]').click();
+    await waitForCondition(() =>
+      expect(rpcMock).toHaveBeenCalledWith(
+        'chat.stream',
+        expect.objectContaining({
+          ...address,
+          ui_context: {
+            view: 'settings',
+            docs: 'references/configuration.md',
+            page: 'system',
+            section: 'server',
+            field: 'server.keep_awake',
+            options: ['true', 'false'],
+          },
+        }),
+      ),
+    );
+    expect(opens).toBe(2);
+    expect(window.location.hash).toBe('#settings/system');
+    buttonWithText('.session-popup button', t('appChat.openFull')).click();
+    await waitForCondition(() => {
+      expect(document.querySelector('.session-popup')).toBeNull();
+      expect(window.location.hash).toBe(
+        `#chat/app-assistant/${address.session_id}`,
+      );
+      expect(
+        document.querySelector('.agent-pill--current .agent-pill__name')
+          ?.textContent,
+      ).toBe('App Agent');
+    });
+  });
+
   it('returns to shared defaults from the Main menu and stays there on a second click', async () => {
     const settingsRpc = createSettingsRpcMock();
     const agentsRpc = agentsAppRpc({ agents: [baseAgent()] });

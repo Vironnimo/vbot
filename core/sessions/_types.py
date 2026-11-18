@@ -186,6 +186,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
     {
         "source_channel_id",
         "input_source_id",
+        "app_chat_launch_id",
         "platform",
         "platform_conv_id",
         "last_reply_target",

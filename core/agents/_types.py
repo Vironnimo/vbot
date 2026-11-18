@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from core.agents.app_chats import APP_CHAT_PROFILES, AppChatBuiltin, app_chat_profile
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MemoryPromptMode,
@@ -22,7 +23,7 @@ DEFAULT_LIBRARIAN_ENABLED = True
 
 # The built-in Agents vBot creates itself. ``agent.json`` marks one with
 # ``builtin``; the mark is valid only on its reserved id.
-BuiltinAgent = Literal["librarian", "live_voice", "live_backend"]
+type BuiltinAgent = Literal["librarian", "live_voice", "live_backend"] | AppChatBuiltin
 LIBRARIAN_BUILTIN: BuiltinAgent = "librarian"
 # The Agents of a Live voice call: the voice Agent records the call in its
 # Session, the backend Agent answers the requests the voice Model hands on.
@@ -39,11 +40,13 @@ BUILTIN_AGENT_IDS: dict[BuiltinAgent, str] = {
     LIBRARIAN_BUILTIN: LIBRARIAN_AGENT_ID,
     LIVE_VOICE_BUILTIN: LIVE_VOICE_AGENT_ID,
     LIVE_BACKEND_BUILTIN: LIVE_BACKEND_AGENT_ID,
+    **{profile.builtin: profile.agent_id for profile in APP_CHAT_PROFILES.values()},
 }
 BUILTIN_AGENT_NAMES: dict[BuiltinAgent, str] = {
     LIBRARIAN_BUILTIN: LIBRARIAN_AGENT_NAME,
     LIVE_VOICE_BUILTIN: "Live voice",
     LIVE_BACKEND_BUILTIN: "Live backend",
+    **{profile.builtin: profile.name for profile in APP_CHAT_PROFILES.values()},
 }
 BUILTIN_AGENTS: frozenset[str] = frozenset(BUILTIN_AGENT_IDS)
 # The Librarian's whole Tool set; nothing widens it.
@@ -196,6 +199,21 @@ class Agent:
     # Trusted Extension that created and may configure this exact identity.
     extension_owner: str | None = None
     extension_creation_request: dict[str, str] | None = None
+
+    @property
+    def bundled_prompt(self) -> bool:
+        """Whether this identity uses code-selected, packaged prompt blocks."""
+        return app_chat_profile(self) is not None
+
+    @property
+    def instructions(self) -> str:
+        profile = app_chat_profile(self)
+        return profile.role if profile else ""
+
+    @property
+    def prompt_blocks(self) -> Sequence[str] | None:
+        profile = app_chat_profile(self)
+        return profile.prompt_blocks if profile else None
 
     @property
     def permission_ceiling(self) -> PermissionCeiling | None:

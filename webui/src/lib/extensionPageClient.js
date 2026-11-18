@@ -1,4 +1,6 @@
 import { t } from './i18n.js';
+import { observeSessionSlot } from './extensionSessionSlot.js';
+import { validPageChatContext } from './extensionChatContext.js';
 
 const BRIDGE_VERSION = 1;
 const MAX_MESSAGE_BYTES = 64 * 1024;
@@ -14,7 +16,9 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const contextListeners = new Set();
   const runEventListeners = new Set();
   const searchListeners = new Set();
+  const sessionSlots = new Set();
   let autosaveParticipant = null;
+  let chatContext = null;
   // The dialogs and menus the page shows over its content, the topmost last.
   const layers = [];
   let forwardsHistoryInput = false;
@@ -191,6 +195,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       )
         return;
       rejectPending(t('extensions.page.reloaded'));
+      if (context) chatContext = null;
       context = {
         nonce: data.nonce,
         epoch: data.epoch,
@@ -217,6 +222,8 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       );
       for (const listener of contextListeners) listener(context);
       if (autosaveParticipant) notifyAutosave();
+      if (chatContext)
+        hostMessage('vbot.extension.chat.context', { value: chatContext });
       if (layers.length > 0) notifyLayers();
       return;
     }
@@ -347,6 +354,53 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     });
   }
 
+  function mountSession(
+    element,
+    groupId,
+    participantId,
+    onError,
+    presentation = 'conversation',
+  ) {
+    let nonce = null;
+    let id;
+    let stop;
+    let mounted = true;
+    function attach(current) {
+      if (!current || current.nonce === nonce) return;
+      stop?.();
+      nonce = current.nonce;
+      id = String(++nextId);
+      const captured = id;
+      void call('session.embed', {
+        slot: id,
+        group_id: groupId,
+        participant_id: participantId,
+        presentation,
+      }).catch((cause) => {
+        if (mounted && id === captured) onError(cause);
+      });
+      stop = observeSessionSlot(element, (bounds) => {
+        hostMessage('vbot.extension.session.bounds', {
+          slot: captured,
+          bounds,
+        });
+      });
+    }
+    function release() {
+      if (!mounted) return;
+      mounted = false;
+      stop?.();
+      contextListeners.delete(attach);
+      sessionSlots.delete(release);
+      if (id && nonce === context?.nonce)
+        hostMessage('vbot.extension.session.release', { slot: id });
+    }
+    sessionSlots.add(release);
+    contextListeners.add(attach);
+    attach(context);
+    return release;
+  }
+
   return {
     get context() {
       return context;
@@ -402,12 +456,21 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     openLink: (url) => call('link.open', { url }),
     openSession: (address) => call('session.open', { address }),
     openAgent: (agentId) => call('agent.open', { agent_id: agentId }),
+    mountSession,
+    setChatContext(value) {
+      if (!validPageChatContext(value))
+        throw new Error(t('extensions.page.requestInvalid'));
+      chatContext = JSON.parse(JSON.stringify(value));
+      hostMessage('vbot.extension.chat.context', { value: chatContext });
+    },
+    openSpecialist: (profile, { presentation = 'conversation' } = {}) =>
+      call('chat.open_specialist', { profile, presentation }),
+    openAppChat: () => call('chat.open_app'),
     openMedia: (url) => call('media.open', { url }),
     // The route becomes part of the app's Back/Forward history: `pushRoute`
     // records a user step to another place of the page, `replaceRoute`
     // corrects the current entry (a default choice, a record that vanished).
-    // A changed route comes back in the next context, like one that
-    // Back/Forward changed.
+    // Awaiting the move observes the host's accepted route in client.context.
     pushRoute: (route) => call('route.push', { route }),
     replaceRoute: (route) => call('route.replace', { route }),
     toast: (message, variant = 'info') => call('toast', { message, variant }),
@@ -487,6 +550,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       return () => runEventListeners.delete(listener);
     },
     dispose() {
+      for (const release of sessionSlots) release();
       window.removeEventListener('message', onMessage);
       forwardHistoryInput(false);
       rejectPending(t('extensions.page.disposed'));

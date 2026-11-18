@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import CommandDispatcher, CommandOutcome
+from core.chat.content_blocks import FileBlock
 from core.projects import AgentResolver, build_project
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
@@ -17,7 +18,12 @@ from core.tools import ToolRegistry, tool_success
 from core.tools.load_tools import register_load_tools_tool
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
-from tests.server.rpc.chat_methods_test_support import _InlineSessionPool
+from tests.server.rpc.chat_methods_test_support import (
+    _InlineSessionPool,
+    _RecordingLoop,
+    call,
+    chat_state,
+)
 from tests.server.rpc_test_support import StubAdapter, make_state, rpc_result
 
 
@@ -103,8 +109,9 @@ def _state(
         *,
         session_id: str | None = None,
         require_model: bool = True,
+        include_temporary: bool = False,
     ) -> object:
-        assert not require_model
+        assert not require_model and include_temporary
         if not resolvable:
             from core.projects import AgentResolutionError
 
@@ -168,34 +175,76 @@ async def test_identity_agent_address_filters_by_agent_allowed_skills() -> None:
     assert _skill_names(result) == ["debugging"]
 
 
+def _create_workspace_less_participant(runtime: Any, cwd: Path) -> SessionAddress:
+    from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+    from core.tools.availability import ToolAccess
+    from tests.server.rpc.project_methods_test_support import _openai_configured
+
+    registry = TemporaryAgentRegistry(runtime.sessions)
+    runtime.agent_resolver = AgentResolver(
+        runtime.agents,
+        runtime.projects,
+        _openai_configured(),
+        dict,
+        temporary_agents=registry,
+        sessions=runtime.sessions,
+    )
+    binding = registry.create(
+        owner_name="demo",
+        group_id="group",
+        participant_id="writer",
+        project_id=None,
+        config=TemporaryAgentConfig(
+            name="Writer",
+            model="openai/gpt-5.2",
+            cwd=cwd,
+            allowed_skills=["debugging"],
+            tool_access=ToolAccess(mode="none"),
+            tools={},
+        ),
+    )
+    return binding.address
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("project_agent", [False, True])
+@pytest.mark.parametrize("kind", ["identity", "project", "participant", "delegated"])
 async def test_command_catalog_remains_available_with_an_unusable_session_model(
-    tmp_path: Path, project_agent: bool
+    tmp_path: Path, kind: str
 ) -> None:
     from core.chat import CommandDispatcher
     from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
 
     state = _make_state(tmp_path)
     runtime = state.runtime
-    if project_agent:
+    if kind == "project":
         repo = _make_repo(tmp_path, "vbot", "builder.md")
         runtime.projects.create("vbot", "vBot", repo)
-        agent_id, project_id, address = "builder", "vbot", "builder@vbot"
-    else:
+        address = "builder@vbot"
+        session = runtime.sessions.create("builder", project_id="vbot")
+    elif kind == "identity":
         runtime.agents.create("coder", "Coder", model="openai/gpt-5.2")
-        agent_id, project_id, address = "coder", None, "coder"
-    session = runtime.sessions.create(agent_id, project_id=project_id)
+        address = "coder"
+        session = runtime.sessions.create(address)
+    else:
+        bound = _create_workspace_less_participant(runtime, tmp_path)
+        address = bound.agent_id
+        session = (
+            runtime.sessions.get(bound)
+            if kind == "participant"
+            else runtime.sessions.create(address)
+        )
     runtime.sessions.set_metadata(
         session.address, {"agent_overrides": {"model": "openai/unavailable"}}
     )
-    runtime.skills_for = lambda *_args: _Registry(["debugging"])
+    runtime.skills_for = lambda *_args: _Registry(["debugging", "unselected"])
     state.command_dispatcher = CommandDispatcher(state.chat_runs)
     try:
         result = await _list_commands(
             state, {"agent_id": address, "session_id": session.id, "reply_surface": "tui"}
         )
         assert any(item["name"] == "model" for item in result["items"])
+        if kind in {"participant", "delegated"}:
+            assert _skill_names(result) == ["debugging"]
     finally:
         runtime.sessions.close()
 
@@ -720,7 +769,7 @@ def _files_state(
     runtime = SimpleNamespace(
         projects=projects,
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(
+            resolve_agent=lambda project_id, agent_id, **_: SimpleNamespace(
                 id=agent_id,
                 workspace=workspace,
                 root_project_id=root_project_id,
@@ -775,6 +824,54 @@ async def test_files_list_lists_one_directory_with_ignored_entries(tmp_path: Pat
             {"name": ".gitignore", "kind": "file", "ignored": False},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_workspace_less_chat_accepts_uploaded_files_and_has_no_file_mention_root(
+    tmp_path: Path,
+) -> None:
+    from tests.server.rpc.project_methods_test_support import _make_state
+
+    runtime = _make_state(tmp_path).runtime
+    private = tmp_path / "extension-state"
+    private.mkdir()
+    (private / "private.txt").write_text("private", encoding="utf-8")
+    try:
+        bound = _create_workspace_less_participant(runtime, private)
+        address = {"agent_id": bound.agent_id, "session_id": bound.session_id}
+        loop = _RecordingLoop()
+        state = chat_state(loop, agent_resolver=runtime.agent_resolver)
+        index = await _list_files(state, address)
+        assert index == {"root": None, "files": [], "directories": [], "truncated": False}
+        assert await _list_files(state, {**address, "directory": ""}) == {**index, "entries": []}
+        response = await call(
+            state,
+            "chat.stream",
+            **address,
+            content="look at @private.txt",
+            file_mentions=["private.txt"],
+        )
+        assert response["error"]["code"] == "invalid_request"
+        assert "Attach the file" in response["error"]["message"]
+        assert not loop.start_calls
+        upload = {
+            "type": "file",
+            "attachment_id": "att-upload",
+            "filename": "notes.pdf",
+            "media_type": "application/pdf",
+        }
+        response = await call(state, "chat.stream", **address, content=[upload])
+        assert response["ok"]
+        assert loop.start_calls[0]["content"] == [
+            FileBlock(
+                type="file",
+                attachment_id="att-upload",
+                filename="notes.pdf",
+                media_type="application/pdf",
+            )
+        ]
+    finally:
+        runtime.sessions.close()
 
 
 @pytest.mark.asyncio

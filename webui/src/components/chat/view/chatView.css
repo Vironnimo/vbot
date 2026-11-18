@@ -18,6 +18,13 @@
   display: none;
 }
 
+.chat-view__embed-header,
+.chat-view__monitor-usage {
+  display: flex;
+  justify-content: flex-end;
+  padding-inline: var(--space-sm);
+}
+
 .chat-view__surface {
   position: relative;
   display: flex;

@@ -368,7 +368,7 @@ class _FakeResolver:
             sessions=cast(Any, sessions),
         )
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> Any:
+    def resolve_agent(self, project_id: str | None, agent_id: str, **options: Any) -> Any:
         return self._agent
 
     def resolve_working_project(self, project_id: str | None, agent: Any, **options: Any) -> Any:

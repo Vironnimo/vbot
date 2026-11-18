@@ -20,14 +20,23 @@
 
 /* The index follows the shared Secondary pane anatomy: header, the search as
    its pinned area, then the page list. */
-.settings-search {
+.settings-search.secondary-pane__pinned {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.settings-search-field {
   position: relative;
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-search-icon {
   position: absolute;
-  top: calc(50% - 4px);
-  left: 22px;
+  top: 50%;
+  left: 10px;
   transform: translateY(-50%);
   color: var(--text-med);
   pointer-events: none;

@@ -56,6 +56,7 @@ describe('extension page client', () => {
     const entries = [{ id: 'one', label: 'One', terms: 'connection' }];
     for (const [invoke, method, params] of [
       [() => client.services.describe(), 'service.describe', {}],
+      [() => client.openAppChat(), 'chat.open_app', {}],
       [
         () => client.services.query('agent.list'),
         'service.query',
@@ -137,6 +138,69 @@ describe('extension page client', () => {
       result: {},
     });
     await expect(opened).resolves.toEqual({});
+  });
+
+  it('attaches a participant slot after handshake and releases it from the current registration', () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    const errors = vi.fn();
+    const scroller = document.createElement('div');
+    const slot = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    scroller.append(slot);
+    Object.defineProperty(scroller, 'clientHeight', { value: 100 });
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 30 });
+    vi.spyOn(slot, 'getBoundingClientRect').mockReturnValue({
+      x: 10,
+      left: 10,
+      right: 210,
+      width: 200,
+      y: -10,
+      top: -10,
+      bottom: 200,
+      height: 210,
+    });
+    const viewport = document.documentElement;
+    const width = vi.spyOn(viewport, 'clientWidth', 'get').mockReturnValue(400);
+    const height = vi
+      .spyOn(viewport, 'clientHeight', 'get')
+      .mockReturnValue(400);
+    const release = client.mountSession(
+      slot,
+      'group',
+      'worker',
+      errors,
+      'compact',
+    );
+    expect(target.postMessage).not.toHaveBeenCalled();
+    initialize(target);
+    initialize(target, 'next');
+    release();
+    const sent = target.postMessage.mock.calls.map(([data]) => data);
+    const mounts = sent.filter((m) => m.method === 'session.embed');
+    expect(mounts.map((m) => m.nonce)).toEqual(['nonce-a', 'next']);
+    expect(mounts[1].params).toMatchObject({
+      group_id: 'group',
+      participant_id: 'worker',
+      presentation: 'compact',
+    });
+    expect(
+      sent.find((m) => m.type === 'vbot.extension.session.bounds')?.bounds,
+    ).toEqual({
+      x: 10,
+      y: -10,
+      width: 200,
+      height: 210,
+      clip: [40, 0, 70, 0],
+    });
+    expect(sent.at(-1)).toMatchObject({
+      type: 'vbot.extension.session.release',
+      nonce: 'next',
+      slot: mounts[1].params.slot,
+    });
+    expect(errors).not.toHaveBeenCalled();
+    width.mockRestore();
+    height.mockRestore();
   });
 
   it('flushes a registered editor and rejects obsolete completion after reinitialization', async () => {

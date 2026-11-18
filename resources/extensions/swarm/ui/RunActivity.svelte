@@ -3,6 +3,7 @@
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import SessionEmbed from '@vbot/extension-sdk/ui/SessionEmbed.svelte';
   import EmptyState from '@vbot/extension-sdk/ui/EmptyState.svelte';
   import ChatAssistantRun from '@vbot/extension-sdk/ui/ChatAssistantRun.svelte';
   import ChatTimelineEntry from '@vbot/extension-sdk/ui/ChatTimelineEntry.svelte';
@@ -172,15 +173,24 @@
         <h3 class="activity-head__name" id={headingId}>
           {inspected.display_name}
         </h3>
-        <div class="activity-head__context">
-          <ContextUsageRing
-            contextUsage={activity.history?.data.context_usage}
-            contextWindow={activity.contextWindow}
-            usage={activity.history?.data.usage}
-            sessionUsage={activity.history?.data.session_usage}
-            showFigures
-          />
-        </div>
+        {#if !activity.sessionOpen}<div class="activity-head__context">
+            <ContextUsageRing
+              contextUsage={activity.history?.data.context_usage}
+              contextWindow={activity.contextWindow}
+              usage={activity.history?.data.usage}
+              sessionUsage={activity.history?.data.session_usage}
+              showFigures
+            />
+          </div>{/if}
+        <Button
+          variant="tertiary"
+          class="activity-head__session"
+          onClick={activity.toggleSession}
+        >
+          {activity.sessionOpen
+            ? t('swarm.activity.showActivity')
+            : t('swarm.activity.showSession')}
+        </Button>
         {#if canResumeInspected}
           <Button
             variant="secondary"
@@ -199,7 +209,16 @@
           onClick={activity.leaveActivity}><SwarmIcon kind="close" /></Button
         >
       </header>
-      {#if activity.history}
+      {#if activity.sessionOpen}
+        <div class="activity-session">
+          <SessionEmbed
+            client={model.client}
+            groupId={model.selectedSwarm.id}
+            participantId={inspected.id}
+            presentation="compact"
+          />
+        </div>
+      {:else if activity.history}
         {#if activity.history.data.has_more && activity.history.data.next_before}
           <Button
             variant="secondary"

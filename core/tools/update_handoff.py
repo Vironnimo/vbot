@@ -1,6 +1,6 @@
-"""Update handoff capabilities for shell commands that run ``vbot update``.
+"""Update handoff capabilities for Tool calls that run ``vbot update``.
 
-Every shell call with a persistence boundary receives an unguessable in-memory
+Each eligible command with a persistence boundary receives an unguessable in-memory
 token through ``VBOT_UPDATE_HANDOFF``. Only a packaged ``vbot update`` claims
 it: the server then writes one durable,
 opaque ticket that the independent updater and the private application RPCs
@@ -18,10 +18,13 @@ import time
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.utils.atomic import atomic_write_bytes
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.tools.tools import ToolContext
 
 HANDOFF_ENV = "VBOT_UPDATE_HANDOFF"
 HANDOFF_SCHEMA = 1
@@ -41,7 +44,7 @@ _LOGGER = get_logger("tools.update_handoff")
 
 
 class UpdateHandoffUnavailableError(ValueError):
-    """A presented token names no Bash call whose command may still run here."""
+    """A presented token names no Tool call whose command may still run here."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +61,9 @@ class UpdateHandoffTicket:
 
 
 class UpdateHandoffGrant:
-    """One shell call's in-memory handoff capability.
+    """One command's in-memory handoff capability.
 
-    The shell Tool exports ``token`` to the command, calls ``acknowledge``
+    The Tool exports ``token`` to the command, calls ``acknowledge``
     after the Tool Result enters Session history, and calls ``release`` once no
     process of the call can still run. Acknowledgement keeps working after
     release so a ticket claimed by a finished command is still acknowledged.
@@ -150,7 +153,7 @@ class UpdateHandoffGrant:
 
 
 class UpdateHandoffs:
-    """Live Bash update-handoff capabilities of this server process.
+    """Live command update-handoff capabilities of this server process.
 
     State is in memory and confined to the event loop: a server restart forgets
     every token, while claimed tickets stay durable for the updater.
@@ -169,7 +172,7 @@ class UpdateHandoffs:
         project_id: str | None,
         session_id: str,
     ) -> UpdateHandoffGrant:
-        """Create one capability scoped to an exact Bash Tool call."""
+        """Create one capability scoped to an exact Tool call."""
         grant = UpdateHandoffGrant(
             self,
             secrets.token_urlsafe(_TOKEN_BYTES),
@@ -218,6 +221,32 @@ class UpdateHandoffs:
     def _release(self, grant: UpdateHandoffGrant) -> None:
         if self._grants.get(grant._key) is grant:
             del self._grants[grant._key]
+
+
+def issue_for_tool_context(
+    update_handoffs: UpdateHandoffs | None, context: ToolContext
+) -> UpdateHandoffGrant | None:
+    """Give a command whose Tool Result has a persistence boundary its handoff token."""
+    if update_handoffs is None or context.result_persisted_hook is None:
+        return None
+    try:
+        handoff = update_handoffs.issue(
+            run_id=context.run_id,
+            tool_call_id=context.tool_call_id,
+            agent_id=context.agent_id,
+            project_id=context.project_id,
+            session_id=context.session_id,
+        )
+    except ValueError:
+        _LOGGER.warning(
+            "%s call %s runs without an update handoff: its Run ids are incomplete",
+            context.tool_name,
+            context.tool_call_id,
+            exc_info=True,
+        )
+        return None
+    context.after_result_persisted(handoff.acknowledge)
+    return handoff
 
 
 def acknowledge_update_handoff_ticket(ticket: UpdateHandoffTicket) -> UpdateHandoffTicket:
@@ -415,6 +444,7 @@ __all__ = [
     "UpdateHandoffUnavailableError",
     "UpdateHandoffs",
     "acknowledge_update_handoff_ticket",
+    "issue_for_tool_context",
     "read_handoff_ticket",
     "read_update_handoff_ticket",
     "ticket_id_from_path",

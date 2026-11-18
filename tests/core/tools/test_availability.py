@@ -171,6 +171,23 @@ def test_followed_tool_requires_one_of_its_sources_and_can_be_denied_independent
     assert resolve("bash", "subagent", denied=("bash", "subagent")) == ()
 
 
+def test_exact_selection_requires_both_a_follower_and_its_source() -> None:
+    tools = _catalog(
+        ("bash", {}),
+        ("background_tasks", {"activation": "follows", "activation_source": "bash"}),
+        ("execute_code", {"activation": "follows", "activation_source": "bash"}),
+    )
+
+    def selected(*names: str) -> tuple[str, ...]:
+        return resolve_tool_access(
+            ToolAccess(mode="selected", allowed=names, fixed=True, exact=True), tools, "off"
+        ).allowed_tools
+
+    assert selected("bash") == ("bash",)
+    assert selected("execute_code") == ()
+    assert selected("bash", "execute_code") == ("bash", "execute_code")
+
+
 @pytest.mark.parametrize(("memory_mode", "project_memory"), [("agent_user", False), ("off", True)])
 def test_denials_win_over_memory_activation_and_session_grants(
     memory_mode: MemoryPromptMode, project_memory: bool

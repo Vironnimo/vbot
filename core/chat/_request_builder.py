@@ -464,6 +464,7 @@ class RequestBuilder:
             )
         live_tool_grants = _live_session_tool_grants(
             session_capability,
+            agent=agent,
             subagent_session=inputs.subagent_session,
             goal_session=inputs.goal_session,
         )

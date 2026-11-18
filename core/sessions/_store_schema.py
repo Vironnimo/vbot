@@ -107,6 +107,12 @@ def session_database_spec(
             # Older readers cannot open protected opaque Tool payloads/checkpoints.
             Migration("sessions.0012_protected_tool_data", breaks_older=True),
             Migration("sessions.0013_protected_tool_outcomes", breaks_older=True),
+            # Older readers reject the Extension input origin on User entries.
+            Migration(
+                "sessions.0014_extension_input_origin",
+                breaks_older=True,
+                apply=_adopt_extension_input_origins,
+            ),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
@@ -114,6 +120,18 @@ def session_database_spec(
         # Session writes, and so Runs, go on while a data snapshot is taken; the
         # snapshot stands for the instant this database is copied.
         snapshot_capture=ANCHOR_CAPTURE,
+    )
+
+
+def _adopt_extension_input_origins(connection: sqlite3.Connection) -> None:
+    """Identify generated initial inputs from their exact owner delivery receipt."""
+    connection.execute(
+        "INSERT OR IGNORE INTO user_entry_origins (entry_key, input_origin) "
+        "SELECT e.entry_key, 'extension' FROM session_delivery_receipts AS r "
+        "JOIN sessions AS s ON s.session_key = r.session_key "
+        "JOIN entries AS e ON e.session_key = r.session_key AND e.seq = r.carrier_sequence "
+        "WHERE r.effect_kind = 'initial' AND r.carrier_kind = 'user' AND e.role = 'user' "
+        "AND r.receipt_id = 'initial:' || s.generation_id"
     )
 
 

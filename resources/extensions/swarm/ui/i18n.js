@@ -102,6 +102,8 @@ export default Object.freeze({
   'swarm.participant.state.failed': 'Failed',
   'swarm.participant.state.cancelled': 'Cancelled',
   'swarm.participant.state.interrupted': 'Interrupted',
+  'swarm.activity.showSession': 'View Session',
+  'swarm.activity.showActivity': 'View Swarm activity',
   'swarm.activity.empty': 'Choose a participant',
   'swarm.activity.emptyHint':
     'Their messages and Tool calls show here, live while they work.',

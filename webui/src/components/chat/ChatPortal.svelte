@@ -106,7 +106,7 @@
   }
 
   async function close() {
-    if (!address || closing) return;
+    if (!address || closing || viewState.readOnly) return;
     closing = true;
     closeError = '';
     try {
@@ -189,15 +189,17 @@
             </svg>
           </a>
         {/if}
-        <Button
-          variant="tertiary"
-          class="chat-portal__action"
-          loading={closing}
-          tooltip={t('chat.portal.closeHint')}
-          onClick={close}
-        >
-          {t('chat.portal.close')}
-        </Button>
+        {#if !viewState.readOnly}
+          <Button
+            variant="tertiary"
+            class="chat-portal__action"
+            loading={closing}
+            tooltip={t('chat.portal.closeHint')}
+            onClick={close}
+          >
+            {t('chat.portal.close')}
+          </Button>
+        {/if}
       </span>
     {/if}
   </div>
@@ -216,6 +218,7 @@
       class="chat-portal__frame"
       src={url}
       {title}
+      inert={viewState.readOnly}
       referrerpolicy="no-referrer"
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
     ></iframe>

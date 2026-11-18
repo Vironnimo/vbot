@@ -277,6 +277,10 @@ class TemporaryExecutionGroups:
                         "This Session is no longer available. "
                         "Check its state through its Extension."
                     )
+                if any(
+                    binding.config.get("app_chat_profile") for binding in state.bindings.values()
+                ):
+                    raise RunAdmissionBlockedError("App chat Sessions accept input through Chat.")
                 if self._validate_binding is not None:
                     for binding in state.bindings.values():
                         await self._validate_binding(binding)
@@ -396,7 +400,9 @@ class TemporaryExecutionGroups:
                         "Check its state through its Extension."
                     )
                 message = (
-                    ChatMessage.user(self._chat.mask_user_input(input.content))
+                    ChatMessage.user(
+                        self._chat.mask_user_input(input.content), input_origin="extension"
+                    )
                     if input.kind == "initial"
                     else ChatMessage.note(input.content)
                 )

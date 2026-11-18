@@ -38,7 +38,6 @@ from core.agents._config import (
 from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     DEFAULT_LIBRARIAN_ENABLED,
-    LIBRARIAN_BUILTIN,
     LIVE_BACKEND_BUILTIN,
     LIVE_VOICE_BUILTIN,
     Agent,
@@ -252,7 +251,7 @@ class AgentMutations:
                 subagent["allowed_agents"] = changes.pop("subagent_allow")
                 changes["tools"] = {**agent.tools, "subagent": subagent}
             if agent.builtin is not None:
-                editable = _BUILTIN_EDITABLE_FIELDS[agent.builtin]
+                editable = _BUILTIN_EDITABLE_FIELDS.get(agent.builtin, _BUILTIN_MODEL_FIELDS)
                 fixed_fields = sorted(set(changes) - editable)
                 if fixed_fields or copy_workspace_identity_files:
                     names = ", ".join(sorted(editable - {"current_session_id"}))
@@ -436,7 +435,6 @@ _BUILTIN_MODEL_FIELDS = frozenset(
 
 
 _BUILTIN_EDITABLE_FIELDS: dict[str, frozenset[str]] = {
-    LIBRARIAN_BUILTIN: _BUILTIN_MODEL_FIELDS,
     LIVE_VOICE_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
     LIVE_BACKEND_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
 }

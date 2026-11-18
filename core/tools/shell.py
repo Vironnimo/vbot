@@ -87,7 +87,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
+from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs, issue_for_tool_context
 from core.utils.logging import get_logger
 
 from ._shell_definition import (
@@ -230,33 +230,6 @@ def _shell_start(
         raise _cannot_start(f"{error}. Ask the user to install it.") from error
 
 
-def _issue_update_handoff(
-    update_handoffs: UpdateHandoffs | None, context: ToolContext
-) -> UpdateHandoffGrant | None:
-    """Give a call whose Tool Result has a persistence boundary its handoff token."""
-    if update_handoffs is None or context.result_persisted_hook is None:
-        return None
-    try:
-        handoff = update_handoffs.issue(
-            run_id=context.run_id,
-            tool_call_id=context.tool_call_id,
-            agent_id=context.agent_id,
-            project_id=context.project_id,
-            session_id=context.session_id,
-        )
-    except ValueError:
-        # A token is scoped to the call's Run ids; without them the command runs
-        # without the capability.
-        _LOGGER.warning(
-            "Shell call %s runs without an update handoff: its Run ids are incomplete",
-            context.tool_call_id,
-            exc_info=True,
-        )
-        return None
-    context.after_result_persisted(handoff.acknowledge)
-    return handoff
-
-
 class ShellTool:
     """Runs shell commands for Agents through the ``CommandManager``."""
 
@@ -365,7 +338,7 @@ class ShellTool:
                 "Permission Rules changed while the command was prepared. Call it again."
             )
         # A restricted Session cannot reach the server to use an update handoff.
-        handoff = None if confined else _issue_update_handoff(self._update_handoffs, context)
+        handoff = None if confined else issue_for_tool_context(self._update_handoffs, context)
         try:
             command_id = await self._start(
                 context,

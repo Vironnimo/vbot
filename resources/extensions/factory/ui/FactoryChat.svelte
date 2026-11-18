@@ -3,6 +3,8 @@
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
+  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
+  import CardSession from './CardSession.svelte';
   import { failureText, waitingLabel } from './presentation.js';
 
   let {
@@ -22,9 +24,10 @@
     sending = $state(false),
     loading = $state(true),
     loaded = $state(false);
+  let inspectedBinding = $state(null);
   let fresh = $state(false),
-    log = $state(null),
-    input = $state(null);
+    log = $state(null);
+  const inputId = $props.id();
   let request = 0,
     disposed = false,
     attempt = null;
@@ -127,7 +130,7 @@
     }
     if (!disposed && !error) {
       await refresh();
-      input?.focus();
+      document.getElementById(inputId)?.focus();
     }
   }
   async function stopDiscussion() {
@@ -145,11 +148,12 @@
   function newTopic() {
     request++;
     chat = null;
+    inspectedBinding = null;
     fresh = true;
     historyPages = 1;
     attempt = null;
     error = '';
-    input?.focus();
+    document.getElementById(inputId)?.focus();
   }
   function keydown(event) {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -178,17 +182,17 @@
           >{t('factory.chat.stop')}</Button
         >
       {/if}
-      {#if chat?.session}
+      {#if chat?.session_binding}
         <Button
           variant="tertiary"
-          onClick={() => model.openSession(chat.session)}
+          onClick={() => (inspectedBinding = chat.session_binding)}
           >{t('factory.native.openSession')}</Button
         >
       {/if}
-      {#if chat?.task_session}
+      {#if chat?.task_session_binding}
         <Button
           variant="tertiary"
-          onClick={() => model.openSession(chat.task_session)}
+          onClick={() => (inspectedBinding = chat.task_session_binding)}
           >{t('factory.chat.openTaskSession')}</Button
         >
       {/if}
@@ -201,6 +205,14 @@
       {/if}
     </div>
   </header>
+  {#if inspectedBinding}
+    <CardSession
+      client={model.client}
+      groupId={inspectedBinding.group_id}
+      participant={{ ...inspectedBinding, display_name: name }}
+      onClose={() => (inspectedBinding = null)}
+    />
+  {/if}
   <div class="messages" role="log" bind:this={log}>
     {#if chat?.before}<Button
         variant="tertiary"
@@ -247,16 +259,18 @@
       void send();
     }}
   >
-    <textarea
-      bind:this={input}
-      bind:value={draft}
+    <TextArea
+      id={inputId}
+      class="factory-chat-input"
+      value={draft}
+      onInput={(value) => (draft = value)}
       rows="2"
       maxlength="20000"
       onkeydown={keydown}
-      aria-label={t('factory.chat.message', { name })}
+      ariaLabel={t('factory.chat.message', { name })}
       placeholder={t('factory.chat.message', { name })}
       disabled={sending || inactive || chat?.topic?.state === 'closed'}
-    ></textarea>
+    />
     <Button
       variant="primary"
       onClick={send}
@@ -335,17 +349,10 @@
     border-top: 1px solid var(--border);
     margin-top: 8px;
   }
-  textarea {
+  form :global(.factory-chat-input) {
     flex: 1;
     min-width: 0;
-    resize: vertical;
     max-height: 10rem;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px;
-    color: var(--text-hi);
-    font: inherit;
   }
   .task-link {
     align-self: flex-start;

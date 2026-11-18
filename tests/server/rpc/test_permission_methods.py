@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.agents.agents import AgentStore
+from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import write_bootstrap_marker
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import AgentOverrides
@@ -16,6 +17,7 @@ from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
+from core.tools.availability import ToolAccess
 from server.access import bound_principal
 from server.access._principal import HOST
 from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
@@ -49,12 +51,16 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
     )
     projects = ProjectStore(data_dir)
     checker = ModelConfigurationChecker(_NoModels(), _NoModels(), _NoCredentials())
-    resolver = AgentResolver(agents, projects, checker, lambda: defaults, sessions=sessions)
+    temporary = TemporaryAgentRegistry(sessions)
+    resolver = AgentResolver(
+        agents, projects, checker, lambda: defaults, sessions=sessions, temporary_agents=temporary
+    )
     events: list[tuple[str, JsonObject]] = []
     return SimpleNamespace(
         runtime=SimpleNamespace(
             agents=agents,
             agent_resolver=resolver,
+            temporary_agents=temporary,
             chat_sessions=sessions,
             projects=projects,
             storage=StorageManager(data_dir),
@@ -337,6 +343,30 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert inherited["read"] is None
     assert inherited["write"] == ["{scratch}"]
     assert result["stored_ceiling"] is True
+
+    # Extension-owned Sessions describe their actual limits in full Chat too.
+    binding = state.runtime.temporary_agents.create(
+        owner_name="review",
+        group_id="review",
+        participant_id="worker",
+        config=TemporaryAgentConfig(
+            name="Reviewer",
+            model="example/model",
+            cwd=workspace,
+            tool_access=ToolAccess(mode="none"),
+            allowed_skills=[],
+            tools={},
+            permission_rules={"read": "work_area"},
+        ),
+    )
+    temporary = await rpc_result(
+        state,
+        "permissions.session",
+        agent_id=binding.address.agent_id,
+        session_id=binding.address.session_id,
+    )
+    assert temporary["restricted"] is True
+    assert temporary["layers"][0]["read"] == [root, "{scratch}"]
 
     # Only the user lifts the inherited ceiling; the Agent's own rules stay.
     refused = await rpc_error(

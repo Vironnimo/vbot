@@ -27,6 +27,7 @@ from core.agents._types import (
 from core.agents._workspace import (
     _workspace_from_data,
 )
+from core.agents.app_chats import app_chat_profile
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -818,14 +819,19 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
     """Return ``agent`` with the fixed capabilities of a built-in Agent; others unchanged."""
     if agent.builtin is None:
         return agent
-    tool_access = (
-        _LIBRARIAN_TOOL_ACCESS
-        if agent.builtin == LIBRARIAN_BUILTIN
-        else live_agent_tool_access(agent.tool_access)
-    )
+    profile = app_chat_profile(agent)
+    if profile is not None:
+        tool_access = ToolAccess(
+            mode=TOOL_ACCESS_MODE_SELECTED, allowed=profile.tools, fixed=True, exact=True
+        )
+    elif agent.builtin == LIBRARIAN_BUILTIN:
+        tool_access = _LIBRARIAN_TOOL_ACCESS
+    else:
+        tool_access = live_agent_tool_access(agent.tool_access)
     return replace(
         agent,
         tool_access=tool_access,
+        allowed_skills=list(profile.skills) if profile is not None else agent.allowed_skills,
         memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
         project_memory_enabled=False,
         custom_system_prompt_enabled=False,

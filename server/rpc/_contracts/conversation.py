@@ -1059,6 +1059,7 @@ _CHAT_RPC_ONLY_FIELDS = {
     "widget_states": (
         "Widget return state records a human interaction and cannot be claimed by an Extension."
     ),
+    "ui_context": "Only the human Accessor can attach its current view to a specialist Session.",
     "input_id": (
         "Durable Accessor input receipts belong to human submission; "
         "Extension SYSTEM Runs use their own admission."
@@ -1083,6 +1084,7 @@ RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {
 }
 
 SERVICE_EXCLUSIONS = {
+    "session.create_app_chat": "The WebUI starts a user-facing specialist conversation.",
     "chat.cancel_tool_call": (
         "Tool cancellation sets human-stop authority and user-cancelled Tool results; "
         "Extensions use neutral Run cancellation instead."

@@ -26,6 +26,8 @@ vi.mock('$lib/api.js', () => ({
   openExtensionPageRun: vi.fn(),
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
+  resolveExtensionPageSession: vi.fn(),
+  openExtensionPageSpecialist: vi.fn(),
   readExtensionPageTimelineChildren: (...args) => runChildren(...args),
   readExtensionPageToolCall: (...args) => toolCall(...args),
   listServerDirectory: vi.fn(),
@@ -140,6 +142,118 @@ async function flushReplies() {
 }
 
 describe('ExtensionPage frame bridge', () => {
+  it('opens an owner-bound specialist on user activation and samples this frame at send time', async () => {
+    const close = vi.fn();
+    const appChats = { openSpecialist: vi.fn(() => ({ close })) };
+    const page = openPage({ appChats });
+    const activation = { isActive: false };
+    Object.defineProperty(navigator, 'userActivation', {
+      configurable: true,
+      value: activation,
+    });
+    try {
+      document.querySelector('iframe').focus();
+      page.call('auto', 'chat.open_specialist', { profile: 'assistant' });
+      await page.replied('auto');
+      expect(appChats.openSpecialist).not.toHaveBeenCalled();
+      expect(page.errors()).toContain('auto');
+      page.call('unattended', 'chat.open_app', {});
+      await page.replied('unattended');
+      expect(page.errors()).toContain('unattended');
+      activation.isActive = true;
+      page.call('send', 'chat.open_app', { message: 'run a command' });
+      await page.replied('send');
+      expect(page.errors()).toContain('send');
+      page.call('app', 'chat.open_app', {});
+      await page.replied('app');
+      const [shared] = appChats.openSpecialist.mock.calls[0];
+      expect(shared.profile).toBe('app');
+      expect(shared.createSession).toBeUndefined();
+      page.message({
+        ...page.init,
+        type: 'vbot.extension.chat.context',
+        value: { docs: 'references/configuration.md' },
+      });
+      expect(shared.getUiContext()).toEqual({
+        view: 'extension:alpha:main',
+        docs: 'references/configuration.md',
+      });
+      page.call('open', 'chat.open_specialist', {
+        profile: 'assistant',
+        presentation: 'compact',
+      });
+      await page.replied('open');
+      const [config] = appChats.openSpecialist.mock.calls[1];
+      expect(config.profile).toBe('extension:alpha:assistant');
+      expect(config.presentation).toBe('compact');
+      for (const field of ['one', 'two']) {
+        page.message({
+          ...page.init,
+          type: 'vbot.extension.chat.context',
+          value: { field },
+        });
+        expect(config.getUiContext()).toEqual({
+          view: 'extension:alpha:main',
+          field,
+        });
+      }
+      page.message({
+        ...page.init,
+        type: 'vbot.extension.chat.context',
+        value: { view: 'settings' },
+      });
+      expect(config.getUiContext()).toEqual({ view: 'extension:alpha:main' });
+      await config.createSession('request');
+      expect(api.openExtensionPageSpecialist).toHaveBeenCalledExactlyOnceWith(
+        'alpha',
+        pageRef,
+        'assistant',
+        'request',
+      );
+      component.update({ descriptor: { ...descriptor, epoch: 'other' } });
+      flushSync();
+      expect(close).toHaveBeenCalledOnce();
+      expect(() => config.getUiContext()).toThrow();
+    } finally {
+      delete navigator.userActivation;
+    }
+  });
+  it('discards a released participant view while its address is resolving, without sending Session data to the page', async () => {
+    const page = openPage();
+    let finish;
+    api.resolveExtensionPageSession.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const params = { slot: '1', group_id: 'group', participant_id: 'worker' };
+    page.call('mount', 'session.embed', params);
+    await flushReplies();
+    expect(api.resolveExtensionPageSession).toHaveBeenCalledWith(
+      'alpha',
+      pageRef,
+      'group',
+      'worker',
+    );
+    const bounds = { x: 0, y: 0, width: 400, height: 320, clip: [0, 0, 0, 0] };
+    page.message({
+      ...page.init,
+      type: 'vbot.extension.session.bounds',
+      slot: '1',
+      bounds,
+    });
+    page.message({
+      ...page.init,
+      type: 'vbot.extension.session.release',
+      slot: '1',
+    });
+    finish({ agent_id: 'worker', session_id: 'private' });
+    await page.replied('mount');
+    flushSync();
+    expect(document.querySelector('.session-embed')).toBeNull();
+    expect(page.reply('mount').result).toEqual({});
+  });
   it.each(['session_id', 'message_id', 'editor_mode'])(
     'binds declared services and surface commands to the current page and %s context',
     async (scopeField) => {
@@ -400,7 +514,30 @@ describe('ExtensionPage frame bridge', () => {
     navigation.replace([]);
     flushSync();
     expect(routes().at(-1)).toBe('');
+    const guardedNavigate = navigation.navigate.bind(navigation);
+    let accept;
+    navigate.mockImplementationOnce(
+      (place) =>
+        new Promise((resolve) => {
+          accept = () => resolve(guardedNavigate(place));
+        }),
+    );
     page.call('push', 'route.push', { route: '/swarms/swr-b/usage' });
+    await flushReplies();
+    expect(page.reply('push')).toBeUndefined();
+    accept();
+    await page.replied('push');
+    const posted = page.posted();
+    expect(
+      posted.findIndex((message) => message.id === 'push'),
+    ).toBeGreaterThan(
+      posted.findIndex(
+        (message) =>
+          message.type === 'vbot.extension.context' &&
+          message.route === '/swarms/swr-b/usage',
+      ),
+    );
+    expect(routes().at(-1)).toBe('/swarms/swr-b/usage');
     page.call('replace', 'route.replace', { route: '/profiles/prf-a' });
     await page.replied('replace');
     expect(navigate).toHaveBeenCalledWith(['swarms', 'swr-b', 'usage']);

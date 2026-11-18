@@ -151,7 +151,9 @@ class TemporaryAgentConfig:
                 self.thinking_effort_override, label="thinking_effort_override"
             )
         normalized_access = replace(
-            normalize_tool_access(self.tool_access), fixed=getattr(self.tool_access, "fixed", False)
+            normalize_tool_access(self.tool_access),
+            fixed=getattr(self.tool_access, "fixed", False),
+            exact=getattr(self.tool_access, "exact", False),
         )
         if not isinstance(self.tools, dict):
             raise ValueError("temporary tools must be an object")
@@ -184,6 +186,14 @@ class TemporaryAgentConfig:
         )
 
 
+@dataclass(frozen=True, kw_only=True)
+class AppChatAgentConfig(TemporaryAgentConfig):
+    """A declared operator chat profile, captured at Session creation."""
+
+    profile_id: str
+    profile_revision: str
+
+
 @dataclass(frozen=True)
 class TemporaryAgent:
     """A workspace-less RuntimeAgent resolved only from its Session binding."""
@@ -211,6 +221,8 @@ class TemporaryAgent:
     created_at: str = ""
     updated_at: str = ""
     compaction_policy: dict[str, Any] | None = None
+    # App chat profiles use packaged prompt blocks independent of user overrides.
+    bundled_prompt: bool = False
     # A temporary Agent has no On-demand Tools.
     tool_loading: dict[str, Any] | None = None
     # The owner's rules (``TemporaryAgentConfig.permission_rules``) and ceiling.
@@ -344,6 +356,9 @@ class TemporaryAgentRegistry:
         # Written only when set: an inheriting participant keeps the exact
         # configuration of bindings that predate the optional key, so their
         # idempotent re-creation still reconciles.
+        if isinstance(config, AppChatAgentConfig):
+            result["app_chat_profile"] = config.profile_id
+            result["app_chat_revision"] = config.profile_revision
         if config.compaction_policy is not None:
             result["compaction_policy"] = deepcopy(config.compaction_policy)
         if not config.project_memory_enabled:
@@ -352,6 +367,8 @@ class TemporaryAgentRegistry:
             result["top_p"] = config.top_p
         if config.tool_access.fixed:
             result["fixed_tool_access"] = True
+        if config.tool_access.exact:
+            result["exact_tool_access"] = True
         if config.repository_profile is not None:
             result["repository_profile"] = config.repository_profile
         if config.identity_profile is not None:
@@ -369,19 +386,33 @@ class TemporaryAgentRegistry:
             result["permission_ceiling"] = deepcopy(dict(config.permission_ceiling))
         return result
 
-    def identity_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
+    def session_agent(
+        self, address: SessionAddress, *, include_temporary: bool = False
+    ) -> TemporaryAgent | OwnedIdentityAgent | None:
+        """Read the current binding of an addressed Session and resolve its Agent.
+
+        Ordinary resolution applies owned Identity profiles. Inspection can also
+        resolve a temporary participant and its same-Agent delegated Sessions.
+        An address without a live Session never inherits another binding.
+        """
         from core.sessions.errors import SessionNotFoundError
 
         try:
             binding = self._sessions.temporary_binding(address)
         except SessionNotFoundError:
             return None
-        return binding if binding is not None and binding.config.get("identity_agent") else None
+        if binding is None and include_temporary:
+            binding = self._sessions.temporary_agent_binding(address.project_id, address.agent_id)
+        if binding is None or not (include_temporary or binding.config.get("identity_agent")):
+            return None
+        return self._from_binding(binding)
 
-    async def identity_binding_async(
-        self, address: SessionAddress
-    ) -> TemporarySessionBinding | None:
-        return await self._sessions.run_async(self.identity_binding, address)
+    async def session_agent_async(
+        self, address: SessionAddress, *, include_temporary: bool = False
+    ) -> TemporaryAgent | OwnedIdentityAgent | None:
+        return await self._sessions.run_async(
+            self.session_agent, address, include_temporary=include_temporary
+        )
 
     def _identity(self, agent_id: str, incarnation: str | None) -> Agent:
         if self._resolve_identity is None:
@@ -414,6 +445,7 @@ class TemporaryAgentRegistry:
         owner_access = replace(
             normalize_tool_access(config["tool_access"]),
             fixed=config.get("fixed_tool_access", False),
+            exact=config.get("exact_tool_access", False),
         )
         owner_skills = config["allowed_skills"]
         skills = (
@@ -485,6 +517,12 @@ class TemporaryAgentRegistry:
         binding = self._sessions.temporary_binding(address)
         if binding is None or binding.generation_id != generation_id:
             return None
+        return self._from_binding(binding)
+
+    def _from_binding(
+        self, binding: TemporarySessionBinding
+    ) -> TemporaryAgent | OwnedIdentityAgent:
+        address = binding.address
         config = binding.config
         if config.get("identity_agent"):
             return self._owned_identity(config, address)
@@ -508,12 +546,14 @@ class TemporaryAgentRegistry:
                 tool_access=replace(
                     normalize_tool_access(config["tool_access"]),
                     fixed=config.get("fixed_tool_access", False),
+                    exact=config.get("exact_tool_access", bool(config.get("app_chat_profile"))),
                 ),
                 allowed_skills=list(config["allowed_skills"]),
                 tools=dict(config["tools"]),
                 fallback_models=list(config.get("fallback_models", [])),
                 delegation_bindings=dict(bindings),
                 instructions=str(config.get("instructions", "")),
+                bundled_prompt=config.get("app_chat_profile") is not None,
                 prompt_blocks=deepcopy(config.get("prompt_blocks")),
                 temperature=config.get("temperature"),
                 top_p=config.get("top_p"),

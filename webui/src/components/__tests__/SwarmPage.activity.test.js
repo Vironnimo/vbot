@@ -84,6 +84,60 @@ describe('Swarm participant Activity', () => {
     expect(document.body.textContent).not.toContain('detached-stream-sentinel');
   });
 
+  it('hands the selected participant to the native Session view and resumes Activity only after closing it', async () => {
+    const selected = swarmWithRun('run-selected');
+    selected.participants.push({
+      ...swarm.participants[1],
+      run_active: true,
+      lifecycle_run_id: 'run-second',
+    });
+    const { bridge } = createBridge(profile, selected);
+    bridge.subscribeRun.mockResolvedValue({
+      subscription_id: 'selected-stream',
+    });
+    await openParticipant(bridge);
+    await vi.waitFor(() =>
+      expect(bridge.subscribeRun).toHaveBeenCalledTimes(1),
+    );
+    button(t('swarm.activity.showSession')).click();
+    await tick();
+    expect(bridge.mountSession).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      'swr-a',
+      'prt-a',
+      expect.any(Function),
+      'compact',
+    );
+    expect(bridge.unsubscribeRun).toHaveBeenCalledWith('selected-stream');
+    expect(document.querySelector('.history')).toBeNull();
+    const dispose = bridge.mountSession.mock.results[0].value;
+    button('Beta').click();
+    await vi.waitFor(() =>
+      expect(bridge.mountSession).toHaveBeenCalledTimes(2),
+    );
+    expect(bridge.mountSession).toHaveBeenLastCalledWith(
+      expect.any(HTMLElement),
+      'swr-a',
+      'prt-b',
+      expect.any(Function),
+      'compact',
+    );
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(bridge.readHistory).toHaveBeenCalledTimes(1);
+    const disposeSecond = bridge.mountSession.mock.results[1].value;
+    button(t('swarm.activity.showActivity')).click();
+    await vi.waitFor(() =>
+      expect(bridge.subscribeRun).toHaveBeenCalledTimes(2),
+    );
+    expect(disposeSecond).toHaveBeenCalledTimes(1);
+    expect(bridge.subscribeRun).toHaveBeenLastCalledWith(
+      'swr-a',
+      'run-second',
+      0,
+      { timeline: true, childLimit: 100 },
+    );
+  });
+
   it('opens Activity links through the extension bridge', async () => {
     const { bridge, operation } = createBridge();
     await openParticipant(bridge);

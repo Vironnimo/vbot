@@ -16,7 +16,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
   import {
     buildChatWidthOptions,
     buildChatWorkingModeOptions,
@@ -38,8 +38,6 @@
     onError = noop,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
   let selectedLanguageId = $state(
     untrack(() => settings?.appearance?.language ?? 'en'),
   );
@@ -50,10 +48,11 @@
     untrack(() => getPersistedChatWorkingMode(settings)),
   );
   let saving = $state(false);
-  const appearanceDraft = createSettingsDraft({
+  const appearanceDraft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
     submit: submitDraftSettings,
-    settings: untrack(() => settings),
+    getSettings: () => settings,
+    onError: (message) => onError(message),
     fromSettings: (next) => ({
       language: next?.appearance?.language ?? 'en',
       chatWidth: getPersistedChatWidth(next),
@@ -185,7 +184,13 @@
 <!-- The Language row appears only when there is a language to choose. -->
 <div class="s-group">
   {#if availableLanguageOptions.length > 1}
-    <div class="s-row">
+    <div
+      class="s-row"
+      data-setting-path="appearance.language"
+      data-setting-options={languageDropdownOptions
+        .map((option) => option.value)
+        .join(' ')}
+    >
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.appearance.language')}
@@ -205,7 +210,13 @@
     </div>
   {/if}
 
-  <div class="s-row">
+  <div
+    class="s-row"
+    data-setting-path="appearance.chat_width"
+    data-setting-options={chatWidthDropdownOptions
+      .map((option) => option.value)
+      .join(' ')}
+  >
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.appearance.chatWidth.label')}
@@ -227,7 +238,13 @@
     </div>
   </div>
 
-  <div class="s-row">
+  <div
+    class="s-row"
+    data-setting-path="appearance.chat_working_mode"
+    data-setting-options={chatWorkingModeDropdownOptions
+      .map((option) => option.value)
+      .join(' ')}
+  >
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.appearance.chatWorkingMode.label')}

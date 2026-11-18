@@ -21,7 +21,7 @@ import {
   modelFavoriteFields,
 } from '$lib/modelFavorites.svelte.js';
 import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
-import { createSettingsDraft } from '$lib/settingsSave.js';
+import { createSettingsEditorDraft } from '$lib/settingsEditorDraft.svelte.js';
 import {
   JSON_OPTION_TYPE,
   TASK_MODEL_ROWS,
@@ -84,14 +84,13 @@ export function createTaskModelEditor({
     };
   }
 
-  // Seeded once from the Settings at creation; later commits flow back
-  // through the saved-state comparison.
   let bindings = $state(untrack(() => scopedBindings(getSettings())));
   // Counts user edits, so a save that finishes after another edit stays armed.
   let edits = 0;
-  const draft = createSettingsDraft({
+  const draft = createSettingsEditorDraft({
     reload: reloadDraftSettings,
-    settings: untrack(() => getSettings()),
+    getSettings,
+    onError: (message) => onError(message),
     fromSettings: scopedBindings,
     read: () => bindings,
     write: replaceBindings,

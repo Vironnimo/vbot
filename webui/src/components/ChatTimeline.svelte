@@ -3,9 +3,11 @@
   import { tick, untrack } from 'svelte';
 
   import {
+    conversationTimelineRows,
     dateKeyForTimestamp,
     formatDate,
     groupTransientCards,
+    labelForEvent,
     liveClockCadenceMs,
     runFooterGroups,
     timestampForItem,
@@ -44,7 +46,9 @@
     currentRun = null,
     agentName = '',
     chatWorkingMode = 'normal',
-    transientCards = [],
+    presentation = 'full',
+    readOnly = false,
+    transientCards: sourceCards = [],
     submittedTurnScrollKey = 0,
     // Height of the floating composer stack overlaying this timeline's
     // bottom; the bottom padding reserves space for it so the newest
@@ -68,7 +72,7 @@
     // Open in split view for Sub-Agent links (`{ label, open(target) }`, with
     // the link's `{ agentId, sessionId }` target); null offers no link menu.
     otherArea = null,
-    onCancelToolCall = () => {},
+    onCancelToolCall = null,
     onStopBackgroundCommand = null,
     onBackgroundToolCall = () => {},
     onCancelSubAgent = () => {},
@@ -92,8 +96,18 @@
     onScrollbarWidthChange = () => {},
   } = $props();
 
+  const conversation = $derived(presentation === 'conversation');
+  const workingMode = $derived(
+    presentation === 'compact' ? 'compact' : chatWorkingMode,
+  );
+  const presentedItems = $derived(
+    conversation
+      ? conversationTimelineRows(sourceTimelineItems)
+      : sourceTimelineItems,
+  );
+  const transientCards = $derived(conversation ? [] : sourceCards);
   const timelineItems = $derived(
-    timelineRowsForViewport(sourceTimelineItems, chatWorkingMode),
+    timelineRowsForViewport(presentedItems, workingMode),
   );
   // Keyed by source item id: every viewport part of a Run carries its Run's.
   const latestRunItemId = $derived(
@@ -143,7 +157,9 @@
   let lightboxImage = $state(null);
   // Disclosure and pending-action state of the rows, per displayed Session;
   // rows read it through context so it outlives their components.
-  const viewState = provideTimelineViewState(createTimelineViewState());
+  const viewState = provideTimelineViewState(
+    createTimelineViewState(() => readOnly),
+  );
   // Text of the polite live region: only genuinely new content (see
   // `timelineAnnouncer.js`), never rows the window mounts while scrolling.
   const announcer = createTimelineAnnouncer();
@@ -298,7 +314,7 @@
   });
 
   $effect(() => {
-    const items = sourceTimelineItems;
+    const items = presentedItems;
     const cards = transientCards;
     const key = sessionScrollKey;
     const text = announcer.update(items, cards, key, {
@@ -548,7 +564,7 @@
     return (
       hasOlderHistory &&
       !loadingOlderHistory &&
-      timelineItems.length > 0 &&
+      sourceTimelineItems.length > 0 &&
       Boolean(scrollContainer)
     );
   }
@@ -567,8 +583,12 @@
       <EmptyState
         fill
         class="chat-timeline-empty"
-        title={t('chat.historyEmptyTitle')}
-        description={t('chat.historyEmpty')}
+        title={conversation && sourceTimelineItems.length
+          ? t('chat.noConversationMessages')
+          : t('chat.historyEmptyTitle')}
+        description={readOnly || sourceTimelineItems.length
+          ? ''
+          : t('chat.historyEmpty')}
       >
         {#snippet icon()}
           <svg viewBox="0 0 32 32" width="38" height="38">
@@ -609,7 +629,7 @@
           run_id: currentRun?.runId ?? uiContext.run_id ?? '',
           run_active: uiContext.run_active ?? currentRun?.status === 'running',
         }}
-        data={{ items: sourceTimelineItems }}
+        data={{ items: presentedItems }}
         commands={{ 'timeline.latest': () => jumpToLatest() }}
         builtins={[
           {
@@ -651,12 +671,26 @@
         {formatDate(timestampForItem(item))}
       </div>
     {/if}
-    {#if item.type === 'assistant_run'}
+    {#if item.type === 'run_status'}
+      <div class="run-footer">
+        {item.status === 'running'
+          ? t('chat.working.active')
+          : labelForEvent({ type: `run_${item.status}` })}
+      </div>
+    {:else if item.type === 'history_gap'}
+      <div
+        class="run-history-gap"
+        aria-hidden="true"
+        data-history-gap={item.run_id}
+        data-history-gap-before={item.before}
+      ></div>
+    {:else if item.type === 'assistant_run'}
       <ChatAssistantRun
         {uiContext}
         {item}
         {agentName}
-        {chatWorkingMode}
+        chatWorkingMode={workingMode}
+        summarizeSingleSteps={presentation === 'compact'}
         {subAgentStatuses}
         {backgroundCommandStatuses}
         {commandStatuses}

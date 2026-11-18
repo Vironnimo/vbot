@@ -24,10 +24,10 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 35
-SDK_VERSION: Final[str] = "35.0.0"
+API_VERSION: Final[int] = 37
+SDK_VERSION: Final[str] = "37.0.0"
 
-def require_api(minimum: int = 35, *, maximum: int | None = None) -> int: ...
+def require_api(minimum: int = 37, *, maximum: int | None = None) -> int: ...
 
 @dataclass(frozen=True)
 class TemporaryAgentConfig:
@@ -122,6 +122,19 @@ class ExtensionAPI:
         family: str | None = None,
         announce_changes: Sequence[str] = (),
         secret_sinks: Mapping[str, str] | None = None,
+    ) -> None: ...
+    def register_app_chat_profile(
+        self,
+        profile_id: str,
+        *,
+        name: str,
+        instructions: str,
+        tools: Sequence[str] = (),
+        tool_settings: Mapping[str, Any] | None = None,
+        permission_ceiling: Mapping[str, Any] | None = None,
+        skills: Sequence[str] = (),
+        prompt_blocks: Sequence[str] = ("core:tools", "core:system_reminders"),
+        model: str = "",
     ) -> None: ...
     def register_page(
         self,

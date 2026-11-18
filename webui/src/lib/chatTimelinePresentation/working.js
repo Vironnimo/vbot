@@ -22,8 +22,13 @@ const isWorkingChild = (child) =>
 // Compact Work details fold each contiguous span of at least two Thinking or
 // Tool rows into one Working line; Assistant output, speech, widgets, Portal cards,
 // user messages and every other row stay in place, and a single Thinking or
-// Tool row stays inline.
-export function groupRunChildren(children, workingMode) {
+// Tool row stays inline in normal Chat. An embedded compact presentation
+// can also summarize a single row.
+export function groupRunChildren(
+  children,
+  workingMode,
+  summarizeSingleSteps = false,
+) {
   if (workingMode !== 'compact') {
     return children.map((child) => ({
       id: `child:${child.id}`,
@@ -35,9 +40,9 @@ export function groupRunChildren(children, workingMode) {
   const groups = [];
   let span = [];
   const flush = () => {
-    if (span.length === 1) {
+    if (span.length === 1 && !summarizeSingleSteps) {
       groups.push({ id: `child:${span[0].id}`, type: 'child', child: span[0] });
-    } else if (span.length > 1) {
+    } else if (span.length) {
       groups.push({
         id: `working:${span[0].id}`,
         type: 'working',

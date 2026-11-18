@@ -17,8 +17,8 @@
   top: var(--swarm-run-sticky-top, calc(-1 * var(--page-inset-top, 0px)));
   z-index: 1;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  grid-template-areas: 'avatar name context close';
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'avatar name context session close';
   align-items: center;
   gap: 8px 12px;
   padding-block: 10px;
@@ -26,8 +26,8 @@
   background: var(--bg);
 }
 .swarm-page .activity-head:has(.activity-head__resume) {
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-  grid-template-areas: 'avatar name context resume close';
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  grid-template-areas: 'avatar name context session resume close';
 }
 .swarm-page .activity-head > .participant-avatar {
   grid-area: avatar;
@@ -47,6 +47,13 @@
   grid-area: resume;
   justify-self: start;
 }
+.swarm-page .activity-head__session {
+  grid-area: session;
+  justify-self: start;
+}
+.swarm-page .activity-session {
+  height: clamp(320px, 60dvh, 840px);
+}
 .swarm-page .activity-head__close {
   grid-area: close;
 }
@@ -63,11 +70,12 @@
 .swarm-page .activity-stop {
   margin-inline: var(--chat-msg-gutter);
 }
-@container swarm-activity (max-width: 520px) {
+@container swarm-activity (max-width: 650px) {
+  .swarm-page .activity-head,
   .swarm-page .activity-head:has(.activity-head__resume) {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
       'avatar name context close'
-      '. resume resume resume';
+      '. session resume resume';
   }
 }

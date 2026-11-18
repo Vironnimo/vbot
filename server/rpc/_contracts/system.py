@@ -1095,6 +1095,8 @@ SERVICE_EXCLUSIONS = {
     "extensions.page_history": (
         "Page-owned temporary Session history belongs to its registration-bound browser bridge."
     ),
+    "extensions.page_session": "The registered page resolves only its own participant Sessions.",
+    "extensions.page_open_specialist": "Starts a chat with the current page's registered profile.",
     "extensions.page_tool_call": (
         "Page-owned Tool-call projection belongs to its registration-bound browser bridge."
     ),

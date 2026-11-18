@@ -91,6 +91,11 @@ def _global_roots(
     ]
 
 
+def bundled_skill_path(root: Path, name: str, docs_path: Path | None) -> Path:
+    """Use the published immutable generation for the bundled documentation package."""
+    return docs_path if name == "vbot-docs" and docs_path is not None else root / name
+
+
 def _bundled_roots(root: Path, docs_path: Path | None) -> list[_GlobalRoot]:
     if docs_path is None:
         return [_GlobalRoot(root, "bundled")]
@@ -101,7 +106,7 @@ def _bundled_roots(root: Path, docs_path: Path | None) -> list[_GlobalRoot]:
         return [_GlobalRoot(root, "bundled")]
     roots: list[_GlobalRoot] = []
     for candidate in packages:
-        package = docs_path if candidate.name == "vbot-docs" else candidate
+        package = bundled_skill_path(root, candidate.name, docs_path)
         try:
             if not is_dir_strict(package) or not is_file_strict(package / "SKILL.md"):
                 continue

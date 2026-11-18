@@ -465,6 +465,100 @@ async def _extension_page_cancel_tool(state: Any, params: JsonObject) -> JsonObj
         raise _map_expected_error(error) from error
 
 
+async def _extension_page_session(state: Any, params: JsonObject) -> JsonObject:
+    """Resolve the Session to display in a host-rendered participant view."""
+    _reject_unsupported(
+        params, {"name", "page", "group_id", "participant_id"}, "extensions.page_session"
+    )
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    participant_id = _required_string(params, "participant_id")
+    registry = state.runtime.extensions
+    try:
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
+        sessions = state.runtime.chat_sessions
+        binding = await sessions.run_async(
+            sessions.temporary_binding_by_participant,
+            owner_name=name,
+            group_id=group_id,
+            participant_id=participant_id,
+        )
+        _validate_page_context(state.runtime, registry, name, params["page"])
+        if binding is None:
+            raise ValueError("This participant has no Session in this Extension.")
+        address = binding.address
+        return {
+            "agent_id": address.agent_id,
+            "project_id": address.project_id,
+            "session_id": address.session_id,
+        }
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
+async def _extension_page_open_specialist(state: Any, params: JsonObject) -> JsonObject:
+    """Open or recover one page request's operator Session under its declared task profile."""
+    from core.settings.agent_defaults import AgentDefaults
+    from server.rpc.session_methods import app_chat_model
+
+    _reject_unsupported(
+        params, {"name", "page", "profile", "request_id"}, "extensions.page_open_specialist"
+    )
+    name = _required_string(params, "name")
+    profile_id = _required_string(params, "profile")
+    request_id = _required_string(params, "request_id")
+    if len(request_id) > 128 or not request_id.isascii() or not request_id.isprintable():
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "request_id must be a bounded printable id")
+    runtime = state.runtime
+    registry = runtime.extensions
+    group = f"app-chat:{request_id}"
+    try:
+        _validate_page_context(runtime, registry, name, params.get("page"))
+        identity = ExtensionRegistrationIdentity(name, params["page"]["epoch"])
+        profile = registry.current_app_chat_profile(identity, profile_id)
+        if profile is None:
+            raise ValueError("This Extension does not declare the requested app chat profile")
+        if unavailable := profile.unavailable_tool(name, runtime.tools):
+            raise ValueError(f"App chat Tool '{unavailable}' is unavailable to this profile")
+        host = registry.host_for(identity)
+        sessions = runtime.chat_sessions
+        binding = await sessions.run_async(
+            sessions.temporary_binding_by_participant,
+            owner_name=name,
+            group_id=group,
+            participant_id="operator",
+        )
+        if binding is None:
+            defaults = await _SETTINGS_WORKERS.run(runtime.storage.load_defaults)
+            agent_defaults = AgentDefaults.from_dict(defaults.get("agent"))
+            model = await app_chat_model(runtime, profile.model or agent_defaults.model)
+            config = profile.configuration(model, agent_defaults, host.state_dir)
+            await _SETTINGS_WORKERS.run(
+                runtime.agent_resolver.require_chat_model_configured, config.model
+            )
+            _validate_page_context(runtime, registry, name, params["page"])
+            binding = await host.temporary_agents.create(group, "operator", config)
+        _validate_page_context(runtime, registry, name, params["page"])
+        if (
+            binding.config.get("app_chat_profile") != profile.id
+            or registry.session_capability(binding, runtime.tools) is None
+        ):
+            raise ValueError(
+                "This chat has a different or unavailable profile. Open a new conversation."
+            )
+        return {
+            "agent_id": binding.address.agent_id,
+            "session_id": binding.address.session_id,
+            "project_id": binding.address.project_id,
+        }
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
 async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
     """Project one owner-bound temporary Session history for a registered page."""
     from server.timeline import capture_run_timeline
@@ -712,7 +806,11 @@ def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) ->
     if not isinstance(page_id, str) or not isinstance(epoch, str):
         raise ValueError("page requires id and epoch strings")
     identity = ExtensionRegistrationIdentity(name, epoch)
-    if runtime.extensions is not registry or registry.current_page(identity, page_id) is None:
+    if (
+        registry is None
+        or runtime.extensions is not registry
+        or registry.current_page(identity, page_id) is None
+    ):
         raise ValueError("Extension page is unavailable; refresh the page")
 
 
@@ -775,6 +873,10 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         ),
         "extensions.operation": _extension_operation,
         "extensions.page_history": _extension_page_history,
+        "extensions.page_session": _extension_page_session,
+        "extensions.page_open_specialist": serialized_mutation(
+            _extension_page_open_specialist, lock_attribute="_settings_mutation_lock"
+        ),
         "extensions.page_run": _extension_page_run,
         "extensions.page_timeline_children": _extension_page_timeline_children,
         "extensions.page_tool_call": _extension_page_tool_call,

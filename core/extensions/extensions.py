@@ -80,6 +80,7 @@ from core.extensions._loading import (
     refresh_page_availability,
     resolve_pages,
 )
+from core.extensions.app_chats import AppChatDeclaration
 from core.extensions.contributions import ContributionDeclaration
 from core.extensions.interactions import (
     InteractionEvent,
@@ -155,6 +156,23 @@ class ExtensionRegistry:
         return (
             self.is_registration_current(identity)
             and identity.name not in self._retired_service_owners
+        )
+
+    def current_app_chat_profile(
+        self,
+        identity: ExtensionRegistrationIdentity,
+        profile_id: str,
+    ) -> AppChatDeclaration | None:
+        """Return the operator chat profile from this live registration only."""
+        if not self.is_registration_current(identity):
+            return None
+        return next(
+            (
+                record.declarations.app_chat_profiles.get(profile_id)
+                for record in self._records
+                if record.name == identity.name and record.status == "loaded"
+            ),
+            None,
         )
 
     def current_page(
@@ -526,10 +544,23 @@ class ExtensionRegistry:
         )
         if record is None:
             return None
+        config = getattr(binding, "config", None)
+        if not isinstance(config, dict):
+            return None
+        profile_id = config.get("app_chat_profile")
+        profile = None
+        if profile_id is not None:
+            profile = record.declarations.app_chat_profiles.get(profile_id)
+            if profile is None or profile.revision != config.get("app_chat_revision"):
+                return None
+            if profile.unavailable_tool(owner_name, tool_registry) is not None:
+                return None
         declarations = [
-            declaration for declaration in record.declarations.tools if declaration.session_scoped
+            declaration
+            for declaration in record.declarations.tools
+            if declaration.session_scoped and (profile is None or declaration.name in profile.tools)
         ]
-        if not declarations:
+        if not declarations and profile is None:
             return None
         for declaration in declarations:
             try:
@@ -552,8 +583,12 @@ class ExtensionRegistry:
             tool_names=tuple(
                 declaration.name for declaration in declarations if declaration.name not in denied
             ),
-            prompt_blocks=tuple(record.declarations.session_prompt_blocks),
-            runtime=record.declarations.session_runtime,
+            prompt_blocks=tuple(
+                block
+                for block in record.declarations.session_prompt_blocks
+                if profile is None or f"extension_session:{block.slug}" in profile.prompt_blocks
+            ),
+            runtime=record.declarations.session_runtime if profile is None else None,
             identity=ExtensionRegistrationIdentity(owner_name, self._epoch),
         )
 

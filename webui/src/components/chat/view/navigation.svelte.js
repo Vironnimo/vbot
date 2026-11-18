@@ -12,9 +12,13 @@ import { onDestroy, tick, untrack } from 'svelte';
 import { createSessionProvenance } from './provenance.svelte.js';
 
 export function createChatViewNavigation(context) {
-  let viewingSessionId = $state('');
+  let viewingSessionId = $state(
+    untrack(() => context.boundSession?.sessionId ?? ''),
+  );
 
-  let viewingSessionAgentId = $state('');
+  let viewingSessionAgentId = $state(
+    untrack(() => context.boundSession?.agentAddress ?? ''),
+  );
 
   let viewingSubAgentSession = $state(false);
 

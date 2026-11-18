@@ -103,6 +103,14 @@ export function createComposerSubmission(context) {
       return;
     }
 
+    try {
+      // Capture the visible UI at the click, before asynchronous file lookup.
+      // A closing or retired source refuses the send and leaves its draft.
+      snapshot.uiContext = $state.snapshot(context.getUIContext?.());
+    } catch (error) {
+      context.onSendError?.(String(error?.message ?? error));
+      return;
+    }
     inFlight = true;
     try {
       const fileMentions =
@@ -117,6 +125,7 @@ export function createComposerSubmission(context) {
 
   const finishSubmit = async (snapshot, fileMentions) => {
     const sendOptionCandidates = {
+      ...(snapshot.uiContext ? { uiContext: snapshot.uiContext } : {}),
       ...(snapshot.inputOrigin ? { inputOrigin: snapshot.inputOrigin } : {}),
       ...(fileMentions.length > 0 ? { fileMentions } : {}),
       ...(snapshot.widgetStates.length > 0

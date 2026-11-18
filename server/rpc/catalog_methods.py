@@ -191,7 +191,7 @@ async def _command_skill_suggestions(
     agent_id, project_id = address
     resolver = state.runtime.agent_resolver
     agent = await resolver.resolve_agent_async(
-        project_id, agent_id, session_id=session_id, require_model=False
+        project_id, agent_id, session_id=session_id, require_model=False, include_temporary=True
     )
     try:
         working_project = await resolver.resolve_working_project_async(
@@ -251,6 +251,11 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
                 working_project_id=working_project_id,
             )
         )
+        if root is None:
+            result: JsonObject = {"root": None, "files": [], "directories": [], "truncated": False}
+            if directory is not None:
+                result["entries"] = []
+            return result
         if directory is not None:
             listed = await list_mention_directory(root, directory)
             return {

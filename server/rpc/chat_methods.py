@@ -79,6 +79,7 @@ from server.rpc.validation import (
     _optional_chat_input_origin,
     _optional_file_mentions,
     _optional_string,
+    _optional_ui_context,
     _optional_widget_states,
     _parse_chat_content,
     _reject_unsupported,
@@ -117,6 +118,7 @@ async def _submit_chat(
     reply_surface = _chat_reply_surface(params)
     file_mentions = _optional_file_mentions(params)
     widget_states = _optional_widget_states(params)
+    ui_context = _optional_ui_context(params)
 
     chat_loop: ChatLoop = state.chat_loop
     dispatcher: CommandDispatcher = state.command_dispatcher
@@ -147,6 +149,8 @@ async def _submit_chat(
             RPC_ERROR_INVALID_REQUEST,
             "params.widget_states can accompany only a message to an existing Session",
         )
+    if ui_context is not None and isinstance(target, _NewSessionTarget):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.ui_context requires an existing app chat")
     input_id = _accessor_input_id(params)
     request_hash = _accessor_request_hash(params)
     if prepared_command is None:
@@ -188,6 +192,8 @@ async def _submit_chat(
         )
 
     run_options: JsonObject = {}
+    if ui_context is not None:
+        run_options["ui_context"] = ui_context
     if input_origin is not None:
         run_options["input_origin"] = input_origin
     if widget_states and (note := await _widget_state_note(state, address, widget_states)):
@@ -197,7 +203,7 @@ async def _submit_chat(
         state, address, content, file_mentions, file_reads=file_reads
     )
 
-    if project_id is None:
+    if project_id is None and ui_context is None:
         await _mark_current_session(state, address)
     try:
         submission = await chat_loop.submit_accessor_input(

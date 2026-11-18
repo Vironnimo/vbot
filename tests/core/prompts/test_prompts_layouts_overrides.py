@@ -4,7 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import override
 
+from core.agents import APP_CHAT_PROFILES
 from core.agents.temporary import TemporaryAgent
+from core.projects import runtime_agent_body
 from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.prompts.prompts import ProjectPromptContext
 from core.storage.prompt_blocks import PromptBlockStore
@@ -112,6 +114,41 @@ def test_participant_selection_overrides_shared_enablement(tmp_path: Path) -> No
 
     assert manager.build_system_prompt(agent) == "tools-sentinel\n\nskills-sentinel"
     assert "runtime-sentinel" in manager.build_system_prompt(replace(agent, prompt_blocks=None))
+
+
+def test_app_chat_uses_its_role_and_packaged_blocks_even_with_global_customizations(
+    workspace: Path, tmp_path: Path
+) -> None:
+    profile = APP_CHAT_PROFILES["app"]
+    agent = replace(_agent(workspace, agent_id=profile.agent_id), builtin=profile.builtin)
+    store = StubBlockStore(
+        layouts={"default": [LayoutEntry(id="user:theme", enabled=True, source="user")]},
+        overrides={
+            ("default", "user:theme"): "theme-sentinel",
+            ("default", "core:tools"): "override-sentinel",
+        },
+    )
+    manager = _manager(
+        tmp_path, storage=StubStorage({"tools.md": "fragment-sentinel"}), block_store=store
+    )
+    details: list[dict[str, object]] = []
+    prompt = manager.build_system_prompt(
+        agent, agent_body=runtime_agent_body(agent), block_details=details
+    )
+    assert {block["id"] for block in details if block["included"]} == {
+        "core:agent_body",
+        "core:tools",
+        "core:system_reminders",
+    }
+    assert profile.role in prompt
+    assert all(
+        marker not in prompt
+        for marker in ("theme-sentinel", "override-sentinel", "fragment-sentinel")
+    )
+    assert manager.render_dynamic_blocks(agent) == {}
+    reads: list[FileRead] = []
+    assert manager.render_soul(agent, on_read=reads.append) == ""
+    assert reads == []
 
 
 def test_request_local_data_does_not_read_persistent_override_paths(

@@ -289,6 +289,14 @@ describe('Factory native work', () => {
             posts: [...posts],
             session,
             task_session: session && taskAddress,
+            session_binding: session && {
+              group_id: 'topic-first',
+              participant_id: 'leader',
+            },
+            task_session_binding: session && {
+              group_id: 'task-first',
+              participant_id: 'leader',
+            },
             replying: Boolean(session),
           }
         : { topic: null, posts: [] };
@@ -342,9 +350,23 @@ describe('Factory native work', () => {
     bridge.invalidate({ resource: 'topics' });
     await settle();
     button(t('factory.native.openSession')).click();
-    expect(bridge.openSession).toHaveBeenLastCalledWith(address);
+    await tick();
+    expect(bridge.mountSession).toHaveBeenLastCalledWith(
+      expect.any(HTMLElement),
+      'topic-first',
+      'leader',
+      expect.any(Function),
+      'conversation',
+    );
     button(t('factory.chat.openTaskSession')).click();
-    expect(bridge.openSession).toHaveBeenLastCalledWith(taskAddress);
+    await tick();
+    expect(bridge.mountSession).toHaveBeenLastCalledWith(
+      expect.any(HTMLElement),
+      'task-first',
+      'leader',
+      expect.any(Function),
+      'conversation',
+    );
     expect(document.querySelector('.project-overview').textContent).toContain(
       'Review PR 42',
     );
@@ -773,27 +795,23 @@ describe('Factory native work', () => {
         (node) => node.textContent === t('factory.native.outcome'),
       ),
     ).toBe(false);
-    button(t('factory.native.openSession')).click();
-    await settle();
-    expect(bridge.openSession).toHaveBeenCalledWith({
-      agent_id: 'drafter',
-      session_id: 'ses-one',
-      project_id: 'project-a',
-    });
-    sessionButtons[1].click();
-    await settle();
-    expect(bridge.openSession).toHaveBeenLastCalledWith({
-      agent_id: 'drafter',
-      session_id: 'ses-two',
-      project_id: 'project-a',
-    });
-    button(t('factory.native.readHistory')).click();
-    await settle();
-    expect(bridge.readHistory).toHaveBeenCalledWith(
+    for (const [index, group] of [
       'native-group',
-      'mem-worker',
-      { limit: 100, child_limit: 100 },
-    );
+      'native-group-epoch-two',
+    ].entries()) {
+      sessionButtons[index].click();
+      await tick();
+      expect(bridge.mountSession).toHaveBeenLastCalledWith(
+        expect.any(HTMLElement),
+        group,
+        'mem-worker',
+        expect.any(Function),
+        'conversation',
+      );
+      expect(
+        document.querySelectorAll('.factory-session-history'),
+      ).toHaveLength(1);
+    }
   });
   it('retains an edited objective through invalidation, rebases its revision and flushes before leaving', async () => {
     const { bridge, operation, data } = nativeBridge();

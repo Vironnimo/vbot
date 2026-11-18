@@ -87,6 +87,8 @@ def test_canonical_output_settles_streamed_phase_in_place_after_early_tool_compl
     )
     assert reason["durationEstimateMs"] is None
     assert answer["content"] == "Inspected."
+    assert not previous["items"][1].get("finalAnswer")
+    assert answer["finalAnswer"] is False
     assert tool["status"] == "success"
     assert tool["display"] == {"summary": "Read README"}
     assert all(not item["streaming"] for item in settled["items"])

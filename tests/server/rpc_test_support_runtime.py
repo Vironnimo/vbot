@@ -727,7 +727,11 @@ class StubRuntime:
         return None
 
     def set_server_port(
-        self, _port: int, *, own_hosts: Callable[[], tuple[str, ...]] | None = None
+        self,
+        _port: int,
+        *,
+        listen_host: str,
+        own_hosts: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         return None
 

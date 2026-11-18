@@ -76,6 +76,7 @@
     agentName = '',
     uiContext = {},
     chatWorkingMode = 'normal',
+    summarizeSingleSteps = false,
     subAgentStatuses = {},
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
@@ -83,7 +84,7 @@
     // Called with (event, target) for a right click or the context menu key
     // on a Sub-Agent link; null keeps the native menu.
     onSubAgentContextMenu = null,
-    onCancelToolCall = () => {},
+    onCancelToolCall = null,
     onStopBackgroundCommand = null,
     onBackgroundToolCall = () => {},
     // Reads the complete arguments and result of a Tool row, which the row
@@ -150,7 +151,11 @@
   }
 
   let runDisplayGroups = $derived(
-    groupRunChildren(visibleRunChildren(item), chatWorkingMode),
+    groupRunChildren(
+      visibleRunChildren(item),
+      chatWorkingMode,
+      summarizeSingleSteps,
+    ),
   );
 
   // The running Run's latest activity, also when this item is one viewport
@@ -219,7 +224,7 @@
       return;
     }
     await viewState.runPending(actionKey('tool', toolCallId), () =>
-      onCancelToolCall({ runId, toolCallId }),
+      onCancelToolCall?.({ runId, toolCallId }),
     );
   }
 
@@ -342,7 +347,9 @@
     {#snippet approvalCards(child)}
       <!-- A Tool row shows the approval it waits on; a Sub-Agent row the
            approvals its Session waits on, answerable from here. -->
-      {#if isSubAgentSpawnTool(child)}
+      {#if viewState.readOnly}
+        <!-- The Session link opens the ordinary Chat approval surface. -->
+      {:else if isSubAgentSpawnTool(child)}
         {#each approvalsInSubAgent(child) as request (request.id)}
           <ChatApprovalCard
             {request}
@@ -489,7 +496,7 @@
                   {subAgentTimeLabel}
                 </span>
               {/if}
-              {#if isRowCancellable({ kind: 'sub_agent', dotStatus })}
+              {#if !viewState.readOnly && isRowCancellable( { kind: 'sub_agent', dotStatus } )}
                 <Button
                   variant="danger"
                   icon
@@ -693,7 +700,7 @@
                   {rowTimeLabel}
                 </span>
               {/if}
-              {#if commandRowState?.dotStatus === 'running' && onStopBackgroundCommand}
+              {#if !viewState.readOnly && commandRowState?.dotStatus === 'running' && onStopBackgroundCommand}
                 <Button
                   variant="danger"
                   icon
@@ -719,8 +726,8 @@
                     <path d="m4 4 8 8M12 4l-8 8" />
                   </svg>
                 </Button>
-              {:else if isToolCancellable}
-                {#if backgroundToolCallIds.includes(child.toolCallId)}
+              {:else if isToolCancellable && (!viewState.readOnly || onCancelToolCall)}
+                {#if !viewState.readOnly && backgroundToolCallIds.includes(child.toolCallId)}
                   <Button
                     variant="tertiary"
                     icon
@@ -793,7 +800,8 @@
                 src={speechArtifact?.url ?? ''}
                 {playback}
                 cancelled={item.status === 'cancelled'}
-                autoplay={item.source === 'live' &&
+                autoplay={!viewState.readOnly &&
+                  item.source === 'live' &&
                   item.status !== 'cancelled' &&
                   viewState.claimAutoplay(
                     `${item.runId ?? item.id}:${child.toolCallId ?? child.id}`,

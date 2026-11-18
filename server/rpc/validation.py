@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Set as AbstractSet
+from functools import cache
 from typing import Any, Literal, cast
 
 from core.chat import ChatError, ReplySurface
@@ -18,6 +19,7 @@ from core.projects import (
 )
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.settings import is_valid_agent_id, is_valid_project_id
+from core.utils.config import VBOT_ROOT
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -92,6 +94,61 @@ def _optional_file_mentions(params: JsonObject) -> list[str]:
     if "file_mentions" not in params:
         return []
     return _required_string_list(params, "file_mentions")
+
+
+@cache
+def _bundled_app_chat_references() -> frozenset[str]:
+    package = VBOT_ROOT / "resources" / "skills" / "vbot-docs"
+    return frozenset(
+        path.relative_to(package).as_posix()
+        for path in (package / "references").rglob("*.md")
+        if path.is_file()
+    )
+
+
+def _optional_ui_context(params: JsonObject) -> dict[str, str | list[str]] | None:
+    """A small projection of the visible UI, never a form-value or executable payload."""
+    if "ui_context" not in params:
+        return None
+    context = params["ui_context"]
+    if not isinstance(context, dict) or "view" not in context:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.ui_context requires a view")
+    _reject_unsupported(
+        context,
+        {"view", "page", "section", "field", "selection", "options", "docs"},
+        "params.ui_context",
+    )
+    for key, value in context.items():
+        if key == "options":
+            if not isinstance(value, list) or len(value) > 32:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST, "params.ui_context.options accepts up to 32 labels"
+                )
+            labels = value
+        else:
+            labels = [value]
+        if any(
+            not isinstance(label, str) or not label.strip() or len(label) > 256 for label in labels
+        ):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.ui_context.{key} requires labels of 1 to 256 characters",
+            )
+        if key == "docs" and value not in _bundled_app_chat_references():
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.ui_context.docs requires a bundled vbot-docs reference such as "
+                "references/configuration.md",
+            )
+    try:
+        encoded = json.dumps(context, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except UnicodeEncodeError:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.ui_context requires Unicode text"
+        ) from None
+    if len(encoded) > 8192:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.ui_context exceeds 8192 bytes")
+    return context
 
 
 MAX_WIDGET_STATES = 8

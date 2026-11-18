@@ -88,6 +88,10 @@ export function startChatRun(params = {}, options = {}) {
   return rpc('chat.stream', params, options);
 }
 
+export function createAppChat(profile, sessionId) {
+  return rpc('session.create_app_chat', { profile, session_id: sessionId });
+}
+
 export function editChatMessage(params = {}, options = {}) {
   requirePlainObject(params, 'Chat edit must be an object', 'chat.edit');
   return rpc('chat.edit', params, options);

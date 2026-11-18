@@ -32,6 +32,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     extensionOperation: (name, operation, args = {}) =>
       call('extensions.operation', { name, operation, arguments: args }),
     getSettings: () => call('settings.get'),
+    createAppChat: (profile, sessionId) =>
+      call('session.create_app_chat', { profile, session_id: sessionId }),
     getSetup: () => call('setup.get'),
     updateSetup: (step) => call('setup.update', { step }),
     finishSetup: () => call('setup.finish'),

@@ -13,7 +13,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 from core.activity import IDLE
-from core.agents import BUILTIN_AGENT_IDS
+from core.agents import APP_CHAT_PROFILES, BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
 from core.chat.messages import ChatMessage
@@ -28,14 +28,17 @@ from core.projects import (
     parse_agent_address,
 )
 from core.runs import RunAdmissionBlockedError
+from core.runtime._setup import setup_agent
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    SESSION_ID_PATTERN,
     SessionAddress,
     SessionListCursor,
     SessionListFilters,
     SessionListPage,
     SessionProjectGrouping,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.subagents.links import descendants
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
@@ -51,6 +54,8 @@ from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
+    RPC_ERROR_AGENT_NOT_FOUND,
+    RPC_ERROR_INPUT_CONFLICT,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_SESSION_BUSY,
     RPC_ERROR_SESSION_IN_USE,
@@ -87,6 +92,63 @@ SESSION_LIST_DEFAULT_LIMIT = 100
 SESSION_LIST_MAX_LIMIT = 100
 
 SESSION_LIST_MAX_AGENT_BATCH = 100
+
+
+async def app_chat_model(runtime: Any, configured: str | None) -> str:
+    """Resolve the Model for a specialist independently of the first Agent's capabilities."""
+    if configured:
+        return configured
+    initial = await runtime.chat_sessions.run_async(setup_agent, runtime)
+    model = initial.model if initial is not None else None
+    if isinstance(model, str) and model:
+        return model
+    raise RpcError(
+        RPC_ERROR_INVALID_REQUEST,
+        "Choose a Model in first setup or set the default Agent Model to use app chat.",
+    )
+
+
+@_guard_agent_lifecycle
+async def _create_app_chat(state: Any, params: JsonObject) -> JsonObject:
+    """Start a canonical specialist Session, or recover the caller's exact launch."""
+    _reject_unsupported(params, {"profile", "session_id"}, "session.create_app_chat")
+    profile_id = _required_string(params, "profile")
+    session_id = _optional_string(params, "session_id")
+    if session_id is not None and SESSION_ID_PATTERN.fullmatch(session_id) is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.session_id is not a valid Session id")
+    profile = APP_CHAT_PROFILES.get(profile_id)
+    if profile is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"Unknown app chat profile: {profile_id}")
+    sessions = state.runtime.chat_sessions
+    # An older installation may already have a user's Agent with the same id.
+    agent = await sessions.run_async(state.runtime.agents.builtin_agent, profile.builtin)
+    if agent is None:
+        raise RpcError(RPC_ERROR_AGENT_NOT_FOUND, f"The {profile_id} app chat Agent is unavailable")
+    if session_id is not None:
+        address = SessionAddress(None, agent.id, session_id)
+        try:
+            launch_id = await sessions.metadata_value_async(address, "app_chat_launch_id")
+        except SessionNotFoundError:
+            pass
+        else:
+            if launch_id != session_id:
+                raise RpcError(
+                    RPC_ERROR_INPUT_CONFLICT, "Session id already belongs to a different launch"
+                )
+            return {"agent_id": agent.id, "session_id": session_id}
+    target: JsonObject = {
+        "agent_id": agent.id,
+        "session_id": session_id,
+        "working_project_id": None,
+    }
+    if not agent.model:
+        target["agent_overrides"] = {"model": await app_chat_model(state.runtime, agent.model)}
+    created = await _create_session(
+        state,
+        target,
+        initial_metadata={"app_chat_launch_id": session_id} if session_id is not None else None,
+    )
+    return {"agent_id": agent.id, "session_id": created["session_id"]}
 
 
 async def _create_session(
@@ -431,7 +493,11 @@ def _session_project_grouping(state: Any) -> SessionProjectGrouping:
     """Group by the registered Projects; the built-in Agents' Sessions stay out."""
     return SessionProjectGrouping(
         project_ids=tuple(project.project_id for project in state.runtime.projects.list()),
-        excluded_agent_ids=tuple(BUILTIN_AGENT_IDS.values()),
+        excluded_agent_ids=tuple(
+            agent_id
+            for kind, agent_id in BUILTIN_AGENT_IDS.items()
+            if state.runtime.agents.builtin_problem(kind) is None
+        ),
     )
 
 
@@ -786,9 +852,6 @@ async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     if not 1 <= len(run_ids) <= 200 or ("run_id" in params and "run_ids" in params):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Send run_id or 1-200 run_ids")
     try:
-        await state.runtime.agent_resolver.resolve_agent_async(
-            address.project_id, address.agent_id, require_model=False
-        )
         sessions = state.runtime.chat_sessions
         activity = (
             await sessions.mark_terminal_run_read_async(address, run_ids[0])
@@ -1100,6 +1163,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered session RPC handlers."""
     return {
         "session.create": _create_session,
+        "session.create_app_chat": _create_app_chat,
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
         "session.show": show_session,

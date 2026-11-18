@@ -15,7 +15,6 @@ export default {
   'factory.native.moreEvents': 'Load more events',
   'factory.native.archived': 'Archived',
   'factory.native.openSession': 'Open Session',
-  'factory.native.readHistory': 'Read execution history',
   'factory.native.inheritedModel': 'Use Agent defaults',
   'factory.native.factories': 'Projects',
   'factory.native.waitDependencies': 'Waiting for prerequisite tasks',
@@ -331,9 +330,6 @@ export default {
   'factory.invalid.limits':
     'Use non-negative whole numbers for Runs, Tool calls and Tokens, and a non-negative USD amount for cost. Leave blank or enter 0 for unlimited.',
   'factory.history': 'Session history',
-  'factory.noHistory': 'No Session activity yet.',
-  'factory.olderHistory': 'Load older messages',
-  'factory.olderSteps': 'Load earlier Run steps',
   'factory.hostUnavailable': 'The Factory page could not connect to vBot.',
   'factory.requestFailed': 'The request failed.',
   'factory.cardMissing': 'This card is no longer available.',

@@ -44,6 +44,7 @@ let histories = readStore(HISTORY_STORAGE_KEY) ?? {};
 let attachments = readStore(ATTACHMENTS_STORAGE_KEY) ?? {};
 // Keys this tab set or removed since its last persist, oldest edit first.
 const dirtyDrafts = new Set();
+const draftListeners = new Set();
 const attachmentListeners = new Set();
 // Only additions and explicit removals belong to this tab. An unchanged file
 // in a dirty Session must not return after another tab removed or sent it.
@@ -145,6 +146,7 @@ function schedulePersist() {
 function persistNow() {
   if (dirtyDrafts.size > 0) {
     drafts = persistKeyedChanges(DRAFTS_STORAGE_KEY, drafts, dirtyDrafts);
+    notifyDrafts();
   }
   if (pendingAttachmentChanges.length > 0) {
     attachments = withPendingAttachments(
@@ -254,6 +256,7 @@ function adoptOtherTabWrites() {
           drafts,
           dirtyDrafts,
         );
+        notifyDrafts();
       }
     }
     if (adoptAll || event.key === ATTACHMENTS_STORAGE_KEY) {
@@ -299,6 +302,26 @@ export function getDraft(sessionKey) {
   return typeof value === 'string' ? value : '';
 }
 
+// A popup and a retained Chat may both hold the same Session. Notify only
+// when the stored text for the observed key changes. Text excluded from
+// composer memory is never broadcast to a second input.
+export function subscribeDraft(sessionKey, listener) {
+  let previous = getDraft(sessionKey);
+  const update = () => {
+    const value = getDraft(sessionKey);
+    if (previous === value) return;
+    const replaced = previous;
+    previous = value;
+    listener(value, replaced);
+  };
+  draftListeners.add(update);
+  return () => draftListeners.delete(update);
+}
+
+function notifyDrafts() {
+  for (const update of draftListeners) update();
+}
+
 export function setDraft(sessionKey, text) {
   if (!sessionKey) {
     return;
@@ -318,6 +341,7 @@ export function setDraft(sessionKey, text) {
   markChanged(dirtyDrafts, sessionKey);
   pruneOldest(drafts, MAX_DRAFT_SESSIONS);
   schedulePersist();
+  notifyDrafts();
 }
 
 export function clearDraft(sessionKey) {
@@ -327,6 +351,7 @@ export function clearDraft(sessionKey) {
   delete drafts[sessionKey];
   markChanged(dirtyDrafts, sessionKey);
   schedulePersist();
+  notifyDrafts();
 }
 
 // Attachments have already been uploaded when they enter this store, so their
@@ -479,6 +504,7 @@ export function renameComposerAgent(oldAgentId, newAgentId) {
     return;
   }
   drafts = withRenamedSessionKeys(drafts, oldAgentId, newAgentId, dirtyDrafts);
+  notifyDrafts();
   attachments = withRenamedSessionKeys(attachments, oldAgentId, newAgentId);
   pendingAttachmentChanges.push({
     fromAgent: oldAgentId,
@@ -538,6 +564,7 @@ export function resetComposerMemory() {
   }
   writeStore(DRAFTS_STORAGE_KEY, drafts);
   writeStore(HISTORY_STORAGE_KEY, histories);
+  notifyDrafts();
   writeStore(ATTACHMENTS_STORAGE_KEY, attachments);
   notifyPendingAttachments();
 }

@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-35.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-37.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-35.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-37.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,61 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `35.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 35` in `extension.json` for Extensions using the new
+The SDK version is `37.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 37` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 37 adds hosted Session views and page-initiated specialist chats. Register a
+profile in Python and open its owner-local id from the page. For example, a
+calendar Extension with an existing private `calendar_lookup` Tool can declare:
+
+```python
+def register(api):
+    api.register_app_chat_profile(
+        "event-help",
+        name="Event assistant",
+        instructions="Answer questions about the selected calendar event.",
+        tools=["calendar_lookup"],
+        tool_settings={"calendar_lookup": {"include_archived": False}},
+    )
+```
+
+The role is the Agent's body. The default additional blocks are Tool Guidance
+and System Reminders. Pass `prompt_blocks` to select other block ids and
+`skills` to select explicit Skills. `model` overrides the default Agent Model
+for this profile. A fresh installation with no default uses the Model chosen
+during setup. Open it with `client.openSpecialist("event-help")` in the
+Extension page. See the [WebUI SDK](../../webui/extension-sdk/README.md) for
+sending view context and embedding a participant Session.
+
+`tool_settings` supplies settings by selected Tool name. A custom Tool reads
+its block through `context.tool_settings` and implements the supported options.
+The profile cannot add permanent Bash environment grants.
+Select each follower Tool and at least one Tool it follows to include it.
+
+Pass `permission_ceiling` to impose the same Permission Ceiling as an
+owner-managed `TemporaryAgentConfig`. It accepts expanded inherited layers,
+as produced by `PermissionBoundary.to_ceiling_dict(source="extension")`.
+For example, the following ceiling limits a selected Shell Tool to `git status`
+under the usual command and approval checks. Set `workdir` to an absolute path.
+The Shell Tool can use that directory by passing it as its own `workdir`.
+
+```python
+from pathlib import Path
+
+ceiling = {"layers": [{
+    "source": "extension", "workdir": str(Path(__file__).resolve().parent),
+    "read": "work_area", "write": "scratch", "commands": "listed", "web": "listed",
+    "allow": ["Shell(git status)"], "deny": [],
+}]}
+```
+
+The ceiling applies alongside the operator's default Permission Rules captured
+at creation and any Session overrides. Delegated Runs inherit the effective
+boundary. Editing a profile's Tool settings or ceiling requires a new conversation.
 
 API 35 adds `client.openAgent(agentId)` to the page bridge for opening an Identity Agent in the regular Agents editor.
 

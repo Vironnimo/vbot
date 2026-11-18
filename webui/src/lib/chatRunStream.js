@@ -32,6 +32,7 @@ export function createChatRunStream({
   refreshSessionQueue,
   reconcileRunSession = async () => false,
   isDisplayedSession,
+  acceptsSession = () => true,
   updateSubAgentRunStatuses,
   onReflectionFinished = () => {},
   reportStreamDiagnostic = () => {},
@@ -239,7 +240,12 @@ export function createChatRunStream({
 
   function handleServerEvent(serverEvent) {
     const event = runEventFromServerEvent(serverEvent);
-    if (!event?.agent_id || !event?.session_id) return;
+    if (
+      !event?.agent_id ||
+      !event?.session_id ||
+      !acceptsSession(event.agent_id, event.session_id)
+    )
+      return;
     trackActivity(event);
     const session = ensureSessionState(
       chatState,
@@ -278,7 +284,13 @@ export function createChatRunStream({
 
   function applyConnectionSnapshot(snapshot) {
     if (!Array.isArray(snapshot?.active_runs)) return;
-    const activeIds = new Set(snapshot.active_runs.map((run) => run.run_id));
+    const runs = snapshot.active_runs.filter((run) =>
+      acceptsSession(
+        formatAgentAddress(run?.agent_id, run?.project_id),
+        run?.session_id,
+      ),
+    );
+    const activeIds = new Set(runs.map((run) => run.run_id));
     for (const session of Object.values(chatState.sessions)) {
       if (!isRunActive(session) || activeIds.has(session.currentRun?.runId))
         continue;
@@ -288,8 +300,8 @@ export function createChatRunStream({
         void reconcile(session, session.currentRun.runId);
       } else resetStaleRun(session);
     }
-    activity.applySnapshot(snapshot.active_runs);
-    for (const run of snapshot.active_runs) {
+    activity.applySnapshot(runs);
+    for (const run of runs) {
       if (!run?.run_id || !run.agent_id || !run.session_id) continue;
       const address = formatAgentAddress(run.agent_id, run.project_id);
       const session = ensureSessionState(chatState, address, run.session_id);

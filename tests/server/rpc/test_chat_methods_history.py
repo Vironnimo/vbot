@@ -62,11 +62,12 @@ class _HistoryAgents:
         *,
         session_id: str | None = None,
         require_model: bool = True,
+        include_temporary: bool = False,
     ) -> SimpleNamespace:
         if project_id is not None:
             raise AgentResolutionError(f"agent '{agent_id}@{project_id}' not found")
         model = self.session_models.get(session_id or "", self.model)
-        return SimpleNamespace(compaction_policy=self.compaction_policy, model=model)
+        return SimpleNamespace(name="Coder", compaction_policy=self.compaction_policy, model=model)
 
 
 class _Automations:
@@ -988,6 +989,7 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
     first = await history.read()
     assert {"session_usage", "background_command_statuses", "compaction_policy"} <= set(first)
     assert first["reflection_runs"] == []
+    assert first["agent_name"] == "Coder"
     # Read but absent: an explicit null clears the caller's value.
     assert first["context_usage"] is None
 
@@ -1307,6 +1309,24 @@ async def test_history_omits_the_policy_when_the_agent_no_longer_resolves(
 
     assert result["messages"]
     assert "compaction_policy" not in result
+    assert result["agent_name"] is None
+
+    # The owning Extension keeps the participant's display name even when the
+    # ordinary roster resolver does not know it. Its delegated Sessions share it.
+    binding = SessionAddress("vbot", "tmp_participant", "bound")
+    history.sessions.create_bound_temporary_session(
+        binding,
+        owner_name="factory",
+        group_id="work",
+        participant_id="review",
+        config={"name": "Release reviewer"},
+    )
+    child = history.sessions.create(binding.agent_id, project_id="vbot", session_id="child")
+    for session_id in (binding.session_id, child.id):
+        timeline = await history.read(
+            method="chat.timeline", agent_id="tmp_participant@vbot", session_id=session_id
+        )
+        assert timeline["agent_name"] == "Release reviewer"
 
 
 @pytest.mark.asyncio

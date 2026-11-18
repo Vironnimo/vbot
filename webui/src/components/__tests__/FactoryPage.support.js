@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, expect, vi } from 'vitest';
-import { assistantRun, outputItem } from './timelineItems.support.js';
 vi.mock(
   'svelte',
   async () => import('../../../node_modules/svelte/src/index-client.js'),
@@ -176,7 +175,6 @@ export function createBridge(initialCards = [card('fct-a')]) {
   };
   const contexts = new Set();
   const invalidations = new Set();
-  const runEvents = new Set();
   const layers = [];
   let autosave;
   let context = null;
@@ -385,13 +383,6 @@ export function createBridge(initialCards = [card('fct-a')]) {
     invalidate(change = null) {
       for (const callback of invalidations) callback({ reason: null, change });
     },
-    onRunEvent(callback) {
-      runEvents.add(callback);
-      return () => runEvents.delete(callback);
-    },
-    emitRun(id, event) {
-      for (const callback of runEvents) callback(id, event);
-    },
     registerLayer(layer) {
       layers.push(layer);
       return () => {
@@ -415,24 +406,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
     openLink: vi.fn().mockResolvedValue({}),
     readModelFavorites: vi.fn().mockResolvedValue({ models: [] }),
     setModelFavorite: vi.fn().mockResolvedValue({ models: [] }),
-    readHistory: vi.fn().mockResolvedValue({
-      messages: [],
-      items: [
-        assistantRun('worker', [outputItem('test-owned history')], {
-          status: 'completed',
-          source: 'history',
-        }),
-      ],
-      history_generation: 'gen-1',
-    }),
-    subscribeRun: vi.fn().mockResolvedValue({
-      subscription_id: 'subscription-a',
-      replay_through_sequence: 0,
-    }),
-    unsubscribeRun: vi.fn().mockResolvedValue({}),
-    readRunChildren: vi.fn(),
-    readToolCall: vi.fn(),
-    cancelToolCall: vi.fn().mockResolvedValue({}),
+    mountSession: vi.fn(() => vi.fn()),
     dispose: vi.fn(),
   };
   return { bridge, operation, state };

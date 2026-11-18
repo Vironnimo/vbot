@@ -621,7 +621,7 @@
             client={model.client}
             {groupId}
             participant={inspected}
-            onError={(message) => (model.error = message)}
+            presentation="compact"
             onClose={() => (inspectedId = '')}
           />{/snippet}</LazyContent
       >{/key}

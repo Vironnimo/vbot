@@ -332,6 +332,7 @@ export function createChatController({
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         ...messageParams(content, options),
+        ...(options.uiContext ? { ui_context: options.uiContext } : {}),
         ...(widgetStates.length > 0 ? { widget_states: widgetStates } : {}),
       });
       if (run?.command_handled) {

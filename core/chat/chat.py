@@ -185,6 +185,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        ui_context: dict[str, str | list[str]] | None = None,
         file_reads: Sequence[FileRead] = (),
     ) -> AccessorChatSubmission:
         """Commit normal Accessor input and install it in the shared Run Queue."""
@@ -207,6 +208,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             context_note=context_note,
+            ui_context=ui_context,
             file_reads=file_reads,
         )
 
@@ -568,7 +570,7 @@ class ChatLoop:
             session = await self._get_session_async(
                 agent_id, session_id, create_missing=False, project_id=project_id
             )
-            await self._reject_owner_managed_session(project_id, agent_id, session_id)
+            await self._input_binding(session.address)
             resolver = self._dependencies.agent_resolver
             agent = await resolver.resolve_agent_async(
                 project_id, agent_id, session_id=session_id, run_overrides=run_overrides
@@ -664,12 +666,22 @@ class ChatLoop:
         executor = queued_item.executor
         if not isinstance(executor, _QueuedRunExecutor) or executor.loop is not self:
             raise ChatError("queued item is not an editable chat request")
-        agent = await self._dependencies.agent_resolver.resolve_agent_async(
-            project_id,
-            agent_id,
-            session_id=session_id,
-            run_overrides=executor.request.run_overrides,
-        )
+        resolver = self._dependencies.agent_resolver
+        if executor.request.extension_app_chat:
+            address = SessionAddress(project_id, agent_id, session_id)
+            binding = await executor.app_chat_binding(
+                address, queued_item.admission.expected_session_generation_id
+            )
+            agent = await resolver.resolve_temporary_agent_async(
+                address, generation_id=binding.generation_id, session=address
+            )
+        else:
+            agent = await resolver.resolve_agent_async(
+                project_id,
+                agent_id,
+                session_id=session_id,
+                run_overrides=executor.request.run_overrides,
+            )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = await self._get_session_async(
@@ -831,8 +843,12 @@ class ChatLoop:
                 except SessionNotFoundError:
                     if not create_missing:
                         raise
+            binding = None
             if session_id is not None:
-                await self._reject_owner_managed_session(project_id, agent_id, session_id)
+                binding = await self._input_binding(
+                    SessionAddress(project_id, agent_id, session_id),
+                    allow_app_chat=edit_message_id is not None,
+                )
             if expected_session_generation_id is not None and (
                 session is None or session.generation_id != expected_session_generation_id
             ):
@@ -844,7 +860,14 @@ class ChatLoop:
             ):
                 raise ChatError("The continuation's Session is no longer available")
             resolver = self._dependencies.agent_resolver
-            if new_session is None:
+            if binding is not None:
+                agent = await resolver.resolve_temporary_agent_async(
+                    binding.address, generation_id=binding.generation_id, session=binding.address
+                )
+                working_project_id = await resolver.resolve_working_project_async(
+                    project_id, agent, session_id=session_id
+                )
+            elif new_session is None:
                 agent = await resolver.resolve_agent_async(
                     project_id, agent_id, session_id=session_id, run_overrides=run_overrides
                 )
@@ -945,6 +968,7 @@ class ChatLoop:
                 max_tool_iterations=max_tool_iterations,
                 input_persisted_hook=input_persisted_hook,
                 edit_message_id=edit_message_id,
+                extension_app_chat=binding is not None,
                 context_note=context_note,
             )
             address = SessionAddress(
@@ -1138,20 +1162,32 @@ class ChatLoop:
                 ),
             )
 
-    async def _reject_owner_managed_session(
-        self, project_id: str | None, agent_id: str, session_id: str
-    ) -> None:
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    async def _input_binding(
+        self, address: SessionAddress, *, allow_app_chat: bool = False
+    ) -> TemporarySessionBinding | None:
+        """Only explicitly registered app chat bindings accept an operator's ordinary input."""
         try:
             binding = await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.sessions.temporary_binding, address
             )
         except SessionNotFoundError:
-            return
+            return None
         if binding is not None:
+            if allow_app_chat and binding.config.get("app_chat_profile"):
+                registry = self._dependencies.get_extension_registry()
+                if (
+                    registry is None
+                    or registry.session_capability(binding, self._dependencies.tools) is None
+                ):
+                    raise ChatError(
+                        "This Extension chat profile changed or was disabled. "
+                        "Open a new conversation in its page."
+                    )
+                return binding
             raise ChatError(
                 "This Session is managed by an Extension. Use that Extension to resume it."
             )
+        return None
 
     async def _get_session_async(
         self,

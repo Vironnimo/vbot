@@ -22,6 +22,8 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 
 ## API versions
 
+- v37: `ui.session-chats` for host-rendered participant Session views and user-started chats with owner-registered specialist profiles (`webui/extension-pages.md`, `extensions/host.md`).
+
 - v34: owner-scoped revisioned execution Usage changes, with ledger continuity and exact integer cost snapshots (`extensions/host.md`, `usage.md`).
 - v35: Extension pages can open the Identity Agent editor with `client.openAgent(agentId)` (`webui/extension-pages.md`).
 

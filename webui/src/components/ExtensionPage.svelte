@@ -1,5 +1,9 @@
+<script module>
+  const loadSessionView = () => import('./SessionView.svelte');
+</script>
+
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import { t } from '$lib/i18n.js';
   import { formatAgentAddress } from '$lib/agentAddress.js';
@@ -13,6 +17,13 @@
     openDesktopExternalUrl,
   } from '$lib/desktopBridge.js';
   import Banner from './ui/Banner.svelte';
+  import LazyContent from './ui/LazyContent.svelte';
+  import { createExtensionSessionEmbeds } from '$lib/extensionSessionEmbeds.svelte.js';
+  import {
+    sessionPresentations,
+    validPageChatContext,
+  } from '$lib/extensionChatContext.js';
+  import { getAppChats } from '$lib/appChats.svelte.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
     createStandaloneNavigation,
@@ -24,6 +35,7 @@
     listModelFavorites,
     openExtensionPageRun,
     cancelExtensionPageToolCall,
+    openExtensionPageSpecialist,
     readExtensionPageHistory,
     readExtensionPageTimelineChildren,
     readExtensionPageToolCall,
@@ -49,6 +61,9 @@
     'link.open',
     'session.open',
     'agent.open',
+    'session.embed',
+    'chat.open_specialist',
+    'chat.open_app',
     'media.open',
     'route.push',
     'route.replace',
@@ -93,6 +108,7 @@
   // The App navigator: its Back/Forward first close registered layers, and
   // the page's frame forwards the Back/Forward input it handles.
   const shell = useNavigation();
+  const appChats = getAppChats();
   let frame = $state.raw(null);
   let frameContext = $state.raw(null);
   let disposed = false;
@@ -101,6 +117,7 @@
   let pageLayerOpen = $state(false);
   let searchEntries = $state([]);
   const runSubscriptions = new SvelteMap();
+  const embeds = createExtensionSessionEmbeds();
   const unregisterAutosave = useAutosaveContext().register({
     hasPending: () => frameContext?.autosavePending === true,
     flush: flushAutosave,
@@ -285,6 +302,8 @@
   function invalidateContext(reason) {
     const previous = frameContext;
     frameContext = null;
+    embeds.slots.clear();
+    previous?.specialist?.close();
     searchEntries = [];
     if (previous) showPageLayers(previous, false);
     for (const request of previous?.runReads ?? []) request.abort();
@@ -505,6 +524,19 @@
       typeof data.saved === 'boolean'
     ) {
       context.autosaveFlushes.get(data.id)(data.saved);
+      return;
+    }
+    if (context.ready && data.type === 'vbot.extension.session.bounds') {
+      embeds.position(data.slot, data.bounds);
+      return;
+    }
+    if (context.ready && data.type === 'vbot.extension.session.release') {
+      embeds.slots.delete(data.slot);
+      return;
+    }
+    if (context.ready && data.type === 'vbot.extension.chat.context') {
+      context.chat = validPageChatContext(data.value) ? data.value : null;
+      context.chatRoute = route;
       return;
     }
     if (!context.ready || !validCall(data)) return;
@@ -784,10 +816,61 @@
         (data.method === 'route.push' || data.method === 'route.replace') &&
         typeof data.params.route === 'string'
       ) {
-        // The new route reaches the page with the next context update.
+        // A guarded navigation can wait for autosave or a user's decision.
+        // Deliver its resulting context before the page continues after await.
         const place = placeFromRoute(data.params.route);
-        if (data.method === 'route.push') navigation.navigate(place);
-        else navigation.replace(place);
+        if (data.method === 'route.push') await navigation.navigate(place);
+        else await navigation.replace(place);
+        await tick();
+        result = {};
+      } else if (data.method === 'session.embed') {
+        await embeds.mount(context, data.params);
+        result = {};
+      } else if (
+        data.method === 'chat.open_specialist' ||
+        data.method === 'chat.open_app'
+      ) {
+        const shared = data.method === 'chat.open_app';
+        const { profile, presentation = 'conversation' } = data.params;
+        if (
+          !appChats ||
+          document.activeElement !== frame ||
+          !navigator.userActivation?.isActive ||
+          !sessionPresentations.includes(presentation) ||
+          (shared
+            ? Object.keys(data.params).length !== 0
+            : typeof profile !== 'string' ||
+              !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profile))
+        )
+          throw new Error(t('extensions.page.requestInvalid'));
+        const { owner, page, epoch } = context.descriptor;
+        context.specialist = appChats.openSpecialist({
+          profile: shared ? 'app' : `extension:${owner}:${profile}`,
+          presentation,
+          title: descriptor.title,
+          key: JSON.stringify([owner, page, epoch, shared ? null : profile]),
+          createSession: shared
+            ? undefined
+            : (id) => {
+                if (frameContext !== context)
+                  throw new Error(t('extensions.page.reloaded'));
+                return openExtensionPageSpecialist(
+                  owner,
+                  { id: page, epoch },
+                  profile,
+                  id,
+                );
+              },
+          getUiContext: () => {
+            if (frameContext !== context)
+              throw new Error(t('extensions.page.reloaded'));
+            return {
+              view: `extension:${owner}:${page}`,
+              ...(route ? { page: route.slice(0, 256) } : {}),
+              ...(context.chatRoute === route ? context.chat : null),
+            };
+          },
+        });
         result = {};
       } else if (data.method === 'agent.open') {
         if (!safeId(data.params.agent_id))
@@ -1024,21 +1107,63 @@
       }}>{entry.label}</button
     >
   {/each}
-  <iframe
-    class:extension-page--layer={embedded && pageLayerOpen}
-    bind:this={frame}
-    title={descriptor.title}
-    sandbox="allow-scripts"
-    allow="clipboard-write *"
-    src={descriptor.entry_url}
-    onload={onFrameLoad}
-  ></iframe>
+  <div class="extension-page">
+    <iframe
+      class:extension-page--layer={embedded && pageLayerOpen}
+      bind:this={frame}
+      title={descriptor.title}
+      sandbox="allow-scripts"
+      allow="clipboard-write *"
+      src={descriptor.entry_url}
+      onload={onFrameLoad}
+    ></iframe>
+    {#each embeds.slots as [slot, view] (slot)}
+      {#if view.address && view.bounds}
+        {@const bounds = view.bounds}
+        <div
+          class="session-embed"
+          hidden={!view.visible || pageLayerOpen}
+          style:left={`${bounds.x}px`}
+          style:top={`${bounds.y}px`}
+          style:width={`${bounds.width}px`}
+          style:height={`${bounds.height}px`}
+          style:clip-path={`inset(${bounds.clip.map((n) => n + 'px').join(' ')})`}
+        >
+          <LazyContent load={loadSessionView}>
+            {#snippet children(View)}
+              <View
+                address={view.address}
+                presentation={view.presentation}
+                active={Boolean(view.visible && !pageLayerOpen)}
+                readOnly
+                monitor={view.monitor}
+              />
+            {/snippet}
+          </LazyContent>
+        </div>
+      {/if}
+    {/each}
+  </div>
 {:else}
   <Banner variant="error">{t('extensions.pageUnavailable')}</Banner>
 {/if}
 
 <style>
+  .extension-page {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: clip;
+  }
+  .session-embed {
+    position: absolute;
+    overflow: hidden;
+    contain: strict;
+    background: var(--surface);
+  }
   iframe {
+    display: block;
     width: 100%;
     height: 100%;
     min-height: 0;

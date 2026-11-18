@@ -43,10 +43,15 @@ export function createChatSubmissions(send, storage = browserStorage()) {
     const commandCandidate = isSlashCommandCandidate(params.content);
     const request = JSON.stringify(params);
     const sensitive = containsPotentialKeyInValue(params);
+    const intent = inputIdentity(request);
     let record = [
       ...pending,
-      ...(commandCandidate || sensitive ? [] : readPending(storage)),
-    ].find((entry) => entry.scope === scope && entry.request === request);
+      ...(commandCandidate ? [] : readPending(storage)),
+    ].find(
+      (entry) =>
+        entry.scope === scope &&
+        (entry.request === request || inputIdentity(entry.request) === intent),
+    );
     if (!record) {
       record = { scope, request, inputId: newInputId() };
       pending = [...pending.slice(-(MAX_PENDING_INPUTS - 1)), record];
@@ -88,6 +93,17 @@ export function createChatSubmissions(send, storage = browserStorage()) {
       }
     }
   };
+}
+
+// UI location is captured by the app for the user's message. A retry made
+// after navigation must replay the original location as part of the exact
+// admitted envelope. All user choices, attachments and the destination
+// continue to distinguish separate inputs.
+function inputIdentity(request) {
+  const params = JSON.parse(request);
+  if (!params?.ui_context) return request;
+  delete params.ui_context;
+  return JSON.stringify(params);
 }
 
 function uncertainAcknowledgment(error) {

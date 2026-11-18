@@ -127,7 +127,7 @@
   }
 
   async function submitEdit(message) {
-    if (editSaving || editedContent.trim().length === 0) {
+    if (viewState.readOnly || editSaving || editedContent.trim().length === 0) {
       return;
     }
     editSaving = true;
@@ -391,7 +391,7 @@
         {/if}
       {/snippet}
       {#snippet editMessage()}
-        {#if item.message.editable === true && !editing}
+        {#if !viewState.readOnly && item.message.editable === true && !editing}
           <Button
             variant="tertiary"
             icon
@@ -430,7 +430,7 @@
       />
     </div>
     <div class="msg-content">
-      {#if editing}
+      {#if editing && !viewState.readOnly}
         <div class="message-edit-form">
           <TextArea
             value={editedContent}
@@ -643,7 +643,8 @@
                 ? `${item.event.run_id}:${toolCallFromEvent(item.event).id}`
                 : ''}
               src={speechArtifact.url}
-              autoplay={viewState.claimAutoplay(speechArtifact.url)}
+              autoplay={!viewState.readOnly &&
+                viewState.claimAutoplay(speechArtifact.url)}
             />
           {/if}
         {/if}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.agents.app_chats import app_chat_tool_grants
 from core.chat._effort_epoch import (
     EffortPin,
     EffortState,
@@ -46,20 +47,21 @@ def _finalize_compaction_checkpoint(
 
 
 def _live_session_tool_grants(
-    session_capability: Any | None, *, subagent_session: bool, goal_session: bool
+    session_capability: Any | None, *, agent: Any, subagent_session: bool, goal_session: bool
 ) -> tuple[str, ...]:
     """Return the session-scoped Tools the Session grants now.
 
     A temporary Session grants its capability's Tools; a Sub-Agent Session grants
     the Tools a Sub-Agent uses to reach its Parent Agent; a Session with an open
-    goal grants the Tool that ends its automatic turns.
+    goal grants the Tool that ends its automatic turns. An app specialist's
+    fixed server profile grants its task Tools.
     """
     grants = tuple(session_capability.tool_names) if session_capability is not None else ()
     if subagent_session:
         grants = (*grants, *SUBAGENT_SESSION_TOOL_NAMES)
     if goal_session:
         grants = (*grants, UPDATE_GOAL_TOOL_NAME)
-    return grants
+    return app_chat_tool_grants(agent, grants)
 
 
 def _withheld_session_tools(*, subagent_tool_withheld: bool) -> tuple[str, ...]:

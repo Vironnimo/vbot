@@ -23,6 +23,7 @@ const HISTORY_OLDER_LIMIT = 50;
 // null) whenever it was read.
 function historyLoadOptions(history) {
   return {
+    agentName: history?.agent_name,
     items: history?.items,
     replaceRunIds: history?.replace_run_ids,
     timelineSequence: history?.timeline_sequence,
@@ -176,6 +177,9 @@ export function createChatHistory({
       else
         result = {
           ...page,
+          agent_name: Object.hasOwn(page, 'agent_name')
+            ? page.agent_name
+            : result.agent_name,
           incremental: result.incremental,
           has_more: result.has_more,
           next_before: result.next_before,

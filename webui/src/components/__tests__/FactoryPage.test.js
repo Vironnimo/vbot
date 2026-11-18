@@ -20,7 +20,6 @@ import {
   tick,
   flushSync,
 } from './FactoryPage.support.js';
-import { assistantRun, outputItem } from './timelineItems.support.js';
 
 const planImplement = workflow('planimpl', 'Plan, then implement', [
   step('plan', 'Plan'),
@@ -934,7 +933,7 @@ describe('Factory record editors', () => {
 });
 
 describe('Factory owned Session activity', () => {
-  it('reads and follows only the chosen participant, opens projected links through the bridge and releases streams on close', async () => {
+  it('embeds the chosen step participant in the Card and releases the view on close', async () => {
     const { bridge, state } = createBridge([
       startedCard('fct-a', 'working', '', implementWorkflow, {
         implement: { status: 'running' },
@@ -968,50 +967,20 @@ describe('Factory owned Session activity', () => {
     await render(bridge, '/card/fct-a');
     button(t('factory.openSession')).click();
     await settle();
-    expect(bridge.readHistory).toHaveBeenCalledWith(
+    expect(bridge.mountSession).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
       'fct-a.implement',
       'implement-1',
-      { limit: 100, child_limit: 100 },
+      expect.any(Function),
+      'compact',
     );
-    expect(bridge.subscribeRun).toHaveBeenCalledWith(
-      'fct-a.implement',
-      'run-worker',
-      0,
-      { timeline: true, childLimit: 100 },
-    );
-    bridge.emitRun('subscription-a', {
-      type: 'timeline_snapshot',
-      run_id: 'run-worker',
-      sequence: 1,
-      history_generation: 'gen-1',
-      items: [
-        assistantRun('worker', [outputItem('https://example.test/factory')], {
-          status: 'running',
-          source: 'history',
-        }),
-      ],
-    });
-    await tick();
-    const link = document.querySelector('.factory-history-timeline a');
-    expect(link).not.toBeNull();
-    link.click();
-    await tick();
-    expect(bridge.openLink).toHaveBeenCalledWith(
-      'https://example.test/factory',
-    );
+    const dispose = bridge.mountSession.mock.results[0].value;
     button(
       t('common.close'),
       document.querySelector('.factory-session-history'),
     ).click();
     await tick();
-    expect(bridge.unsubscribeRun).toHaveBeenCalledWith('subscription-a');
-    bridge.emitRun('subscription-a', {
-      type: 'timeline_snapshot',
-      run_id: 'run-worker',
-      sequence: 2,
-      items: [],
-    });
-    await tick();
+    expect(dispose).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.factory-session-history')).toBeNull();
   });
 });

@@ -67,6 +67,7 @@ class ToolAccess:
     ``subagent``, the remote Tools of an MCP connection). The Agent owner sets it
     for a built-in Agent or a translated repository Profile.
     It is absent from public policy JSON and retained in temporary bindings.
+    An app chat's ``exact`` selection also excludes unlisted followers.
     ``live_call`` lets the policy activate the Tools constrained to a Live
     voice call; the Agent owner sets it only for the Agents of a Live call, and
     it is absent from public policy JSON too.
@@ -78,6 +79,7 @@ class ToolAccess:
     granted: tuple[str, ...] = ()
     fixed: bool = False
     live_call: bool = False
+    exact: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical persisted/public JSON representation."""
@@ -177,7 +179,12 @@ def resolve_tool_access(
     if tool_access.mode == TOOL_ACCESS_MODE_NONE:
         return ToolAccessResolution(allowed_tools=(), session_tool_grants=())
 
-    catalog = {tool.name: tool for tool in tools if not getattr(tool, "internal", False)}
+    selected = frozenset(tool_access.allowed) if tool_access.exact else None
+    catalog = {
+        tool.name: tool
+        for tool in tools
+        if not getattr(tool, "internal", False) and (selected is None or tool.name in selected)
+    }
     if tool_access.mode == TOOL_ACCESS_MODE_ALL:
         active = {
             name
@@ -434,8 +441,9 @@ def intersect_tool_access(owner: ToolAccess, agent: ToolAccess) -> ToolAccess:
     """
     denied = tuple(sorted(set(owner.denied) | set(agent.denied)))
     fixed = owner.fixed or agent.fixed or owner.mode == "none"
+    exact = owner.exact or agent.exact
     if owner.mode == "none" or agent.mode == "none":
-        return ToolAccess(mode="none", denied=denied, fixed=fixed)
+        return ToolAccess(mode="none", denied=denied, fixed=fixed, exact=exact)
     granted = tuple(sorted(set(owner.granted) | set(agent.granted)))
     if owner.mode == "all" and agent.mode == "all":
         return ToolAccess(
@@ -443,6 +451,7 @@ def intersect_tool_access(owner: ToolAccess, agent: ToolAccess) -> ToolAccess:
             denied=denied,
             granted=tuple(name for name in granted if name not in denied),
             fixed=fixed,
+            exact=exact,
         )
     if owner.mode == "all":
         names = set(agent.allowed)
@@ -457,4 +466,5 @@ def intersect_tool_access(owner: ToolAccess, agent: ToolAccess) -> ToolAccess:
         denied=denied,
         granted=tuple(name for name in granted if name in allowed),
         fixed=fixed,
+        exact=exact,
     )

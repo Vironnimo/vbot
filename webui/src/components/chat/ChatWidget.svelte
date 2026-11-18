@@ -112,6 +112,7 @@
 
   function receiveState(data) {
     if (
+      viewState.readOnly ||
       !isPlainObject(data.state) ||
       serializedBytes(data.state) > MAX_STATE_BYTES
     ) {
@@ -193,6 +194,7 @@
         style:height={`${height}px`}
         {src}
         {title}
+        inert={viewState.readOnly}
         sandbox="allow-scripts"
         referrerpolicy="no-referrer"
         allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"

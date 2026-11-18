@@ -238,6 +238,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       // The Session's effective Compaction Policy from `chat.history`; null
       // until History reports it.
       compactionPolicy: null,
+      agentName: null,
       // Durable state of each background shell command, by command id
       // (`{ status, stillRunning }`), from `chat.history`'s
       // `background_command_statuses` and

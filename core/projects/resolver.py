@@ -232,6 +232,7 @@ class AgentResolver:
         new_session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
+        include_temporary: bool = False,
     ) -> RuntimeAgent:
         """Resolve one agent to a runnable :class:`RuntimeAgent`.
 
@@ -259,17 +260,20 @@ class AgentResolver:
         ``require_model=False`` preserves Session Model overrides without
         checking their availability. A Config Agent's default chain still skips
         unavailable Models and returns an empty Model when exhausted. Run
-        admission keeps the default availability checks.
+        admission keeps the default availability checks. Session inspection uses
+        ``include_temporary=True`` to resolve a temporary Agent's immutable
+        binding for the addressed Session, including a Session it delegated to itself.
         """
         _require_one_override_source(session_id, new_session_overrides)
-        if session_id is not None and self._temporary_agents is not None:
-            owned_address = _session_address(project_id, agent_id, session_id)
-            binding = self._temporary_agents.identity_binding(owned_address)
-            if binding is not None:
-                return self.resolve_temporary_agent(
-                    owned_address, generation_id=binding.generation_id, session=owned_address
-                )
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
+        if address is not None and self._temporary_agents is not None:
+            bound = self._temporary_agents.session_agent(
+                address, include_temporary=include_temporary
+            )
+            if bound is not None:
+                return self._temporary_resolution.apply_to_session(
+                    bound, address, address, require_model=require_model
+                )
         overrides = (
             self.session_overrides(address)
             if address is not None
@@ -317,6 +321,7 @@ class AgentResolver:
         new_session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
+        include_temporary: bool = False,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_agent`.
 
@@ -328,14 +333,15 @@ class AgentResolver:
         ``agent-resolution`` pool.
         """
         _require_one_override_source(session_id, new_session_overrides)
-        if session_id is not None and self._temporary_agents is not None:
-            owned_address = _session_address(project_id, agent_id, session_id)
-            binding = await self._temporary_agents.identity_binding_async(owned_address)
-            if binding is not None:
-                return await self.resolve_temporary_agent_async(
-                    owned_address, generation_id=binding.generation_id, session=owned_address
-                )
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
+        if address is not None and self._temporary_agents is not None:
+            bound = await self._temporary_agents.session_agent_async(
+                address, include_temporary=include_temporary
+            )
+            if bound is not None:
+                return await self._temporary_resolution.apply_to_session_async(
+                    bound, address, address, require_model=require_model
+                )
         if address is not None:
             overrides = await self.session_overrides_async(address)
         else:

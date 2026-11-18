@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 type Json = dict[str, Any]
 
 
+def _session_binding(execution: Json | None) -> Json | None:
+    if execution is None or not execution["runtime"].get("address"):
+        return None
+    return {key: execution[key] for key in ("group_id", "participant_id")}
+
+
 async def _bootstrap(management: NativeFactoryManagement, project_id: str) -> Json:
     host = management.service.host
     assert host is not None
@@ -187,6 +193,8 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
     return {
         "session": discussion["runtime"].get("address") if discussion else None,
         "task_session": work["runtime"].get("address") if work else None,
+        "session_binding": _session_binding(discussion),
+        "task_session_binding": _session_binding(work),
         "replying": bool(current and current["state"] in {"admitting", "running"}),
         "topic": topic,
         **history,

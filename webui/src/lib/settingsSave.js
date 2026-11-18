@@ -195,5 +195,5 @@ export function createSettingsDraft({
     }
   }
 
-  return { save };
+  return { save, adopt };
 }

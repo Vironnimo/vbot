@@ -12,10 +12,20 @@ from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.agents import Agent
     from core.runtime.interfaces import RuntimeServices
 
 _LOGGER = get_logger("runtime.setup")
 _CONDITIONS = LoggedConditions()
+
+
+def setup_agent(runtime: RuntimeServices) -> Agent | None:
+    """Read the initial Chat Agent selected during setup, or the first remaining one."""
+    previous = runtime.storage.setup.read()
+    agents = [agent for agent in runtime.agents.list() if agent.placement is None]
+    return next(
+        (agent for agent in agents if agent.id == previous.agent_id), next(iter(agents), None)
+    )
 
 
 def update_setup(
@@ -31,11 +41,7 @@ def update_setup(
     including an explicit shared default, therefore records a user's selection.
     Neither catalog membership nor live credentials can undo that historical fact.
     """
-    agents = [agent for agent in runtime.agents.list() if agent.placement is None]
-    previous = runtime.storage.setup.read()
-    target = next((agent for agent in agents if agent.id == previous.agent_id), None)
-    if target is None:
-        target = next(iter(agents), None)
+    target = setup_agent(runtime)
     configured = False
     if target is not None:
         try:

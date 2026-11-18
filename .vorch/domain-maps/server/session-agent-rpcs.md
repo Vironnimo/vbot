@@ -45,7 +45,7 @@ Shared Project Memory changes carry `project_id` on their learning-change and co
 ## Notification policy and read state
 
 - `session.notification_policy {agent_id, session_id, policy}` saves `all`, `errors` or `muted`, returns the fresh Session summary and publishes the Session invalidation. It does not mark results read.
-- `session.mark_read {agent_id, session_id, run_id}` also accepts `run_ids` (1-200 exact ids) instead of the scalar. Acknowledgements affect only completed own Runs and return fresh revisioned counters; old results can be read independently.
+- `session.mark_read {agent_id, session_id, run_id}` also accepts `run_ids` (1-200 exact ids) instead of the scalar. Acknowledgements address the live Session directly, including an Extension participant, affect only its own completed Runs and return fresh revisioned counters. Old results can be read independently.
 - `session.notification_status {agent_id, session_id, run_id}` returns `{allowed}` for desktop delivery immediately before showing a toast, combining current source policy, eligibility and unread state. A deleted Schedule suppresses its pending toast.
 
 ## Session inspection by id
