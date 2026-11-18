@@ -69,7 +69,7 @@ OPERATION_SCHEMAS = {
         {"project_id": S, "query": S, "include_replies": B, **PAGING}, ("project_id",)
     ),
     "work.reply": schema({"project_id": S, "id": S}, ("project_id", "id")),
-    "conversation.get": schema({**CONVERSATION, "before": S}, ("project_id",)),
+    "conversation.get": schema({**CONVERSATION, "before": S, "new_topic": B}, ("project_id",)),
     "conversation.stop": schema({"project_id": S, "topic_id": S}, ("project_id", "topic_id")),
     "conversation.send": schema(
         {**CONVERSATION, "text": S, "request_id": S, "new_topic": B},

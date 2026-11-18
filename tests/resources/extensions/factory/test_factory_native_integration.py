@@ -1239,6 +1239,10 @@ async def test_project_chat_keeps_the_discussion_assignment_and_result_together(
             "conversation.send", **scope, text="Discuss this first", request_id="first"
         )
         assert replay["session"] == live["session"] and not replay["replying"]
+        draft = await harness.operation("conversation.get", **scope, new_topic=True)
+        assert draft["topic"] is None and not draft["posts"]
+        assert draft["agent_id"] == live["agent_id"] and draft["agent_proof"] == live["agent_proof"]
+        assert draft["profile_available"]
         assert [m["text"] for m in replay["posts"]] == ["Discuss this first", "An idea"]
         assert not (await harness.operation("work.list", **scope))["work"]
         [reply] = (await harness.operation("work.list", **scope, include_replies=True))["work"]

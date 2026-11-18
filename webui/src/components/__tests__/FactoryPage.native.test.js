@@ -298,8 +298,18 @@ describe('Factory native work', () => {
     const posts = [
       { id: 'one', author: 'member:mem-leader', text: 'Existing answer' },
     ];
-    state.handlers['conversation.get'] = ({ project_id }) =>
-      project_id === 'project-a'
+    state.handlers['conversation.get'] = ({ project_id, new_topic }) => {
+      if (new_topic)
+        return {
+          topic: null,
+          posts: [],
+          member_name: 'Current Leader',
+          agent_id: 'planner',
+          factory_id: 'fac-one',
+          profile_available: true,
+          agent_proof: 'leader-proof',
+        };
+      return project_id === 'project-a'
         ? {
             topic,
             posts: [...posts],
@@ -316,6 +326,7 @@ describe('Factory native work', () => {
             replying: Boolean(session),
           }
         : { topic: null, posts: [] };
+    };
     state.handlers['conversation.send'] = ({ text }) => {
       posts.push({ id: 'two', author: 'user', text });
       return { topic, posts: [...posts] };
@@ -415,6 +426,19 @@ describe('Factory native work', () => {
       project_id: 'project-a',
     });
     expect(input.disabled).toBe(true);
+    button(t('factory.chat.new')).click();
+    await settle();
+    expect(calls(operation, 'conversation.get').at(-1)[1]).toEqual({
+      project_id: 'project-a',
+      new_topic: true,
+    });
+    expect(input.getAttribute('aria-label')).toContain('Current Leader');
+    expect(log().textContent.trim()).toBe('');
+    button(t('factory.native.editAgent')).click();
+    expect(bridge.openAgent).toHaveBeenCalledWith('planner', {
+      expectedIncarnation: 'leader-proof',
+      relatedScope: 'fac-one',
+    });
     await choose('native-project', 'Project B');
     await settle();
     expect(log().textContent).not.toContain('Continue here');

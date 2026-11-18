@@ -55,10 +55,10 @@
     if (follow && log) log.scrollTop = log.scrollHeight;
   }
   async function refresh() {
-    if (fresh || sending) return;
+    if (sending) return;
     const version = ++request;
     try {
-      const args = scope();
+      const args = fresh ? { ...scope(), new_topic: true } : scope();
       const value = await model.call('conversation.get', args);
       for (let page = 1; page < historyPages && value?.before; page++) {
         const older = await model.call('conversation.get', {
@@ -158,9 +158,12 @@
     chat = null;
     inspectedBinding = null;
     fresh = true;
+    loaded = false;
+    loading = true;
     historyPages = 1;
     attempt = null;
     error = '';
+    void refresh();
     document.getElementById(inputId)?.focus();
   }
   function keydown(event) {
