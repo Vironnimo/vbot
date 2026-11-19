@@ -19,6 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.agents.app_chats import app_chat_tool_grants
 from core.chat._run_permissions import RunPermissions, live_run_permission_boundary
 from core.chat._run_state import _resolve_working_project
 from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
@@ -48,7 +49,6 @@ from core.runs import (
     RunKind,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
-from core.skills.skills import skill_tool_grants
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -474,7 +474,7 @@ async def start_external_run(
         skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
             dependencies.resolve_skills, skill_project_id, identity_agent_id
         )
-        grants = skill_tool_grants(skill_registry, agent.allowed_skills)
+        grants = app_chat_tool_grants(agent, ())
         definitions = await requests.tool_catalog.preview_tool_definitions(
             agent, session_tool_grants=grants
         )

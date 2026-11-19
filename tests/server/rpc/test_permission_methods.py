@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, override
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,11 +19,78 @@ from core.projects import AgentOverrides
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
+from core.skills.policy import SkillPackageRef
+from core.skills.skills import SkillMetadata, SkillRegistry
 from core.storage import StorageManager
 from core.tools.availability import ToolAccess
+from core.tools.shell_cli import ShellCliAccess
 from server.access import bound_principal
 from server.access._principal import HOST
+from tests.core.permissions.command_check_support import restricted
+from tests.core.tools.tools_test_support import make_context
 from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
+
+
+@pytest.mark.asyncio
+async def test_shell_cli_reviews_end_with_the_command_or_its_docs_access(tmp_path: Path) -> None:
+    docs = SkillMetadata(
+        "vbot-docs", "Docs", tmp_path, package_ref=SkillPackageRef("bundled", "vbot-docs")
+    )
+    registry = SkillRegistry({docs.name: docs})
+    agent = SimpleNamespace(allowed_skills=["vbot-docs"])
+    access = ShellCliAccess(
+        resolve_agent=AsyncMock(return_value=agent),
+        resolve_skills=lambda *_: registry,
+        data_dir=tmp_path,
+        server_bind=lambda: ("127.0.0.1", 22336),
+    )
+    entered = asyncio.Event()
+    decision = asyncio.Event()
+
+    async def approval(*_args: Any) -> bool:
+        entered.set()
+        await decision.wait()
+        return True
+
+    state = SimpleNamespace(runtime=SimpleNamespace(shell_cli=access))
+    context = make_context(
+        "bash",
+        cwd=tmp_path,
+        permissions=restricted(tmp_path),
+        approval_hook=approval,
+    )
+    grant = access.issue(
+        context, {"command": "vbot agent update x --permissions full-access"}, handoff_token=None
+    )
+    mutation = {
+        "token": json.loads(grant.environment_value)["token"],
+        "argv": ["agent", "update", "x", "--permissions", "full-access"],
+        "rights": True,
+        "reads": [],
+        "profile": None,
+    }
+    lookup = {**mutation, "argv": ["agent", "list"], "rights": False}
+    method = "permissions.review_cli"
+    assert await rpc_result(state, method, **lookup) == {"files": {}}
+    assert not entered.is_set()
+
+    rejected = asyncio.create_task(rpc_error(state, method, **mutation))
+    await entered.wait()
+    assert grant.reviewing
+    agent.allowed_skills.clear()
+    decision.set()
+    assert (await rejected)["code"] == "permission_denied"
+    assert (await rpc_error(state, method, **lookup))["code"] == "permission_denied"
+
+    agent.allowed_skills.append("vbot-docs")
+    entered.clear()
+    decision.clear()
+    rejected = asyncio.create_task(rpc_error(state, method, **mutation))
+    await entered.wait()
+    grant.release()
+    await grant.wait_for_reviews()
+    assert (await rejected)["code"] == "permission_denied"
+    assert (await rpc_error(state, method, **lookup))["code"] == "permission_denied"
 
 
 class _NoModels:

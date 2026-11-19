@@ -110,7 +110,7 @@ def _digest(files: dict[str, PackageFile]) -> str:
 def install_package(
     authoring: SkillAuthoringService,
     target_root: Path,
-    source: str,
+    source: str | SkillSource,
     *,
     writer: SkillWriter,
     path: str | None = None,
@@ -120,7 +120,9 @@ def install_package(
     archive: bytes | None = None,
     expected_sha256: str | None = None,
 ) -> SkillInstallResult:
-    if archive is None:
+    if isinstance(source, SkillSource):
+        bundle = source
+    elif archive is None:
         bundle = load_source(source, ref=ref)
     else:
         if ref is not None:

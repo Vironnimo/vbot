@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ async def authorize_accesses(
     urls: Sequence[str],
     *,
     arguments: JsonObject,
+    by_program: bool = False,
     reason: str = "Permission Rules",
     cwd: Path | None = None,
 ) -> None:
@@ -64,7 +65,7 @@ async def authorize_accesses(
                 if identity not in pending:
                     pending.append(identity)
         for url in urls:
-            refusal = context.permissions.check_url(url)
+            refusal = context.permission_access.check_url(url, by_program=by_program)
             if refusal is not None:
                 if refusal.reason != "not_permitted":
                     raise PermissionDenied(refusal)
@@ -93,7 +94,7 @@ async def authorize_accesses(
             if refusal is not None:
                 raise PermissionDenied(refusal)
         for url in urls:
-            refusal = context.permission_access.check_url(url)
+            refusal = context.permission_access.check_url(url, by_program=by_program)
             if refusal is not None:
                 raise PermissionDenied(refusal)
 
@@ -146,12 +147,13 @@ async def authorize_command(
     argv: Sequence[str] | None = None,
     refuse_command: Any = None,
     workdir_parameter: bool = False,
-) -> None:
+    allows_instance_cli: Callable[[], Awaitable[bool]] | None = None,
+) -> CommandPlan | None:
     """Authorize a whole analyzed command; recheck the prepared plan after waiting."""
     if (command is None) == (argv is None) or (command is not None and shell is None):
         raise ValueError("provide a shell command or argv")
     if not context.permissions.restricted:
-        return
+        return None
     computer = str(context.execution.get("computer_id", "server"))
 
     async def assess() -> tuple[
@@ -172,6 +174,7 @@ async def authorize_command(
                 home=Path.home(),
                 workdir_parameter=workdir_parameter,
                 computer_id=computer,
+                allows_instance_cli=allows_instance_cli,
             )
         else:
             plan, decision = await checker.prepare_argv(
@@ -238,3 +241,4 @@ async def authorize_command(
     if missing:
         await recheck()
     context.add_permission_recheck(recheck)
+    return plan

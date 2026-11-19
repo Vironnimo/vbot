@@ -192,7 +192,9 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(
     same_id_without_builtin = replace(specialist, builtin=None)
     assert [
         tool["name"]
-        for tool in shared_runtime.system_prompts.provider_tool_definitions(same_id_without_builtin)
+        for tool in shared_runtime.system_prompts.provider_tool_definitions(
+            same_id_without_builtin, session_tool_grants=("vbot",)
+        )
     ] == ["skill"]
     for tool_name, definition in definitions.items():
         tool = shared_runtime.tools.get(tool_name)

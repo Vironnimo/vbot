@@ -91,6 +91,7 @@ from core.tools.command_manager import CommandManager
 from core.tools.live import LiveToolHosts
 from core.tools.portal_registry import PortalRegistry
 from core.tools.scratch_areas import ScratchAreas
+from core.tools.shell_cli import ShellCliAccess
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.watch_checks import WatchCheckRunner
@@ -147,6 +148,7 @@ class RuntimeServiceGraph:
         self._memory_service: MemoryService | None = None
         self._file_state: FileReadState | None = None
         self._update_handoffs: UpdateHandoffs | None = None
+        self._shell_cli: ShellCliAccess | None = None
         self._terminal_manager: TerminalManager | None = None
         self._computers: ComputerRegistry | None = None
         self._command_manager: CommandManager | None = None
@@ -285,6 +287,10 @@ class RuntimeServiceGraph:
 
     update_handoffs: _StartedService[UpdateHandoffs] = _StartedService(
         lambda runtime: runtime._update_handoffs, "Update handoff service not available"
+    )
+
+    shell_cli: _StartedService[ShellCliAccess] = _StartedService(
+        lambda runtime: runtime._shell_cli, "Shell CLI access not available"
     )
 
     computers: _StartedService[ComputerRegistry] = _StartedService(

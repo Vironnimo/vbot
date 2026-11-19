@@ -877,6 +877,20 @@ def members(
     )
 
 
+def member_agent_overrides(
+    connection: sqlite3.Connection, entry_key: int
+) -> tuple[dict[str, Any], ...]:
+    rows = connection.execute(
+        "SELECT s.agent_overrides_json FROM archive_entry_sessions AS m "
+        "JOIN sessions AS s ON s.session_key = m.session_key "
+        "WHERE m.entry_key = ? AND s.agent_overrides_json IS NOT NULL",
+        (entry_key,),
+    )
+    return tuple(
+        _store_values._json_from_payload(row[0], "Session agent overrides") for row in rows
+    )
+
+
 def holds_one_session(connection: sqlite3.Connection, entry_key: int) -> bool:
     """Whether the entry holds exactly one Session besides its review forks."""
     rows = connection.execute(

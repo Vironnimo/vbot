@@ -45,7 +45,7 @@
 
   // What one requirement asks for: a verb and the thing it reaches.
   function describe(requirement) {
-    if (requirement.kind === 'review' && request.tool_name === 'vbot')
+    if (requirement.kind === 'review' && requirement.shown)
       return {
         verb: t('approvals.need.agentAccess'),
         target: requirement.shown,
@@ -376,6 +376,7 @@
     overflow-wrap: anywhere;
   }
   .approval-card__target {
+    white-space: pre-wrap;
     overflow-wrap: anywhere;
     color: var(--text-hi);
   }

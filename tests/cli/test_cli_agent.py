@@ -651,7 +651,7 @@ def test_an_unknown_permission_preset_is_a_usage_error(
     assert "Use full-access, work-dir or work-dir-read-only" in capsys.readouterr().err
 
 
-def test_run_can_set_inline_rules_without_replacing_a_profile(
+def test_full_access_run_can_replace_a_profile_with_explicit_rules(
     rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
@@ -660,4 +660,4 @@ def test_run_can_set_inline_rules_without_replacing_a_profile(
     assert run_cli("agent", "create", "helper", "Helper", "--permissions", "work-dir")[0] == 0
     assert run_cli("agent", "update", "helper", "--permissions", "full-access")[0] == 0
     assert "require_no_permission_profile" not in rpc.params("agent.create")
-    assert rpc.params("agent.update")["require_no_permission_profile"] is True
+    assert "require_no_permission_profile" not in rpc.params("agent.update")

@@ -38,7 +38,9 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
         "performance.heap",
         "data_store.snapshot_create",
         "skill.install",
+        "skill.install_cli",
         "agent.delete",
+        "permissions.review_cli",
         "project.rm",
         "session.delete",
         "archive.restore",
@@ -55,6 +57,7 @@ RUN_EVENTS_READ_TIMEOUT_SECONDS = 60.0
 
 _PROGRESS_PHASES = {
     "skill.install": "Preparing and validating the Skill package",
+    "skill.install_cli": "Preparing and validating the Skill package",
     "model.refresh_db": "Refreshing Model catalogs from Providers",
     "data_store.snapshot_create": "Creating and verifying a data snapshot",
     "extensions.reload": "Reloading Extensions and checking their load results",

@@ -25,7 +25,8 @@ Skill use from Statistics.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import asyncio
+from collections.abc import Callable, Coroutine, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -43,6 +44,8 @@ from core.skills import (
     SkillWriter,
     SkillWriteResult,
 )
+from core.skills._packages import PackageError
+from core.skills._sources import SkillSource, load_reviewed_source
 from core.skills.policy import SkillPackageRef
 from core.statistics.skills import SkillActivationUse
 from core.utils.logging import get_logger
@@ -60,6 +63,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.permission_methods import cli_permission_errors
 from server.rpc.statistics_methods import statistics_service
 from server.rpc.validation import (
     _optional_string,
@@ -74,6 +78,7 @@ _GLOBAL_SCOPE = "global"
 _AGENT_SCOPE_PREFIX = "agent:"
 _LOGGER = get_logger("server.rpc.skills")
 _SKILL_READ_WORKERS = BoundedWorkerPool(name="skill-manager", max_workers=1)
+_SKILL_DOWNLOAD_WORKERS = BoundedWorkerPool(name="reviewed-skill-download", max_workers=4)
 _DEFAULT_HISTORY_LIMIT = 50
 _MAX_HISTORY_LIMIT = 500
 
@@ -221,9 +226,7 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
-async def _skill_install(
-    state: Any, params: JsonObject, *, archive: bytes | None = None
-) -> JsonObject:
+async def _validated_install(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("skill.install"), "skill.install")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     source = _required_string(params, "source")
@@ -239,19 +242,50 @@ async def _skill_install(
         or any(char not in "0123456789abcdef" for char in expected_sha256)
     ):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "expected_sha256 must be a SHA-256 digest")
+    return {
+        "scope": scope,
+        "source": source,
+        "path": path,
+        "ref": ref,
+        "replace": replace,
+        "dry_run": dry_run,
+        "expected_sha256": expected_sha256,
+    }
+
+
+async def _skill_install(
+    state: Any,
+    params: JsonObject,
+    *,
+    archive: bytes | None = None,
+    prepared: SkillSource | None = None,
+    expected_incarnation: str | None = None,
+) -> JsonObject:
+    options = await _validated_install(state, params)
+    scope = options.pop("scope")
+    source = options.pop("source")
+    writer = _writer()
+
+    def install() -> Any:
+        with agent_profile_guard(
+            state.runtime.agents,
+            scope.removeprefix(_AGENT_SCOPE_PREFIX),
+            {"expected_incarnation": expected_incarnation}
+            if expected_incarnation is not None
+            else {},
+        ):
+            return state.runtime.skill_authoring.install(
+                _scope_root(state, scope),
+                prepared if prepared is not None else source,
+                **options,
+                archive=archive,
+                writer=writer,
+            )
+
     try:
-        result = await _SKILL_READ_WORKERS.run(
-            state.runtime.skill_authoring.install,
-            _scope_root(state, scope),
-            source,
-            path=path,
-            ref=ref,
-            replace=replace,
-            dry_run=dry_run,
-            archive=archive,
-            expected_sha256=expected_sha256,
-            writer=_writer(),
-        )
+        result = await _SKILL_READ_WORKERS.run(install)
+    except AgentNotFoundError as error:
+        raise RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(error)) from error
     except (SkillAuthoringError, OSError) as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
     if result.operation in {"installed", "replaced", "unchanged"}:
@@ -265,6 +299,53 @@ async def _skill_install(
             )
             publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {**result.to_dict(), "scope": scope}
+
+
+async def _skill_install_cli(state: Any, params: JsonObject) -> JsonObject:
+    """Acquire a remote package with live approval before taking Skill mutation locks."""
+    _reject_unsupported(
+        params, rpc_request_fields("skill.install") | {"token"}, "skill.install_cli"
+    )
+    token = _required_string(params, "token")
+    install_params = {key: value for key, value in params.items() if key != "token"}
+    loop = asyncio.get_running_loop()
+    with cli_permission_errors():
+        review_url: Callable[[str | None], Coroutine[Any, Any, None]] = (
+            state.runtime.shell_cli.download_url_review(token)
+        )
+
+        async def prepare(state: Any, params: JsonObject) -> JsonObject:
+            options = await _validated_install(state, params)
+            scope: str = options["scope"]
+            if scope.startswith(_AGENT_SCOPE_PREFIX):
+                agent = await _SKILL_READ_WORKERS.run(
+                    state.runtime.agents.identify, scope.removeprefix(_AGENT_SCOPE_PREFIX)
+                )
+                options["incarnation"] = agent.created_at
+            return options
+
+        options = await _serialized_skill_mutation(prepare)(state, install_params)
+        source = options["source"]
+
+        def authorize(url: str) -> None:
+            asyncio.run_coroutine_threadsafe(review_url(url), loop).result()
+
+        try:
+            bundle = await _SKILL_DOWNLOAD_WORKERS.run(
+                load_reviewed_source, source, ref=options["ref"], review_url=authorize
+            )
+        except (PackageError, OSError) as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+        async def publish(state: Any, params: JsonObject) -> JsonObject:
+            # The process or its authority may have ended while the download or a
+            # preceding mutation was in flight. Recheck without requesting approval.
+            await review_url(None)
+            return await _skill_install(
+                state, params, prepared=bundle, expected_incarnation=options.get("incarnation")
+            )
+
+        return await _serialized_skill_mutation(publish)(state, install_params)
 
 
 async def install_skill_upload(
@@ -704,6 +785,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.read": _skill_read,
         "skill.create": _serialized_skill_mutation(_skill_create),
         "skill.install": _serialized_skill_mutation(_skill_install),
+        "skill.install_cli": _skill_install_cli,
         "skill.update": _serialized_skill_mutation(_skill_update),
         "skill.delete": _serialized_skill_mutation(_skill_delete),
         "skill.write_file": _serialized_skill_mutation(_skill_write_file),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,6 +36,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Route the standard native GUI shortcut before loading console commands."""
     _configure_console_output()
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if (scope := os.environ.pop("VBOT_SHELL_CLI", None)) is not None:
+        from cli._shell_cli import run_shell_cli
+
+        try:
+            sys.exit(run_shell_cli(arguments, scope))
+        except (ValueError, OSError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            sys.exit(1)
     # The installer owns exactly this shortcut. All other invocations retain
     # the complete CLI parser, output policy and argument validation.
     if Path(sys.executable).name.casefold() == "vbot.gui.exe" and arguments == ["desktop"]:

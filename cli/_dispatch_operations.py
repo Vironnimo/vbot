@@ -254,6 +254,7 @@ def dispatch_skill_command(
             args.scope,
             path=args.path,
             ref=args.ref,
+            shell_cli_token=getattr(args, "_shell_cli_token", None),
             dry_run=args.dry_run,
             replace=args.replace,
             confirm=args.yes,
@@ -786,7 +787,8 @@ def dispatch_config_command(
     if args.command == "set":
         if args.stdin:
             try:
-                coerced = json.loads(_read_stdin_utf8())
+                stdin = getattr(args, "_reviewed_stdin", None)
+                coerced = json.loads(_read_stdin_utf8() if stdin is None else stdin)
             except OSError, ValueError:
                 return CommandResult(
                     ok=False,

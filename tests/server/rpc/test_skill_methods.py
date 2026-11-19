@@ -9,22 +9,30 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
+import respx
 
+from core.agents import AgentNotFoundError
 from core.skills import SkillPolicyError
 from core.skills._history import SkillHistory, SkillRevision
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPackageRef
-from core.skills.skills import SkillRegistry
+from core.skills.skills import SkillMetadata, SkillRegistry
 from core.statistics.skills import SkillActivationUse
+from core.tools.shell_cli import ShellCliAccess
 from server.events import ServerEventBus
 from server.rpc.skill_methods import install_skill_upload
+from tests.core.permissions.command_check_support import restricted
+from tests.core.tools.tools_test_support import make_context
 from tests.server.rpc_test_support import call, resource_changes, rpc_error, rpc_result
 
 JsonObject = dict[str, Any]
@@ -272,6 +280,99 @@ async def test_install_publishes_the_complete_package_and_refreshes_the_scope(
     runtime = state.runtime
     assert (runtime.reload_calls, runtime.invalidated) == _expected_refresh(scope, 1)
     assert resource_changes(state) == [{"kind": "skills"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blocked", [None, "api.github.com", "cdn.example", "expired", "unknown_scope", "replaced_agent"]
+)
+async def test_shell_install_checks_live_access_before_each_download(
+    tmp_path: Path, blocked: str | None
+) -> None:
+    state = _state(tmp_path)
+    docs = SkillMetadata(
+        "vbot-docs", "Docs", tmp_path, package_ref=SkillPackageRef("bundled", "vbot-docs")
+    )
+    access = ShellCliAccess(
+        resolve_agent=AsyncMock(return_value=SimpleNamespace(allowed_skills=["vbot-docs"])),
+        resolve_skills=lambda *_: SkillRegistry({docs.name: docs}),
+        data_dir=tmp_path,
+        server_bind=lambda: ("127.0.0.1", 22336),
+    )
+    state.runtime.shell_cli = access
+    scope = "global"
+    if blocked == "unknown_scope":
+        scope = "agent:missing"
+    elif blocked == "replaced_agent":
+        scope = "agent:builder"
+        state.runtime.agents.identify = Mock(return_value=SimpleNamespace(created_at="original"))
+        state.runtime.agents.incarnation_guard = Mock(
+            side_effect=AgentNotFoundError("Agent replaced")
+        )
+    boundary = restricted(
+        tmp_path,
+        web="listed",
+        allow=["Web(api.github.com)", "Web(codeload.github.com)"],
+        deny=[f"Web({blocked})"] if blocked in {"api.github.com", "cdn.example"} else [],
+    )
+    approval = AsyncMock(return_value=True)
+    context = make_context(
+        "bash",
+        cwd=tmp_path,
+        permissions=boundary,
+        approval_hook=approval,
+        approval_refresh_hook=AsyncMock(return_value=(boundary, {"computer_id": "server"})),
+    )
+    source = "https://github.com/owner/repo"
+    grant = access.issue(context, {"command": f"vbot skill install {source}"}, handoff_token=None)
+    token = json.loads(grant.environment_value)["token"]
+    api = "https://api.github.com/repos/owner/repo/commits/HEAD"
+    sha = "a" * 40
+    archive = f"https://codeload.github.com/owner/repo/zip/{sha}"
+    cdn = "https://cdn.example/skill.zip"
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as package:
+        package.writestr("demo/SKILL.md", _skill_md())
+
+    loop = asyncio.get_running_loop()
+
+    def redirect(_: httpx.Request) -> httpx.Response:
+        if blocked == "expired":
+            loop.call_soon_threadsafe(grant.release)
+        return httpx.Response(302, headers={"Location": cdn})
+
+    with respx.mock(assert_all_called=False) as network:
+        network.get(api).respond(json={"sha": sha})
+        network.get(archive).mock(side_effect=redirect)
+        network.get(cdn).respond(content=data.getvalue())
+        result = await call(
+            state,
+            "skill.install_cli",
+            source=source,
+            token=token,
+            scope=scope,
+        )
+        requests = [str(call.request.url) for call in network.calls]
+    grant.release()
+    assert result["ok"] is (blocked is None), result
+    approvals = [args.args[2][0].target for args in approval.await_args_list]
+    if blocked == "unknown_scope":
+        assert result["error"]["code"] == "agent_not_found"
+        assert not requests and not approvals
+    elif blocked == "api.github.com":
+        assert not requests and approvals == [source]
+    elif blocked in {"expired", "cdn.example"}:
+        assert requests == [api, archive] and approvals == [source]
+    else:
+        assert requests == [api, archive, cdn] and approvals == [source, cdn]
+        if blocked == "replaced_agent":
+            state.runtime.agents.incarnation_guard.assert_called_once_with("builder", "original")
+            assert result["error"]["code"] == "agent_not_found"
+        else:
+            assert result["result"]["source"] == f"https://github.com/owner/repo/tree/{sha}"
+    if blocked and blocked not in {"unknown_scope", "replaced_agent"}:
+        assert result["error"]["code"] == "permission_denied"
+    assert (_scope_root(state, scope) / "demo" / "SKILL.md").exists() is (blocked is None)
 
 
 @pytest.mark.asyncio

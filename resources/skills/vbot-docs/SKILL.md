@@ -5,7 +5,7 @@ description: "Configure and inspect vBot, the app you run in: Agents including y
 
 # vBot
 
-Run the documented commands with the `vbot` Tool when available. Pass the arguments after `vbot` as a list of strings. In a restricted Session, submit changes to Agent access through this Tool so the user can approve them in chat. With full access and no `vbot` Tool, run the command in the shell. Without target options it reaches the server that runs you, so a saved change applies there at once, also to yourself.
+With a shell Tool, run the documented `vbot` commands as written, including in a restricted Session. Without target options the CLI reaches the server that runs you, so a saved change applies there at once, also to yourself.
 
 Commands read `vbot <area> <action> [target] [options]`: ids are positional, everything else is a flag. `vbot help` lists the areas, `vbot <area>` its actions, `vbot <area> <action> --help` the exact arguments. Use only commands and flags that help shows.
 

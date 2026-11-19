@@ -34,6 +34,9 @@ async def _archived(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, str]]:
     runtime.sessions.create("coder", session_id="work")
     notes = runtime.sessions.create("manager", session_id="notes").address
     runtime.sessions.set_title(notes, "Notes")
+    runtime.sessions.mutate_metadata(
+        notes, lambda meta: meta.update(agent_overrides={"thinking_effort": "high"})
+    )
     await rpc_result(
         state,
         "project.add",
@@ -206,6 +209,7 @@ async def test_show_returns_sessions_files_details_and_the_restore_check(tmp_pat
     result = await rpc_result(state, "archive.show", entry_id=entry_id)
 
     assert result["entry"]["entry_id"] == entry_id
+    assert "restores_access" not in result
     assert [(session["agent_id"], session["review_fork"]) for session in result["sessions"]] == [
         ("coder", False)
     ]
@@ -301,7 +305,11 @@ async def test_restore_warnings_carry_their_facts(tmp_path: Path) -> None:
 async def test_restore_of_a_session_entry_reports_its_address(tmp_path: Path) -> None:
     state, entries = await _archived(tmp_path)
 
-    restored = await rpc_result(state, "archive.restore", entry_id=entries["session"])
+    session_entry = entries["session"]
+    shown = await rpc_result(state, "archive.show", entry_id=session_entry)
+    assert shown["restores_access"] is False
+
+    restored = await rpc_result(state, "archive.restore", entry_id=session_entry)
 
     assert restored["restored"] == {
         "session_id": "notes",

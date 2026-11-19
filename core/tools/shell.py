@@ -67,6 +67,7 @@ from core.tools.command_manager import (
     CommandNotFoundError,
     CommandOwner,
     CommandReport,
+    CommandWaitOutcome,
     StopReason,
 )
 from core.tools.contracts import ToolContractError
@@ -103,6 +104,7 @@ from ._shell_definition import (
 
 if TYPE_CHECKING:
     from core.subagents import SubAgentTree
+    from core.tools.shell_cli import ShellCliAccess, ShellCliGrant
 
 _LOGGER = get_logger("tools.shell")
 
@@ -244,6 +246,7 @@ class ShellTool:
         scratch_areas: ScratchAreas | None = None,
         secrets: AgentSecrets | None = None,
         command_checker: CommandChecker | None = None,
+        shell_cli: ShellCliAccess | None = None,
         subagents: SubAgentTree | None = None,
         review_shell: ShellReviewer | None = None,
         protected_folders: ProtectedFolders | None = None,
@@ -252,6 +255,7 @@ class ShellTool:
         self._protected_folders: ProtectedFolders = protected_folders or tuple
         self._subagents = subagents
         self._checker = command_checker
+        self._shell_cli = shell_cli
         self._review_shell = review_shell
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._credential_names: CredentialNames = credential_names or frozenset
@@ -293,9 +297,12 @@ class ShellTool:
         if confined:
             _check_environment_names(call.variables, opaque_names)
         scratch = await self._scratch(context)
+        uses_cli = False
         if confined:
-            # Before any Agent Secret is used and before the handoff token exists.
-            await self._check_permissions(context, call, scratch, withheld, arguments, opaque_names)
+            # Before any Agent Secret is used and before a command grant exists.
+            uses_cli = await self._check_permissions(
+                context, call, scratch, withheld, arguments, opaque_names
+            )
         await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         if self._review_shell is not None:
             reviewed_cwd = await run_tool_worker(call.workdir.resolve)
@@ -337,35 +344,40 @@ class ShellTool:
             raise ToolContractError(
                 "Permission Rules changed while the command was prepared. Call it again."
             )
-        # A restricted Session cannot reach the server to use an update handoff.
-        handoff = None if confined else issue_for_tool_context(self._update_handoffs, context)
-        try:
-            command_id = await self._start(
-                context,
-                arguments,
-                call,
-                handoff,
-                names,
-                secret_environment,
-                secret_uses,
-                scratch,
-                withheld,
-            )
-        except _NotStartedError as failure:
-            if handoff is not None:
-                handoff.release()
-            return failure.result
-        except BaseException:
-            if handoff is not None:
-                handoff.release()
-            raise
-        if handoff is not None:
-            self._keep(self._release_when_finished(command_id, handoff))
+        cli_grant = None
+        with contextlib.ExitStack() as grants:
+            handoff = None
+            if not confined or uses_cli:
+                handoff = issue_for_tool_context(self._update_handoffs, context)
+                if handoff is not None:
+                    grants.callback(handoff.release)
+            if uses_cli and self._shell_cli is not None:
+                cli_grant = self._shell_cli.issue(
+                    context, arguments, handoff_token=handoff.token if handoff else None
+                )
+                grants.callback(cli_grant.release)
+            try:
+                command_id = await self._start(
+                    context,
+                    arguments,
+                    call,
+                    handoff,
+                    names,
+                    secret_environment,
+                    secret_uses,
+                    scratch,
+                    withheld,
+                    cli_grant,
+                )
+            except _NotStartedError as failure:
+                return failure.result
+            if handoff is not None or cli_grant is not None:
+                self._keep(self._release_when_finished(command_id, grants.pop_all().close))
         if call.background:
             return await self._background_result(
                 call, command_id, names, context.permissions, reason="background"
             )
-        return await self._wait(context, call, command_id, names)
+        return await self._wait(context, call, command_id, names, cli_grant)
 
     async def _scratch(self, context: ToolContext) -> ScratchFolder | None:
         if self._scratch_areas is None:
@@ -386,11 +398,9 @@ class ShellTool:
         withheld: Container[str],
         arguments: JsonObject,
         opaque_names: set[str],
-    ) -> None:
-        """Authorize the whole command before secrets or launch."""
+    ) -> bool:
+        """Authorize the whole command and identify an invocation of the reviewed CLI."""
         boundary = context.permissions
-        if not boundary.restricted:
-            return
         if self._checker is None:
             raise PermissionDenied(
                 boundary.refusal(
@@ -419,7 +429,7 @@ class ShellTool:
             for name, value in environment.complete().items()
             if (name.upper() if sys.platform == "win32" else name) not in opaque_keys
         }
-        await authorize_command(
+        plan = await authorize_command(
             context,
             self._checker,
             arguments=arguments,
@@ -428,7 +438,11 @@ class ShellTool:
             cwd=call.workdir,
             env=visible_env,
             workdir_parameter=True,
+            allows_instance_cli=partial(self._shell_cli.allows, context)
+            if self._shell_cli
+            else None,
         )
+        return plan is not None and any(command.instance_cli for command in plan.commands)
 
     async def _secret_environment(
         self, context: ToolContext, call: _ShellCall
@@ -509,6 +523,7 @@ class ShellTool:
         secret_uses: list[SecretUse],
         scratch: ScratchFolder | None,
         withheld: Container[str],
+        cli_grant: ShellCliGrant | None,
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
         if self._secrets is not None:
@@ -525,6 +540,7 @@ class ShellTool:
                     context.project_id,
                     handoff.token if handoff is not None else None,
                 ),
+                shell_cli=cli_grant.environment_value if cli_grant else None,
                 variables=call.variables,
                 credentials=credentials,
                 scratch=scratch,
@@ -636,7 +652,12 @@ class ShellTool:
         return handle.command_id
 
     async def _wait(
-        self, context: ToolContext, call: _ShellCall, command_id: str, names: ToolNames
+        self,
+        context: ToolContext,
+        call: _ShellCall,
+        command_id: str,
+        names: ToolNames,
+        cli_grant: ShellCliGrant | None,
     ) -> JsonObject:
         moved = asyncio.Event()
         # Set once this call hands the command to the background: from then on a
@@ -659,11 +680,17 @@ class ShellTool:
             context.background_registration_hook(move_to_background)
         context.on_cancel(cancel)
 
-        waiting = asyncio.ensure_future(
-            self._commands.wait(
-                command_id, seconds=call.wait_seconds, check_idle=_CONSOLE_READS_WAIT
-            )
-        )
+        async def wait_for_command() -> CommandWaitOutcome:
+            while True:
+                outcome = await self._commands.wait(
+                    command_id, seconds=call.wait_seconds, check_idle=_CONSOLE_READS_WAIT
+                )
+                if outcome == "ended" or cli_grant is None or not cli_grant.reviewing:
+                    return outcome
+                # Human review time is separate from the shell command's execution budget.
+                await cli_grant.wait_for_reviews()
+
+        waiting = asyncio.ensure_future(wait_for_command())
         moving = asyncio.ensure_future(moved.wait())
         try:
             await asyncio.wait({waiting, moving}, return_when=asyncio.FIRST_COMPLETED)
@@ -747,14 +774,14 @@ class ShellTool:
         if not task.cancelled() and task.exception() is not None:
             _LOGGER.warning("Shell background work failed", exc_info=task.exception())
 
-    async def _release_when_finished(self, command_id: str, handoff: UpdateHandoffGrant) -> None:
-        """Keep the handoff token claimable exactly while the command's processes run."""
+    async def _release_when_finished(self, command_id: str, release: Callable[[], None]) -> None:
+        """Keep the grants live exactly while the command's processes run."""
         try:
             await self._commands.wait_finished(command_id)
         except CommandNotFoundError:
             pass
         finally:
-            handoff.release()
+            release()
 
 
 # Results
@@ -931,6 +958,7 @@ def register_shell_tool(
     scratch_areas: ScratchAreas | None = None,
     secrets: AgentSecrets | None = None,
     command_checker: CommandChecker | None = None,
+    shell_cli: ShellCliAccess | None = None,
     subagents: SubAgentTree | None = None,
     review_shell: ShellReviewer | None = None,
     protected_folders: ProtectedFolders | None = None,
@@ -954,6 +982,7 @@ def register_shell_tool(
         scratch_areas=scratch_areas,
         secrets=secrets,
         command_checker=command_checker,
+        shell_cli=shell_cli,
         subagents=subagents,
         review_shell=review_shell,
         protected_folders=protected_folders,

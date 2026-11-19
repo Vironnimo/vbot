@@ -163,6 +163,7 @@ from core.tools.portal_registry import PortalRegistry
 from core.tools.secrets import register_secrets_tool
 from core.tools.session import register_session_tool
 from core.tools.shell import powershell_executable
+from core.tools.shell_cli import ShellCliAccess
 from core.tools.shell_environment import inherited_value
 from core.tools.show_widget import register_show_widget_tool
 from core.tools.skill import skill_loadable
@@ -473,7 +474,6 @@ def bootstrap(runtime: Runtime) -> None:
                 require_model=False,
                 include_temporary=True,
             ),
-            resolve_skills=runtime.skills_for,
             data_dir=runtime._storage.data_dir,
             server_bind=lambda: (runtime._server_listen_host, runtime._server_port),
             update_handoffs=runtime._update_handoffs,
@@ -990,6 +990,18 @@ def bootstrap(runtime: Runtime) -> None:
             runtime, runtime._trigger_service, secrets=runtime._agent_secrets
         )
         runtime._subagent_coordinator.install(runtime._chat_run_manager)
+        runtime._shell_cli = ShellCliAccess(
+            resolve_agent=lambda context: runtime.agent_resolver.resolve_agent_async(
+                context.project_id,
+                context.agent_id,
+                session_id=context.session_id,
+                require_model=False,
+                include_temporary=True,
+            ),
+            resolve_skills=runtime.skills_for,
+            data_dir=runtime._storage.data_dir,
+            server_bind=lambda: (runtime._server_listen_host, runtime._server_port),
+        )
         register_shell_tool(
             runtime._tools,
             runtime._command_manager,
@@ -1003,6 +1015,7 @@ def bootstrap(runtime: Runtime) -> None:
             command_checker=runtime._command_checker,
             subagents=runtime._subagent_coordinator,
             review_shell=runtime._review_shell,
+            shell_cli=runtime._shell_cli,
             protected_folders=partial(
                 _protected_folders,
                 Path(runtime._storage.data_dir),

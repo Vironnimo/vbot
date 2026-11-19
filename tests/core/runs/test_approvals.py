@@ -60,9 +60,13 @@ async def test_waiting_approval_releases_execution_slots() -> None:
 
     async def preflight(context, arguments):
         if arguments["wait"]:
-            assert await context.request_approval(
-                "review", [ApprovalRequirement.review("x")], arguments=arguments
-            )
+
+            async def review(target):
+                return await context.request_approval(
+                    "review", [ApprovalRequirement.review(target)], arguments=arguments
+                )
+
+            assert all(await asyncio.gather(review("a"), review("b")))
 
     def handler(context, arguments):
         if not arguments["wait"]:
@@ -88,9 +92,70 @@ async def test_waiting_approval_releases_execution_slots() -> None:
     batch.add(ToolCall(id="two", name="probe", arguments={"wait": False}))
     await asyncio.wait_for(sibling_ran.wait(), timeout=1)
     snapshot = manager.approvals_snapshot()
-    assert manager.resolve_approval(snapshot["requests"][0]["id"], "allow")
+    assert len(snapshot["requests"]) == 2
+    for request in snapshot["requests"]:
+        assert manager.resolve_approval(request["id"], "allow")
     results = await batch.results()
     assert all(item["ok"] for item in results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handoff", ["before_review", "while_pending", "while_resuming"])
+async def test_background_approval_outlives_the_shells_execution_slot(handoff: str) -> None:
+    registry = ToolRegistry()
+    shell_context = asyncio.get_running_loop().create_future()
+    shell_exits, sibling_started, sibling_exits = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    requested, answer, answered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def handler(context, _arguments):
+        if context.tool_call_id == "shell":
+            shell_context.set_result(context)
+            await shell_exits.wait()
+        elif context.tool_call_id == "occupy":
+            sibling_started.set()
+            await sibling_exits.wait()
+        return tool_success({})
+
+    async def decision():
+        requested.set()
+        await answer.wait()
+        answered.set()
+        return True
+
+    registry.register("probe", "Probe.", {"type": "object"}, handler)
+    executor = ToolExecutor(registry, per_run_limit=1, global_limit=1)
+    config = make_execution_config()
+    shell = executor.start_batch(config)
+    sibling = executor.start_batch(config)
+    shell.add(ToolCall(id="shell", name="probe", arguments={}))
+    context = await shell_context
+    if handoff == "before_review":
+        shell_exits.set()
+        assert (await shell.result(0))["ok"]
+    review = asyncio.create_task(context.approval_wait_hook(decision()))
+    try:
+        await requested.wait()
+        sibling.add(ToolCall(id="occupy", name="probe", arguments={}))
+        await asyncio.wait_for(sibling_started.wait(), timeout=1)
+        if handoff == "while_resuming":
+            answer.set()
+            await answered.wait()
+            # The decision is ready but the sibling still owns the only global slot.
+            await asyncio.sleep(0)
+            assert not review.done()
+        shell_exits.set()
+        assert (await shell.result(0))["ok"]
+        answer.set()
+        assert await asyncio.wait_for(review, timeout=1)
+    finally:
+        shell_exits.set()
+        sibling_exits.set()
+        review.cancel()
+        await asyncio.gather(review, return_exceptions=True)
+        await shell.aclose()
+        await sibling.aclose()
+    shell.add(ToolCall(id="next", name="probe", arguments={}))
+    assert (await asyncio.wait_for(shell.result(1), timeout=1))["ok"]
 
 
 @pytest.mark.asyncio

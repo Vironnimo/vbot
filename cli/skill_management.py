@@ -24,6 +24,7 @@ def skill_install(
     *,
     path: str | None = None,
     ref: str | None = None,
+    shell_cli_token: str | None = None,
     dry_run: bool = False,
     replace: bool = False,
     confirm: bool = False,
@@ -71,7 +72,11 @@ def skill_install(
         params["path"] = path
     if ref is not None:
         params["ref"] = ref
-    payload = _rpc_call(instance, "skill.install", params)
+    method = "skill.install"
+    if shell_cli_token is not None:
+        method = "skill.install_cli"
+        params["token"] = shell_cli_token
+    payload = _rpc_call(instance, method, params)
     if not payload.ok:
         return payload.to_command_result()
     data = payload.data

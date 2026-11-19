@@ -163,9 +163,6 @@ class StubSkills:
             return list(self._skills)
         return [skill for skill in self._skills if skill.name in allowed_skills]
 
-    def is_allowed(self, name: str, allowed_skills: list[str]) -> bool:
-        return any(skill.name == name for skill in self.filter_allowed(allowed_skills))
-
 
 class StubBlockStore:
     """In-memory read+write BlockStore using the manager's scope-key convention."""
@@ -271,12 +268,8 @@ def _preview_state(
     ``route_on_demand`` is true.
     """
 
-    async def preview_tool_definitions(
-        _agent: Any, *, session_tool_grants: Sequence[str]
-    ) -> list[dict[str, Any]]:
-        definitions = await manager.provider_tool_definitions_async(
-            _agent, session_tool_grants=session_tool_grants
-        )
+    async def preview_tool_definitions(_agent: Any) -> list[dict[str, Any]]:
+        definitions = await manager.provider_tool_definitions_async(_agent)
         if not route_on_demand:
             definitions.append(
                 {"name": "call_tool", "description": "test proxy", "parameters": {"type": "object"}}

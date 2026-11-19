@@ -643,6 +643,9 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     world.sessions.create("coder", session_id="other")
     world.sessions.set_title(session, "Planning")
     review = (await world.sessions.fork(session, run_kind=RunKind.MEMORY_REFLECTION)).address
+    world.sessions.mutate_metadata(
+        review, lambda meta: meta.update(agent_overrides={"permission_grants": ["Read(~/docs/**)"]})
+    )
     scratch = await world.scratch_areas.folder_for(session)
     review_scratch = await world.scratch_areas.folder_for(review)
     if current.endswith("review-fork"):
@@ -670,7 +673,10 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     assert world.recall_removals == [(None, session.agent_id, session.session_id)]
     assert world.closed_transports == [session, review]
     assert not scratch.area.exists() and not review_scratch.area.exists()
-    assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
+    detail = await world.service.show(archived.entry_id, session_limit=1)
+    assert detail.listing.accepts_target_id
+    assert [shown.address for shown in detail.sessions] == [session]
+    assert detail.restores_access is True  # The review fork is outside the displayed page.
     # Channel routing started a new Session at the archived address meanwhile.
     world.sessions.create(session.agent_id, session_id=session.session_id)
     with pytest.raises(ArchiveRestoreConflictError) as taken:

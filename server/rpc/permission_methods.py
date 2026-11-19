@@ -14,6 +14,8 @@ Agent reads.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,6 +39,9 @@ from core.permissions import (
 )
 from core.projects import AgentOverrides, ResolutionAgentNotFoundError, RuntimeAgent
 from core.sessions import SessionAddress, WorkingProjectChoice
+from core.tools._tool_context import ToolApprovalCancelledError, ToolAuthorityUnavailableError
+from core.tools.shell_cli import ShellCliAccessError
+from core.utils.errors import VBotError
 from server.access import current_principal
 from server.rpc import _permission_profiles
 from server.rpc.dispatcher import RpcMethodHandler
@@ -49,6 +54,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
+    _required_bool,
     _required_session_address,
     _required_string,
     rpc_request_fields,
@@ -453,6 +459,62 @@ async def _remove_session_grants(state: Any, params: JsonObject) -> JsonObject:
     return _grant_summary(overrides)
 
 
+@contextmanager
+def cli_permission_errors() -> Iterator[None]:
+    """Surface refusals and expired shell grants consistently to private CLI calls."""
+    try:
+        yield
+    except (
+        ShellCliAccessError,
+        VBotError,
+        ToolAuthorityUnavailableError,
+        ToolApprovalCancelledError,
+    ) as exc:
+        raise RpcError(
+            "permission_denied", str(exc) or "The CLI request was cancelled.", routine=True
+        ) from exc
+
+
+async def _review_cli(state: Any, params: JsonObject) -> JsonObject:
+    """Authorize the CLI's parsed operation in the shell call that launched it."""
+    _reject_unsupported(
+        params,
+        {"token", "argv", "rights", "profile", "reads", "stdin"},
+        "permissions.review_cli",
+    )
+    token = _required_string(params, "token")
+    argv = params.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "argv must be a list of strings")
+    rights = _required_bool(params, "rights")
+    reads = params.get("reads")
+    if not isinstance(reads, list) or not all(
+        isinstance(read, list)
+        and len(read) == 2
+        and isinstance(read[0], str)
+        and Path(read[0]).is_absolute()
+        and isinstance(read[1], bool)
+        for read in reads
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "reads must contain absolute paths and subtree flags"
+        )
+    profile = params.get("profile")
+    stdin = params.get("stdin")
+    if not isinstance(profile, dict | None) or not isinstance(stdin, str | None):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Invalid CLI review input")
+    with cli_permission_errors():
+        files = await state.runtime.shell_cli.review(
+            token,
+            argv=argv,
+            reads=[(path, subtree) for path, subtree in reads],
+            rights=rights,
+            profile=profile,
+            stdin=stdin,
+        )
+    return {"files": files}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the Permission Rules RPC handlers."""
 
@@ -460,6 +522,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         **_permission_profiles.method_handlers(),
         "permissions.pending": _pending_approvals,
         "permissions.resolve": _resolve_approval,
+        "permissions.review_cli": _review_cli,
         "permissions.validate": _validate_permission_rules,
         "permissions.session": _session_permissions,
         "permissions.set_session_rules": _set_session_rules,

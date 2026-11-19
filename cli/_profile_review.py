@@ -6,7 +6,6 @@ import argparse
 from contextvars import ContextVar
 from typing import Any
 
-from cli.device_management import run_refusal
 from cli.rpc_client import rpc_call
 from cli.server_management import ServerInstance
 
@@ -16,12 +15,6 @@ type JsonObject = dict[str, Any]
 bound_profile_review: ContextVar[JsonObject | None] = ContextVar(
     "bound_profile_review", default=None
 )
-
-
-def profile_change_refusal(action: str) -> str | None:
-    if bound_profile_review.get() is not None:
-        return None
-    return run_refusal(action, "use the vbot Tool for this change")
 
 
 def profile_write_condition() -> JsonObject:
@@ -56,7 +49,9 @@ def _catalog_entry(instance: ServerInstance, name: str) -> JsonObject | None:
     return next((row for row in rows if row["name"] == name), None)
 
 
-def _catalog_change(instance: ServerInstance, args: argparse.Namespace) -> JsonObject:
+def _catalog_change(
+    instance: ServerInstance, args: argparse.Namespace, allow_file: bool
+) -> JsonObject:
     from cli.approval_management import profile_input
     from core.permissions import (
         custom_permission_profile_name,
@@ -67,7 +62,7 @@ def _catalog_change(instance: ServerInstance, args: argparse.Namespace) -> JsonO
     name = custom_permission_profile_name(args.name)
     rules = None
     if args.command == "save":
-        if args.file is not None:
+        if args.file is not None and not allow_file:
             raise ValueError(
                 "Use --stdin and pass the Permission Rules JSON in the vbot Tool's stdin "
                 "so the user can approve the exact rules."
@@ -128,9 +123,11 @@ def _team_fallback(
     raise ValueError("The server could not preview this Project Agent's Permission Rules.")
 
 
-def prepare_profile_review(instance: ServerInstance, args: argparse.Namespace) -> JsonObject | None:
+def prepare_profile_review(
+    instance: ServerInstance, args: argparse.Namespace, *, allow_profile_file: bool = False
+) -> JsonObject | None:
     if args.area == "permission-profiles" and args.command in {"save", "delete"}:
-        return _catalog_change(instance, args)
+        return _catalog_change(instance, args, allow_profile_file)
     if args.area == "agent" and args.command in {"create", "update"}:
         from cli._dispatch_agents import _agent_tool_access_args_error, _permission_edit_from_args
 

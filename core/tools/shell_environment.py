@@ -27,13 +27,13 @@ One owner builds it from explicit layers, each applied over the previous one:
 7. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
 
-A Session with Permission Rules gets a confined environment instead of layer 7:
-without the instance variables of layer 2, the Run identity and this server's
-own ``vbot`` command on ``PATH`` (``VBOT_SCRATCH_DIR`` stays), so a command
-cannot find or address the vBot server through its environment; and without
-the credentials vBot knows (``Runtime.environment_credential_names``) that the
-login base carries, such as a Provider key the server was started with, so a
-command gets a credential only as a granted one (layer 5).
+A restricted Session's shell omits layer 2 and the Run variables of layer 7.
+For a checked shell invocation of the instance CLI, its PATH leads with a
+launcher for the running version and VBOT_SHELL_CLI carries the call's review
+grant. Other shell calls and Terminal Sessions receive no grant. The Scratch
+folder stays available. The confined environment withholds login credentials
+known to vBot (Runtime.environment_credential_names), so a command gets those
+credentials only through an explicit grant in layer 5.
 
 A command's environment comes in two parts (``CommandEnvironment``): layers 1
 to 4 are its shell's start environment, the same for every call until the login
@@ -79,6 +79,9 @@ _INSTANCE_VARIABLES = ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT")
 _CHECKOUT = Path(__file__).resolve().parents[2]
 # The directory of this server's own ``vbot`` command, set once at server start.
 _instance_command_directory: Path | None = None
+# Checked shell calls bypass the installation bootstrap and enter the running CLI directly.
+_reviewed_cli_directory: Path | None = None
+SHELL_CLI_ENV = "VBOT_SHELL_CLI"
 # Variables vBot's own Python process carries and a user's shell must not.
 _PROCESS_VARIABLES = frozenset({"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "__PYVENV_LAUNCHER__"})
 
@@ -200,6 +203,7 @@ class CommandEnvironment:
 def command_environment(
     run: RunIdentity | None,
     *,
+    shell_cli: str | None = None,
     variables: Mapping[str, str] | None = None,
     credentials: Mapping[str, str] | None = None,
     scratch: ScratchFolder | None = None,
@@ -208,13 +212,10 @@ def command_environment(
 ) -> CommandEnvironment:
     """Environment of one shell command run by an Agent.
 
-    *confined* (a Session with Permission Rules) leaves out what exists only to
-    reach or control the vBot server: the instance variables, the Run identity
-    and this server's own ``vbot`` command on ``PATH``; ``VBOT_SCRATCH_DIR``
-    stays. It also withholds the login base's variables named in
-    *credential_names*, the names vBot knows as credentials; *variables* and
-    *credentials* apply after that, so a granted credential still arrives.
-    *run* is None only for a confined command.
+    A confined command omits the server's instance and Run variables. A
+    reviewed invocation receives *shell_cli* and the instance CLI's dedicated
+    PATH entry. Both confined forms keep the Scratch folder and strip the login
+    credentials named in *credential_names* before applying granted credentials.
     """
     base = _command_base()
     environment = dict(base)
@@ -224,9 +225,21 @@ def command_environment(
     _apply(environment, credentials or {})
     if scratch is not None:
         _apply(environment, scratch_environment(scratch))
-    _remove(environment, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
+    _remove(environment, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV, SHELL_CLI_ENV))
     if confined:
         _confine(environment)
+        if shell_cli is not None:
+            if _reviewed_cli_directory is None:
+                raise ValueError("The server could not prepare its vbot CLI command.")
+            path = _get(environment, "PATH")
+            directory = str(_reviewed_cli_directory)
+            _apply(
+                environment,
+                {
+                    "PATH": directory + os.pathsep + path if path else directory,
+                    SHELL_CLI_ENV: shell_cli,
+                },
+            )
     elif run is not None:
         run_variables = {RUN_AGENT_ID_ENV: run.agent_id, RUN_SESSION_ID_ENV: run.session_id}
         if run.project_id is not None:
@@ -274,6 +287,7 @@ def _confine(environment: dict[str, str]) -> None:
         environment,
         (
             *_INSTANCE_VARIABLES,
+            SHELL_CLI_ENV,
             RUN_AGENT_ID_ENV,
             RUN_SESSION_ID_ENV,
             RUN_PROJECT_ID_ENV,
@@ -311,6 +325,7 @@ def _command_base() -> dict[str, str]:
 def _instance_environment() -> dict[str, str]:
     """The login base with this vBot instance's variables (layers 1 and 2)."""
     environment = _login_environment()
+    _remove(environment, (SHELL_CLI_ENV,))
     _apply(environment, _instance_variables())
     if _instance_command_directory is not None:
         path = _get(environment, "PATH")
@@ -325,19 +340,30 @@ def provide_instance_command(
     port: int,
     *,
     checkout: Path = _CHECKOUT,
-    interpreter: str = sys.executable,
+    interpreter: str | None = None,
 ) -> Path | None:
-    """Write a ``vbot`` command for this server and lead every shell's PATH with it.
+    """Prepare the running server's CLI launchers.
 
-    Only for a server that runs from a source checkout: an installed server's shells
-    keep the installation's own ``vbot``. The command runs the checkout's CLI with
-    this server's data directory and port, so a ``vbot`` call in a Run reaches the
-    server that runs it. Returns the directory, or None for an installed server.
+    Reviewed shell calls get a CLI-only launcher on every installation. A
+    checkout also gets a launcher that binds ordinary Agent commands to its
+    instance. Return the latter's directory, or None on packaged installations.
     """
-    global _instance_command_directory
+    from core.utils.python_process import python_executable
+
+    global _instance_command_directory, _reviewed_cli_directory
     cli = checkout / "cli" / "main.py"
-    installed = os.environ.get("VBOT_INSTALL_ROOT") or not (checkout / ".git").exists()
-    if installed or not cli.is_file():
+    installed = bool(os.environ.get("VBOT_INSTALL_ROOT")) or not (checkout / ".git").exists()
+    _reviewed_cli_directory = None
+    if not cli.is_file():
+        return None
+    interpreter = interpreter or python_executable()
+    # An installation's public vbot can also launch the tray or interpreter before
+    # cli.main. Only the current CLI, in its issuing server's version, handles a
+    # reviewed command. A stale shell cannot fall back to standalone operator mode.
+    reviewed = directory / "reviewed"
+    _write_reviewed_cli(reviewed, interpreter, cli, installed=installed)
+    _reviewed_cli_directory = reviewed
+    if installed:
         return None
     directory.mkdir(parents=True, exist_ok=True)
     data, python, script = str(data_dir), str(interpreter), str(cli)
@@ -366,15 +392,39 @@ def provide_instance_command(
     return directory
 
 
-def _powershell_command(data: str, port: int, python: str, script: str) -> str:
-    def quote(value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
-    call = f"& {quote(python)} {quote(script)} @args"
+
+def _write_reviewed_cli(directory: Path, interpreter: str, cli: Path, *, installed: bool) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    flags = "-I -B" if installed else "-E -B"
+    if os.name == "nt":
+        call = f"& {_ps_quote(interpreter)} {flags} {_ps_quote(str(cli))} @args"
+        (directory / "vbot.ps1").write_text(
+            f'if (-not $env:{SHELL_CLI_ENV}) {{ throw "The CLI grant is missing." }}\n'
+            f"if ($MyInvocation.ExpectingInput) {{ $input | {call} }} else {{ {call} }}\n"
+            "exit $LASTEXITCODE\n",
+            encoding="utf-8",
+        )
+    else:
+        command = directory / "vbot"
+        command.write_text(
+            "#!/bin/sh\n"
+            f': "${{{SHELL_CLI_ENV}:?The CLI grant is missing.}}"\n'
+            f'exec {_sh_quote(interpreter)} {flags} {_sh_quote(str(cli))} "$@"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        command.chmod(0o755)
+
+
+def _powershell_command(data: str, port: int, python: str, script: str) -> str:
+    call = f"& {_ps_quote(python)} {_ps_quote(script)} @args"
     # $env: belongs to the whole shell: the previous values come back after the call.
     return (
         "$saved = $env:VBOT_DATA_DIR, $env:VBOT_SERVER_PORT\n"
-        f"$env:VBOT_DATA_DIR = {quote(data)}\n"
+        f"$env:VBOT_DATA_DIR = {_ps_quote(data)}\n"
         f"$env:VBOT_SERVER_PORT = '{port}'\n"
         "try {\n"
         f"    if ($MyInvocation.ExpectingInput) {{ $input | {call} }} else {{ {call} }}\n"

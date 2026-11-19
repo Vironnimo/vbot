@@ -30,9 +30,11 @@ def login_base(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "PAGER": "less",
         "VBOT_RUN_PROJECT_ID": "inherited-project",
         "VBOT_UPDATE_HANDOFF": "stale-token",
+        "VBOT_SHELL_CLI": "expired",
     }
     monkeypatch.setattr(shell_environment, "_login_environment", lambda: dict(base))
     monkeypatch.setattr(shell_environment, "_instance_command_directory", None)
+    monkeypatch.setattr(shell_environment, "_reviewed_cli_directory", None)
     for name in ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT"):
         monkeypatch.delenv(name, raising=False)
     return base
@@ -114,6 +116,7 @@ def test_a_confined_environment_withholds_known_credentials_but_applies_granted_
     assert layers.base == command_environment(None).base
     assert layers.changes["OPENAI_API_KEY"] is None
     environment = layers.complete()
+    assert "VBOT_SHELL_CLI" not in environment
     assert "OPENAI_API_KEY" not in environment
     assert (environment["API_TOKEN"], environment["PAGER"]) == ("granted", "cat")
     unattended = unattended_command_environment(confined=True, credential_names=known)
@@ -177,6 +180,36 @@ def test_checkout_server_leads_shell_path_with_a_vbot_for_itself(
         )
         is None
     )
+    # A packaged server keeps the user's normal launcher for unrestricted shells.
+    # The restricted shell enters this version's CLI directly, preserving argv and stdin.
+    packaged_cli = checkout / "cli" / "main.py"
+    original = packaged_cli.read_text(encoding="utf-8")
+    packaged_cli.write_text(
+        "import json, os, sys\n"
+        "print(json.dumps([sys.argv[1:], sys.stdin.read().strip(), "
+        "os.environ['VBOT_SHELL_CLI'], os.getenv('VBOT_DATA_DIR')]))\n",
+        encoding="utf-8",
+    )
+    reviewed = command_environment(None, confined=True, shell_cli="test-grant").complete()
+    env = {**os.environ, **reviewed}
+    arguments = ["-m", "sample with spaces"]
+    if sys.platform == "win32":
+        ps = shutil.which("pwsh")
+        if ps is None:
+            pytest.skip("PowerShell 7 is not installed")
+        reviewed_command = [
+            ps,
+            "-NoProfile",
+            "-Command",
+            "'payload' | vbot -m 'sample with spaces'",
+        ]
+    else:
+        reviewed_command = ["/bin/sh", "-c", """printf payload | vbot -m 'sample with spaces'"""]
+    result = subprocess.run(
+        reviewed_command, capture_output=True, text=True, check=True, env=env, timeout=30
+    )
+    assert json.loads(result.stdout) == [arguments, "payload", "test-grant", None]
+    packaged_cli.write_text(original, encoding="utf-8")
     monkeypatch.delenv("VBOT_INSTALL_ROOT")
 
     directory = shell_environment.provide_instance_command(

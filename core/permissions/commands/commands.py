@@ -89,6 +89,8 @@ class SimpleCommand:
     words: tuple[CommandWord, ...]
     source: str
     shell: ShellKind
+    # A direct invocation of the instance CLI in the checked shell.
+    instance_cli: bool = False
 
 
 @dataclass(frozen=True, slots=True)

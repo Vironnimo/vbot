@@ -24,6 +24,7 @@ from core.tools._tool_results import (
     tool_failure_for_exception,
 )
 from core.tools.contracts import JsonObject
+from core.utils.workers import cancel_and_wait
 
 if TYPE_CHECKING:
     from core.tools.tools import ToolRegistry
@@ -37,38 +38,66 @@ class _ExecutionSlots:
     def __init__(self, per_run: asyncio.Semaphore, global_slot: asyncio.Semaphore | None) -> None:
         self._per_run = per_run
         self._global = global_slot
-        self._held_run = False
-        self._held_global = False
+        self._held = False
+        self._closed = False
+        self._waiters = 0
+        self._resuming: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> _ExecutionSlots:
+        await self._acquire()
+        return self
+
+    async def _acquire(self) -> None:
         await self._per_run.acquire()
-        self._held_run = True
         try:
             if self._global is not None:
                 await self._global.acquire()
-                self._held_global = True
         except BaseException:
-            self._release()
+            self._per_run.release()
             raise
-        return self
+        self._held = True
 
     async def __aexit__(self, *args: object) -> None:
-        self._release()
+        self._closed = True
+        try:
+            if self._resuming is not None:
+                await cancel_and_wait(self._resuming)
+        finally:
+            self._release()
 
     def _release(self) -> None:
-        if self._held_global:
-            assert self._global is not None
-            self._global.release()
-            self._held_global = False
-        if self._held_run:
+        if self._held:
+            if self._global is not None:
+                self._global.release()
             self._per_run.release()
-            self._held_run = False
+            self._held = False
 
     async def wait[T](self, pending: Awaitable[T]) -> T:
-        self._release()
-        result = await pending
-        await self.__aenter__()
-        return result
+        # A background shell process can request or finish an approval after
+        # its Tool returned. Only the live Tool occupies execution slots.
+        if self._closed:
+            return await pending
+        if self._waiters == 0:
+            self._release()
+        self._waiters += 1
+        try:
+            result = await pending
+            if not self._closed:
+                # Concurrent decisions for one call share one reacquisition.
+                if self._resuming is None and not self._held:
+                    self._resuming = asyncio.create_task(self._acquire())
+                if restoring := self._resuming:
+                    await asyncio.wait((restoring,))
+                    if not restoring.cancelled():
+                        restoring.result()
+            return result
+        finally:
+            self._waiters -= 1
+            if self._waiters == 0 and self._resuming is not None:
+                restoring = self._resuming
+                self._resuming = None
+                if not restoring.done():
+                    await cancel_and_wait(restoring)
 
 
 class ToolExecutor:
