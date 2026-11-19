@@ -67,6 +67,7 @@ def _culture_sentence(culture: PowerShellCulture | None) -> str:
 SHELL_TOOL_DESCRIPTION = (
     f"{_OPENING}{_culture_sentence(powershell_culture())} "
     "Use rg to search file contents and rg --files to find files by name. "
+    "Use -uu to include ignored and hidden files. "
     "Long output keeps its first and last "
     f"lines, and the result names a file with all of it, so there is no need to trim it with "
     f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
