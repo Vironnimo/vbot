@@ -55,13 +55,14 @@ class RemoteDesktopTarget:
         self._tasks: set[asyncio.Task[None]] = set()
         self._stop = threading.Event()
         self._closed = False
+        self._connection = 0
         self._control_error: TargetError | None = None
         self.hotkey_available = False
         self.on_control_changed: Callable[[], None] | None = None
         self.on_stopped: Callable[[str], None] | None = None
 
     async def _send(
-        self, operation: str, params: dict[str, Any], *, ordered: bool = True
+        self, operation: str, params: dict[str, Any], *, connection: int, ordered: bool = True
     ) -> dict[str, Any]:
         # Typing is paced by the native keyboard, and hold/drag can last 100 s.
         timeout = max(30.0, float(params.get("seconds", 0)) + 15)
@@ -69,7 +70,7 @@ class RemoteDesktopTarget:
             timeout = max(timeout, len(str(params.get("text", ""))) * 0.06 + 15)
 
         async def perform() -> dict[str, Any]:
-            if self._closed:
+            if self._closed or connection != self._connection:
                 raise TargetError("This desktop connection has ended.", "computer_offline")
             try:
                 result = await self.computers.call(
@@ -109,18 +110,22 @@ class RemoteDesktopTarget:
     def _call(self, operation: str, **params: Any) -> dict[str, Any]:
         if self._closed:
             raise TargetError("This desktop connection has ended.", "computer_offline")
-        future = asyncio.run_coroutine_threadsafe(self._send(operation, params), self._loop)
+        future = asyncio.run_coroutine_threadsafe(
+            self._send(operation, params, connection=self._connection), self._loop
+        )
         return future.result()
 
     def _queue(self, operation: str, params: dict[str, Any], *, ordered: bool = True) -> None:
+        connection = self._connection
+
         async def send() -> None:
             try:
-                result = await self._send(operation, params, ordered=ordered)
-                if operation == "control":
+                result = await self._send(operation, params, connection=connection, ordered=ordered)
+                if operation == "control" and self._connection == connection:
                     self._control_error = None
                     self.set_hotkey_available(result.get("hotkey_available") is True)
             except TargetError as error:
-                if operation in {"control", "begin", "activity"}:
+                if self._connection == connection and operation in {"control", "begin", "activity"}:
                     self._control_error = error
                 # A disconnection already stops input locally and through the router.
                 _LOGGER.debug("Remote desktop control was unavailable (operation=%s)", operation)
@@ -133,6 +138,11 @@ class RemoteDesktopTarget:
             task.add_done_callback(self._tasks.discard)
 
         self._loop.call_soon_threadsafe(start)
+
+    def reconnected(self) -> None:
+        """A fresh connection starts with no controls queued or failed on the old link."""
+        self._connection += 1
+        self._control_error = None
 
     async def drain(self) -> None:
         await asyncio.sleep(0)
