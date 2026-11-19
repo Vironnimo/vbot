@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 from contextlib import aclosing
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,6 +18,7 @@ from core.providers import _antigravity_bridge as bridge
 from core.providers import _antigravity_transport as transport
 from core.providers.errors import ProviderError
 from core.storage import TemporaryFileManager
+from core.utils import python_process
 
 _MODEL = "model-low"
 _ARGS = {"sample": "value"}
@@ -62,11 +65,19 @@ async def child(monkeypatch: pytest.MonkeyPatch) -> _Child:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["call", "native", "missing_receipt", "missing_guard", "fallback"])
+@pytest.mark.parametrize(
+    "case", ["call", "native", "missing_receipt", "missing_guard", "missing_inventory", "fallback"]
+)
 async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child: _Child, case: str
 ) -> None:
     workspace: list[Path] = []
+    runtime = tmp_path / "vBot package" / "runtime"
+    monkeypatch.setattr(
+        python_process,
+        "sys",
+        SimpleNamespace(platform="win32", executable=str(runtime / "vBot.Server.exe")),
+    )
     tool = "manage_task" if case == "native" else "mcp_vbot_signal"
 
     async def launch(*args: str, cwd: Path, env: dict[str, str], **_: Any) -> _Child:
@@ -75,6 +86,13 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
         assert "--disable-slash-commands" in args
         assert "--dangerously-skip-permissions" not in args
         assert Path(env["HOME"]) == root / "home"
+        assert env["PATH"].split(os.pathsep)[0] == str(runtime)
+        assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+        mcp = json.loads((root / "home/.gemini/config/mcp_config.json").read_text())
+        assert mcp["mcpServers"]["vbot"]["command"] == str(runtime / "python.exe")
+        hooks = json.loads((cwd / ".agents/hooks.json").read_text())["vbot"]
+        assert hooks["PreInvocation"][0]["command"].startswith("python.exe -I ")
+        assert hooks["PreToolUse"][0]["hooks"][0]["command"].startswith("python.exe -I ")
         settings = json.loads(Path(args[args.index("--settings") + 1]).read_text())
         assert settings["useG1Credits"] is False and settings["toolPermission"] == "strict"
         assert set(settings["permissions"]["deny"]) == {
@@ -97,8 +115,9 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
             model=_MODEL,
         )
         child.event("step_update", step_type="user_input", state="DONE")
-        (root / "listed").touch()
-        if case != "missing_guard":
+        if case != "missing_inventory":
+            (root / "listed").touch()
+        if case not in {"missing_guard", "missing_inventory"}:
             assert bridge._guard("before", root) == {}
             assert bridge._guard("before", root) == {"terminationBehavior": "terminate"}
         child.event("step_update", step_type="agent_response", state="ACTIVE", text_delta="text")
@@ -168,7 +187,8 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
             {"type": "finish", "reason": "tool_calls"},
         ]
     else:
-        with pytest.raises(ProviderError):
+        expected = {"missing_guard": "pre-invocation hook", "missing_inventory": "Tool inventory"}
+        with pytest.raises(ProviderError, match=expected.get(case)):
             _ = [delta async for delta in stream]
     if case == "fallback":
         assert not child.stdin

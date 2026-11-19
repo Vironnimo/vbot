@@ -17,7 +17,6 @@ from core.sessions import SessionAddress
 from core.tools._argument_repair import load_json_value
 from core.tools._code_process import CodeExecutionResult, run_python
 from core.tools._permission_preflight import authorize_command
-from core.tools._python_process import python_executable
 from core.tools._tool_display import display_notice, display_text
 from core.tools.arguments import required_string
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
@@ -34,6 +33,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.python_process import python_executable
 
 EXECUTE_CODE_DESCRIPTION = (
     "Run Python to combine Tool calls and process their results; "

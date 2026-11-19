@@ -308,10 +308,17 @@ class ModelRegistry:
             if overrides_file.name == CANONICAL_OVERRIDES_FILE_NAME:
                 continue
             try:
-                provider_id, override_models = cls._read_override_file(overrides_file)
+                provider_id, override_models, discovered_only = cls._read_override_file(
+                    overrides_file
+                )
             except _MODEL_DATA_ERRORS as exc:
                 report(f"Ignoring invalid Model DB override file '{overrides_file}': {exc}")
                 continue
+            if discovered_only:
+                listed = provider_layers.get(provider_id, {})
+                override_models = {
+                    key: value for key, value in override_models.items() if key in listed
+                }
             override_layers[provider_id] = override_models
             override_sources[provider_id] = overrides_file
             provider_layers.setdefault(provider_id, {})
@@ -432,7 +439,7 @@ class ModelRegistry:
         return provider_id, provider_models
 
     @staticmethod
-    def _read_override_file(path: Path) -> tuple[str, dict[str, Any]]:
+    def _read_override_file(path: Path) -> tuple[str, dict[str, Any], bool]:
         """Read and validate one optional Provider override layer."""
 
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -444,7 +451,10 @@ class ModelRegistry:
         override_models = data.get("models", {})
         if not isinstance(override_models, dict):
             raise ValueError("'models' must be an object")
-        return provider_id, override_models
+        discovered_only = data.get("discovered_only", False)
+        if not isinstance(discovered_only, bool):
+            raise ValueError("'discovered_only' must be a boolean")
+        return provider_id, override_models, discovered_only
 
     @classmethod
     def invalidate(

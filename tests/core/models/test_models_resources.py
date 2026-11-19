@@ -123,6 +123,17 @@ def test_the_bundled_root_loads_without_dropping_records(registry: ModelRegistry
         if provider_id == "models":
             continue
         data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("discovered_only"):
+            generated = path.with_name(f"{provider_id}.json")
+            discovered = (
+                json.loads(generated.read_text(encoding="utf-8"))["models"]
+                if generated.exists()
+                else {}
+            )
+            assert {row.model_id for row in registry.list_for_provider(provider_id)} == set(
+                discovered
+            )
+            continue
         for model_id in data.get("models", {}):
             assert registry.get(provider_id, model_id).model_id == model_id
 
