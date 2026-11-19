@@ -28,7 +28,7 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
-from core.projects._resolution_values import inherited_permission_rules
+from core.projects._resolution_values import inherited_permission_rules, permission_rules_source
 from core.projects.paths import cwd_identity_key
 from core.projects.resolver import (
     AgentOverrides,
@@ -119,6 +119,7 @@ class StubAgent:
     tool_loading: JsonObject | None = None
     librarian_enabled: bool = True
     permission_rules: Any = None
+    permission_profile: str | None = None
     permission_ceiling: Any = None
     rule_files: tuple[Any, ...] = ()
     builtin: str | None = None
@@ -285,6 +286,8 @@ class StubAgents:
         **changes: Any,
     ) -> Any:
         del copy_workspace_identity_files
+        if changes.pop("require_no_permission_profile", False):
+            assert getattr(self.get_raw(agent_id), "permission_profile", None) is None
         return SimpleNamespace(
             agent=self.update(agent_id, **changes),
             copied_files=(),
@@ -449,6 +452,7 @@ class StubAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
         include_temporary: bool = False,
@@ -467,12 +471,19 @@ class StubAgentResolver:
                     f"agent '{agent_id}' is not on project '{project_id}' team"
                 ) from error
         if session_id is None:
+            if session_overrides is not None:
+                raise ValueError("session_overrides requires a Session id")
             overrides = new_session_overrides or AgentOverrides()
             if overrides.model is not None:
                 self.models.require_configured(overrides.model)
+        elif session_overrides is not None:
+            overrides = session_overrides
         else:
             overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-        agent = replace(agent, **overrides.agent_changes())
+        changes = overrides.agent_changes()
+        if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
+            changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
+        agent = replace(agent, **changes)
         if run_overrides is not None and not run_overrides.is_empty:
             agent = replace(agent, **run_overrides.agent_changes())
         return agent
@@ -583,6 +594,9 @@ class StubAgentResolver:
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )
         return {
+            "permission_rules": permission_rules_source(
+                (("agent", raw.permission_rules),), AgentDefaults.from_dict(defaults)
+            ),
             "model": _identity_source(raw.model, defaults, "model", empty=""),
             "fallback_models": _identity_source(
                 raw.fallback_models,

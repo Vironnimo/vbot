@@ -9,7 +9,7 @@
     useAgentProfileBinding,
   } from '$lib/agentProfileBinding.js';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
-  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
+  import PermissionProfilePicker from '../permissions/PermissionProfilePicker.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -306,13 +306,16 @@
       </header>
       <p class="s-section__desc">{t('permissions.agentDescription')}</p>
       <div class="s-section__body">
-        <PermissionRulesEditor
-          value={formValues.permission_rules}
+        <PermissionProfilePicker
+          profile={formValues.permission_profile}
+          rules={formValues.permission_rules}
           inherited={permissionRulesDefault}
           agentId={permissionRulesNewAgent ? '' : formValues.id}
-          newAgent={permissionRulesNewAgent}
           idPrefix="agent-permission-rules"
-          onChange={(next) => (formValues.permission_rules = next)}
+          onChange={(profile, rules) => {
+            formValues.permission_profile = profile;
+            formValues.permission_rules = rules;
+          }}
         />
       </div>
     </section>

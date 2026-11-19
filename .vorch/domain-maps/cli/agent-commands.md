@@ -1,8 +1,10 @@
 # Agent, Project, Session and Automation Commands
 
-Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` and `librarian` areas. What the deleting commands print is in `cli/archive-commands.md`.
+Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill`, `librarian` and `permission-profiles` areas. What the deleting commands print is in `cli/archive-commands.md`.
 
 ## Agent area
+
+- `permission-profiles list|show|save|delete` manages the shared catalog through the operator RPCs. `agent create|update --permission-profile <name>` and `project override set <project-id> <agent-id> permission_profile <name>` select a profile by reference. A selected profile replaces the local rules. A complete inline rule set can replace a selected profile, and `--clear-permissions` returns to inheritance. Incremental edits require an unbound Agent and an atomic no-profile precondition. In an Agent Run the instance-bound `vbot` Tool handles catalog and assignment changes. A restricted Run saves profile JSON with `--stdin`. Its approval binds the command arguments, input and resulting profile rules. A reviewed assignment or replacement writes only if the server still resolves to the approved rights. Catalog changes compare the previous definition before saving or deleting. Full-access Tool calls and the user's terminal also accept `--file`. The standalone Run CLI can still write inline rules on unassigned Agents and uses the same precondition to protect concurrent assignments.
 
 - Create/update `--placement chat|helper|private` maps to the public placement input; `--owner <agent-id>` is required exactly with `private`, and contradictory combinations are refused before RPC. Show/list expose Helper and Private placement and the missing-owner state; Chat keeps its existing output. Placement and automatic delegation contracts: `agent/placement.md`.
 

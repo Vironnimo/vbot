@@ -11,12 +11,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from typing import Any, cast
 
 from core.agents import AgentPlacement, AgentStore, SoulFile
 from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
-from core.permissions import PermissionRulesError, normalize_permission_rules
+from core.permissions import (
+    PermissionRulesError,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.prompts import INLINE_FILE_MAX_BYTES, load_bundled_default_layout
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
@@ -44,6 +49,12 @@ from server.events import (
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_INPUTS,
     RESOURCE_KIND_SESSIONS,
+)
+from server.rpc._permission_profiles import (
+    check_reviewed_rules,
+    guard_profile_assignment,
+    inline_profile_precondition,
+    validate_profile_selection,
 )
 from server.rpc.agent_refs import (
     _agent_reference_lock,
@@ -211,7 +222,18 @@ async def _set_agent_soul(state: Any, params: JsonObject) -> JsonObject:
 def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
-        changes = _agent_changes(params, blocked={"id"}, for_create=True)
+        changes = _agent_changes(
+            state, params, blocked={"id", "expected_profile_rules"}, for_create=True
+        )
+        if "expected_profile_rules" in params:
+            selected = changes.get("permission_profile")
+            if selected is None:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "A reviewed Agent creation needs a permission profile.",
+                )
+            rules = state.runtime.agent_resolver.permission_rules_for_profile(selected)
+            check_reviewed_rules(params, {"value": permission_rules_to_dict(rules)})
         name = changes.pop("name", None)
         _ensure_agent_model_connections(state, changes)
         state.runtime.agents.create(agent_id, name, **changes)
@@ -227,7 +249,32 @@ def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
 def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, list[str]]:
     agent_id = _required_string(params, "id")
     try:
-        changes = _agent_changes(params, blocked={"id", "expected_incarnation"}, for_create=False)
+        changes = _agent_changes(
+            state,
+            params,
+            blocked={
+                "id",
+                "expected_incarnation",
+                "require_no_permission_profile",
+                "expected_profile_rules",
+            },
+            for_create=False,
+        )
+        unbound = inline_profile_precondition(
+            params,
+            inline_rules="permission_rules" in changes and "permission_profile" not in changes,
+        )
+        if "expected_profile_rules" in params:
+            raw = state.runtime.agents.get_raw(agent_id)
+            profile = changes.get("permission_profile", raw.permission_profile)
+            inline = changes.get("permission_rules", raw.permission_rules)
+            if changes.get("permission_profile") is not None:
+                inline = None
+            elif changes.get("permission_rules") is not None:
+                profile = None
+            proposed = replace(raw, permission_rules=inline, permission_profile=profile)
+            effective = state.runtime.agent_resolver.effective_config_for_identity(proposed)
+            check_reviewed_rules(params, effective["permission_rules"])
         copy_workspace_identity_files = changes.pop("copy_workspace_identity_files", False)
         root_project_id = changes.get("root_project_id")
         if root_project_id is not None and not state.runtime.projects.exists(root_project_id):
@@ -248,6 +295,7 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
         update_result = state.runtime.agents.update_with_metadata(
             agent_id,
             copy_workspace_identity_files=copy_workspace_identity_files,
+            require_no_permission_profile=unbound,
             **changes,
         )
         agent = update_result.agent
@@ -467,7 +515,9 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
     return result
 
 
-def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -> JsonObject:
+def _agent_changes(
+    state: Any, params: JsonObject, *, blocked: set[str], for_create: bool
+) -> JsonObject:
     method = "agent.create" if for_create else "agent.update"
     public_fields = rpc_request_fields(method) - blocked
 
@@ -477,6 +527,9 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
             "subagent_allow changes only the delegation allow-list; "
             "send it without tools, which replaces all Tool settings. Nothing was changed.",
         )
+
+    if params.get("permission_rules") is not None and params.get("permission_profile") is not None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Choose permission_profile or permission_rules.")
 
     rejected_fields = sorted(set(params) - public_fields - blocked)
     if rejected_fields:
@@ -489,7 +542,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
     for key, value in params.items():
         if key in blocked:
             continue
-        changes[key] = _validate_agent_field(key, value)
+        changes[key] = _validate_agent_field(state, key, value)
     return changes
 
 
@@ -510,7 +563,7 @@ def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
                 )
 
 
-def _validate_agent_field(key: str, value: Any) -> Any:
+def _validate_agent_field(state: Any, key: str, value: Any) -> Any:
     if key == "placement":
         if isinstance(value, dict):
             kind = value.get("kind")
@@ -675,6 +728,8 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             return normalize_tool_loading(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if key == "permission_profile":
+        return validate_profile_selection(state, value) if value is not None else None
     if key == "permission_rules":
         # ``null`` removes the Agent's own rules: it inherits the shared default,
         # else it has full access.
@@ -734,8 +789,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.suggest_description": _suggest_agent_description,
         "agent.soul.get": _get_agent_soul,
         "agent.soul.set": _set_agent_soul,
-        "agent.create": _create_agent,
-        "agent.update": _update_agent,
+        "agent.create": guard_profile_assignment(_create_agent),
+        "agent.update": guard_profile_assignment(_update_agent),
         "agent.rename": _rename_agent,
         "agent.delete": _delete_agent,
     }

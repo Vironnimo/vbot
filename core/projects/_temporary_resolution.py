@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from core.permissions import PermissionCeiling, PermissionRules
 from core.projects._resolution_context import _RESOLUTION_WORKERS, _require_temporary_binding
 from core.projects._resolution_values import (
-    _override_permission_rules,
     _project_agent_tool_access,
     _resolve_sampling,
     _resolve_thinking_effort,
@@ -64,6 +63,7 @@ class TemporaryResolution:
         *,
         generation_id: str,
         session: SessionAddress | None = None,
+        session_overrides: AgentOverrides | None = None,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve`.
 
@@ -75,21 +75,26 @@ class TemporaryResolution:
         agent = _require_temporary_binding(
             await registry.resolve_async(address, generation_id=generation_id)
         )
-        return await self.apply_to_session_async(agent, address, session)
+        if session_overrides is not None:
+            if session is None:
+                raise ValueError("session_overrides requires a Session address")
+            overrides = session_overrides
+        else:
+            overrides = (
+                AgentOverrides()
+                if session is None
+                else await self._owner.session_overrides_async(session)
+            )
+        return await self.apply_to_session_async(agent, address, overrides)
 
     async def apply_to_session_async(
         self,
         agent: TemporaryAgent | OwnedIdentityAgent,
         address: Any,
-        session: SessionAddress | None,
+        overrides: AgentOverrides,
         *,
         require_model: bool = True,
     ) -> RuntimeAgent:
-        overrides = (
-            AgentOverrides()
-            if session is None
-            else await self._owner.session_overrides_async(session)
-        )
         if getattr(address, "project_id", None) is None and overrides.is_empty:
             return agent
         return await _RESOLUTION_WORKERS.run(
@@ -171,7 +176,7 @@ class TemporaryResolution:
             allowed_skills=skills,
             # The owner's parts first, then the Team member's resolution.
             permission_rules=resolve_permission_rules(
-                (owner_rules, _override_permission_rules(project, profile.agent_id)),
+                (owner_rules, self._owner._team_permission_rules(project, profile.agent_id)),
                 AgentDefaults.from_dict(self._owner._global_agent_defaults()),
                 repository=profile.permission_rules,
             ),

@@ -14,7 +14,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 2. Threat model: mistakes of well-meaning Agents, and Models that must stay out of certain areas. Not a defense against a hostile or prompt-injected Agent.
 3. No OS sandbox: vBot enforces the rules itself. A later OS backend must be able to enforce the same rule model unchanged. User decisions 2026-10-30 and 2026-11-03 add approvals of prepared Tool calls, once or as Session Grants; explicit denies and protected/unsafe/unanalyzable accesses stay hard (`permissions/approvals.md`).
 4. The shell is confined "in a sensible way", not only the file Tools.
-5. Rule-based configuration like Claude Code and OpenCode, with presets as starting points; built polished from the start.
+5. Agents can select a named Permission Profile. Full Access and Restricted ship with vBot. Operators may define additional profiles shared by multiple Agents. Existing inline rules keep their own behavior (amended 2026-11-19).
 6. An Agent can change only files it can read. A stored rule set with `write: anywhere` beside `read: work_area` is refused; when per-part resolution combines them from different levels, writing narrows to `work_area` (`write_within_read`). A `Read` deny also refuses changes and an `Edit` allow also permits reading, so no Tool result can leak a file's content to an Agent that may change but not read it.
 7. Full access stores explicit unrestricted rules over shared defaults, without Permission Boundary protected locations; no own rules inherits the default. Windows shell mistake guards still apply (amendment 2026-11-16; `tools/shell.md` -> PowerShell bootstrap -> Guards).
 8. A restricted Agent needs one-time user approval to change any Agent's access with the bundled Skill's CLI Tool (`tools/vbot.md`). Its own `agent.json` is protected for reading and writing. The repository definitions that supply or could replace its own rules (`projects/resolution.md` -> Permission Rules) are protected for writing.
@@ -44,7 +44,7 @@ Additional access the user allows while approving a Tool call for one Session (`
 
 ## Interfaces
 
-Rule language, presets, resolution, descriptions and editor data: `permissions/rule-language.md` (`normalize_permission_rules` validates every stored form, `resolve_rule_set` resolves per part, `PermissionRules.restricts` decides full access).
+Rule language, profiles, inline presets and editor data: `permissions/rule-language.md`. `resolve_rule_set` resolves rules per part. `PermissionRules.restricts` decides full access.
 
 **Boundary:**
 - `PermissionBoundary.build(rules, context, *, ceilings=()) -> PermissionBoundary`; `BoundaryContext(workdir, home, data_dir, project_root, scratch_root, workspace, agent_config, rule_files, install_dirs, readable_dirs, loopback_port, own_hosts, platform)`. A rule whose placeholder has no value in this Run is dropped.
@@ -106,6 +106,6 @@ Read these only when your task matches - not by default.
 
 - Changing pending approvals, per-call grants, Session Grants, rejection suppression, approval RPC/UI or a review requiring human consent -> `permissions/approvals.md`
 - Changing how shell command lines are analyzed or checked (CommandPlan, PowerShell helper, path tiers, cwd tracking, Shell(...) patterns, the checker's decision order) -> `permissions/commands.md`
-- Changing the stored rule form, its validation, placeholders, host patterns, resolution, presets, layer descriptions, or what `permissions.validate` gives the editors (`editor_bases`) -> `permissions/rule-language.md`
+- Changing the rule language, named profiles, inline presets, resolution, layer descriptions or editor data -> `permissions/rule-language.md`
 - Changing how a path is normalized or matched (unsafe forms, links and junctions, subtree and glob accesses, `refusable_below`, `readable_entries`, case and platform differences) -> `permissions/paths.md`
 - Changing, adding or deleting a sentence of a refusal, a command-check reason or hint, the Cron watch refusal, the `core:permissions` System Prompt block or a permission Run failure -> `permissions/agent-facing-text.md`

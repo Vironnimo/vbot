@@ -263,6 +263,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
         permission_rules: PermissionRules | Mapping[str, Any] | None = None,
+        permission_profile: str | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
         placement: AgentPlacement | None = None,
@@ -299,6 +300,7 @@ class AgentStore:
             compaction_policy=compaction_policy,
             tool_loading=tool_loading,
             permission_rules=permission_rules,
+            permission_profile=permission_profile,
             librarian_enabled=librarian_enabled,
             description=description,
             placement=placement,
@@ -478,6 +480,7 @@ class AgentStore:
         agent_id: str,
         *,
         copy_workspace_identity_files: bool = False,
+        require_no_permission_profile: bool = False,
         **changes: Any,
     ) -> AgentUpdateResult:
         """Update an Agent and transactionally relocate its identity files.
@@ -489,7 +492,10 @@ class AgentStore:
         its original Workspace.
         """
         return self._mutations.update_with_metadata(
-            agent_id, copy_workspace_identity_files=copy_workspace_identity_files, **changes
+            agent_id,
+            copy_workspace_identity_files=copy_workspace_identity_files,
+            require_no_permission_profile=require_no_permission_profile,
+            **changes,
         )
 
     def restore_update(self, previous_agent: Agent, result: AgentUpdateResult) -> None:

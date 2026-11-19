@@ -95,6 +95,19 @@ def _validate_notifications(diagnostics: list[JsonDiagnostic], value: Any) -> No
             _error(diagnostics, f"$.notifications.{field}", "must be a boolean")
 
 
+def _validate_permission_profiles(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    from core.permissions import PermissionRulesError, normalize_custom_permission_profile
+
+    if not isinstance(value, dict):
+        _error(diagnostics, "$.permission_profiles", "must be an object of named rule sets")
+        return
+    for name, rules in value.items():
+        try:
+            normalize_custom_permission_profile(name, rules)
+        except PermissionRulesError as error:
+            _error(diagnostics, _child_path("$.permission_profiles", str(name)), str(error))
+
+
 def _validate_speech(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if value is None:
         return

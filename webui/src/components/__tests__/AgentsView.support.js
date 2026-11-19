@@ -460,6 +460,15 @@ export function createAgentsRpcMock(options = {}) {
 
     // The Permissions section checks the Agent's rules as it shows them.
     // A new Agent inherits `permissionRulesDefault` (named by its preset).
+    if (method === 'permissions.profiles') {
+      return {
+        profiles: ['full_access', 'restricted'].map((name) => ({
+          name,
+          builtin: true,
+          rules: {},
+        })),
+      };
+    }
     if (method === 'permissions.validate') {
       const own = params.permission_rules ?? null;
       const inherited = params.new_agent

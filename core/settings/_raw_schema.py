@@ -77,6 +77,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "model_favorites",
         "model_tasks",
         "notifications",
+        "permission_profiles",
         "port",
         "providers",
         "recall",
@@ -175,6 +176,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
         "extensions": json_object(EXTENSIONS_FIELDS, {"config": json_map(OPAQUE)}),
         "local_models": json_object(LOCAL_MODELS_FIELDS),
         "notifications": json_object(NOTIFICATION_FIELD_SET),
+        "permission_profiles": json_map(OPAQUE),
         "model_tasks": json_object(
             SUPPORTED_TASK_TYPES,
             {

@@ -153,9 +153,10 @@ AGENT_FIELDS = {
     "tool_loading": nullable(TOOL_LOADING),
     "librarian_enabled": boolean(),
     "permission_rules": nullable(PERMISSION_RULES),
+    "permission_profile": nullable(_nonempty("Named permission profile.")),
     "placement": _PLACEMENT,
 }
-OPERATOR_AGENT_FIELDS = frozenset({"permission_rules", "tool_access"})
+OPERATOR_AGENT_FIELDS = frozenset({"permission_rules", "permission_profile", "tool_access"})
 _SERVICE_AGENT_FIELDS = {
     name: schema for name, schema in AGENT_FIELDS.items() if name not in OPERATOR_AGENT_FIELDS
 }
@@ -1085,14 +1086,21 @@ _CHAT_RPC_ONLY_FIELDS = {
         "Extension SYSTEM Runs use their own admission."
     ),
 }
+_AGENT_OPERATOR_FIELDS = dict.fromkeys(
+    OPERATOR_AGENT_FIELDS,
+    "Agent Permission Rules and Tool access are operator-owned configuration.",
+)
+_INLINE_RULE_GUARD = {
+    "require_no_permission_profile": "Inline rule editors can require an unbound Agent.",
+}
+_REVIEWED_RULES = {
+    "expected_profile_rules": "Reviewed permission changes require the approved effective rules.",
+}
 RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {
-    **{
-        method: dict.fromkeys(
-            OPERATOR_AGENT_FIELDS,
-            "Agent Permission Rules and Tool access are operator-owned configuration.",
-        )
-        for method in ("agent.create", "agent.update")
-    },
+    "agent.create": {**_AGENT_OPERATOR_FIELDS, **_REVIEWED_RULES},
+    "agent.update": {**_AGENT_OPERATOR_FIELDS, **_INLINE_RULE_GUARD, **_REVIEWED_RULES},
+    "project.set_override": {**_INLINE_RULE_GUARD, **_REVIEWED_RULES},
+    "project.clear_override": _REVIEWED_RULES,
     "chat.send": dict(_CHAT_RPC_ONLY_FIELDS),
     "chat.stream": dict(_CHAT_RPC_ONLY_FIELDS),
     "session.create": {

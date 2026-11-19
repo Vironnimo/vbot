@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 import { isPlainObject } from './values.js';
 
 // Permission Rules editing (`.vorch/domain-maps/permissions.md`): an Agent's
@@ -9,7 +10,12 @@ import { isPlainObject } from './values.js';
 // this module only edits the stored form with what the server answers.
 
 // The parts of the stored form that hold a base.
-const BASE_PARTS = Object.freeze(['read', 'write', 'commands', 'web']);
+export const PERMISSION_BASE_PARTS = Object.freeze([
+  'read',
+  'write',
+  'commands',
+  'web',
+]);
 
 export const PERMISSION_RULE_EFFECTS = Object.freeze(['allow', 'deny']);
 export const PERMISSION_RULE_KINDS = Object.freeze([
@@ -18,6 +24,46 @@ export const PERMISSION_RULE_KINDS = Object.freeze([
   'Shell',
   'Web',
 ]);
+
+const PART_LABELS = {
+  read: () => t('permissions.part.read'),
+  write: () => t('permissions.part.write'),
+  commands: () => t('permissions.part.commands'),
+  web: () => t('permissions.part.web'),
+};
+const BASE_LABELS = {
+  read: {
+    anywhere: () => t('permissions.base.read.anywhere'),
+    work_area: () => t('permissions.base.read.work_area'),
+  },
+  write: {
+    anywhere: () => t('permissions.base.write.anywhere'),
+    work_area: () => t('permissions.base.write.work_area'),
+    scratch: () => t('permissions.base.write.scratch'),
+  },
+  commands: {
+    any: () => t('permissions.base.commands.any'),
+    listed: () => t('permissions.base.commands.listed'),
+  },
+  web: {
+    any: () => t('permissions.base.web.any'),
+    listed: () => t('permissions.base.web.listed'),
+  },
+};
+
+export function permissionPartLabel(part) {
+  return PART_LABELS[part]?.() ?? part;
+}
+
+export function permissionProfileLabel(name) {
+  if (name === 'full_access') return t('permissions.preset.full_access');
+  if (name === 'restricted') return t('permissions.profile.restricted');
+  return name;
+}
+
+export function permissionBaseLabel(part, base) {
+  return BASE_LABELS[part]?.[base]?.() ?? base;
+}
 
 export const PERMISSION_PRESET_FULL_ACCESS = 'full_access';
 export const PERMISSION_PRESET_CUSTOM = 'custom';
@@ -38,7 +84,7 @@ const RULE_PATTERN = /^\s*([A-Za-z]+)\s*\(([\s\S]*)\)\s*$/;
 export function normalizePermissionRules(value) {
   if (!isPlainObject(value)) return null;
   const rules = {};
-  for (const part of BASE_PARTS) {
+  for (const part of PERMISSION_BASE_PARTS) {
     if (typeof value[part] === 'string') rules[part] = value[part];
   }
   for (const effect of PERMISSION_RULE_EFFECTS) {

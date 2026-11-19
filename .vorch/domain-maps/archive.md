@@ -91,7 +91,7 @@ Tests: `tests/core/archive/` and `tests/core/sessions/test_archive_ledger.py`; p
 
 Read these only when your task matches - not by default.
 
-- Changing an archive or restore operation: its order, outcomes, entry facts, restore blockers or warnings, Workspace handling, review members or the list/show reads -> `archive/operations.md`
+- Changing archive or restore operations, Permission Profile reference checks, entry facts, restore blockers, Workspace handling, review membership or list/show reads -> `archive/operations.md`
 - Changing purge, permanent delete, the retention setting, due computation or the retention sweep -> `archive/purge-and-retention.md`
 - Changing startup recovery, interrupted archive or restore states, or restore provenance warnings -> `archive/recovery.md`
 - Changing the archive migration (`sessions.0001_archive_entries`), startup adoption, `backfill` entries or legacy layouts -> `archive/legacy-adoption.md`

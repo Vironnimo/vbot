@@ -903,6 +903,7 @@ describe('Projects controller Team overrides', () => {
       tool_access: { mode: 'all' },
       // Switched off, the override keeps its Always loaded list.
       tool_loading: { on_demand: false, always_loaded: ['read'] },
+      permission_profile: null,
       permission_rules: { read: 'work_area', deny: ['Read(.env)'] },
       project_memory_enabled: true,
     });
@@ -914,6 +915,7 @@ describe('Projects controller Team overrides', () => {
       compaction_policy: null,
       tool_access: { mode: 'all' },
       tool_loading: null,
+      permission_profile: null,
       permission_rules: null,
       project_memory_enabled: true,
     });

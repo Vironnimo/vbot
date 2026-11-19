@@ -116,6 +116,22 @@ export function updateAgent(params = {}, options = {}) {
   return rpc('agent.update', params, options);
 }
 
+export function listPermissionProfiles() {
+  return rpc('permissions.profiles', {});
+}
+
+export function savePermissionProfile(name, permissionRules, base = undefined) {
+  const params = { name, permission_rules: permissionRules };
+  if (base !== undefined) params.base = base;
+  return rpc('permissions.save_profile', params);
+}
+
+export function deletePermissionProfile(name, base = undefined) {
+  const params = { name };
+  if (base !== undefined) params.base = base;
+  return rpc('permissions.delete_profile', params);
+}
+
 // Normalizes a candidate Permission Rules set without saving it: its problems,
 // the preset it matches, what it inherits and a preview. `agentId` (an Agent
 // address, `agent@project` for a Team member) previews for that Agent's new

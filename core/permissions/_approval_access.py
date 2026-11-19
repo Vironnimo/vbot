@@ -36,6 +36,8 @@ class ApprovalRequirement:
     # A path's lexical form as written, before case folding: what the user reads
     # and a suggested rule names. Not part of the access's identity.
     shown: str | None = field(default=None, compare=False)
+    # Keep the reviewed rules in the immutable identity, including inherited rules.
+    permission_profile_json: str | None = None
 
     @classmethod
     def path(
@@ -115,12 +117,24 @@ class ApprovalRequirement:
 
     @classmethod
     def review(
-        cls, target: str, *, computer_id: str = "server", shown: str | None = None
+        cls,
+        target: str,
+        *,
+        computer_id: str = "server",
+        shown: str | None = None,
+        permission_profile: dict[str, Any] | None = None,
     ) -> ApprovalRequirement:
-        return cls("review", target, "review", computer_id, shown=shown)
+        snapshot = (
+            json.dumps(permission_profile, sort_keys=True)
+            if permission_profile is not None
+            else None
+        )
+        return cls(
+            "review", target, "review", computer_id, shown=shown, permission_profile_json=snapshot
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "kind": self.kind,
             "target": self.target,
             "access": self.access,
@@ -136,6 +150,9 @@ class ApprovalRequirement:
             "filtered": self.filtered,
             "host_aliases": list(self.host_aliases),
         }
+        if self.permission_profile_json is not None:
+            data["permission_profile"] = json.loads(self.permission_profile_json)
+        return data
 
     def to_payload(self) -> dict[str, Any]:
         """The requirement as an approval request shows it: its identity plus ``shown``."""

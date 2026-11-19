@@ -54,15 +54,6 @@ async def _list_channels(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
-    # References stay protected through credential persistence, Channel creation,
-    # rollback and publication, including when the request is cancelled.
-    async with _agent_reference_lock(state):
-        return await serialized_mutation(
-            _create_channel_admitted, lock_attribute="_settings_mutation_lock"
-        )(state, params)
-
-
-async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("channel.create"), "channel.create")
 
     channel_id = _required_string(params, "id")
@@ -683,7 +674,11 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "channel.whatsapp.status": _whatsapp_status,
         "channel.whatsapp.setup": _whatsapp_setup,
         "channel.whatsapp.pair": _whatsapp_pair,
-        "channel.create": _create_channel,
+        "channel.create": serialized_mutation(
+            _create_channel,
+            lock_attribute="_settings_mutation_lock",
+            admission_lock=_agent_reference_lock,
+        ),
         "channel.update": _update_channel,
         "channel.delete": _delete_channel,
         "channel.enable": _enable_channel,

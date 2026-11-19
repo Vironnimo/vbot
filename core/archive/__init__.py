@@ -2,6 +2,7 @@
 Projects and Sessions."""
 
 from core.archive._conversion import archived_projects_need_conversion, convert_archived_projects
+from core.archive._profile_references import permission_profile_references
 from core.archive._types import (
     RESTORE_CONFLICT_CODES,
     AgentArchiveOutcome,
@@ -59,4 +60,5 @@ __all__ = [
     "SkippedPurge",
     "archived_projects_need_conversion",
     "convert_archived_projects",
+    "permission_profile_references",
 ]

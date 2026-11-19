@@ -15,8 +15,10 @@ from core.permissions import (
     matching_preset,
     normalize_permission_rule,
     normalize_permission_rules,
+    permission_profile_catalog,
     permission_rules_to_dict,
     preset_name,
+    resolve_permission_profile,
     resolve_rule_set,
 )
 
@@ -362,6 +364,35 @@ def test_full_access_is_the_explicit_full_set() -> None:
     # rules alone do not, as they only widen a narrowed base.
     assert matching_preset(_rules(**{**applied, "deny": ["Read(**/.env)"]})) == "custom"
     assert matching_preset(_rules(**{**applied, "allow": ["Shell(npm test)"]})) == "full_access"
+
+
+def test_named_profiles_resolve_complete_policies() -> None:
+    custom = {"Only this project": {"read": "work_area", "deny": ["Bash(git push *)"]}}
+    catalog = permission_profile_catalog(custom)
+    assert set(catalog) == {"restricted", "full_access", "Only this project"}
+    assert resolve_permission_profile("full_access", custom) == _FULL_ACCESS
+    assert catalog["restricted"] == {
+        "read": "anywhere",
+        "write": "work_area",
+        "commands": "any",
+        "web": "listed",
+        "allow": [],
+        "deny": [],
+    }
+    assert catalog["Only this project"] == {
+        **catalog["restricted"],
+        "read": "work_area",
+        "deny": ["Shell(git push *)"],
+    }
+    assert resolve_permission_profile("Only this project", custom) == _rules(
+        **catalog["Only this project"]
+    )
+    for missing in ("only this project", "work_dir", "work_dir_read_only"):
+        with pytest.raises(PermissionRulesError):
+            resolve_permission_profile(missing, custom)
+    for reserved in ("restricted", "Full Access"):
+        with pytest.raises(PermissionRulesError):
+            permission_profile_catalog({reserved: {}})
 
 
 def test_a_description_expands_placeholders_and_lists_inactive_rules() -> None:

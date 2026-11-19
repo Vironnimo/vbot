@@ -11,8 +11,11 @@ from core.agents import SKILL_AGENT_CREATED_AT_KEY
 from core.permissions import (
     PERMISSION_RULE_PARTS,
     PermissionCeiling,
+    PermissionRules,
+    PermissionRulesError,
     normalize_permission_rules,
     permission_rules_to_dict,
+    resolve_permission_profile,
 )
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
@@ -189,6 +192,7 @@ class AgentResolver:
         model_checker: ModelConfigurationChecker,
         global_agent_defaults: GlobalAgentDefaultsProvider,
         *,
+        permission_profiles: Callable[[], Mapping[str, Any]] = dict,
         source_adapters: dict[str, AgentAdapter] | None = None,
         project_skill_names: ProjectSkillNamesProvider | None = None,
         profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
@@ -201,6 +205,7 @@ class AgentResolver:
         self._projects = projects
         self._model_checker = model_checker
         self._global_agent_defaults = global_agent_defaults
+        self._permission_profiles = permission_profiles
         # Captured once; ``scan_project`` falls back to its own default registry
         # when this is ``None``, so tests can inject a custom registry.
         self._source_adapters = source_adapters
@@ -319,6 +324,7 @@ class AgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
         include_temporary: bool = False,
@@ -330,22 +336,27 @@ class AgentResolver:
         runs as one unit on the Session database's pool
         (:meth:`AgentStore.get_async`). The Session's overrides are read on the
         Session database's pool; their Model is checked on the
-        ``agent-resolution`` pool.
+        ``agent-resolution`` pool. A Run can supply the Session overrides it
+        already read to use the same snapshot for the Agent and its permission checks.
         """
         _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
+        if address is None:
+            if session_overrides is not None:
+                raise ValueError("session_overrides requires a Session id")
+            overrides = new_session_overrides or AgentOverrides()
+        elif session_overrides is not None:
+            overrides = session_overrides
+        else:
+            overrides = await self.session_overrides_async(address)
         if address is not None and self._temporary_agents is not None:
             bound = await self._temporary_agents.session_agent_async(
                 address, include_temporary=include_temporary
             )
             if bound is not None:
                 return await self._temporary_resolution.apply_to_session_async(
-                    bound, address, address, require_model=require_model
+                    bound, address, overrides, require_model=require_model
                 )
-        if address is not None:
-            overrides = await self.session_overrides_async(address)
-        else:
-            overrides = new_session_overrides or AgentOverrides()
         overrides = _with_run_settings(overrides, run_overrides)
         if project_id is not None:
             agent: RuntimeAgent = await _RESOLUTION_WORKERS.run(
@@ -362,6 +373,7 @@ class AgentResolver:
                 agent = await self._agents.get_async(agent_id)
             except AgentError as error:
                 raise _identity_resolution_error(error) from error
+            agent = await _RESOLUTION_WORKERS.run(self._identity_with_permissions, agent)
         if not overrides.is_empty:
             agent = await _RESOLUTION_WORKERS.run(
                 self._session_resolution._apply_overrides,
@@ -400,10 +412,14 @@ class AgentResolver:
         *,
         generation_id: str,
         session: SessionAddress | None = None,
+        session_overrides: AgentOverrides | None = None,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_temporary_agent`."""
         return await self._temporary_resolution.resolve_async(
-            address, generation_id=generation_id, session=session
+            address,
+            generation_id=generation_id,
+            session=session,
+            session_overrides=session_overrides,
         )
 
     def resolve_working_project(
@@ -586,6 +602,21 @@ class AgentResolver:
             agent = self._agents.get(agent_id)
         except AgentError as error:
             raise _identity_resolution_error(error) from error
+        return self._identity_with_permissions(agent)
+
+    def permission_rules_for_profile(self, name: str) -> PermissionRules:
+        """Resolve a selected profile now. A missing reference always prevents execution."""
+        try:
+            return resolve_permission_profile(name, self._permission_profiles())
+        except PermissionRulesError as error:
+            raise AgentResolutionError(str(error)) from error
+
+    def _identity_with_permissions(self, agent: Agent) -> Agent:
+        if agent.permission_profile is not None:
+            selected = self.permission_rules_for_profile(agent.permission_profile)
+            # Keep the explicit Full Access parts as well: a temporary participant
+            # uses this Identity Agent beneath its owner's rules and above the defaults.
+            return replace(agent, permission_rules=selected)
         if agent.builtin is None:
             # The store baked a valid default; an invalid one refuses the Agent
             # unless its own rules set every part.
@@ -593,6 +624,12 @@ class AgentResolver:
                 (agent.permission_rules,), AgentDefaults.from_dict(self._global_agent_defaults())
             )
         return agent
+
+    def _team_permission_rules(self, project: Project, agent_id: str) -> PermissionRules | None:
+        profile = project.overrides.get(agent_id, {}).get("permission_profile")
+        if profile is not None:
+            return self.permission_rules_for_profile(profile)
+        return _override_permission_rules(project, agent_id)
 
     def _resolve_config_agent(
         self,
@@ -662,7 +699,7 @@ class AgentResolver:
                 global_defaults.tool_loading,
             ),
             permission_rules=resolve_permission_rules(
-                (_override_permission_rules(project, agent_id),),
+                (self._team_permission_rules(project, agent_id),),
                 global_defaults,
                 repository=scanned.permission_rules,
             ),
@@ -804,9 +841,29 @@ class AgentResolver:
             "permission_rules": (
                 {"value": None, "source": None, "parts": {}}
                 if raw.builtin is not None
-                else permission_rules_source((("agent", raw.permission_rules),), defaults)
+                else self._permission_source(
+                    "agent", raw.permission_profile, raw.permission_rules, defaults
+                )
             ),
         }
+
+    def _permission_source(
+        self,
+        source: str,
+        profile: str | None,
+        inline: PermissionRules | None,
+        defaults: AgentDefaults,
+        *,
+        repository: PermissionRules | None = None,
+    ) -> dict[str, Any]:
+        if profile is not None:
+            try:
+                inline = self.permission_rules_for_profile(profile)
+            except AgentResolutionError as error:
+                return {"value": None, "source": source, "parts": {}, "error": str(error)}
+            # Every part is set, so even an unreadable shared default is irrelevant.
+            return permission_rules_source(((source, inline),), AgentDefaults())
+        return permission_rules_source(((source, inline),), defaults, repository=repository)
 
     def _config_effective_config(self, project_id: str, agent_id: str) -> dict[str, dict[str, Any]]:
         project = self._load_project(project_id)
@@ -840,8 +897,10 @@ class AgentResolver:
                     else "project_default"
                 ),
             },
-            "permission_rules": permission_rules_source(
-                (("override", _override_permission_rules(project, scanned.agent_id)),),
+            "permission_rules": self._permission_source(
+                "override",
+                project.overrides.get(scanned.agent_id, {}).get("permission_profile"),
+                _override_permission_rules(project, scanned.agent_id),
                 global_defaults,
                 repository=scanned.permission_rules,
             ),
@@ -994,6 +1053,7 @@ def build_agent_resolver(
     provider_credentials: ProviderCredentialResolverProtocol,
     global_agent_defaults: Callable[[], Mapping[str, Any]],
     *,
+    permission_profiles: Callable[[], Mapping[str, Any]] = dict,
     source_adapters: dict[str, AgentAdapter] | None = None,
     project_skill_names: ProjectSkillNamesProvider | None = None,
     profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
@@ -1017,6 +1077,7 @@ def build_agent_resolver(
         projects,
         checker,
         global_agent_defaults,
+        permission_profiles=permission_profiles,
         source_adapters=source_adapters,
         project_skill_names=project_skill_names,
         profile_skill_content=profile_skill_content,

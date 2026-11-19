@@ -516,7 +516,9 @@ describe('AgentsView behavior and access', () => {
     const sections = Array.from(panel.querySelectorAll(':scope > .s-section'));
     expect(sections).toHaveLength(4);
     expect(sections[0].contains(toolAccessToggle('subagent'))).toBe(true);
-    expect(sections[1].querySelector('[data-permission-rules]')).not.toBeNull();
+    expect(
+      sections[1].querySelector('[data-permission-profile]'),
+    ).not.toBeNull();
     expect(
       sections[2].contains(getButtonByAriaLabel('Toggle skill sample-skill')),
     ).toBe(true);

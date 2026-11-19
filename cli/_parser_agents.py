@@ -230,6 +230,12 @@ def _add_agent_change_arguments(
         ),
     )
     parser.add_argument(
+        "--permission-profile",
+        metavar="<name>",
+        help="Use the named profile from 'vbot permission-profiles list'. "
+        "Changes to that profile apply to every Agent using it.",
+    )
+    parser.add_argument(
         "--permissions",
         type=_permissions_argument,
         metavar="<preset|json-object>",
@@ -239,7 +245,8 @@ def _add_agent_change_arguments(
             "conversation's scratch folder; full-access: no limits, even where the shared "
             "default restricts (--clear-permissions follows the default instead). work-dir and "
             "work-dir-read-only keep the agent's own allow and deny rules; full-access and a "
-            "JSON object replace the whole rule set. Omit to keep the current rules"
+            "JSON object replace the whole rule set. Setting individual rules replaces a "
+            "selected shared profile on this Agent."
         ),
     )
     parser.add_argument(
@@ -266,7 +273,7 @@ def _add_agent_change_arguments(
             "--clear-permissions",
             action="store_true",
             help=(
-                "Remove the agent's own Permission Rules; it then follows the shared default "
+                "Remove the agent's selected profile and own rules to follow the shared default "
                 "(defaults.agent.permission_rules), full access when none is set"
             ),
         )
@@ -568,6 +575,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "compaction_policy",
             "tool_access",
             "tool_loading",
+            "permission_profile",
             "permission_rules",
             "project_memory_enabled",
         ),
@@ -578,6 +586,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<value>",
         help=(
             "Field value; compaction_policy, tool_access and tool_loading take a JSON object; "
+            "permission_profile takes a name from 'vbot permission-profiles list'; "
             "permission_rules takes a JSON object or the preset full-access, work-dir or "
             "work-dir-read-only"
         ),
@@ -601,6 +610,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "compaction_policy",
             "tool_access",
             "tool_loading",
+            "permission_profile",
             "permission_rules",
             "project_memory_enabled",
         ),

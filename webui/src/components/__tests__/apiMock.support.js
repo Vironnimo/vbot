@@ -449,6 +449,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         agent_id: agentId,
         field,
       }),
+    listPermissionProfiles: () => call('permissions.profiles', {}),
     validatePermissionRules: (
       permissionRules,
       { agentId = '', newAgent = false } = {},

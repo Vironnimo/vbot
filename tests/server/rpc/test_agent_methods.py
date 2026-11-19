@@ -343,6 +343,7 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         "compaction_policy",
         "tool_loading",
         "permission_rules",
+        "permission_profile",
     }
     # ``config`` is the Agent's own value; the top-level value is the resolved one.
     assert result["config"]["model"] == (own_model or "")
@@ -494,7 +495,10 @@ async def test_agent_list_reports_the_effective_context_window(
         pytest.param({"tool_loading": None}, "tool_loading", None, id="tool-loading-removed"),
         # An alias is saved under its canonical kind.
         pytest.param(
-            {"permission_rules": {"read": "work_area", "allow": ["Write(src/**)"]}},
+            {
+                "permission_rules": {"read": "work_area", "allow": ["Write(src/**)"]},
+                "require_no_permission_profile": True,
+            },
             "permission_rules",
             {"read": "work_area", "allow": ["Edit(src/**)"]},
             id="permission-rules",

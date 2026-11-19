@@ -47,4 +47,6 @@ The coordinator emits the shared lifecycle on the Run (constants in `core.runs`,
 
 ## Prompt refresh
 
+Manual Compaction resolves the Session's current Permission Boundary when it builds the summary request. Both manual and automatic Compaction resolve it again after the Model returns, before reading the Working Project's auto-loaded files for the next epoch. A temporary Agent resolves through its generation-bound configuration, including for a child Session. If the permission inputs change during rendering, Chat discards the rendered context and refreshes it again. The committed automatic refresh also updates the active Run's boundary.
+
 Temporary Agents refresh from their admitted immutable configuration, never the Identity/Team resolver, and rescan Skills without a private Identity scope. Their Working Project Context pins and refreshes like ordinary Sessions, including temporary self-delegation. Applying a committed refresh replaces SOUL and Memory in the active Run as well as the persisted prompt pins (`core/chat/compaction_host.py`, `tests/core/chat/test_chat_loop_compaction_prompt_epoch.py`).

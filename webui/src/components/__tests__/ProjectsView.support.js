@@ -126,6 +126,11 @@ function mockCatalogs({
     if (method === 'connection.list') {
       return Promise.resolve({ connections });
     }
+    if (method === 'permissions.profiles') {
+      return Promise.resolve({
+        profiles: [{ name: 'Reference desk', builtin: false, rules: {} }],
+      });
+    }
     if (method === 'settings.get') {
       return Promise.resolve(settings);
     }

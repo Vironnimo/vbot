@@ -216,6 +216,14 @@ class StubSkills:
     def get(self, name: str) -> StubSkill:
         return next(skill for skill in self._skills if skill.name == name)
 
+    def is_allowed(self, name: str, allowed_skills: Sequence[str] | None) -> bool:
+        return any(skill.name == name for skill in self._skills) and (
+            name in self.always_allowed
+            or allowed_skills is None
+            or "*" in allowed_skills
+            or name in allowed_skills
+        )
+
     def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
         return [
             skill

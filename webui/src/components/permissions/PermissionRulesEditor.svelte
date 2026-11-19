@@ -26,6 +26,8 @@
     joinPermissionRule,
     normalizePermissionRules,
     parsePastedPermissionRules,
+    permissionBaseLabel,
+    permissionPartLabel,
     permissionPresetChoice,
     permissionProblems,
     permissionRulesComplete,
@@ -43,31 +45,6 @@
     work_dir: () => t('permissions.preset.work_dir'),
     work_dir_read_only: () => t('permissions.preset.work_dir_read_only'),
     custom: () => t('permissions.preset.custom'),
-  };
-  const PART_LABELS = {
-    read: () => t('permissions.part.read'),
-    write: () => t('permissions.part.write'),
-    commands: () => t('permissions.part.commands'),
-    web: () => t('permissions.part.web'),
-  };
-  const BASE_LABELS = {
-    read: {
-      anywhere: () => t('permissions.base.read.anywhere'),
-      work_area: () => t('permissions.base.read.work_area'),
-    },
-    write: {
-      anywhere: () => t('permissions.base.write.anywhere'),
-      work_area: () => t('permissions.base.write.work_area'),
-      scratch: () => t('permissions.base.write.scratch'),
-    },
-    commands: {
-      any: () => t('permissions.base.commands.any'),
-      listed: () => t('permissions.base.commands.listed'),
-    },
-    web: {
-      any: () => t('permissions.base.web.any'),
-      listed: () => t('permissions.base.web.listed'),
-    },
   };
   const LIST_LABELS = {
     allow: {
@@ -88,6 +65,8 @@
   // it. The server checks every edit (`permissions.validate`) and previews
   // what new Sessions can reach; `agentId` names the Agent the preview is for,
   // `newAgent` an Agent being created (it inherits the shared default).
+  // A named profile owns all six rule parts. Its editor offers the concrete
+  // base choices directly, without preset or inheritance selectors.
   // `compact` shows only the preset choice, for the creation dialog.
   let {
     value = null,
@@ -96,6 +75,8 @@
     agentId = '',
     newAgent = false,
     compact = false,
+    profile = false,
+    inset = profile,
     disabled = false,
     idPrefix = 'permission-rules',
     onChange = noop,
@@ -238,32 +219,27 @@
     }
   }
 
-  function baseLabel(part, base) {
-    return BASE_LABELS[part]?.[base]?.() ?? base;
-  }
-
   // `base` is the server's `bases[part]`: what applies without an own value
   // (with its source), the choices, and those the level cannot choose.
   function baseOptions(part, base) {
     const inherit = base.inherit ?? {};
-    const value = baseLabel(part, inherit.value);
+    const value = permissionBaseLabel(part, inherit.value);
     const excluded = base.excluded ?? [];
-    return markDefaultOption(
-      (base.choices ?? []).map((choice) => {
-        const narrowed = excluded.includes(choice);
-        return {
-          value: choice,
-          label: baseLabel(part, choice),
-          disabled: narrowed,
-          tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
-        };
-      }),
-      {
-        defaultValue: inherit.value ?? null,
-        unsetValue: INHERIT,
-        fallbackLabel: defaultOptionLabel(value),
-      },
-    );
+    const choices = (base.choices ?? []).map((choice) => {
+      const narrowed = excluded.includes(choice);
+      return {
+        value: choice,
+        label: permissionBaseLabel(part, choice),
+        disabled: narrowed,
+        tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
+      };
+    });
+    if (profile) return choices;
+    return markDefaultOption(choices, {
+      defaultValue: inherit.value ?? null,
+      unsetValue: INHERIT,
+      fallbackLabel: defaultOptionLabel(value),
+    });
   }
 
   // An own write base the read that applies narrows (`write: anywhere` here
@@ -385,32 +361,39 @@
       {t('permissions.limits')}
       <InfoHint text={t('permissions.limitsHelp')} />
     </p>
-    <div class="s-group">
-      <div class="s-row s-row--compact">
-        <div class="s-row-info">
-          <div class="s-row-label">
-            {t('permissions.preset')}
-            <InfoHint text={t('permissions.presetHelp')} />
+    <div
+      class="permission-rules__bases"
+      class:s-group={!inset}
+      class:s-group__rows={inset}
+      class:permission-rules__inset-bases={inset}
+    >
+      {#if !profile}
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('permissions.preset')}
+              <InfoHint text={t('permissions.presetHelp')} />
+            </div>
+            {@render overrideNote()}
           </div>
-          {@render overrideNote()}
+          <div class="s-row-control">
+            <Dropdown
+              id={`${idPrefix}-preset`}
+              value={presetChoice}
+              options={presetOptions}
+              {disabled}
+              ariaLabel={t('permissions.preset')}
+              onValueChange={choosePreset}
+            />
+          </div>
         </div>
-        <div class="s-row-control">
-          <Dropdown
-            id={`${idPrefix}-preset`}
-            value={presetChoice}
-            options={presetOptions}
-            {disabled}
-            ariaLabel={t('permissions.preset')}
-            onValueChange={choosePreset}
-          />
-        </div>
-      </div>
+      {/if}
       {#each Object.entries(bases) as [part, base] (part)}
         {@const problems = permissionProblems(errors, part)}
         <div class="s-row s-row--compact">
           <div class="s-row-info">
             <div class="s-row-label">
-              {PART_LABELS[part]()}
+              {permissionPartLabel(part)}
               {#if part === 'read' || part === 'write'}
                 <InfoHint text={t('permissions.base.workAreaHelp')} />
               {/if}
@@ -433,14 +416,16 @@
           <div class="s-row-control">
             <Dropdown
               id={`${idPrefix}-${part}`}
-              value={defaultChoiceValue(own?.[part], {
-                defaultValue: base.inherit?.value ?? null,
-                unsetValue: INHERIT,
-              })}
+              value={profile
+                ? own?.[part]
+                : defaultChoiceValue(own?.[part], {
+                    defaultValue: base.inherit?.value ?? null,
+                    unsetValue: INHERIT,
+                  })}
               options={baseOptions(part, base)}
               {disabled}
               invalid={problems.length > 0}
-              ariaLabel={PART_LABELS[part]()}
+              ariaLabel={permissionPartLabel(part)}
               ariaDescribedby={problems.length > 0
                 ? `${idPrefix}-${part}-error`
                 : undefined}
@@ -454,108 +439,112 @@
     {#each PERMISSION_RULE_EFFECTS as effect (effect)}
       {@const rules = shownRules(effect)}
       {@const editable = ownsList(effect)}
-      <div class="s-subhead permission-rules__subhead">
-        <div>
-          <h4 class="s-subhead__title">
-            {LIST_LABELS[effect].title()}
-            <InfoHint
-              text={t('permissions.rulesHelp', {
-                workdir: '{workdir}',
-                project: '{project}',
-                scratch: '{scratch}',
-                workspace: '{workspace}',
-              })}
-            />
-          </h4>
-          <p class="s-row-desc">
-            {editable || rules.length === 0
-              ? LIST_LABELS[effect].description()
-              : t('permissions.rulesInherited')}
-          </p>
+      <div class="permission-rules__section">
+        <div class="permission-rules__subhead">
+          <div>
+            <h4 class="s-subhead__title">
+              {LIST_LABELS[effect].title()}
+              <InfoHint
+                text={t('permissions.rulesHelp', {
+                  workdir: '{workdir}',
+                  project: '{project}',
+                  scratch: '{scratch}',
+                  workspace: '{workspace}',
+                })}
+              />
+            </h4>
+            <p class="s-row-desc">
+              {editable || rules.length === 0
+                ? LIST_LABELS[effect].description()
+                : t('permissions.rulesInherited')}
+            </p>
+          </div>
+          {#if !editable && rules.length > 0}
+            <Button
+              variant="tertiary"
+              {disabled}
+              tooltip={t('permissions.rulesChangeHint')}
+              onClick={() => setRules(effect, rules)}
+              >{t('permissions.rulesChange')}</Button
+            >
+          {:else if editable && (parent?.[effect]?.length ?? 0) > 0}
+            <Button
+              variant="tertiary"
+              {disabled}
+              tooltip={t('permissions.rulesResetHint')}
+              onClick={() => setRules(effect, null)}
+              >{t('permissions.rulesReset')}</Button
+            >
+          {/if}
         </div>
-        {#if !editable && rules.length > 0}
-          <Button
-            variant="tertiary"
-            {disabled}
-            tooltip={t('permissions.rulesChangeHint')}
-            onClick={() => setRules(effect, rules)}
-            >{t('permissions.rulesChange')}</Button
-          >
-        {:else if editable && (parent?.[effect]?.length ?? 0) > 0}
-          <Button
-            variant="tertiary"
-            {disabled}
-            tooltip={t('permissions.rulesResetHint')}
-            onClick={() => setRules(effect, null)}
-            >{t('permissions.rulesReset')}</Button
-          >
-        {/if}
-      </div>
-      <ul class="permission-rules__list" data-permission-list={effect}>
-        {#each rules as rule, index (`${effect}-${index}`)}
-          {@const parts = splitPermissionRule(rule)}
-          {@const problems = editable
-            ? rowProblems(effect, index, parts.pattern)
-            : []}
-          {@const errorId = `${idPrefix}-${effect}-${index}-error`}
-          <li class="permission-rules__rule">
-            {#if editable}
-              <div class="permission-rules__row">
-                <Dropdown
-                  id={`${idPrefix}-${effect}-${index}-kind`}
-                  value={parts.kind}
-                  options={kindOptions(parts.kind)}
-                  {disabled}
-                  triggerClass="permission-rules__kind"
-                  ariaLabel={t('permissions.ruleKind', { index: index + 1 })}
-                  onValueChange={(kind) =>
-                    setRule(effect, index, kind, parts.pattern)}
-                />
-                <TextField
-                  class="permission-rules__pattern"
-                  code
-                  value={parts.pattern}
-                  {disabled}
-                  invalid={problems.length > 0}
-                  placeholder={t('permissions.rulePatternPlaceholder')}
-                  ariaLabel={t('permissions.rulePattern', { index: index + 1 })}
-                  aria-describedby={problems.length > 0 ? errorId : undefined}
-                  onInput={(pattern) =>
-                    setRule(effect, index, parts.kind, pattern)}
-                />
-                <Button
-                  variant="tertiary"
-                  icon
-                  {disabled}
-                  ariaLabel={t('permissions.ruleRemove', { rule })}
-                  onClick={() => removeRule(effect, index)}
-                  ><svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg
-                  ></Button
-                >
-              </div>
-              {#if problems.length > 0}
-                <p class="s-row-error" id={errorId}>{problems.join(' ')}</p>
+        <ul class="permission-rules__list" data-permission-list={effect}>
+          {#each rules as rule, index (`${effect}-${index}`)}
+            {@const parts = splitPermissionRule(rule)}
+            {@const problems = editable
+              ? rowProblems(effect, index, parts.pattern)
+              : []}
+            {@const errorId = `${idPrefix}-${effect}-${index}-error`}
+            <li class="permission-rules__rule">
+              {#if editable}
+                <div class="permission-rules__row">
+                  <Dropdown
+                    id={`${idPrefix}-${effect}-${index}-kind`}
+                    value={parts.kind}
+                    options={kindOptions(parts.kind)}
+                    {disabled}
+                    triggerClass="permission-rules__kind"
+                    ariaLabel={t('permissions.ruleKind', { index: index + 1 })}
+                    onValueChange={(kind) =>
+                      setRule(effect, index, kind, parts.pattern)}
+                  />
+                  <TextField
+                    class="permission-rules__pattern"
+                    code
+                    value={parts.pattern}
+                    {disabled}
+                    invalid={problems.length > 0}
+                    placeholder={t('permissions.rulePatternPlaceholder')}
+                    ariaLabel={t('permissions.rulePattern', {
+                      index: index + 1,
+                    })}
+                    aria-describedby={problems.length > 0 ? errorId : undefined}
+                    onInput={(pattern) =>
+                      setRule(effect, index, parts.kind, pattern)}
+                  />
+                  <Button
+                    variant="tertiary"
+                    icon
+                    {disabled}
+                    ariaLabel={t('permissions.ruleRemove', { rule })}
+                    onClick={() => removeRule(effect, index)}
+                    ><svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg
+                    ></Button
+                  >
+                </div>
+                {#if problems.length > 0}
+                  <p class="s-row-error" id={errorId}>{problems.join(' ')}</p>
+                {/if}
+              {:else}
+                <code class="permission-rules__inherited">{rule}</code>
               {/if}
-            {:else}
-              <code class="permission-rules__inherited">{rule}</code>
-            {/if}
-          </li>
-        {:else}
-          <li class="s-row-desc">{t('permissions.rulesNone')}</li>
-        {/each}
-      </ul>
-      <div class="permission-rules__actions">
-        <Button variant="secondary" {disabled} onClick={() => addRule(effect)}
-          >{t('permissions.ruleAdd')}</Button
-        >
+            </li>
+          {:else}
+            <li class="s-row-desc">{t('permissions.rulesNone')}</li>
+          {/each}
+        </ul>
+        <div class="permission-rules__actions">
+          <Button variant="secondary" {disabled} onClick={() => addRule(effect)}
+            >{t('permissions.ruleAdd')}</Button
+          >
+        </div>
       </div>
     {/each}
 
@@ -653,14 +642,31 @@
 <style>
   .permission-rules {
     display: grid;
-    gap: 10px;
+    gap: var(--space-lg);
     min-width: 0;
+  }
+  .permission-rules:not(.permission-rules--compact) {
+    container-type: inline-size;
   }
   .permission-rules--compact {
     gap: 4px;
   }
   .permission-rules__limits {
     margin: 0;
+  }
+  .permission-rules__inset-bases {
+    border-block: 1px solid var(--border);
+  }
+  .permission-rules__inset-bases > .s-row {
+    padding-inline: 0;
+  }
+  .permission-rules__section {
+    display: grid;
+    gap: var(--space-sm);
+    min-width: 0;
+  }
+  .permission-rules__section p {
+    margin-bottom: 0;
   }
   .permission-rules__subhead {
     display: flex;
@@ -724,5 +730,13 @@
     font-family: var(--font-mono);
     font-size: var(--fs-mono-sm);
     overflow-wrap: anywhere;
+  }
+  /* The available space depends on the settings pane and its inset, even
+     when the browser itself is wide. Give each label the entire row first. */
+  @container (max-width: 440px) {
+    .permission-rules__bases > .s-row.s-row--compact {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-sm);
+    }
   }
 </style>

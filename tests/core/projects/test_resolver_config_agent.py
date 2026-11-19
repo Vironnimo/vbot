@@ -332,11 +332,17 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
     monkeypatch.setattr(resolver._temporary_resolution, "_require_project", recording_project)
     try:
         resolved = await resolver.resolve_temporary_agent_async(
-            binding.address, generation_id=binding.generation_id
+            binding.address,
+            generation_id=binding.generation_id,
+            session=binding.address,
+            session_overrides=AgentOverrides(permission_rules={"write": "scratch"}),
         )
 
         assert resolved.id == binding.address.agent_id
         assert resolved.tool_access == ToolAccess(mode="selected", allowed=("read",))
+        assert (
+            resolved.permission_rules is not None and resolved.permission_rules.write == "scratch"
+        )
         assert threads["binding"].startswith("vbot-db-sessions")
         assert threads["project"].startswith("vbot-agent-resolution")
 
@@ -519,6 +525,21 @@ def test_permission_rules_resolve_each_part_from_override_then_repository_then_d
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules is None
     assert resolver.effective_config("vbot", "builder")["permission_rules"]["value"] is None
+
+    selected = projects.set_override("vbot", "builder", "permission_profile", "restricted")
+    assert selected.overrides["builder"] == {"permission_profile": "restricted"}
+    with pytest.raises(ProjectError):
+        projects.set_override(
+            "vbot", "builder", "permission_rules", {}, require_no_permission_profile=True
+        )
+    rules = resolver.resolve_agent("vbot", "builder").permission_rules
+    assert rules and (rules.read, rules.write, rules.web) == ("anywhere", "work_area", "listed")
+    updated = projects.set_override("vbot", "builder", "permission_rules", {"write": "scratch"})
+    assert updated.overrides["builder"] == {"permission_rules": {"write": "scratch"}}
+    projects.set_override("vbot", "builder", "permission_profile", "Missing")
+    assert "error" in resolver.effective_config("vbot", "builder")["permission_rules"]
+    with pytest.raises(AgentResolutionError):
+        resolver.resolve_agent("vbot", "builder")
 
 
 def test_a_restricted_member_cannot_write_a_definition_that_would_replace_its_own(

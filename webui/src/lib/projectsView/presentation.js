@@ -665,6 +665,8 @@ function normalizeOverrides(overrides) {
   if (toolLoading !== null) {
     normalized.tool_loading = toolLoading;
   }
+  if (overrides.permission_profile)
+    normalized.permission_profile = overrides.permission_profile;
   const permissionRules = normalizePermissionRules(overrides.permission_rules);
   if (permissionRules !== null) {
     normalized.permission_rules = permissionRules;
@@ -760,6 +762,7 @@ export function seedTeamOverrideDraft(member) {
     tool_loading: normalizeToolLoading(overrides.tool_loading),
     // The override's own rules; null while the member inherits every part.
     permission_rules: normalizePermissionRules(overrides.permission_rules),
+    permission_profile: overrides.permission_profile ?? null,
     project_memory_enabled:
       overrides.project_memory_enabled ??
       effective.project_memory_enabled?.value ??

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import partial
@@ -100,13 +100,20 @@ def serialized_read(handler: MutationHandler, *, lock_attribute: str) -> Mutatio
     return run
 
 
-def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> MutationHandler:
+def serialized_mutation(
+    handler: MutationHandler,
+    *,
+    lock_attribute: str,
+    admission_lock: Callable[[Any], asyncio.Lock] | None = None,
+) -> MutationHandler:
     """Keep a state's mutation sequence intact even when its caller is cancelled."""
 
     async def run(state: Any, params: JsonObject) -> JsonObject:
         lock = state_lock(state, lock_attribute)
         require_mutation_available(state, lock_attribute)
-        async with lock:
+        following = admission_lock(state) if admission_lock is not None else nullcontext()
+        # Acquire both locks before admission. A cancelled waiter starts no mutation.
+        async with lock, following:
             lease = _ReadLease(lock)
 
             async def apply() -> JsonObject:

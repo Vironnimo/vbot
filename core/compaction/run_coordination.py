@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from core.chat import RequestState, checkpoint_ordinal, has_unconsumed_skill_activation
@@ -43,7 +42,6 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.compaction import CompactionService
-    from core.permissions import PermissionBoundary
     from core.runs import Run
     from core.sessions import ChatSession, SessionReadCursor, TemporarySessionBinding
 
@@ -59,19 +57,10 @@ class ManualCompactionRequest(Protocol):
     """Materialized Chat operation retained for one manual Compaction."""
 
     @property
-    def project_cwd(self) -> Path | None: ...
-
-    @property
-    def activation_skill_project_id(self) -> str | None: ...
-
-    @property
     def request_state(self) -> RequestState: ...
 
     @property
     def request_inputs(self) -> object: ...
-
-    @property
-    def permissions(self) -> PermissionBoundary: ...
 
     @property
     def active_adapter(self) -> Any: ...
@@ -136,19 +125,9 @@ class CompactionRunHost(Protocol):
         session: ChatSession,
     ) -> ChatMessage: ...
 
-    async def prepare_prompt_refresh(
-        self,
-        *,
-        agent_id: str,
-        session_id: str,
-        agent: Any,
-        project_id: str | None,
-        working_project_id: str | None,
-        project_cwd: Path | None,
-        activation_skill_project_id: str | None,
-        permissions: PermissionBoundary,
-        skill_ceiling: frozenset[str] | None = None,
-    ) -> object: ...
+    async def prepare_manual_prompt_refresh(self, run: Run, agent: Any, request: Any) -> object: ...
+
+    async def prepare_automatic_prompt_refresh(self, context: Any) -> object: ...
 
     async def commit_checkpoint(
         self,
@@ -247,8 +226,8 @@ class CompactionRunCoordinator:
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle.
 
-        *temporary_binding* is the owner binding of an owner-managed Session;
-        its request keeps the Extension's Session Tools and prompt blocks.
+        A temporary Agent uses its admitted binding to resolve permissions. Only
+        the owner Session itself keeps the Extension's Session Tools and blocks.
         """
         session = session.for_run(run.id)
         request: Any | None = None
@@ -346,21 +325,7 @@ class CompactionRunCoordinator:
             )
             prompt_refresh: object | None = None
             try:
-                prompt_refresh = await self._host.prepare_prompt_refresh(
-                    agent_id=run.agent_id,
-                    session_id=run.session_id,
-                    agent=agent,
-                    project_id=run.project_id,
-                    working_project_id=run.working_project_id,
-                    project_cwd=request.project_cwd,
-                    activation_skill_project_id=request.activation_skill_project_id,
-                    permissions=request.permissions,
-                    skill_ceiling=getattr(
-                        getattr(request.request_inputs, "skill_registry", None),
-                        "selection_ceiling",
-                        None,
-                    ),
-                )
+                prompt_refresh = await self._host.prepare_manual_prompt_refresh(run, agent, request)
             except Exception:
                 _LOGGER.warning(
                     "Prompt context refresh failed after manual Compaction (agent=%s session=%s)",
@@ -686,17 +651,7 @@ class CompactionRunCoordinator:
             prompt_refresh: object | None = None
             try:
                 try:
-                    prompt_refresh = await self._host.prepare_prompt_refresh(
-                        agent_id=run.agent_id,
-                        session_id=run.session_id,
-                        agent=agent,
-                        project_id=run.project_id,
-                        working_project_id=run.working_project_id,
-                        project_cwd=context.project_cwd,
-                        activation_skill_project_id=context.skill_project_id,
-                        permissions=context.permissions,
-                        skill_ceiling=getattr(context.skill_registry, "selection_ceiling", None),
-                    )
+                    prompt_refresh = await self._host.prepare_automatic_prompt_refresh(context)
                 except Exception:
                     _LOGGER.warning(
                         "Prompt context refresh failed after automatic Compaction "

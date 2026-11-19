@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, override
 
 import pytest
 
@@ -52,8 +53,15 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
     projects = ProjectStore(data_dir)
     checker = ModelConfigurationChecker(_NoModels(), _NoModels(), _NoCredentials())
     temporary = TemporaryAgentRegistry(sessions)
+    storage = StorageManager(data_dir)
     resolver = AgentResolver(
-        agents, projects, checker, lambda: defaults, sessions=sessions, temporary_agents=temporary
+        agents,
+        projects,
+        checker,
+        lambda: defaults,
+        sessions=sessions,
+        temporary_agents=temporary,
+        permission_profiles=lambda: storage.load_settings().get("permission_profiles", {}),
     )
     events: list[tuple[str, JsonObject]] = []
     return SimpleNamespace(
@@ -63,7 +71,7 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
             temporary_agents=temporary,
             chat_sessions=sessions,
             projects=projects,
-            storage=StorageManager(data_dir),
+            storage=storage,
         ),
         # What the RPCs published, as (event, payload).
         events=events,
@@ -576,3 +584,157 @@ async def test_the_user_remembers_an_approval_for_the_session(tmp_path: Path) ->
             state, "permissions.remove_session_grants", **params, read_folder=folder
         ) == {"session_grants": []}
     assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 4
+
+
+@pytest.mark.asyncio
+async def test_operator_manages_shared_permission_profiles(tmp_path: Path) -> None:
+    state = _state(tmp_path, {})
+    state.agent_delete_lock = asyncio.Lock()
+    state.runtime.models = _NoModels()
+    save = {"name": "Project only", "permission_rules": {"read": "work_area"}, "base": None}
+    assert (await rpc_error(state, "permissions.save_profile", **save))["code"] == "access_denied"
+    assert (await rpc_error(state, "permissions.delete_profile", name=save["name"]))[
+        "code"
+    ] == "access_denied"
+    assert (await rpc_error(state, "agent.create", id="coder", permission_profile="full_access"))[
+        "code"
+    ] == "access_denied"
+    first = await rpc_result(state, "permissions.profiles")
+    assert {row["name"] for row in first["profiles"] if row["builtin"]} == {
+        "restricted",
+        "full_access",
+    }
+    with bound_principal(HOST):
+        saved = await rpc_result(state, "permissions.save_profile", **save)
+        assert await rpc_result(state, "permissions.profiles") == saved
+        (profile,) = [row for row in saved["profiles"] if not row["builtin"]]
+        assert profile["name"] == save["name"]
+        assert profile["rules"]["read"] == "work_area"
+        assert (
+            await rpc_error(
+                state,
+                "permissions.save_profile",
+                **{**save, "permission_rules": {"write": "scratch"}},
+            )
+        )["code"] == "settings_conflict"
+        assert (await rpc_error(state, "permissions.delete_profile", name="restricted"))[
+            "code"
+        ] == "invalid_request"
+        state.runtime.agents.create("coder", permission_profile=save["name"])
+        used = await rpc_error(state, "permissions.delete_profile", name=save["name"])
+        assert used["code"] == "permission_profile_in_use"
+        assert used["data"]["agents"] == ["coder"]
+        stale_edit = await rpc_error(
+            state,
+            "agent.update",
+            id="coder",
+            permission_rules={},
+            require_no_permission_profile=True,
+        )
+        assert "permission profile is selected" in stale_edit["message"]
+        assert state.runtime.agents.get_raw("coder").permission_profile == save["name"]
+        state.runtime.agents.update("coder", permission_profile=None)
+        assert (
+            await rpc_result(
+                state, "permissions.delete_profile", name=save["name"], base=profile["rules"]
+            )
+            == first
+        )
+    # The first Agent RPC also observes the fixture-created Agent for setup.
+    catalog_events = [payload["kind"] for _, payload in state.events if payload["kind"] != "setup"]
+    assert catalog_events == ["settings", "agents", "projects"] * 2
+
+
+@pytest.mark.asyncio
+async def test_reviewed_agent_change_requires_the_same_effective_rules(tmp_path: Path) -> None:
+    defaults: JsonObject = {"permission_rules": {"write": "scratch"}}
+    state = _state(tmp_path, defaults)
+    state.agent_delete_lock = asyncio.Lock()
+    state.runtime.models = _NoModels()
+    selection = {"permission_profile": "Shared"}
+    state.runtime.agents.create("coder")
+    with bound_principal(HOST):
+        catalog = await rpc_result(
+            state, "permissions.save_profile", name="Shared", permission_rules={"write": "scratch"}
+        )
+        reviewed = next(row["rules"] for row in catalog["profiles"] if row["name"] == "Shared")
+        await rpc_result(
+            state, "permissions.save_profile", name="Shared", permission_rules=_FULL_ACCESS
+        )
+
+        for method, agent_id in (("agent.create", "new"), ("agent.update", "coder")):
+            refused = await rpc_error(
+                state, method, id=agent_id, expected_profile_rules=reviewed, **selection
+            )
+            assert refused["code"] == "settings_conflict"
+        assert not state.runtime.agents.exists("new")
+        assert state.runtime.agents.get_raw("coder").permission_profile is None
+
+        created = await rpc_result(
+            state, "agent.create", id="new", expected_profile_rules=_FULL_ACCESS, **selection
+        )
+        inherited = created["permission_rules_default"]
+        defaults["permission_rules"] = {"read": "work_area"}
+        clear = {"id": "new", "permission_rules": None, "permission_profile": None}
+        refused = await rpc_error(state, "agent.update", **clear, expected_profile_rules=inherited)
+        assert refused["code"] == "settings_conflict"
+        assert state.runtime.agents.get_raw("new").permission_profile == "Shared"
+        # An unknown Agent parameter with a Project field name must reach the Agent validator.
+        async with asyncio.timeout(2):
+            malformed = await rpc_error(state, "agent.update", **clear, field="permission_profile")
+        assert malformed["code"] == "invalid_request"
+        cleared = await rpc_result(
+            state, "agent.update", **clear, expected_profile_rules={"read": "work_area"}
+        )
+        assert cleared["config"]["permission_profile"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        (
+            "agent.update",
+            {"id": "coder", "permission_profile": "full_access", "expected_profile_rules": None},
+        ),
+        ("permissions.delete_profile", {"name": "Shared"}),
+        ("channel.create", {"id": "notify", "platform": "telegram", "agent_id": "coder"}),
+    ],
+)
+async def test_settings_waiter_leaves_agent_references_available_for_callbacks(
+    tmp_path: Path, method: str, params: JsonObject
+) -> None:
+    waiting = asyncio.Event()
+
+    class PublicationLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if self.locked():
+                waiting.set()
+            return await super().acquire()
+
+    state = _state(tmp_path, {})
+    state.agent_delete_lock = asyncio.Lock()
+    state._settings_mutation_lock = PublicationLock()
+    state.runtime.models = _NoModels()
+    state.runtime.agents.create("coder")
+
+    async def external_request() -> JsonObject:
+        with bound_principal(HOST):
+            return await rpc_result(state, method, **params)
+
+    async with state._settings_mutation_lock:
+        request = asyncio.create_task(external_request())
+        async with asyncio.timeout(2):
+            await waiting.wait()
+        references_available = not state.agent_delete_lock.locked()
+        if references_available:
+            # An Extension callback can update an Agent during Settings publication.
+            await rpc_result(state, "agent.update", id="coder", name="from callback")
+        request.cancel()
+        await asyncio.sleep(0)
+
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert references_available
+    assert state.runtime.agents.get_raw("coder").permission_profile is None

@@ -37,7 +37,6 @@ import {
   usableConnection,
   baseAgent,
   waitForCondition,
-  PERMISSION_PRESETS,
 } from './AgentsView.support.js';
 
 vi.mock('svelte', async () => {
@@ -878,13 +877,13 @@ describe('AgentsView', () => {
     await flushAsyncUpdates();
 
     const modal = getDialog(t('agents.create'));
-    const preset = 'agent-create-permissions-preset';
+    const preset = 'agent-create-permissions-profile';
     // Without a choice the new Agent uses the shared default.
     await waitForCondition(
       () =>
         triggerTextContent(getSimpleRoot(preset)) ===
         t('common.defaultOption', {
-          label: t('permissions.preset.work_dir'),
+          label: t('permissions.profile.inherited'),
         }),
       100,
     );
@@ -906,14 +905,8 @@ describe('AgentsView', () => {
     const createCall = rpcMock.mock.calls.find(
       (call) => call[0] === 'agent.create',
     );
-    expect(createCall[1].permission_rules).toEqual(
-      PERMISSION_PRESETS.full_access,
-    );
-    // The dialog checks the rules of an Agent that does not exist yet.
-    expect(rpcMock).toHaveBeenCalledWith('permissions.validate', {
-      permission_rules: null,
-      new_agent: true,
-    });
+    expect(createCall[1].permission_profile).toBe('full_access');
+    expect(createCall[1]).not.toHaveProperty('permission_rules');
   });
 
   it('keeps the current Agent selected while the Add modal is open and after cancelling it', async () => {

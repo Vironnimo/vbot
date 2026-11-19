@@ -8,6 +8,9 @@ from typing import Any
 
 import pytest
 
+from core.storage import StorageManager
+from server.access import bound_principal
+from server.access._principal import HOST
 from tests.server.rpc.project_methods_test_support import _make_state, _write_agent
 from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
 
@@ -124,7 +127,9 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
     refused = await rpc_error(
         state, "project.set_override", **override, value={"allow": ["Copy(x)"]}
     )
-    overridden = await rpc_result(state, "project.set_override", **override, value=value)
+    overridden = await rpc_result(
+        state, "project.set_override", **override, value=value, require_no_permission_profile=True
+    )
     invalidated = [change["kind"] for change in resource_changes(state)[before:]]
     # Saving the same rules again changes nothing and invalidates nothing.
     await rpc_result(state, "project.set_override", **override, value=value)
@@ -140,6 +145,64 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
     # Neither the repository nor the shared default restricts this agent.
     assert member["permission_rules_default"] is None
     assert member["effective"]["permission_rules"]["value"] == saved
+    state.runtime.projects.set_override("vbot", "builder", "permission_profile", "restricted")
+    stale_edit = await rpc_error(
+        state, "project.set_override", **override, value=value, require_no_permission_profile=True
+    )
+    assert "permission profile is selected" in stale_edit["message"]
+    assert state.runtime.projects.get("vbot").overrides["builder"] == {
+        "permission_profile": "restricted"
+    }
+
+
+@pytest.mark.asyncio
+async def test_reviewed_team_changes_check_the_policy_before_writing(tmp_path: Path) -> None:
+    state = await _vbot_state(tmp_path)
+    state.runtime.storage = StorageManager(tmp_path / "data")
+    selection = {"project_id": "vbot", "agent_id": "builder", "field": "permission_profile"}
+    with bound_principal(HOST):
+        refused = await rpc_error(
+            state,
+            "project.set_override",
+            **selection,
+            value="restricted",
+            expected_profile_rules=None,
+        )
+        assert refused["code"] == "settings_conflict"
+        assert state.runtime.projects.get("vbot").overrides == {}
+
+        catalog = await rpc_result(state, "permissions.profiles")
+        rules = next(row["rules"] for row in catalog["profiles"] if row["name"] == "restricted")
+        assigned = await rpc_result(
+            state,
+            "project.set_override",
+            **selection,
+            value="restricted",
+            expected_profile_rules=rules,
+        )
+        member = _member(assigned)
+        # The repository can change between presenting the inherited rules and execution.
+        _write_agent(
+            tmp_path / "repos" / "vbot", "builder.md", permission={"external_directory": "deny"}
+        )
+        refused = await rpc_error(
+            state,
+            "project.clear_override",
+            **selection,
+            expected_profile_rules=member["permission_rules_default"],
+        )
+        assert refused["code"] == "settings_conflict"
+        assert state.runtime.projects.get("vbot").overrides["builder"] == {
+            "permission_profile": "restricted"
+        }
+        updated = _member(await rpc_result(state, "project.show", project_id="vbot"))
+        cleared = await rpc_result(
+            state,
+            "project.clear_override",
+            **selection,
+            expected_profile_rules=updated["permission_rules_default"],
+        )
+        assert _member(cleared)["overrides"] is None
 
 
 @pytest.mark.asyncio

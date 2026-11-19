@@ -66,6 +66,7 @@ from core.memory import (
 from core.permissions import (
     PermissionRules,
     PermissionRulesError,
+    normalize_permission_profile_name,
     normalize_permission_rules,
     permission_rules_to_dict,
 )
@@ -162,6 +163,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "project_memory_enabled",
         "model",
         "name",
+        "permission_profile",
         "permission_rules",
         "root_project_id",
         "tools",
@@ -368,6 +370,11 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         validate_permission_rules_diagnostics(
             diagnostics, "$.permission_rules", data["permission_rules"]
         )
+    if data.get("permission_profile") is not None:
+        try:
+            _validate_permission_profile(data["permission_profile"], data.get("permission_rules"))
+        except AgentError as error:
+            add_error(diagnostics, "$.permission_profile", str(error))
     if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
     excluded_skills = data.get("excluded_skills")
@@ -497,6 +504,17 @@ def validate_permission_rules_diagnostics(
         normalize_permission_rules(value)
     except ValueError as error:
         add_error(diagnostics, path, str(error))
+
+
+def _validate_permission_profile(value: Any, inline_rules: Any) -> str | None:
+    if value is None:
+        return None
+    if inline_rules is not None:
+        raise AgentError("Choose a permission profile or inline permission rules.")
+    try:
+        return normalize_permission_profile_name(value)
+    except PermissionRulesError as error:
+        raise AgentError(str(error)) from error
 
 
 def _validate_permission_rules(value: Any) -> PermissionRules | None:
@@ -802,6 +820,7 @@ def _agent_from_dict(
         ),
         tool_loading=_validate_tool_loading(data.get("tool_loading")),
         permission_rules=_validate_permission_rules(data.get("permission_rules")),
+        permission_profile=data.get("permission_profile"),
         librarian_enabled=(
             DEFAULT_LIBRARIAN_ENABLED if librarian_enabled is None else bool(librarian_enabled)
         ),
@@ -842,6 +861,7 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
         tools={},
         tool_loading=None,
         permission_rules=None,
+        permission_profile=None,
     )
 
 
@@ -878,7 +898,9 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("top_p")
     if persisted["tool_loading"] is None:
         persisted.pop("tool_loading")
-    if agent.permission_rules is None:
+    if agent.permission_profile is None:
+        persisted.pop("permission_profile")
+    if agent.permission_rules is None or agent.permission_profile is not None:
         persisted.pop("permission_rules")
     else:
         persisted["permission_rules"] = permission_rules_to_dict(agent.permission_rules)

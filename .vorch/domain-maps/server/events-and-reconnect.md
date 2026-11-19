@@ -76,6 +76,8 @@ Order: a change is published after the terminal events of the Session's finished
 
 Public Settings/Connection catalogs share the Settings mutation lock across their complete read projection, so a concurrent Custom Provider deletion cannot mix old identifiers with a replacement registry. Internal mutation response builders reuse the caller's lock. `server/rpc/_mutations.py::serialized_read` and `state_read_lock` let descendant lifecycle callbacks join the enclosing mutation's live read lease; unrelated calls still wait. Settlement expires that lease and drains admitted reads before releasing the lock. Nested mutations of the same state return `mutation_in_progress` rather than deadlocking. Read cancellation still drains any admitted worker before releasing it. Coverage: `tests/server/rpc/test_mutations.py`, `test_model_methods.py`, `tests/server/test_extension_services.py`.
 
+Profile assignments with reviewed rules, profile deletion and Channel creation acquire the Settings lock before any Agent reference lock. Settings lifecycle callbacks can therefore update Agent references while an unrelated request waits for publication. Both locks must be held before a mutation is admitted, so cancelling a waiter starts no write.
+
 ## `resource_changed`
 
 The same invalidation seam feeds owner-bound Extension service observers through the application catalog binding (`extensions/host.md` -> Public application services). Every successfully applied `settings.patch` or `settings.update` emits an unscoped `settings` invalidation before its narrower live-effect invalidations, so custom Settings surfaces refresh after changes from any accessor.

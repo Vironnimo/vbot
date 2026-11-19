@@ -1023,6 +1023,9 @@ SERVICE_EXCLUSIONS = {
     "permissions.remove_session_grants": (
         "Editing a user's Session Grants requires an authenticated operator principal."
     ),
+    "permissions.profiles": "The profile picker and its rules are served through operator RPCs.",
+    "permissions.save_profile": "Only the operator can define or change Agent permission profiles.",
+    "permissions.delete_profile": "Only the operator can delete Agent permission profiles.",
     "permissions.clear_session_ceiling": (
         "Lifting inherited limits requires an authenticated operator principal."
     ),

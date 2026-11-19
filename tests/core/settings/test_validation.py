@@ -933,6 +933,25 @@ def test_runtime_settings_refuse_a_newer_format_version(tmp_path: Path) -> None:
         load_runtime_settings_json(path)
 
 
+def test_runtime_omits_only_unusable_permission_profiles(tmp_path: Path) -> None:
+    from core.permissions import PermissionRulesError, resolve_permission_profile
+
+    profiles = {"Broken profile": {"future_limit": True}, "Valid": {"read": "work_area"}}
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"format_version": 1, "permission_profiles": profiles}), encoding="utf-8"
+    )
+
+    with pytest.raises(SettingsValidationError):
+        load_validated_settings_json(path)
+    settings, errors = load_runtime_settings_json(path)
+    assert [error.path for error in errors] == ["$.permission_profiles['Broken profile']"]
+    usable = settings["permission_profiles"]
+    assert resolve_permission_profile("Valid", usable).read == "work_area"
+    with pytest.raises(PermissionRulesError):
+        resolve_permission_profile("Broken profile", usable)
+
+
 def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text(

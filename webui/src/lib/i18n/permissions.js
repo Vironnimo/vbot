@@ -1,19 +1,45 @@
 export default Object.freeze({
+  'permissions.profiles.title': 'Permission profiles',
+  'permissions.profiles.description':
+    'Changes to a profile apply to every Agent using it.',
+  'permissions.profiles.add': 'Add profile',
+  'permissions.profiles.name': 'Profile name',
+  'permissions.profiles.exists': 'A profile with this name already exists.',
+  'permissions.profiles.edit': 'Edit {name}',
+  'permissions.profiles.close': 'Close profile editor',
+  'permissions.profiles.remove': 'Delete profile',
+  'permissions.profiles.deleteTitle': 'Delete “{name}”?',
+  'permissions.profiles.deleteBody':
+    'A profile can be deleted once its Agents have been assigned another profile.',
+  'permissions.profiles.sharedRules': 'Inherited rules',
+  'permissions.profiles.sharedDescription':
+    'These rules apply to Agents without a selected profile. Local rules can override them.',
   // Permission Rules editor (components/permissions/PermissionRulesEditor.svelte)
   'permissions.title': 'Permissions',
   'permissions.agentDescription':
-    'Where this Agent may read and change files, which commands it may run and which network destinations shell commands may reach.',
+    'Choose a shared profile or follow the shared defaults. Selecting a profile replaces this Agent’s own rules.',
   'permissions.defaultsTitle': 'Permissions',
   'permissions.defaultsDescription':
-    'The Permission Rules that Identity Agents and Project Agents inherit for each part they do not set themselves. Without them, Agents have full access.',
+    'Manage reusable permission profiles and the default access for Agents.',
   'permissions.overrideDescription':
-    'Rules for this Agent in this Project. Each part it does not set comes from the inherited value.',
+    'Choose a complete profile for this Agent in this Project, or follow its inherited rules.',
   'permissions.limits':
     'The rules limit vBot’s own Tools and check shell commands before they run; programs those commands start, MCP servers and Extensions are not confined.',
   'permissions.limitsHelp':
     'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. In a terminal, only command lines typed at the shell’s own prompt are checked; input to programs running there is not. Web search and page reading are not restricted by destination rules. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git can show the contents of files from its history. Git commands that work on a whole folder or repository, such as pull, switch, restore . or add ., can read and change denied files and a repository’s permission settings files below it; only paths that name such files are refused. If you go back to an older vBot version, it ignores these rules.',
   'permissions.createHelp':
-    'Single bases and rules are set in the Agent editor after creating.',
+    'Manage reusable permission profiles in Agents under Shared defaults.',
+  'permissions.profile.label': 'Permission profile',
+  'permissions.profile.restricted': 'Restricted',
+  'permissions.profile.inherited': 'Inherited rules',
+  'permissions.profile.inheritedFull': 'Inherited rules · Full access',
+  'permissions.profile.local': 'Agent-specific rules',
+  'permissions.profile.missing': '{name} (unavailable)',
+  'permissions.profile.restrictedSummary':
+    'Read outside the working directory. Ask before writing outside the work area or connecting shell commands to additional hosts.',
+  'permissions.profile.fullSummary':
+    'Files, shell commands and network destinations are accessible with the operating system account’s permissions.',
+  'permissions.profile.loadError': 'Could not load the permission profiles.',
   'permissions.preset': 'Preset',
   'permissions.presetHelp':
     'A preset sets where the Agent may read and change files. Full access lifts every limit, also inherited ones; the other presets keep your own rules.',

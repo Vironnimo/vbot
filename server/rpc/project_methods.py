@@ -32,6 +32,7 @@ automation references and default-Project updates (``RPC_ERROR_PROJECT_IN_USE``)
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,12 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
+from server.rpc._permission_profiles import (
+    check_reviewed_rules,
+    guard_profile_assignment,
+    inline_profile_precondition,
+    validate_profile_selection,
+)
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
@@ -425,6 +432,7 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
     field = _required_override_field(params)
+    unbound = inline_profile_precondition(params, inline_rules=field == "permission_rules")
 
     try:
         current_project = _projects(state).get(project_id)
@@ -436,14 +444,21 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
         )
         previous_value = current_project.overrides.get(agent_id, {}).get(field, _MISSING)
         team = _agent_resolver(state).scan_project_report(current_project).team
-        if agent_id not in {member.agent_id for member in team}:
+        member = next((member for member in team if member.agent_id == agent_id), None)
+        if member is None:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
                 f"agent '{agent_id}' is not on project '{project_id}' team",
             )
         if field in {"model", "thinking_effort"}:
             _agent_resolver(state).preserve_agent_sessions(project_id, agent_id)
-        project = _projects(state).set_override(project_id, agent_id, field, value)
+        if "expected_profile_rules" in params:
+            _check_reviewed_override(
+                state, params, current_project, member, field, value, clear=False
+            )
+        project = _projects(state).set_override(
+            project_id, agent_id, field, value, require_no_permission_profile=unbound
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -456,6 +471,27 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
             field,
         )
     return _override_result(state, project), changed
+
+
+def _check_reviewed_override(
+    state: Any,
+    params: JsonObject,
+    project: Project,
+    member: AgentProfile,
+    field: str,
+    value: Any,
+    *,
+    clear: bool,
+) -> None:
+    own = dict(project.overrides.get(member.agent_id, {}))
+    if clear:
+        own.pop(field, None)
+    else:
+        own.pop("permission_rules" if field == "permission_profile" else "permission_profile", None)
+        own[field] = value
+    expected_project = replace(project, overrides={**project.overrides, member.agent_id: own})
+    effective = _agent_resolver(state).effective_config_for_member(expected_project, member)
+    check_reviewed_rules(params, effective["permission_rules"])
 
 
 async def _clear_override(state: Any, params: JsonObject) -> JsonObject:
@@ -482,6 +518,16 @@ def _clear_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, 
     try:
         current_project = _projects(state).get(project_id)
         had_override = field in current_project.overrides.get(agent_id, {})
+        if "expected_profile_rules" in params:
+            team = _agent_resolver(state).scan_project_report(current_project).team
+            member = next((member for member in team if member.agent_id == agent_id), None)
+            if member is None:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST, "The reviewed Project Agent is unavailable."
+                )
+            _check_reviewed_override(
+                state, params, current_project, member, field, None, clear=True
+            )
         if field in {"model", "thinking_effort"}:
             _agent_resolver(state).preserve_agent_sessions(project_id, agent_id)
         project = _projects(state).clear_override(project_id, agent_id, field)
@@ -581,6 +627,8 @@ def _validate_override_value(
         if not isinstance(value, bool):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a boolean")
         return value
+    if field == "permission_profile":
+        return validate_profile_selection(state, value)
     if field == "permission_rules":
         try:
             return permission_rules_to_dict(normalize_permission_rules(value))
@@ -987,8 +1035,12 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.list": _list_projects,
         "project.show": _show_project,
         "project.set": _serialized(_set_project),
-        "project.set_override": _serialized(_set_override),
-        "project.clear_override": _serialized(_clear_override),
+        "project.set_override": guard_profile_assignment(
+            _serialized(_set_override), team_override=True
+        ),
+        "project.clear_override": guard_profile_assignment(
+            _serialized(_clear_override), team_override=True
+        ),
         "project.rm": _remove_project,
         "project.reorder": _serialized(_reorder_projects),
         "project.detect": _detect_project,

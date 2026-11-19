@@ -1,4 +1,4 @@
-"""Operator permission decisions over the WebUI's RPC contract."""
+"""Permission profiles and operator decisions over the WebUI's RPC contract."""
 
 from __future__ import annotations
 
@@ -7,10 +7,122 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from cli._input import _read_stdin_utf8, _read_text_file
+from cli._profile_review import profile_change_refusal, profile_write_condition
 from cli.device_management import run_refusal
 from cli.formatting import inline_text, record_fields
 from cli.rpc_client import RpcPayload, rpc_call
 from cli.server_management import CommandResult, ServerInstance
+
+
+def dispatch_permission_profiles(
+    args: argparse.Namespace, instance: ServerInstance
+) -> CommandResult:
+    """Show profile names and edit a shared rule set through the operator RPCs."""
+    command = args.command
+    params: dict[str, Any] = {}
+    method = "permissions.profiles"
+    if command == "list" and (not 1 <= args.limit <= 200 or args.offset < 0):
+        return _failure(
+            instance,
+            args.json,
+            "invalid_arguments",
+            "--limit needs 1-200 and --offset needs 0 or more.",
+            refused=True,
+        )
+    if command in {"save", "delete"}:
+        refusal = profile_change_refusal(f"permission-profiles {command}")
+        if refusal:
+            return _failure(instance, args.json, "operator_required", refusal, refused=True)
+        method = f"permissions.{command}_profile"
+        params["name"] = args.name
+        params.update(profile_write_condition())
+    if command == "save":
+        try:
+            rules = profile_input(args)
+        except (OSError, ValueError) as error:
+            source = "stdin" if args.stdin else inline_text(args.file)
+            return _failure(
+                instance,
+                args.json,
+                "invalid_rules_input" if args.stdin else "invalid_rules_file",
+                f"Cannot read {source}: {inline_text(error)}. No profile was saved.",
+                refused=True,
+            )
+        params["permission_rules"] = rules
+    response = rpc_call(instance, method, params)
+    if not response.ok:
+        return _rpc_failure(response, args.json)
+    try:
+        profiles = profile_rows(response.data)
+    except ValueError as error:
+        return _failure(instance, args.json, "invalid_response", str(error))
+    if command == "list":
+        page = profiles[args.offset : args.offset + args.limit]
+        data = {"profiles": page, "total": len(profiles)}
+        lines = [f"Permission profiles: showing {len(page)} of {len(profiles)}."]
+        lines.extend(
+            f"  {inline_text(p['name'])} ({'built-in' if p['builtin'] else 'custom'})" for p in page
+        )
+        if args.offset + len(page) < len(profiles):
+            lines.append(
+                f"Next: vbot permission-profiles list --offset {args.offset + len(page)} "
+                f"--limit {args.limit}{_target_options(args)}"
+            )
+    else:
+        name = inline_text(args.name)
+        profile = next((p for p in profiles if p["name"] == args.name), None)
+        if command == "delete" and profile is None:
+            data = {"name": args.name, "deleted": True}
+            lines = [f"Deleted permission profile {name}."]
+        elif command in {"save", "show"} and profile is not None:
+            data = profile
+            label = "Saved permission profile" if command == "save" else "Permission profile"
+            lines = [
+                f"{label}: {name}",
+                f"Origin: {'built-in' if profile['builtin'] else 'custom'}",
+                f"Rules: {json.dumps(profile['rules'], sort_keys=True, ensure_ascii=True)}",
+            ]
+        elif command == "show":
+            return _failure(
+                instance,
+                args.json,
+                "profile_not_found",
+                f"Unknown permission profile {name}. Available profiles: "
+                + ", ".join(inline_text(p["name"]) for p in profiles),
+            )
+        else:
+            return _failure(
+                instance,
+                args.json,
+                "invalid_response",
+                f"The server catalog does not confirm the requested change to {name}.",
+            )
+    return CommandResult(
+        ok=True,
+        message=json.dumps(data, ensure_ascii=True) if args.json else "\n".join(lines),
+        instance=instance,
+    )
+
+
+def profile_input(args: argparse.Namespace) -> dict[str, Any]:
+    rules = json.loads(_read_stdin_utf8() if args.stdin else _read_text_file(args.file))
+    if not isinstance(rules, dict):
+        raise ValueError("expected a JSON object of Permission Rules")
+    return rules
+
+
+def profile_rows(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    profiles = data.get("profiles")
+    if not isinstance(profiles, list) or not all(
+        isinstance(profile, dict)
+        and isinstance(profile.get("name"), str)
+        and isinstance(profile.get("builtin"), bool)
+        and isinstance(profile.get("rules"), dict)
+        for profile in profiles
+    ):
+        raise ValueError("The server returned no valid profile catalog.")
+    return profiles
 
 
 def dispatch_approval_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
@@ -160,7 +272,9 @@ def _rpc_failure(payload: RpcPayload, as_json: bool) -> CommandResult:
     )
 
 
-def _failure(instance: ServerInstance, as_json: bool, code: str, message: str) -> CommandResult:
+def _failure(
+    instance: ServerInstance, as_json: bool, code: str, message: str, *, refused: bool = False
+) -> CommandResult:
     return CommandResult(
         ok=False,
         message=json.dumps(
@@ -169,4 +283,5 @@ def _failure(instance: ServerInstance, as_json: bool, code: str, message: str) -
         if as_json
         else message,
         instance=instance,
+        refused=refused,
     )

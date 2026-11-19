@@ -337,6 +337,12 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
             id="tool-loading",
         ),
         pytest.param(
+            "permission_profile",
+            "Local editing",
+            "Local editing",
+            id="shared-permission-profile",
+        ),
+        pytest.param(
             "permission_rules",
             "Work-Dir-Read-Only",
             {"read": "work_area", "write": "scratch"},
@@ -387,8 +393,9 @@ def test_project_override_set_coerces_the_value(
 
 
 def test_a_permission_override_says_how_its_rules_were_saved_and_what_applies(
-    rpc: FakeRpc, run_cli: RunCli
+    rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "manager")
     rpc.reply("project.set_override", {"project": _project(), "scan": CLEAN_SCAN})
     # The rules the member inherits keep reading in the work area.
     rpc.reply(
@@ -415,6 +422,7 @@ def test_a_permission_override_says_how_its_rules_were_saved_and_what_applies(
     assert code == 0
     lines = out.splitlines()
     assert lines[0].startswith("set builder.permission_rules override on")
+    assert rpc.params("project.set_override")["require_no_permission_profile"] is True
     assert lines[1] == "Note: Shell() was saved as Shell(*)."
     assert lines[2].startswith("Note: write anywhere applies as work_area, because the inherited")
 

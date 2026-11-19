@@ -1,10 +1,7 @@
-"""What Permission Rules editors need: presets and the bases a level offers.
+"""Named Permission Profiles and the editor's inline rule presets.
 
-Presets are shortcuts of the editors (WebUI, CLI), not a stored form: applying
-one writes ordinary parts, and an editor names the preset a stored rule set
-matches. This module is their one definition, and :func:`editor_bases` says
-which base applies to each part of a level and which it cannot choose; the RPC
-hands both to the WebUI, so no editor re-implements the rule language.
+An Agent references a profile by name. Inline presets copy rule parts into the
+edited rule set. The CLI and WebUI share these definitions and the base choices.
 """
 
 from __future__ import annotations
@@ -22,7 +19,9 @@ from core.permissions._rules import (
     PermissionRulesError,
     ReadBase,
     WriteBase,
+    normalize_permission_rules,
     permission_rules_to_dict,
+    resolve_rule_set,
     write_within_read,
 )
 
@@ -45,6 +44,88 @@ PERMISSION_PRESETS: Final[Mapping[PresetName, PermissionRules]] = MappingProxyTy
     }
 )
 CUSTOM_PRESET: Final = "custom"
+
+
+# Named profiles are complete policies. The inline editor presets above keep
+# their original patch semantics for stored rules and existing callers.
+_RESTRICTED: Final = PermissionRules(
+    read="anywhere", write="work_area", commands="any", web="listed", allow=(), deny=()
+)
+BUILTIN_PERMISSION_PROFILES: Final[Mapping[str, PermissionRules]] = MappingProxyType(
+    {"full_access": PERMISSION_PRESETS["full_access"], "restricted": _RESTRICTED}
+)
+
+
+def normalize_permission_profile_name(value: object) -> str:
+    """Validate the exact name shared by a profile and the Agents selecting it."""
+    if not isinstance(value, str) or not value or value != value.strip() or not value.isprintable():
+        raise PermissionRulesError(
+            "A permission profile name must be non-empty printable text "
+            "without surrounding whitespace."
+        )
+    return value
+
+
+def complete_effective_permission_rules(value: object) -> PermissionRules | None:
+    """Fill omitted effective parts with their runtime defaults; None is Full Access."""
+    if value is None:
+        return None
+    return resolve_rule_set(normalize_permission_rules(value), PERMISSION_PRESETS["full_access"])
+
+
+def custom_permission_profile_name(value: object) -> str:
+    name = normalize_permission_profile_name(value)
+    if name.casefold().replace("-", "_").replace(" ", "_") in BUILTIN_PERMISSION_PROFILES:
+        raise PermissionRulesError(f"Permission profile {name!r} is reserved for a built-in.")
+    return name
+
+
+def normalize_custom_permission_profile(name: str, value: object) -> PermissionRules:
+    """Fill omitted parts of a custom profile from the Restricted profile."""
+    custom_permission_profile_name(name)
+    try:
+        rules = normalize_permission_rules(value)
+    except PermissionRulesError as error:
+        raise PermissionRulesError(f"Permission profile {name!r}: {error}") from error
+    return PermissionRules(
+        read=rules.read or _RESTRICTED.read,
+        write=rules.write or _RESTRICTED.write,
+        commands=rules.commands or _RESTRICTED.commands,
+        web=rules.web or _RESTRICTED.web,
+        allow=rules.allow or (),
+        deny=rules.deny or (),
+    )
+
+
+def normalize_permission_profiles(profiles: object) -> dict[str, dict[str, object]]:
+    """Normalize a Settings catalog of custom profiles, rejecting invalid entries."""
+    if not isinstance(profiles, Mapping):
+        raise PermissionRulesError("permission_profiles must be an object of named rule sets.")
+    result: dict[str, dict[str, object]] = {}
+    for name, value in profiles.items():
+        result[name] = permission_rules_to_dict(normalize_custom_permission_profile(name, value))
+    return result
+
+
+def resolve_permission_profile(name: str, profiles: Mapping[str, object]) -> PermissionRules:
+    """Return one complete profile, refusing an unavailable selection."""
+    name = normalize_permission_profile_name(name)
+    if name in BUILTIN_PERMISSION_PROFILES:
+        return BUILTIN_PERMISSION_PROFILES[name]
+    if name not in profiles:
+        raise PermissionRulesError(f"Unknown permission profile {name!r}.")
+    return normalize_custom_permission_profile(name, profiles[name])
+
+
+def permission_profile_catalog(profiles: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    """List the two built-ins and saved profiles as complete, independent rule sets."""
+    return {
+        **{
+            name: permission_rules_to_dict(rules)
+            for name, rules in BUILTIN_PERMISSION_PROFILES.items()
+        },
+        **normalize_permission_profiles(profiles),
+    }
 
 
 def preset_name(text: str) -> PresetName:

@@ -22,7 +22,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 
 | Task | Read |
 |---|---|
-| Create an Agent for a purpose, rename an Agent, Agent settings, Tool and Skill permissions, delegation | `references/agents.md` |
+| Create an Agent for a purpose, rename an Agent, Agent settings, permission profiles, Tool and Skill permissions, delegation | `references/agents.md` |
 | Write or revise an Agent's SOUL.md: its role, how it works, its voice, its boundaries | `references/soul.md` |
 | Projects and their Agents, Sessions (create, fork, rename, delete), archived Agents, Projects and Sessions | `references/projects-sessions.md` |
 | Send a message to an Agent and read its answer, with files or in a throwaway Session, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |

@@ -566,6 +566,18 @@ def test_permission_rules_persist_normalized_and_clear(store: AgentStore) -> Non
         store.update("coder", permission_rules={"write": "everywhere"})
     assert persisted(store, "coder")["permission_rules"] == stored
 
+    with pytest.raises(AgentError):
+        store.update("coder", permission_rules=stored, permission_profile="Editors")
+    store.update("coder", permission_profile="Editors")
+    assert persisted(store, "coder")["permission_profile"] == "Editors"
+    assert "permission_rules" not in persisted(store, "coder")
+    with pytest.raises(AgentError):
+        store.update("coder", permission_rules=stored, require_no_permission_profile=True)
+    assert store.get_raw("coder").permission_profile == "Editors"
+    store.update("coder", permission_rules=stored)
+    assert "permission_profile" not in persisted(store, "coder")
+    assert persisted(store, "coder")["permission_rules"] == stored
+
     assert store.update("coder", permission_rules=None).permission_rules is None
     assert "permission_rules" not in persisted(store, "coder")
 

@@ -745,11 +745,7 @@ class ChatLoop:
                     session,
                     compaction_service,
                     instruction=instruction,
-                    temporary_binding=(
-                        binding
-                        if binding is not None and binding.address == session.address
-                        else None
-                    ),
+                    temporary_binding=binding,
                 ),
                 admission=RunAdmission(
                     working_project_id=working_project_id,

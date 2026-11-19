@@ -377,8 +377,13 @@ def test_agent_create_confirms_the_saved_agent(
             id="permissions-full-access",
         ),
         pytest.param(
+            ("--permission-profile", "Read notes"),
+            {"permission_profile": "Read notes"},
+            id="named-permission-profile",
+        ),
+        pytest.param(
             ("--clear-permissions",),
-            {"permission_rules": None},
+            {"permission_rules": None, "permission_profile": None},
             id="permissions-cleared",
         ),
     ],
@@ -403,6 +408,11 @@ def test_agent_update_sends_only_the_given_changes(
     ("options", "named_options"),
     [
         pytest.param(("--placement", "private"), ("--owner",), id="private-without-owner"),
+        pytest.param(
+            ("--permission-profile", "restricted", "--allow-rule", "Read(notes)"),
+            ("--permission-profile", "--allow-rule"),
+            id="profile-and-individual-rules",
+        ),
         pytest.param(("--owner", "researcher"), ("--placement",), id="owner-without-placement"),
         pytest.param(
             ("--placement", "helper", "--owner", "researcher"),
@@ -597,9 +607,13 @@ def test_agent_reorder_suggests_a_close_match_for_an_unknown_id(
         assert text in out
 
 
-def test_a_preset_and_added_rules_keep_the_agents_own_rules(rpc: FakeRpc, run_cli: RunCli) -> None:
+@pytest.mark.parametrize("profile", [None, "Team rules"])
+def test_a_preset_and_added_rules_keep_the_agents_own_rules(
+    rpc: FakeRpc, run_cli: RunCli, profile: str | None
+) -> None:
     own = {"commands": "listed", "allow": ["Shell(npm test)"], "deny": ["Read(.env)"]}
-    rpc.reply("agent.get", agent_payload() | {"config": {"permission_rules": own}})
+    config = {"permission_profile": profile} if profile is not None else {"permission_rules": own}
+    rpc.reply("agent.get", agent_payload() | {"config": config})
     rpc.reply("agent.update", {"id": "coder"})
     rpc.reply("permissions.validate", {"notes": []})
 
@@ -610,9 +624,13 @@ def test_a_preset_and_added_rules_keep_the_agents_own_rules(rpc: FakeRpc, run_cl
         "--deny-rule", "Read(secrets/**)",
     )  # fmt: skip
 
+    if profile is not None:
+        assert code == 2 and rpc.methods == ["agent.get"]
+        return
     assert code == 0
     assert rpc.params("agent.update") == {
         "id": "coder",
+        "require_no_permission_profile": True,
         "permission_rules": {
             "read": "work_area",
             "write": "work_area",
@@ -631,3 +649,15 @@ def test_an_unknown_permission_preset_is_a_usage_error(
     assert done.value.code == 2
     assert rpc.calls == []
     assert "Use full-access, work-dir or work-dir-read-only" in capsys.readouterr().err
+
+
+def test_run_can_set_inline_rules_without_replacing_a_profile(
+    rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
+    rpc.reply("agent.create", {"id": "helper"})
+    rpc.reply("agent.update", {"id": "helper"})
+    assert run_cli("agent", "create", "helper", "Helper", "--permissions", "work-dir")[0] == 0
+    assert run_cli("agent", "update", "helper", "--permissions", "full-access")[0] == 0
+    assert "require_no_permission_profile" not in rpc.params("agent.create")
+    assert rpc.params("agent.update")["require_no_permission_profile"] is True

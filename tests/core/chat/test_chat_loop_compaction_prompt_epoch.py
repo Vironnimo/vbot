@@ -505,8 +505,11 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True], ids=["automatic", "manual"])
 async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    manual: bool,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -520,30 +523,62 @@ async def test_compaction_refreshes_rooted_working_project_files_and_auto_load(
         ),
         projects=StubProjects({"proj": project}),
     )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session = runtime.chat_sessions.create(
+        "coder", session_id="session-one", working_project_id="proj"
+    )
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
-    context = await run_context(
-        loop,
-        Run(run_id="run-1", agent_id="coder", session_id=session.id, working_project_id="proj"),
-        session,
-    )
-    agents_file.write_text("Updated rules", encoding="utf-8")
-    (repo / "CONTEXT.md").write_text("New context", encoding="utf-8")
-    project.auto_load.append("CONTEXT.md")
+    private_file = repo / "private.md"
+    compact = service.compact
 
-    rebuilt = await compact_context(loop, context)
+    def deny_read(path: Path) -> None:
+        runtime.chat_sessions.mutate_metadata(
+            session.address,
+            lambda metadata: metadata.update(
+                agent_overrides={"permission_rules": {"deny": [f"Read({path.as_posix()})"]}}
+            ),
+        )
 
-    system_prompt = str(rebuilt.messages[0]["content"])
+    async def revoke_read_during_compaction(*args: Any, **kwargs: Any) -> ChatMessage:
+        checkpoint = await compact(*args, **kwargs)
+        agents_file.write_text("Updated rules", encoding="utf-8")
+        (repo / "CONTEXT.md").write_text("New context", encoding="utf-8")
+        private_file.write_text("NEWLY_DENIED_CONTENT", encoding="utf-8")
+        project.auto_load.extend(["CONTEXT.md", private_file.name])
+        deny_read(private_file)
+        return checkpoint
+
+    monkeypatch.setattr(service, "compact", revoke_read_during_compaction)
+    if manual:
+        host = loop._compaction_runs._host
+        materialize = host.materialize_manual_request
+
+        async def revoke_after_admission(*args: Any, **kwargs: Any) -> Any:
+            deny_read(agents_file)
+            return await materialize(*args, **kwargs)
+
+        monkeypatch.setattr(host, "materialize_manual_request", revoke_after_admission)
+        assert await loop.compact_session("coder", session.id) == "Context compacted."
+        assert "Original rules" not in str(service.compact_calls[0]["request_messages"])
+    else:
+        context = await run_context(
+            loop,
+            Run(run_id="run-1", agent_id="coder", session_id=session.id, working_project_id="proj"),
+            session,
+        )
+        rebuilt = await compact_context(loop, context)
+        system_prompt = str(rebuilt.messages[0]["content"])
+        assert "Updated rules" in system_prompt and "New context" in system_prompt
+        assert "Original rules" not in system_prompt and "NEWLY_DENIED_CONTENT" not in system_prompt
+        assert context.permissions.check_path(private_file, "read") is not None
     project_pin = runtime.chat_sessions.prompt_pin(
         session.address, PINNED_WORKING_PROJECT_CONTEXT_SLOT
     )
-    assert "Updated rules" in system_prompt and "New context" in system_prompt
-    assert "Original rules" not in system_prompt
     assert runtime.refresh_skills_for_calls == [("proj", "coder")]
     assert len(runtime.system_prompts.render_working_project_context_calls) == 2
     assert project_pin is not None
     assert "Updated rules" in project_pin["text"] and "New context" in project_pin["text"]
+    assert "NEWLY_DENIED_CONTENT" not in project_pin["text"]
 
 
 @pytest.mark.asyncio
