@@ -101,21 +101,29 @@ def _effective_detail(agent: JsonObject) -> JsonObject:
     return detail
 
 
-def _team_fallback(instance: ServerInstance, args: argparse.Namespace) -> JsonObject | None:
+def _validated_rules(instance: ServerInstance, target: str, own: object) -> JsonObject | None:
+    checked = _read(instance, "permissions.validate", permission_rules=own, agent_id=target)
+    if checked.get("valid") is not True:
+        raise ValueError(f"The server could not validate the Permission Rules for {target!r}.")
+    return _rules(checked, "effective")
+
+
+def _team_fallback(
+    instance: ServerInstance, args: argparse.Namespace, target: str
+) -> JsonObject | None:
     project = _read(instance, "project.show", project_id=args.id)
     scan = project.get("scan")
     team = scan.get("team") if isinstance(scan, dict) else None
     for member in team if isinstance(team, list) else ():
         if not isinstance(member, dict) or member.get("agent_id") != args.agent:
             continue
-        detail = _effective_detail(member)
         if "overrides" not in member:
             break
         overrides = member["overrides"]
         if overrides is None or isinstance(overrides, dict):
             if overrides and overrides.get(args.field) is not None:
-                return _rules(member, "permission_rules_default")
-            return _rules(detail, "value")
+                return _validated_rules(instance, target, None)
+            return _rules(_effective_detail(member), "value")
         break
     raise ValueError("The server could not preview this Project Agent's Permission Rules.")
 
@@ -135,9 +143,7 @@ def prepare_profile_review(instance: ServerInstance, args: argparse.Namespace) -
         if args.command == "create" or edit is None or edit.keeps_current:
             return None
         if edit.clear:
-            agent = _read(instance, "agent.get", id=target)
-            _effective_detail(agent)
-            inherited = _rules(agent, "permission_rules_default")
+            inherited = _validated_rules(instance, target, None)
             return {"action": "inherit", "name": None, "target": target, "rules": inherited}
         own: object = edit.apply(None)
     elif args.area == "project" and args.command in {"set-override", "clear-override"}:
@@ -151,19 +157,16 @@ def prepare_profile_review(instance: ServerInstance, args: argparse.Namespace) -
                 "action": "inherit",
                 "name": None,
                 "target": target,
-                "rules": _team_fallback(instance, args),
+                "rules": _team_fallback(instance, args, target),
             }
         if args.field == "permission_profile":
             return _assignment(instance, args.value, target)
         own = _coerce_override_value(args.field, args.value)
     else:
         return None
-    checked = _read(instance, "permissions.validate", permission_rules=own, agent_id=target)
-    if checked.get("valid") is not True:
-        raise ValueError(f"The server could not validate the Permission Rules for {target!r}.")
     return {
         "action": "inline",
         "name": None,
         "target": target,
-        "rules": _rules(checked, "effective"),
+        "rules": _validated_rules(instance, target, own),
     }

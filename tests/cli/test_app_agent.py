@@ -14,7 +14,7 @@ from core.tools.shell_environment import RunIdentity
 from core.tools.vbot_cli_runner import (
     REVIEW_ENV,
     REVIEW_EXIT,
-    REVIEWED_PROFILE_ENV,
+    REVIEWED_INPUTS_ENV,
     VBotAccessReviewRequiredError,
     run_vbot_cli,
 )
@@ -133,8 +133,10 @@ def test_app_agent_requires_profile_contents_in_approval(
         "permissions.save_profile",
         {"profiles": [{"name": "custom", "builtin": False, "rules": rules}]},
     )
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(snapshot) + "\n" + body))
-    monkeypatch.setenv(REVIEWED_PROFILE_ENV, "1")
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"profile": snapshot, "files": {}}) + "\n" + body)
+    )
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
     monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
     assert main() == 0
     assert rpc.params("permissions.save_profile") == {
@@ -173,7 +175,7 @@ def test_app_agent_requires_profile_contents_in_approval(
             "catalog",
         ),
         (
-            ["project", "override", "clear", "p", "a", "permission_profile"],
+            ["project", "override", "clear", "p", "broken", "permission_profile"],
             "inherit",
             "project.clear_override",
             "inherited",
@@ -217,7 +219,7 @@ def test_bound_profile_change_writes_with_approved_snapshot(
     values: dict[str, dict[str, object] | None] = {
         "catalog": {"read": "work_area"},
         "current": {"web": "listed"},
-        "inherited": None,
+        "inherited": {"commands": "listed"},
         "inline": {"write": "scratch"},
     }
     rpc.reply(
@@ -228,15 +230,7 @@ def test_bound_profile_change_writes_with_approved_snapshot(
             ]
         },
     )
-    rpc.reply(
-        "agent.get",
-        {
-            "permission_rules_default": values["inherited"],
-            "effective": {"permission_rules": {"value": values["current"]}},
-        },
-    )
     member = {
-        "permission_rules_default": values["inherited"],
         "effective": {"permission_rules": {"value": values["current"]}},
     }
     rpc.reply(
@@ -246,11 +240,16 @@ def test_bound_profile_change_writes_with_approved_snapshot(
                 "team": [
                     {**member, "agent_id": "a", "overrides": {"permission_profile": "custom"}},
                     {**member, "agent_id": "unbound", "overrides": None},
+                    {
+                        "agent_id": "broken",
+                        "overrides": {"permission_profile": "missing"},
+                        "effective": {"permission_rules": {"value": None, "error": "missing"}},
+                    },
                 ]
             }
         },
     )
-    rpc.reply("permissions.validate", {"valid": True, "effective": values["inline"]})
+    rpc.reply("permissions.validate", {"valid": True, "effective": values[expected]})
     rpc.reply(write, {"profiles": []} if action == "delete" else {})
     monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VBOT_SERVER_PORT", "22000")
@@ -263,7 +262,12 @@ def test_bound_profile_change_writes_with_approved_snapshot(
     snapshot = json.loads(message)["profile"]
     key = "base" if action == "delete" else "rules"
     target_rules = values[expected]
-    if expected in {"current", "inline"}:
+    if expected == "inherited":
+        assert rpc.params("permissions.validate") == {
+            "agent_id": snapshot["target"],
+            "permission_rules": None,
+        }
+    if expected in {"current", "inline", "inherited"}:
         assert target_rules is not None
         target_rules = {
             "read": "anywhere",
@@ -276,8 +280,10 @@ def test_bound_profile_change_writes_with_approved_snapshot(
         }
     assert snapshot["action"] == action and snapshot[key] == target_rules
     assert write not in rpc.methods
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(snapshot) + "\n"))
-    monkeypatch.setenv(REVIEWED_PROFILE_ENV, "1")
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"profile": snapshot, "files": {}}) + "\n")
+    )
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
     monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
     assert main() == 0
     assert (

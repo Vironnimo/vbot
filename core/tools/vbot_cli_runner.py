@@ -25,7 +25,7 @@ from core.utils.workers import finish_despite_cancel
 
 REVIEW_ENV = "VBOT_CLI_REVIEW_AGENT_ACCESS"
 REVIEW_EXIT = 79
-REVIEWED_PROFILE_ENV = "VBOT_CLI_REVIEWED_PROFILE"
+REVIEWED_INPUTS_ENV = "VBOT_CLI_REVIEWED_INPUTS"
 
 
 class VBotAccessReviewRequiredError(Exception):
@@ -78,7 +78,7 @@ async def run_vbot_cli(
     run: RunIdentity,
     host: str = DEFAULT_HOST,
     check_agent_access: bool = False,
-    reviewed_profile: dict[str, Any] | None = None,
+    reviewed_inputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if port is None:
         raise ValueError("The vBot CLI Tool needs a running server.")
@@ -90,11 +90,11 @@ async def run_vbot_cli(
     )
     env.pop("VBOT_SERVER_URL", None)
     env.pop(REVIEW_ENV, None)
-    env.pop(REVIEWED_PROFILE_ENV, None)
-    if reviewed_profile is not None:
-        # A frame on stdin also works for profiles larger than Windows' environment limit.
-        env[REVIEWED_PROFILE_ENV] = "1"
-        stdin = json.dumps(reviewed_profile, separators=(",", ":")) + "\n" + (stdin or "")
+    env.pop(REVIEWED_INPUTS_ENV, None)
+    if reviewed_inputs is not None:
+        # Keep potentially large snapshots and paths off the command line and environment.
+        env[REVIEWED_INPUTS_ENV] = "1"
+        stdin = json.dumps(reviewed_inputs, separators=(",", ":")) + "\n" + (stdin or "")
     review_marker = secrets.token_hex(24) if check_agent_access else None
     if review_marker is not None:
         env[REVIEW_ENV] = review_marker

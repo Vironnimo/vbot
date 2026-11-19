@@ -98,7 +98,7 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
         agent_id, project_id = address
         try:
             inherited, values = await state.runtime.chat_sessions.run_async(
-                _editor_context, state, agent_id, project_id
+                _editor_context, state, agent_id, project_id, require_inherited=value is None
             )
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -124,11 +124,12 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
 
 
 def _editor_context(
-    state: Any, agent_id: str, project_id: str | None
+    state: Any, agent_id: str, project_id: str | None, *, require_inherited: bool
 ) -> tuple[PermissionRules | None, dict[str, str | None]]:
     """Blocking: what the edited level inherits, and its new Sessions' folders."""
     runtime = state.runtime
     resolver = runtime.agent_resolver
+    member = None
     if project_id is not None:
         project = runtime.projects.get(project_id)
         member = next(
@@ -140,19 +141,22 @@ def _editor_context(
                 f"agent '{agent_id}' is not on project '{project_id}' team"
             )
         cwd = str(Path(project.cwd))
-        inherited = resolver.inherited_permission_rules(member)
         values = {"workdir": cwd, "project": cwd, "workspace": None, "home": str(Path.home())}
-        return _rules_or_none(inherited), values
-    agent = runtime.agents.get(agent_id)
-    # New Sessions work in the default Project; one that no longer exists names none.
-    default_project = getattr(agent, "root_project_id", None)
-    working = (
-        default_project
-        if default_project is not None and runtime.projects.exists(default_project)
-        else None
-    )
-    inherited = resolver.inherited_permission_rules()
-    return _rules_or_none(inherited), _session_values(state, agent, working)
+    else:
+        agent = runtime.agents.get(agent_id)
+        # New Sessions work in the default Project; one that no longer exists names none.
+        default_project = getattr(agent, "root_project_id", None)
+        working = (
+            default_project
+            if default_project is not None and runtime.projects.exists(default_project)
+            else None
+        )
+        values = _session_values(state, agent, working)
+    # A clear proposes inheritance as the actual policy. Editor placeholders
+    # for an unreadable default cannot serve as its approved Full Access value.
+    if require_inherited:
+        return resolver.default_permission_rules(member), values
+    return _rules_or_none(resolver.inherited_permission_rules(member)), values
 
 
 async def _session_permissions(state: Any, params: JsonObject) -> JsonObject:

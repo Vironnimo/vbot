@@ -119,6 +119,7 @@ def bind_target(args: argparse.Namespace, instance: ServerInstance) -> None:
 
 def main() -> int:
     from cli._commands import run
+    from cli._input import document_file_review
     from cli._profile_review import bound_profile_review, prepare_profile_review
     from cli.main import _configure_console_output
 
@@ -134,16 +135,39 @@ def main() -> int:
     from core.tools.vbot_cli_runner import (
         REVIEW_ENV,
         REVIEW_EXIT,
-        REVIEWED_PROFILE_ENV,
+        REVIEWED_INPUTS_ENV,
         VBotAccessReviewRequiredError,
     )
 
     marker = os.environ.pop(REVIEW_ENV, None)
-    reviewed = {}
-    if os.environ.pop(REVIEWED_PROFILE_ENV, None) == "1":
-        reviewed = json.loads(getattr(sys.stdin, "buffer", sys.stdin).readline())
-        if not isinstance(reviewed, dict) or not reviewed:
+    reviewed_files: dict[str, str] = {}
+    reviewed_profile = {}
+    resumed = os.environ.pop(REVIEWED_INPUTS_ENV, None) == "1"
+    if resumed:
+        frame = json.loads(getattr(sys.stdin, "buffer", sys.stdin).readline())
+        reviewed_files = frame["files"]
+        profile = frame["profile"]
+        if profile is not None and (not isinstance(profile, dict) or not profile):
             raise ValueError("The approved permission profile is missing.")
+        reviewed_profile = profile or {}
+
+    def review_document_files(sources: dict[str, str]) -> dict[str, str]:
+        paths = {key: str(Path(source).absolute()) for key, source in sources.items()}
+        if marker and paths:
+            raise VBotAccessReviewRequiredError(False, [(path, False) for path in paths.values()])
+        if set(paths.values()) == reviewed_files.keys():
+            try:
+                if all(
+                    str(Path(path).resolve()) == resolved
+                    for path, resolved in reviewed_files.items()
+                ):
+                    return {key: reviewed_files[path] for key, path in paths.items()}
+            except OSError:
+                pass  # An unavailable target cannot be confirmed either.
+        raise ValueError(
+            "No documents were read. The reviewed file paths could not be confirmed. "
+            "Call the Tool again."
+        )
 
     def check_access(args: argparse.Namespace) -> None:
         rights = changes_agent_access(args)
@@ -153,7 +177,10 @@ def main() -> int:
             raise VBotAccessReviewRequiredError(rights, reads, profile=profile)
 
     try:
-        with bound_profile_review.set(reviewed):
+        with (
+            bound_profile_review.set(reviewed_profile),
+            document_file_review.set(review_document_files if marker or resumed else None),
+        ):
             return run(app_instance=target, check_app_command=check_access if marker else None)
     except VBotAccessReviewRequiredError as review:
         print(marker)

@@ -5,7 +5,15 @@ from __future__ import annotations
 import argparse
 import codecs
 import sys
+from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
+
+# A bound vbot Tool reviews all file operands discovered in a live Extension schema
+# together and supplies the authorized file for each operand before the CLI opens it.
+document_file_review: ContextVar[Callable[[dict[str, str]], dict[str, str]] | None] = ContextVar(
+    "document_file_review", default=None
+)
 
 
 def _read_text_file(path: str) -> str:
