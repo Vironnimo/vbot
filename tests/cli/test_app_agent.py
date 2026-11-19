@@ -14,7 +14,7 @@ from core.tools.shell_environment import RunIdentity
 from core.tools.vbot_cli_runner import (
     REVIEW_ENV,
     REVIEW_EXIT,
-    REVIEWED_PROFILE_ENV,
+    REVIEWED_INPUTS_ENV,
     VBotAccessReviewRequiredError,
     run_vbot_cli,
 )
@@ -133,8 +133,10 @@ def test_app_agent_requires_profile_contents_in_approval(
         "permissions.save_profile",
         {"profiles": [{"name": "custom", "builtin": False, "rules": rules}]},
     )
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(snapshot) + "\n" + body))
-    monkeypatch.setenv(REVIEWED_PROFILE_ENV, "1")
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"profile": snapshot, "files": {}}) + "\n" + body)
+    )
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
     monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
     assert main() == 0
     assert rpc.params("permissions.save_profile") == {
@@ -276,8 +278,10 @@ def test_bound_profile_change_writes_with_approved_snapshot(
         }
     assert snapshot["action"] == action and snapshot[key] == target_rules
     assert write not in rpc.methods
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(snapshot) + "\n"))
-    monkeypatch.setenv(REVIEWED_PROFILE_ENV, "1")
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"profile": snapshot, "files": {}}) + "\n")
+    )
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
     monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
     assert main() == 0
     assert (

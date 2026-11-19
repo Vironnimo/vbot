@@ -22,7 +22,7 @@ from core.tools.vbot import register_vbot_tool
 from core.tools.vbot_cli_runner import (
     REVIEW_ENV,
     REVIEW_EXIT,
-    REVIEWED_PROFILE_ENV,
+    REVIEWED_INPUTS_ENV,
     VBotAccessReviewRequiredError,
     run_vbot_cli,
 )
@@ -98,7 +98,7 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
         host="::1",
         port=12345,
         check_agent_access=False,
-        reviewed_profile=None,
+        reviewed_inputs=None,
         run=RunIdentity(profile.agent_id, context.session_id, None, identity.update_handoff),
     )
     assert len(acknowledgements) == 1
@@ -143,17 +143,33 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
     assert (await dispatch_as_executor(registry, replace(limited), edit))["ok"]
     assert [call.kwargs["check_agent_access"] for call in cli.await_args_list] == [True, False]
     assert all(call.args[0] == edit["argv"] for call in cli.await_args_list)
-    assert [call.kwargs["reviewed_profile"] for call in cli.await_args_list] == [None, changed]
+    assert [call.kwargs["reviewed_inputs"] for call in cli.await_args_list] == [
+        None,
+        {"profile": changed, "files": {}},
+    ]
     assert approval.await_args.args[2][0].key != first_review.key
 
     protected_file = tmp_path.parent / f"{tmp_path.name}-vbot-data" / "settings.json"
-    read = {"argv": ["prompt", "set", "main", "role", "--content-file", str(protected_file)]}
+    read = {"argv": ["extensions", "run", "demo", "import", str(protected_file)]}
     cli.reset_mock()
     approval.reset_mock()
     cli.side_effect = VBotAccessReviewRequiredError(False, [(str(protected_file), False)])
     refused = await dispatch_as_executor(registry, replace(limited), read)
     assert refused["error"]["code"] == "permission_denied"
     cli.assert_awaited_once()
+    approval.assert_not_called()
+
+    allowed = tmp_path / "input.txt"
+    read = {"argv": ["extensions", "run", "demo", "import", str(allowed)]}
+    cli.reset_mock()
+    cli.side_effect = [
+        VBotAccessReviewRequiredError(False, [(str(allowed), False)]),
+        cli.return_value,
+    ]
+    assert (await dispatch_as_executor(registry, replace(limited), read))["ok"]
+    assert cli.await_args.kwargs["reviewed_inputs"]["files"] == {
+        str(allowed): str(allowed.resolve())
+    }
     approval.assert_not_called()
 
     async def revoke(*_):
@@ -177,17 +193,17 @@ async def test_vbot_cli_transfers_large_reviewed_profiles_and_preserves_stdin(
     body = json.dumps(rules, ensure_ascii=False, indent=2) + "\n"
     argv = ["permission-profiles", "save", "privat", "--stdin"]
     pipe = Mock(drain=AsyncMock())
-    monkeypatch.setenv(REVIEWED_PROFILE_ENV, "inherited")
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "inherited")
 
     async def launch(*args, env, **kwargs):
         stdout, stderr = asyncio.StreamReader(), asyncio.StreamReader()
         if marker := env.get(REVIEW_ENV):
-            assert REVIEWED_PROFILE_ENV not in env
+            assert REVIEWED_INPUTS_ENV not in env
             envelope = json.dumps({"rights": True, "reads": [], "profile": profile})
             stdout.feed_data(f"{marker}\r\n{envelope}\n".encode())
             code = REVIEW_EXIT
         else:
-            assert env[REVIEWED_PROFILE_ENV] == "1"
+            assert env[REVIEWED_INPUTS_ENV] == "1"
             code = 0
         stdout.feed_eof()
         stderr.feed_eof()
@@ -208,9 +224,9 @@ async def test_vbot_cli_transfers_large_reviewed_profiles_and_preserves_stdin(
         stdin=body,
         port=22000,
         run=run,
-        reviewed_profile=pending.value.profile,
+        reviewed_inputs={"profile": pending.value.profile, "files": {}},
     )
     assert result["exit_code"] == 0
     frame, remaining = pipe.write.call_args.args[0].split(b"\n", 1)
-    assert json.loads(frame) == profile
+    assert json.loads(frame) == {"profile": profile, "files": {}}
     assert remaining == body.encode()

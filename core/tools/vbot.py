@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +30,14 @@ from core.tools.vbot_cli_runner import VBotAccessReviewRequiredError, run_vbot_c
 
 if TYPE_CHECKING:
     from core.projects._runtime_agent import RuntimeAgent
+
+
+def _reviewed_files(context: ToolContext, reads: Sequence[tuple[str, bool]]) -> dict[str, str]:
+    return {
+        path: str(context.resolve_path(path, access="read"))
+        for path, subtree in reads
+        if not subtree
+    }
 
 
 def register_vbot_tool(
@@ -80,7 +88,7 @@ def register_vbot_tool(
         grant = issue_for_tool_context(update_handoffs, context)
 
         async def execute(
-            *, check_agent_access: bool, reviewed_profile: JsonObject | None = None
+            *, check_agent_access: bool, reviewed_inputs: JsonObject | None = None
         ) -> JsonObject:
             return await run_vbot_cli(
                 argv,
@@ -89,7 +97,7 @@ def register_vbot_tool(
                 port=port,
                 host=host,
                 check_agent_access=check_agent_access,
-                reviewed_profile=reviewed_profile,
+                reviewed_inputs=reviewed_inputs,
                 run=RunIdentity(
                     context.agent_id,
                     context.session_id,
@@ -124,8 +132,16 @@ def register_vbot_tool(
                         return tool_failure(
                             "permission_denied", "The access change was not approved."
                         )
+                reviewed_files = (
+                    await run_tool_worker(_reviewed_files, context, review.reads)
+                    if review.reads
+                    else {}
+                )
                 await check_authority(context)
-                result = await execute(check_agent_access=False, reviewed_profile=review.profile)
+                result = await execute(
+                    check_agent_access=False,
+                    reviewed_inputs={"files": reviewed_files, "profile": review.profile},
+                )
         finally:
             if grant is not None:
                 grant.release()

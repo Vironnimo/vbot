@@ -10,8 +10,10 @@ from typing import Any
 
 import pytest
 
+from cli import app_agent
 from cli import main as cli_main
 from cli.server_management import ServerInstance
+from core.tools.vbot_cli_runner import REVIEW_ENV, REVIEW_EXIT, REVIEWED_INPUTS_ENV
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
 
@@ -190,7 +192,9 @@ def test_secret_operation_reads_utf8_json_from_stdin_without_echo(
     assert "ä-secret" not in out + err
 
 
-@pytest.mark.parametrize("source", ["utf-8", "utf-8-sig", "utf-16-le", "utf-16-be", "stdin"])
+@pytest.mark.parametrize(
+    "source", ["utf-8", "utf-8-sig", "utf-16-le", "utf-16-be", "stdin", "tool-stdin"]
+)
 def test_document_argument_is_read_from_a_file_or_standard_input(
     rpc: FakeRpc,
     run_cli: RunCli,
@@ -203,7 +207,7 @@ def test_document_argument_is_read_from_a_file_or_standard_input(
     load = _operation("import", {"source": document, "apply": {"type": "boolean"}})
     rpc.reply("extensions.operation", {"operations": [load]})
     rpc.reply("extensions.operation", {"servers": []})
-    if source != "stdin":
+    if source not in {"stdin", "tool-stdin"}:
         path = tmp_path / "setup.json"
         bom = {"utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}.get(source, b"")
         path.write_bytes(bom + text.encode(source))
@@ -212,11 +216,97 @@ def test_document_argument_is_read_from_a_file_or_standard_input(
         monkeypatch.setattr(sys, "stdin", io.StringIO(text))
         tokens = ("--source", "-")
 
-    code, _out, _err = run_cli("extensions", "run", "mcp", "import", *tokens, "--apply", "true")
+    command = ["extensions", "run", "mcp", "import", *tokens, "--apply", "true"]
+    if source == "tool-stdin":
+        monkeypatch.setattr(sys, "argv", ["vbot", *command])
+        monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("VBOT_SERVER_PORT", "22000")
+        monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
+        monkeypatch.setenv(REVIEW_ENV, "marker")
+        code = app_agent.main()
+    else:
+        code, _out, _err = run_cli(*command)
 
     assert code == 0
     # The text is read without a byte order mark and never passes the shell.
     assert rpc.calls[-1][1]["arguments"] == {"source": text, "apply": True}
+
+
+@pytest.mark.parametrize("change", ["none", "schema", "link"])
+def test_bound_tool_reviews_all_document_files_before_opening_any(
+    rpc: FakeRpc,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    change: str,
+) -> None:
+    document = {"type": "string", "contentMediaType": "text/plain"}
+    plain = {"type": "string"}
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    extra = tmp_path / "extra.txt"
+    monkeypatch.chdir(tmp_path)
+    command = [
+        "vbot",
+        "extensions",
+        "run",
+        "demo",
+        "import",
+        first.name,
+        "--second",
+        str(second),
+        "--extra",
+        str(extra),
+        "--stdin",
+    ]
+    monkeypatch.setattr(sys, "argv", command)
+    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("VBOT_SERVER_PORT", "22000")
+    monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
+    monkeypatch.setenv(REVIEW_ENV, "marker")
+    body = json.dumps({"inline": "a path-shaped value from stdin"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(body))
+    properties = {"first": document, "second": document, "extra": plain, "inline": document}
+    rpc.reply("extensions.operation", {"operations": [_operation("import", properties)]})
+    next_properties = {**properties, "extra": document} if change == "schema" else properties
+    rpc.reply("extensions.operation", {"operations": [_operation("import", next_properties)]})
+    rpc.reply("extensions.operation", {"state": "completed"})
+    # Neither file exists yet. The entire operand list reaches review before any read.
+    assert app_agent.main() == REVIEW_EXIT
+    marker, packet = capsys.readouterr().out.strip().splitlines()
+    assert marker == "marker"
+    assert json.loads(packet) == {
+        "rights": False,
+        "reads": [[str(first), False], [str(second), False]],
+    }
+    assert _operation_calls(rpc) == ["describe"]
+
+    frame = {"profile": None, "files": {str(p): str(p.resolve()) for p in (first, second)}}
+    if change == "none":
+        first.write_text("first", encoding="utf8")
+        second.write_text("second", encoding="utf8")
+    elif change == "link":
+        extra.write_text("different target", encoding="utf8")
+        try:
+            second.symlink_to(extra)
+        except OSError:
+            pytest.skip("symlink privilege unavailable")
+    monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
+    monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(frame) + "\n" + body))
+    code = app_agent.main()
+    if change != "none":
+        assert code == 2
+        assert "paths could not be confirmed" in capsys.readouterr().out
+        assert _operation_calls(rpc) == ["describe", "describe"]
+    else:
+        assert code == 0
+        assert rpc.calls[-1][1]["arguments"] == {
+            "first": "first",
+            "second": "second",
+            "extra": str(extra),
+            "inline": "a path-shaped value from stdin",
+        }
 
 
 def test_unreadable_document_argument_is_not_echoed(rpc: FakeRpc, run_cli: RunCli) -> None:

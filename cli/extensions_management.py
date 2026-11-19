@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from difflib import get_close_matches
 from typing import Any
 
-from cli._input import _read_text_file
+from cli._input import _read_text_file, document_file_review
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -669,9 +669,13 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
                 f"Invalid choice for --{key.replace('_', '-')}; "
                 f"choose from {', '.join(str(choice) for choice in choices)}.{hint}"
             )
-    for key in documents:
-        if key in named:
-            arguments[key] = _read_document(key, arguments[key], stdin_used=stdin_used)
+    sources = {key: arguments[key] for key in documents if key in named}
+    if review_files := document_file_review.get():
+        sources.update(
+            review_files({key: source for key, source in sources.items() if source != "-"})
+        )
+    for key, source in sources.items():
+        arguments[key] = _read_document(key, source, stdin_used=stdin_used)
     return arguments
 
 
