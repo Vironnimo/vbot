@@ -145,7 +145,6 @@ async def test_run_passes_only_named_secrets_the_parent_can_use(
         session_id=harness.parent.session_id,
         agents=[harness.parent.agent_id],
     )
-    harness.loop.hold("review")
 
     refused = await harness.call(
         {"description": "Do review", "content": "review", "secrets": ["API", "GITLAB"]}
@@ -154,6 +153,7 @@ async def test_run_passes_only_named_secrets_the_parent_can_use(
 
     assert not refused["ok"] and "GITLAB" in refused["error"]["message"]
     child = harness.subagent_session(data["id"])
+    await harness.settle()
     assert [
         item.name
         for item in harness.secrets.usable(SessionAddress(None, "worker", child.session_id))
@@ -1587,6 +1587,10 @@ async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
     )
     call = asyncio.create_task(harness.call(arguments))
     await entered.wait()
+    if action == "send":
+        assert (await asyncio.wait_for(harness.coordinator.work_snapshot(harness.parent), 2))[
+            "background_work_running"
+        ]
     # The calling Run's cancel lands after the work was admitted, before the
     # Tool returns its result, regardless of when background forwarding runs.
     call.cancel()
@@ -1602,14 +1606,31 @@ async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
 async def test_a_subagent_whose_run_cannot_start_leaves_no_session(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def refuse(*_arguments: Any, **_options: Any) -> Run:
+    harness.secrets.create(
+        name="API",
+        kind="token",
+        values={"value": "test"},
+        actor="user",
+        lifetime="session",
+        session_id=harness.parent.session_id,
+        agents=[harness.parent.agent_id],
+    )
+
+    attempted = []
+
+    async def refuse(address: SessionAddress, *_arguments: Any, **_options: Any) -> Run:
+        attempted.append(address)
         raise RunAdmissionBlockedError("run manager is shutting down")
 
     monkeypatch.setattr(harness.manager, "start", refuse)
 
-    result = await harness.call({"description": "Do review", "content": "review"})
+    result = await harness.call(
+        {"description": "Do review", "content": "review", "secrets": ["API"]}
+    )
 
     assert result["ok"] is False
+    [child] = attempted
+    assert not harness.secrets.usable(child, passed_only=True)
     assert harness.sessions.subagent_children(harness.parent) == []
     assert harness.sessions.list_addresses(agent_id="parent") == [harness.parent]
 

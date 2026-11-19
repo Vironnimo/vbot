@@ -44,6 +44,15 @@ async def test_a_missing_parent_generation_receives_no_children_or_answers(
 async def test_run_does_not_recreate_a_generation_archived_before_admission(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, replace: bool
 ) -> None:
+    harness.secrets.create(
+        name="API",
+        kind="token",
+        values={"value": "test"},
+        actor="user",
+        lifetime="session",
+        session_id=harness.parent.session_id,
+        agents=[harness.parent.agent_id],
+    )
     start = harness.manager.start
     created: list[SessionAddress] = []
 
@@ -62,11 +71,14 @@ async def test_run_does_not_recreate_a_generation_archived_before_admission(
         return await start(address, executor, **kwargs)
 
     monkeypatch.setattr(harness.manager, "start", archive_before_start)
-    result = await harness.call({"description": "Review", "content": "not executed"})
+    result = await harness.call(
+        {"description": "Review", "content": "not executed", "secrets": ["API"]}
+    )
     await harness.settle()
 
     assert result["ok"] is False
     [address] = created
+    assert not harness.secrets.usable(address, passed_only=True)
     assert harness.sessions.exists(address) is replace
     assert all(turn.run is None for turn in harness.loop.turns)
     assert harness.manager.waiting_work_count() == 0
@@ -187,6 +199,44 @@ async def test_rejected_send_keeps_settings_and_waiting_capacity(
     for reservation in reservations:
         assert harness.manager.release_waiting_work(reservation)
     assert harness.manager.waiting_work_count() == 0
+
+
+async def test_a_send_waiting_for_the_child_leaves_tree_control_available(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.loop.hold("child")
+    child = await harness.spawn("child")
+    address = harness.subagent_session(child["id"])
+    child_lock = harness.sessions.write_lock(address)
+    write_lock = harness.sessions.write_lock
+    begin, waiting = asyncio.Event(), asyncio.Event()
+
+    def observe_lock(target):
+        if target == address:
+            waiting.set()
+        return write_lock(target)
+
+    async def send():
+        await begin.wait()
+        return await harness.call({"action": "send", "id": child["id"], "content": "follow-up"})
+
+    # The Parent task must not inherit the Child's reentrant Session lease.
+    sending = asyncio.create_task(send())
+    monkeypatch.setattr(harness.sessions, "write_lock", observe_lock)
+    try:
+        async with child_lock:
+            begin.set()
+            await waiting.wait()
+            snapshot = await asyncio.wait_for(harness.coordinator.work_snapshot(harness.parent), 2)
+            assert snapshot["background_work_running"]
+            await harness.spawn("nested", address)
+            sending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await sending
+            assert await harness.coordinator.stop_tree(harness.parent) >= 1
+    finally:
+        await asyncio.gather(sending, return_exceptions=True)
+    assert not any(turn.content == "follow-up" for turn in harness.loop.turns)
 
 
 @pytest.mark.parametrize(

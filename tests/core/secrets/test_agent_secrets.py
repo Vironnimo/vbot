@@ -302,6 +302,16 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
         agents=["main"],
     )
 
+    # A later forbidden grant must not leave an earlier grant from the batch.
+    helper = SessionAddress(None, "helper", "child")
+    owner = SessionAddress(None, "main", "s1")
+    local = secrets.create(
+        name="LOCAL", kind="token", values={"value": TOKEN}, actor="user", agents=["helper"]
+    )
+    with pytest.raises(SecretRecordError):
+        secrets.pass_to_session(helper, ["LOCAL", "GITHUB"], child=owner)
+    assert secrets.lookup(owner, "LOCAL", passed_only=True) is None
+
     assert refused.value.code == "unknown_secret"
     assert unpassed.value.code == "not_granted"
     assert "not passed to you" in str(unpassed.value)
@@ -314,7 +324,7 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
         for item in secrets.usable(SessionAddress(None, "helper", "child"), passed_only=True)
     ] == ["GITHUB"]
     secrets.remove_session(SessionAddress(None, "helper", "child"))
-    assert secrets.usable(SessionAddress(None, "helper", "child")) == []
+    assert secrets.usable(helper) == [local]
     assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s1"))] == [
         "GITHUB",
         "STRIPE",

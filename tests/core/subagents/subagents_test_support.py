@@ -251,6 +251,7 @@ class ScriptedLoop:
         reply_surface: Any = None,
         temporary_parent_binding: Any = None,
         parent_agent_input: bool = False,
+        context_note: str | None = None,
     ) -> Callable[[Run], Any]:
         del reply_surface, temporary_parent_binding
         turn = Turn(content, parent_agent_input)
@@ -264,7 +265,10 @@ class ScriptedLoop:
             target = (
                 "parent" if parent_agent_input else "user" if run.run_kind == RunKind.USER else None
             )
-            await session.append_many_async([], subagent_reply_target=target)
+            await session.append_many_async(
+                [ChatMessage.note(context_note)] if context_note else [],
+                subagent_reply_target=target,
+            )
             turn.input_persisted.set()
             gate = self.gates.get(content)
             if gate is not None:
