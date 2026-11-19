@@ -13,9 +13,11 @@ import pytest
 import respx
 
 from core.debug import DebugContext
+from core.providers._native_agent_wire import NativeAgentAdapter
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ProviderAdapter,
+    build_tool_call_rejection,
     request_input_budget,
     resolve_request_input_budget,
 )
@@ -103,6 +105,48 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
     assert frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"}) == (
         IMAGE_WIRE_MEDIA_TYPES
     )
+
+
+@pytest.mark.asyncio
+async def test_native_completed_response_keeps_provider_rejection_on_every_recovered_call() -> None:
+    arguments = '{"path":"one"}null'
+    rejection = build_tool_call_rejection(
+        code="provider_denied",
+        message="The Provider refused this call.",
+        name="read",
+        arguments=arguments,
+    )
+
+    class Native(NativeAgentAdapter):
+        @override
+        async def aclose(self) -> None:
+            pass
+
+        @override
+        async def stream(
+            self, messages: list[dict], *, model_id: str, **kwargs: Any
+        ) -> AsyncIterator[dict]:
+            yield {"type": "tool_call_delta", "slot": 0, "name_delta": "re", "rejection": rejection}
+            yield {
+                "type": "tool_call_delta",
+                "slot": 0,
+                "id": "call",
+                "name_delta": "ad",
+                "arguments_delta": arguments,
+            }
+            yield {"type": "finish", "reason": "tool_calls"}
+
+    adapter = Native()
+    result = await adapter.send([], model_id="test")
+    assert result["terminal_outcome"] == "tool_calls"
+    first, second = result["tool_calls"]
+    assert first["id"] == "call" and second["id"] != "call"
+    assert [call["arguments"] for call in (first, second)] == [{"path": "one"}, {}]
+    assert [call["argument_sequence_index"] for call in (first, second)] == [0, 1]
+    assert all(
+        call["name"] == "read" and call["rejection"] == rejection for call in (first, second)
+    )
+    assert adapter.normalize_response(result) == result
 
 
 # ---------------------------------------------------------------------------

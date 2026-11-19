@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat.streaming import stream_model_response
 from core.providers.accounts import ConnectionRef
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import TOOL_CALL_REJECTION_FIELD, ProviderAdapter
+from core.providers.errors import ProviderError
 from core.runtime._workers import _RUNTIME_WORKERS
 
 if TYPE_CHECKING:
@@ -73,6 +74,17 @@ async def sample_extension(
             ),
         )
         usage = normalized.get("usage")
+        if calls := normalized.get("tool_calls"):
+            offered = {tool["name"] for tool in request.get("tools") or []}
+            if request.get("tool_choice") == "none" or any(
+                TOOL_CALL_REJECTION_FIELD in call or call["name"] not in offered for call in calls
+            ):
+                # Sampling clients can execute every returned call. Unlike Chat they
+                # have no per-call rejection channel, so return none of this batch.
+                raise ProviderError(
+                    "The Model proposed an unavailable Tool in its sampling response.",
+                    retryable=False,
+                )
         outcome = "completed"
     except asyncio.CancelledError:
         outcome = "cancelled"

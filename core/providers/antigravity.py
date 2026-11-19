@@ -53,7 +53,7 @@ def _text(content: Any) -> str:
     )
 
 
-def _prompt(messages: Sequence[Mapping[str, Any]]) -> str:
+def _prompt(messages: Sequence[Mapping[str, Any]], *, has_tools: bool) -> str:
     conversation = [message for message in messages if message.get("role") != "system"]
     records = []
     for message in conversation:
@@ -65,7 +65,12 @@ def _prompt(messages: Sequence[Mapping[str, Any]]) -> str:
         # Preserve a literal @ in JSON without invoking the CLI's @file preprocessor.
         encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
         records.append(encoded.replace("@", r"\u0040"))
-    return "\n".join([_TRANSCRIPT_HEADER, *records])
+    tool_scope = (
+        "Use the vbot MCP server for tool calls."
+        if has_tools
+        else "Answer directly without calling tools."
+    )
+    return "\n".join([f"{_TRANSCRIPT_HEADER} {tool_scope}", *records])
 
 
 def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
@@ -82,7 +87,7 @@ def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
 def _request(
     messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
 ) -> tuple[str, str, list[JsonObject]]:
-    return system_prompt(messages), _prompt(messages), _mcp_tools(tools)
+    return system_prompt(messages), _prompt(messages, has_tools=bool(tools)), _mcp_tools(tools)
 
 
 class AntigravityAdapter(NativeAgentAdapter):
@@ -157,7 +162,8 @@ class AntigravityAdapter(NativeAgentAdapter):
         from core.utils.tokens import estimate_structured_tokens
 
         return estimate_structured_tokens(
-            [system_prompt(messages), _prompt(messages), tools or []], model_id=model_id
+            [system_prompt(messages), _prompt(messages, has_tools=bool(tools)), tools or []],
+            model_id=model_id,
         )[0]
 
     @classmethod

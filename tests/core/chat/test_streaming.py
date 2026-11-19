@@ -328,10 +328,19 @@ def test_partial_fields_drop_an_in_flight_tool_call_without_raising() -> None:
 
 
 def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them() -> None:
-    read = {"id": "tool_call_0", "name": "read", "arguments": {"path": "a.md"}}
+    rejection = {"code": "denied", "message": "Denied by the Provider.", "fingerprint": "r"}
+    read = {
+        "id": "tool_call_0",
+        "name": "read",
+        "arguments": {"path": "a.md"},
+        "rejection": rejection,
+    }
     write = {"id": "tool_call_1", "name": "write", "arguments": {"path": "b.md"}}
     search = {"id": "tool_call_2", "name": "search", "arguments": {"q": "x"}}
     accumulator = _accumulate(_tool_delta('{"path":"a.md"}', name="read", slot=0))
+    assert (
+        accumulator.add_delta({"type": "tool_call_delta", "slot": 0, "rejection": rejection}) == []
+    )
     # The last call may still grow.
     assert accumulator.take_completed_tool_calls() == []
 
@@ -571,6 +580,7 @@ def test_output_timing_follows_the_finalized_answer_boundary(
     "usage",
     [
         {"input_tokens": 250, "output_tokens": 80},
+        {"reported_cost_usd": 0.0},
         {"output_tokens": 2572},
         {
             "input_tokens": 250,
@@ -585,7 +595,7 @@ def test_output_timing_follows_the_finalized_answer_boundary(
             "reported_output_duration_ms": 100.0,
         },
     ],
-    ids=["counts", "partial", "token-details", "provider-rate-and-window"],
+    ids=["counts", "cost-only", "partial", "token-details", "provider-rate-and-window"],
 )
 def test_usage_delta_reaches_the_final_response_without_a_visible_delta(usage: JsonObject) -> None:
     accumulator = StreamingAccumulator()

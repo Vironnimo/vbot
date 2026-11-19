@@ -21,6 +21,7 @@ from core.chat._stream_repetition import StreamRepetitionGuard, before_repetitio
 from core.chat.messages import USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
+    TOOL_CALL_REJECTION_FIELD,
     ProviderAdapter,
     TerminalOutcome,
     normalize_tool_call_candidates,
@@ -474,6 +475,7 @@ class _ToolCallFragments:
     provider_id: str | None = None
     name_text: str = ""
     arguments_text: str = ""
+    rejection: object = None
 
     @property
     def tool_call_id(self) -> str:
@@ -513,6 +515,7 @@ class _ToolCallFragments:
             name=self.name_text,
             arguments=self.arguments_text,
             fallback_id=f"tool_call_{self.synthetic_id_suffix}",
+            rejection=self.rejection,
         )
 
 
@@ -795,10 +798,11 @@ class StreamingAccumulator:
         provider_id = _optional_tool_call_provider_id(delta)
         name_delta = _optional_delta_string(delta, "name_delta")
         arguments_delta = _optional_delta_string(delta, "arguments_delta")
+        rejection = delta.get(TOOL_CALL_REJECTION_FIELD)
         if stream_slot in self._taken_tool_calls:
             # The call already runs as it was when the stream moved past it.
             # A Provider that returns to it breaks stream order; keep what ran.
-            if name_delta or arguments_delta:
+            if name_delta or arguments_delta or rejection is not None:
                 _LOGGER.warning(
                     "Provider stream returned to a Tool Call that already started; "
                     "ignoring the late fragment"
@@ -816,6 +820,8 @@ class StreamingAccumulator:
         )
         previous_id = fragments.tool_call_id
         fragments.accept_provider_id(provider_id)
+        if fragments.rejection is None:
+            fragments.rejection = rejection
         id_changed = had_fragments and previous_id != fragments.tool_call_id
         if not name_delta and not arguments_delta and not id_changed:
             return None
@@ -858,8 +864,11 @@ class StreamingAccumulator:
                 raise StreamingDeltaError(f"usage delta {token_key} must be a non-negative integer")
             usage[token_key] = token_count
             primary_count += 1
-        if primary_count == 0:
-            raise StreamingDeltaError("usage delta must include input_tokens or output_tokens")
+        reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
+        if primary_count == 0 and reported_cost is None:
+            raise StreamingDeltaError(
+                "usage delta must include a primary token count or reported cost"
+            )
         for detail_key in ("cache_read_tokens", "cache_write_tokens", "reasoning_tokens"):
             detail_tokens = delta.get(detail_key)
             if (
@@ -868,7 +877,6 @@ class StreamingAccumulator:
                 and detail_tokens >= 0
             ):
                 usage[detail_key] = detail_tokens
-        reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
         if reported_cost is not None:
             usage["reported_cost_usd"] = reported_cost
         for measurement in (REPORTED_SPEED_FIELD, REPORTED_DURATION_FIELD):

@@ -30,6 +30,7 @@ from core.providers._tool_calls import (
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     JsonObject,
     ToolCallIdProfile,
+    build_tool_call_rejection,
     canonical_tool_result_is_error,
     normalize_tool_call_candidate,
     normalize_tool_call_candidates,
@@ -82,6 +83,7 @@ __all__ = [
     "TOOL_RESULT_CONTENT_BLOCKS_FIELD",
     "TerminalOutcome",
     "ToolCallIdProfile",
+    "build_tool_call_rejection",
     "canonical_tool_result_is_error",
     "estimate_wire_request_input_tokens",
     "is_request_context_message",
@@ -248,7 +250,10 @@ class ProviderAdapter(ABC):
     - ``{"type": "reasoning_delta", "text": " thinking"}``
     - ``{"type": "tool_call_delta", "id": "...", "name_delta": "...", "arguments_delta": "..."}``
       or ``{"type": "tool_call_delta", "slot": 0, "id": "...", ...}``, where
-      ``id`` may be omitted until a later fragment for index-based wires
+      ``id`` may be omitted until a later fragment for index-based wires.
+      A Provider can reject the entire attempt with ``rejection`` from
+      ``build_tool_call_rejection()``. Emit it before advancing to another
+      call, text, reasoning or finish, since Chat may dispatch the call then.
     - ``{"type": "heartbeat"}`` (transport liveness only; not Model progress)
     - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
     - ``{"type": "usage", "input_tokens": 1, "output_tokens": 1}``
@@ -256,8 +261,9 @@ class ProviderAdapter(ABC):
       provider reports prompt-cache usage, plus optional ``reasoning_tokens``
       as a subset of output; ``input_tokens`` is always the total prompt
       including cached tokens; either primary token counter may be omitted when
-      the upstream Provider reports only the other one, and Chat estimates only
-      the missing field; optional ``reported_output_tokens_per_second`` when
+      the upstream Provider reports only the other one. A known
+      ``reported_cost_usd`` can also arrive without token counts. Chat
+      estimates the missing counters. Optional ``reported_output_tokens_per_second`` when
       the Provider measured its own decode speed, as local servers do, plus
       ``reported_output_duration_ms`` for its actual measurement window)
     - ``{"type": "finish", "reason": "stop" | "tool_calls" |
