@@ -451,6 +451,7 @@ class StubAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
         include_temporary: bool = False,
@@ -469,12 +470,19 @@ class StubAgentResolver:
                     f"agent '{agent_id}' is not on project '{project_id}' team"
                 ) from error
         if session_id is None:
+            if session_overrides is not None:
+                raise ValueError("session_overrides requires a Session id")
             overrides = new_session_overrides or AgentOverrides()
             if overrides.model is not None:
                 self.models.require_configured(overrides.model)
+        elif session_overrides is not None:
+            overrides = session_overrides
         else:
             overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-        agent = replace(agent, **overrides.agent_changes())
+        changes = overrides.agent_changes()
+        if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
+            changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
+        agent = replace(agent, **changes)
         if run_overrides is not None and not run_overrides.is_empty:
             agent = replace(agent, **run_overrides.agent_changes())
         return agent

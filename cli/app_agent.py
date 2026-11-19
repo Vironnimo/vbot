@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from cli._server_target import ServerInstance, parse_server_url, resolve_instance
@@ -17,6 +18,7 @@ def changes_agent_access(args: argparse.Namespace) -> bool:
         from cli._dispatch_agents import _agent_changes_from_args
 
         return not {
+            "permission_profile",
             "permission_rules",
             "tool_access",
             "allowed_skills",
@@ -29,7 +31,7 @@ def changes_agent_access(args: argparse.Namespace) -> bool:
         }.isdisjoint(_agent_changes_from_args(args))
     if args.area == "project":
         if args.command in {"set-override", "clear-override"}:
-            return args.field in {"permission_rules", "tool_access"}
+            return args.field in {"permission_profile", "permission_rules", "tool_access"}
         if args.command in {"set", "add"}:
             return any(
                 getattr(args, key, None) is not None
@@ -40,6 +42,8 @@ def changes_agent_access(args: argparse.Namespace) -> bool:
                     "sources",
                 )
             ) or (args.command == "set" and args.cwd is not None)
+    if args.area == "permission-profiles":
+        return args.command in {"save", "delete"}
     if args.area == "config":
         from cli.config_management import PERMISSION_RULES_DEFAULT_PATH
         from core.settings.paths import resolve_setting
@@ -115,6 +119,7 @@ def bind_target(args: argparse.Namespace, instance: ServerInstance) -> None:
 
 def main() -> int:
     from cli._commands import run
+    from cli._profile_review import bound_profile_review, prepare_profile_review
     from cli.main import _configure_console_output
 
     _configure_console_output()
@@ -126,21 +131,36 @@ def main() -> int:
     # access record names the loopback literal on which it actually accepts the CLI.
     host = local.loopback[0] if local and local.loopback else listen_host
     target = resolve_instance(host=host, port=port, data_dir=data_dir)
-    from core.tools.vbot_cli_runner import REVIEW_ENV, REVIEW_EXIT, VBotAccessReviewRequiredError
+    from core.tools.vbot_cli_runner import (
+        REVIEW_ENV,
+        REVIEW_EXIT,
+        REVIEWED_PROFILE_ENV,
+        VBotAccessReviewRequiredError,
+    )
 
     marker = os.environ.pop(REVIEW_ENV, None)
+    reviewed = {}
+    if os.environ.pop(REVIEWED_PROFILE_ENV, None) == "1":
+        reviewed = json.loads(getattr(sys.stdin, "buffer", sys.stdin).readline())
+        if not isinstance(reviewed, dict) or not reviewed:
+            raise ValueError("The approved permission profile is missing.")
 
     def check_access(args: argparse.Namespace) -> None:
         rights = changes_agent_access(args)
         reads = _file_inputs(args)
         if rights or reads:
-            raise VBotAccessReviewRequiredError(rights, reads)
+            profile = prepare_profile_review(target, args) if rights else None
+            raise VBotAccessReviewRequiredError(rights, reads, profile=profile)
 
     try:
-        return run(app_instance=target, check_app_command=check_access if marker else None)
+        with bound_profile_review.set(reviewed):
+            return run(app_instance=target, check_app_command=check_access if marker else None)
     except VBotAccessReviewRequiredError as review:
         print(marker)
-        print(json.dumps({"rights": review.rights, "reads": review.reads}))
+        payload = {"rights": review.rights, "reads": review.reads}
+        if review.profile is not None:
+            payload["profile"] = review.profile
+        print(json.dumps(payload))
         return REVIEW_EXIT
 
 

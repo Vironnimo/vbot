@@ -31,11 +31,17 @@ def add_permission_profile_parsers(
                 "--offset", type=int, default=0, help="Profiles to skip. Omit for 0."
             )
         if action == "save":
-            parser.add_argument(
+            rules = parser.add_mutually_exclusive_group(required=True)
+            rules.add_argument(
                 "--file",
-                required=True,
                 help="Path to a JSON Permission Rules object. "
                 "Omitted fields take their values from the restricted profile.",
+            )
+            rules.add_argument(
+                "--stdin",
+                action="store_true",
+                help="Read the Permission Rules as one UTF-8 JSON object from stdin. "
+                "Use this input for approval in a restricted Run.",
             )
         parser.add_argument("--json", action="store_true", help="Print the result as JSON")
 

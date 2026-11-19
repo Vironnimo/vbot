@@ -7,6 +7,7 @@ from typing import Any
 from core.permissions import (
     BUILTIN_PERMISSION_PROFILES,
     PermissionRulesError,
+    complete_effective_permission_rules,
     custom_permission_profile_name,
     normalize_permission_profile_name,
     permission_profile_catalog,
@@ -20,10 +21,11 @@ from server.rpc._mutations import (
     require_mutation_available,
     serialized_mutation,
     serialized_read,
+    state_read_lock,
 )
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_SETTINGS_CONFLICT, RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _optional_bool, _reject_unsupported
 
@@ -43,6 +45,14 @@ def _require_operator() -> str:
 
 def guard_profile_assignment(handler: MutationHandler) -> MutationHandler:
     async def guarded(state: Any, params: JsonObject) -> JsonObject:
+        if "expected_profile_rules" in params:
+            _require_operator()
+            if not ({"permission_profile", "permission_rules"} & params.keys()) and params.get(
+                "field"
+            ) not in ("permission_profile", "permission_rules"):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST, "expected_profile_rules needs a permission change."
+                )
         if params.get("field") == "permission_profile":
             _require_operator()
             async with _agent_reference_lock(state):
@@ -52,6 +62,37 @@ def guard_profile_assignment(handler: MutationHandler) -> MutationHandler:
         return await handler(state, params)
 
     return guarded
+
+
+def guard_reviewed_rules(handler: MutationHandler) -> MutationHandler:
+    """Keep operator Settings writes out between a reviewed comparison and its Agent write."""
+
+    async def guarded(state: Any, params: JsonObject) -> JsonObject:
+        if "expected_profile_rules" in params:
+            async with state_read_lock(state, _SETTINGS_LOCK):
+                return await handler(state, params)
+        return await handler(state, params)
+
+    return guarded
+
+
+def check_reviewed_rules(params: JsonObject, effective: JsonObject) -> None:
+    """Compare the exact effective policy after this change to the approved outcome."""
+    if "expected_profile_rules" not in params:
+        return
+    try:
+        expected = complete_effective_permission_rules(params["expected_profile_rules"])
+    except PermissionRulesError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"Invalid expected_profile_rules: {exc}") from exc
+    if (
+        effective.get("error")
+        or complete_effective_permission_rules(effective["value"]) != expected
+    ):
+        raise RpcError(
+            RPC_ERROR_SETTINGS_CONFLICT,
+            "The resulting permission rules have changed or are unavailable. "
+            "Review the current rules before applying this change.",
+        )
 
 
 def inline_profile_precondition(params: JsonObject, *, inline_rules: bool) -> bool:

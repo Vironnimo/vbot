@@ -79,7 +79,9 @@ def register_vbot_tool(
             return tool_failure("vbot_unavailable", "The local vBot server has no active port.")
         grant = issue_for_tool_context(update_handoffs, context)
 
-        async def execute(*, check_agent_access: bool) -> JsonObject:
+        async def execute(
+            *, check_agent_access: bool, reviewed_profile: JsonObject | None = None
+        ) -> JsonObject:
             return await run_vbot_cli(
                 argv,
                 stdin=arguments.get("stdin"),
@@ -87,6 +89,7 @@ def register_vbot_tool(
                 port=port,
                 host=host,
                 check_agent_access=check_agent_access,
+                reviewed_profile=reviewed_profile,
                 run=RunIdentity(
                     context.agent_id,
                     context.session_id,
@@ -110,7 +113,9 @@ def register_vbot_tool(
                     target = json.dumps(public, ensure_ascii=False, sort_keys=True)
                     shown = public["argv"]
                     command = shown if shown[:1] == ["vbot"] else ["vbot", *shown]
-                    requirement = ApprovalRequirement.review(target, shown=shlex.join(command))
+                    requirement = ApprovalRequirement.review(
+                        target, shown=shlex.join(command), permission_profile=review.profile
+                    )
                     if not await context.request_approval(
                         "This command changes Agent access.",
                         [requirement],
@@ -120,7 +125,7 @@ def register_vbot_tool(
                             "permission_denied", "The access change was not approved."
                         )
                 await check_authority(context)
-                result = await execute(check_agent_access=False)
+                result = await execute(check_agent_access=False, reviewed_profile=review.profile)
         finally:
             if grant is not None:
                 grant.release()

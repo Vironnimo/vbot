@@ -8,8 +8,8 @@
   import {
     permissionProfiles,
     refreshPermissionProfiles,
-    permissionProfileLabel,
   } from '$lib/permissionProfiles.js';
+  import { permissionProfileLabel } from '$lib/permissionRules.js';
 
   let {
     profile = null,

@@ -26,6 +26,8 @@
     joinPermissionRule,
     normalizePermissionRules,
     parsePastedPermissionRules,
+    permissionBaseLabel,
+    permissionPartLabel,
     permissionPresetChoice,
     permissionProblems,
     permissionRulesComplete,
@@ -43,31 +45,6 @@
     work_dir: () => t('permissions.preset.work_dir'),
     work_dir_read_only: () => t('permissions.preset.work_dir_read_only'),
     custom: () => t('permissions.preset.custom'),
-  };
-  const PART_LABELS = {
-    read: () => t('permissions.part.read'),
-    write: () => t('permissions.part.write'),
-    commands: () => t('permissions.part.commands'),
-    web: () => t('permissions.part.web'),
-  };
-  const BASE_LABELS = {
-    read: {
-      anywhere: () => t('permissions.base.read.anywhere'),
-      work_area: () => t('permissions.base.read.work_area'),
-    },
-    write: {
-      anywhere: () => t('permissions.base.write.anywhere'),
-      work_area: () => t('permissions.base.write.work_area'),
-      scratch: () => t('permissions.base.write.scratch'),
-    },
-    commands: {
-      any: () => t('permissions.base.commands.any'),
-      listed: () => t('permissions.base.commands.listed'),
-    },
-    web: {
-      any: () => t('permissions.base.web.any'),
-      listed: () => t('permissions.base.web.listed'),
-    },
   };
   const LIST_LABELS = {
     allow: {
@@ -242,21 +219,17 @@
     }
   }
 
-  function baseLabel(part, base) {
-    return BASE_LABELS[part]?.[base]?.() ?? base;
-  }
-
   // `base` is the server's `bases[part]`: what applies without an own value
   // (with its source), the choices, and those the level cannot choose.
   function baseOptions(part, base) {
     const inherit = base.inherit ?? {};
-    const value = baseLabel(part, inherit.value);
+    const value = permissionBaseLabel(part, inherit.value);
     const excluded = base.excluded ?? [];
     const choices = (base.choices ?? []).map((choice) => {
       const narrowed = excluded.includes(choice);
       return {
         value: choice,
-        label: baseLabel(part, choice),
+        label: permissionBaseLabel(part, choice),
         disabled: narrowed,
         tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
       };
@@ -420,7 +393,7 @@
         <div class="s-row s-row--compact">
           <div class="s-row-info">
             <div class="s-row-label">
-              {PART_LABELS[part]()}
+              {permissionPartLabel(part)}
               {#if part === 'read' || part === 'write'}
                 <InfoHint text={t('permissions.base.workAreaHelp')} />
               {/if}
@@ -452,7 +425,7 @@
               options={baseOptions(part, base)}
               {disabled}
               invalid={problems.length > 0}
-              ariaLabel={PART_LABELS[part]()}
+              ariaLabel={permissionPartLabel(part)}
               ariaDescribedby={problems.length > 0
                 ? `${idPrefix}-${part}-error`
                 : undefined}

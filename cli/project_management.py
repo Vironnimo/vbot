@@ -19,13 +19,13 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli._profile_review import profile_change_refusal, profile_write_condition
 from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
     sessions_text,
     unfinished_permanent_delete,
 )
-from cli.device_management import run_refusal
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
@@ -136,17 +136,20 @@ def project_set_override(
 ) -> CommandResult:
     """Set one Project Agent override and show the refreshed Project."""
 
-    refusal = run_refusal(
-        "Changing a Project Agent's permission profile",
-        "the user can select a profile in their terminal or the WebUI",
-    )
+    refusal = profile_change_refusal("Changing a Project Agent's permission profile")
     if refusal and field == "permission_profile":
         return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
     try:
         value = _coerce_override_value(field, raw_value)
     except ValueError as exc:
         return CommandResult(ok=False, message=str(exc), instance=instance)
-    params = {"project_id": project_id, "agent_id": agent_id, "field": field, "value": value}
+    params = {
+        "project_id": project_id,
+        "agent_id": agent_id,
+        "field": field,
+        "value": value,
+        **profile_write_condition(),
+    }
     if refusal and field == "permission_rules":
         params["require_no_permission_profile"] = True
     payload = _rpc_call(instance, "project.set_override", params)
@@ -178,16 +181,18 @@ def project_clear_override(
     """Clear one Project Agent override and show the refreshed Project."""
 
     if field == "permission_profile" and (
-        refusal := run_refusal(
-            "Changing a Project Agent's permission profile",
-            "the user can select a profile in their terminal or the WebUI",
-        )
+        refusal := profile_change_refusal("Changing a Project Agent's permission profile")
     ):
         return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
     payload = _rpc_call(
         instance,
         "project.clear_override",
-        {"project_id": project_id, "agent_id": agent_id, "field": field},
+        {
+            "project_id": project_id,
+            "agent_id": agent_id,
+            "field": field,
+            **profile_write_condition(),
+        },
     )
     if not payload.ok:
         return payload.to_command_result()

@@ -43,9 +43,3 @@ export const permissionProfiles = readable(initial, (set) => {
 export function refreshPermissionProfiles() {
   return refreshOpenCatalog?.() ?? Promise.resolve(initial);
 }
-
-export function permissionProfileLabel(name) {
-  if (name === 'full_access') return t('permissions.preset.full_access');
-  if (name === 'restricted') return t('permissions.profile.restricted');
-  return name;
-}

@@ -5,10 +5,10 @@
   import { useAutosaveContext } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
-    permissionProfileLabel,
     permissionProfiles,
     refreshPermissionProfiles,
   } from '$lib/permissionProfiles.js';
+  import { permissionProfileLabel } from '$lib/permissionRules.js';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import TextField from '../ui/TextField.svelte';

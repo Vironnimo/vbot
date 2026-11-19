@@ -1,6 +1,7 @@
 <script>
   import { getContext } from 'svelte';
   import { t } from '$lib/i18n.js';
+  import ChatPermissionProfileReview from './ChatPermissionProfileReview.svelte';
   import Button from '../ui/Button.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -61,8 +62,6 @@
       below: requirement.kind === 'path' && requirement.subtree,
     };
   }
-
-  const needs = $derived((request?.requirements ?? []).map(describe));
 
   async function decide(decision, options = {}) {
     if (disabled) return;
@@ -181,14 +180,23 @@
     {/if}
   </div>
   <ul class="approval-card__needs">
-    {#each needs as need, index (index)}
+    {#each request.requirements ?? [] as requirement, index (index)}
       <li>
-        <span class="approval-card__verb">{need.verb}</span>
-        {#if need.target}<code class="approval-card__target">{need.target}</code
-          >{/if}
-        {#if need.below}<span class="approval-card__below"
-            >{t('approvals.need.below')}</span
-          >{/if}
+        {#if requirement.permission_profile}
+          <ChatPermissionProfileReview
+            profile={requirement.permission_profile}
+            command={requirement.shown}
+          />
+        {:else}
+          {@const need = describe(requirement)}
+          <span class="approval-card__verb">{need.verb}</span>
+          {#if need.target}<code class="approval-card__target"
+              >{need.target}</code
+            >{/if}
+          {#if need.below}<span class="approval-card__below"
+              >{t('approvals.need.below')}</span
+            >{/if}
+        {/if}
       </li>
     {/each}
   </ul>
@@ -319,6 +327,7 @@
 <style>
   .approval-card {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-sm);
     margin: var(--space-xs) 0 var(--space-sm);
     padding: 10px 12px;
@@ -354,9 +363,6 @@
     padding: 0;
     list-style: none;
   }
-  .approval-card__needs li {
-    overflow-wrap: anywhere;
-  }
   .approval-card__verb {
     color: var(--text-med);
     margin-right: 6px;
@@ -370,6 +376,7 @@
     overflow-wrap: anywhere;
   }
   .approval-card__target {
+    overflow-wrap: anywhere;
     color: var(--text-hi);
   }
   .approval-card__below,

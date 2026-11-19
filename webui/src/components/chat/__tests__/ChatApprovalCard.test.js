@@ -119,6 +119,111 @@ describe('ChatApprovalCard', () => {
     expect(button(t('approvals.allowSession'))).toBeUndefined();
   });
 
+  function mountProfile(profile, argv, stdin) {
+    component = mount(ChatApprovalCard, {
+      target: document.body,
+      props: {
+        request: approval({
+          tool_name: 'vbot',
+          arguments: { argv, stdin },
+          requirements: [
+            {
+              kind: 'review',
+              shown: ['vbot', ...argv].join(' '),
+              permission_profile: profile,
+            },
+          ],
+          session_grant: null,
+        }),
+      },
+    });
+    flushSync();
+    return document.querySelector('.approval-card__needs');
+  }
+
+  const rules = {
+    read: 'anywhere',
+    write: 'scratch',
+    commands: 'any',
+    web: 'listed',
+    allow: ['Shell(git status)', 'Shell(git diff *)'],
+    deny: [],
+  };
+
+  it('shows the complete reviewed rules for a partial profile save', () => {
+    const stdin = JSON.stringify({ write: 'scratch', allow: rules.allow });
+    const argv = ['permission-profiles', 'save', 'analyst', '--stdin'];
+    const base = { ...rules, write: 'anywhere' };
+    const review = mountProfile(
+      { action: 'save', name: 'analyst', rules, base },
+      argv,
+      stdin,
+    );
+    expect(review.textContent).toContain('Update permission profile “analyst”');
+    expect(review.textContent).not.toContain(stdin);
+    const definition = review.querySelector('dl');
+    const values = [...definition.querySelectorAll('dt')].map((dt) => [
+      dt.textContent.trim(),
+      dt.nextElementSibling.textContent.trim(),
+    ]);
+    expect(values).toEqual([
+      [t('permissions.part.read'), t('permissions.base.read.anywhere')],
+      [t('permissions.part.write'), t('permissions.base.write.scratch')],
+      [t('permissions.part.commands'), t('permissions.base.commands.any')],
+      [t('permissions.part.web'), t('permissions.base.web.listed')],
+      [t('permissions.allowTitle'), expect.stringContaining(rules.allow[0])],
+      [t('permissions.denyTitle'), t('permissions.rulesNone')],
+    ]);
+    expect(
+      [...definition.querySelectorAll('li')].map((li) => li.textContent),
+    ).toEqual(rules.allow);
+    const previous = review.querySelector('details');
+    expect(previous.open).toBe(false);
+    expect(previous.querySelectorAll('dd')[1].textContent.trim()).toBe(
+      t('permissions.base.write.anywhere'),
+    );
+    const details = document.querySelector('.approval-card__details');
+    expect(details.open).toBe(false);
+    expect(JSON.parse(details.querySelector('pre').textContent)).toEqual({
+      argv,
+      stdin,
+    });
+  });
+
+  it('shows the definition being removed when a profile is deleted', () => {
+    const review = mountProfile(
+      { action: 'delete', name: 'analyst', rules: null, base: rules },
+      ['permission-profiles', 'delete', 'analyst'],
+    );
+    expect(review.textContent).toContain('Delete permission profile “analyst”');
+    expect(review.textContent).toContain(rules.allow[0]);
+  });
+
+  it('keeps additional access flags visible when assigning a profile', () => {
+    const argv =
+      'agent update beta --permission-profile analyst --tool-access-mode all'.split(
+        ' ',
+      );
+    const review = mountProfile(
+      { action: 'assign', name: 'analyst', target: 'beta', rules },
+      argv,
+    );
+    expect(review.textContent).toContain(
+      'Assign permission profile “analyst” to beta',
+    );
+    expect(review.textContent).toContain(rules.allow[0]);
+    expect(review.textContent).toContain(['vbot', ...argv].join(' '));
+  });
+
+  it.each(['inherit', 'inline'])(
+    'names unrestricted access when %s resolves to Full access',
+    (action) => {
+      const review = mountProfile({ action, target: 'beta', rules: null }, []);
+      expect(review.textContent).toContain('beta');
+      expect(review.textContent).toContain(t('permissions.preset.full_access'));
+    },
+  );
+
   it('remembers the suggested, the exact or the edited rules', async () => {
     resolve.mockResolvedValue({ resolved: true });
     const request = approval();

@@ -1093,10 +1093,14 @@ _AGENT_OPERATOR_FIELDS = dict.fromkeys(
 _INLINE_RULE_GUARD = {
     "require_no_permission_profile": "Inline rule editors can require an unbound Agent.",
 }
+_REVIEWED_RULES = {
+    "expected_profile_rules": "Reviewed permission changes require the approved effective rules.",
+}
 RPC_ONLY_FIELDS: dict[str, dict[str, str]] = {
-    "agent.create": _AGENT_OPERATOR_FIELDS,
-    "agent.update": {**_AGENT_OPERATOR_FIELDS, **_INLINE_RULE_GUARD},
-    "project.set_override": _INLINE_RULE_GUARD,
+    "agent.create": {**_AGENT_OPERATOR_FIELDS, **_REVIEWED_RULES},
+    "agent.update": {**_AGENT_OPERATOR_FIELDS, **_INLINE_RULE_GUARD, **_REVIEWED_RULES},
+    "project.set_override": {**_INLINE_RULE_GUARD, **_REVIEWED_RULES},
+    "project.clear_override": _REVIEWED_RULES,
     "chat.send": dict(_CHAT_RPC_ONLY_FIELDS),
     "chat.stream": dict(_CHAT_RPC_ONLY_FIELDS),
     "session.create": {

@@ -53,8 +53,15 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
     projects = ProjectStore(data_dir)
     checker = ModelConfigurationChecker(_NoModels(), _NoModels(), _NoCredentials())
     temporary = TemporaryAgentRegistry(sessions)
+    storage = StorageManager(data_dir)
     resolver = AgentResolver(
-        agents, projects, checker, lambda: defaults, sessions=sessions, temporary_agents=temporary
+        agents,
+        projects,
+        checker,
+        lambda: defaults,
+        sessions=sessions,
+        temporary_agents=temporary,
+        permission_profiles=lambda: storage.load_settings().get("permission_profiles", {}),
     )
     events: list[tuple[str, JsonObject]] = []
     return SimpleNamespace(
@@ -64,7 +71,7 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
             temporary_agents=temporary,
             chat_sessions=sessions,
             projects=projects,
-            storage=StorageManager(data_dir),
+            storage=storage,
         ),
         # What the RPCs published, as (event, payload).
         events=events,
@@ -636,3 +643,43 @@ async def test_operator_manages_shared_permission_profiles(tmp_path: Path) -> No
     # The first Agent RPC also observes the fixture-created Agent for setup.
     catalog_events = [payload["kind"] for _, payload in state.events if payload["kind"] != "setup"]
     assert catalog_events == ["settings", "agents", "projects"] * 2
+
+
+@pytest.mark.asyncio
+async def test_reviewed_agent_change_requires_the_same_effective_rules(tmp_path: Path) -> None:
+    defaults: JsonObject = {"permission_rules": {"write": "scratch"}}
+    state = _state(tmp_path, defaults)
+    state.agent_delete_lock = asyncio.Lock()
+    state.runtime.models = _NoModels()
+    selection = {"permission_profile": "Shared"}
+    state.runtime.agents.create("coder")
+    with bound_principal(HOST):
+        catalog = await rpc_result(
+            state, "permissions.save_profile", name="Shared", permission_rules={"write": "scratch"}
+        )
+        reviewed = next(row["rules"] for row in catalog["profiles"] if row["name"] == "Shared")
+        await rpc_result(
+            state, "permissions.save_profile", name="Shared", permission_rules=_FULL_ACCESS
+        )
+
+        for method, agent_id in (("agent.create", "new"), ("agent.update", "coder")):
+            refused = await rpc_error(
+                state, method, id=agent_id, expected_profile_rules=reviewed, **selection
+            )
+            assert refused["code"] == "settings_conflict"
+        assert not state.runtime.agents.exists("new")
+        assert state.runtime.agents.get_raw("coder").permission_profile is None
+
+        created = await rpc_result(
+            state, "agent.create", id="new", expected_profile_rules=_FULL_ACCESS, **selection
+        )
+        inherited = created["permission_rules_default"]
+        defaults["permission_rules"] = {"read": "work_area"}
+        clear = {"id": "new", "permission_rules": None, "permission_profile": None}
+        refused = await rpc_error(state, "agent.update", **clear, expected_profile_rules=inherited)
+        assert refused["code"] == "settings_conflict"
+        assert state.runtime.agents.get_raw("new").permission_profile == "Shared"
+        cleared = await rpc_result(
+            state, "agent.update", **clear, expected_profile_rules={"read": "work_area"}
+        )
+        assert cleared["config"]["permission_profile"] is None

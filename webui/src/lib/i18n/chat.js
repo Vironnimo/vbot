@@ -59,6 +59,13 @@ export default Object.freeze({
   'approvals.need.agentAccess': 'Change Agent access',
   'approvals.need.review':
     'Run this command, although Shell review could not confirm that your request covers it',
+  'approvals.profile.create': 'Create permission profile “{name}”',
+  'approvals.profile.update': 'Update permission profile “{name}”',
+  'approvals.profile.delete': 'Delete permission profile “{name}”',
+  'approvals.profile.assign': 'Assign permission profile “{name}” to {target}',
+  'approvals.profile.inherit': 'Use inherited permissions for {target}',
+  'approvals.profile.inline': 'Change local permission rules for {target}',
+  'approvals.profile.previous': 'Previous rules',
   'approvals.details': 'Details',
   'approvals.tool': 'Tool',
   'approvals.computer': 'Computer',

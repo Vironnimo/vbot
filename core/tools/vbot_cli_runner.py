@@ -25,20 +25,48 @@ from core.utils.workers import finish_despite_cancel
 
 REVIEW_ENV = "VBOT_CLI_REVIEW_AGENT_ACCESS"
 REVIEW_EXIT = 79
+REVIEWED_PROFILE_ENV = "VBOT_CLI_REVIEWED_PROFILE"
 
 
 class VBotAccessReviewRequiredError(Exception):
     """The bound CLI stopped before dispatch and described its actual operands."""
 
-    def __init__(self, rights: bool = True, reads: Sequence[tuple[str, bool]] = ()) -> None:
+    def __init__(
+        self,
+        rights: bool = True,
+        reads: Sequence[tuple[str, bool]] = (),
+        *,
+        profile: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
-        self.rights = rights
+        self.rights = rights or profile is not None
         self.reads = tuple((path, subtree) for path, subtree in reads)
+        self.profile = profile
 
 
 async def _capture(reader: asyncio.StreamReader, output: OutputCapture) -> None:
     while chunk := await reader.read(65536):
         output.append(chunk)
+
+
+async def _capture_stdout(
+    reader: asyncio.StreamReader, output: OutputCapture, marker: str | None
+) -> bytes | None:
+    # Only the bound CLI's marked preflight reply is control data. Keep the normal
+    # output limit for commands while transferring even a large reviewed profile in full.
+    if marker is not None:
+        try:
+            prefix = await reader.readexactly(len(marker))
+        except asyncio.IncompleteReadError as error:
+            output.append(error.partial)
+            return None
+        output.append(prefix)
+        if prefix == marker.encode("ascii"):
+            packet = await reader.read()
+            output.append(packet)
+            return packet
+    await _capture(reader, output)
+    return None
 
 
 async def run_vbot_cli(
@@ -50,6 +78,7 @@ async def run_vbot_cli(
     run: RunIdentity,
     host: str = DEFAULT_HOST,
     check_agent_access: bool = False,
+    reviewed_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if port is None:
         raise ValueError("The vBot CLI Tool needs a running server.")
@@ -61,6 +90,11 @@ async def run_vbot_cli(
     )
     env.pop("VBOT_SERVER_URL", None)
     env.pop(REVIEW_ENV, None)
+    env.pop(REVIEWED_PROFILE_ENV, None)
+    if reviewed_profile is not None:
+        # A frame on stdin also works for profiles larger than Windows' environment limit.
+        env[REVIEWED_PROFILE_ENV] = "1"
+        stdin = json.dumps(reviewed_profile, separators=(",", ":")) + "\n" + (stdin or "")
     review_marker = secrets.token_hex(24) if check_agent_access else None
     if review_marker is not None:
         env[REVIEW_ENV] = review_marker
@@ -99,7 +133,9 @@ async def run_vbot_cli(
 
         try:
             async with asyncio.timeout(120), asyncio.TaskGroup() as group:
-                group.create_task(_capture(process.stdout, stdout))
+                review_packet = group.create_task(
+                    _capture_stdout(process.stdout, stdout, review_marker)
+                )
                 group.create_task(_capture(process.stderr, stderr))
                 group.create_task(send_input())
                 result = await wait_for_exit(process)
@@ -115,13 +151,12 @@ async def run_vbot_cli(
                     await finish_despite_cancel(kill_process_tree_async(process))
                 await finish_despite_cancel(wait_for_exit(process))
     error_output = stderr.text()
-    if review_marker and result == REVIEW_EXIT:
-        lines = stdout.text().splitlines()
-        if lines and lines[0] == review_marker:
-            if len(lines) != 2 or stdout.truncated:
-                raise ValueError("The vbot command has too many input paths. Use fewer per call.")
-            review = json.loads(lines[1])
-            raise VBotAccessReviewRequiredError(review["rights"], review["reads"])
+    if result == REVIEW_EXIT and (packet := review_packet.result()) is not None:
+        review = json.loads(packet)
+        profile = review.get("profile")
+        if stdout.truncated and profile is None:
+            raise ValueError("The vbot command has too many input paths. Use fewer per call.")
+        raise VBotAccessReviewRequiredError(review["rights"], review["reads"], profile=profile)
     if timeout:
         error_output += "\nCommand timed out. Inspect the result before repeating a change."
     return {

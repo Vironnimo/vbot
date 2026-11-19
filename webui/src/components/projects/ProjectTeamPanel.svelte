@@ -25,7 +25,7 @@
   import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
-  import { permissionProfileLabel } from '$lib/permissionProfiles.js';
+  import { permissionProfileLabel } from '$lib/permissionRules.js';
   import PermissionProfilePicker from '../permissions/PermissionProfilePicker.svelte';
   import ProjectSourceList from './ProjectSourceList.svelte';
   import ProjectModelMappings from './ProjectModelMappings.svelte';

@@ -21,6 +21,7 @@ from core.permissions._rules import (
     WriteBase,
     normalize_permission_rules,
     permission_rules_to_dict,
+    resolve_rule_set,
     write_within_read,
 )
 
@@ -63,6 +64,13 @@ def normalize_permission_profile_name(value: object) -> str:
             "without surrounding whitespace."
         )
     return value
+
+
+def complete_effective_permission_rules(value: object) -> PermissionRules | None:
+    """Fill omitted effective parts with their runtime defaults; None is Full Access."""
+    if value is None:
+        return None
+    return resolve_rule_set(normalize_permission_rules(value), PERMISSION_PRESETS["full_access"])
 
 
 def custom_permission_profile_name(value: object) -> str:

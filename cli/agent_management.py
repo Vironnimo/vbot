@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
+from cli._profile_review import profile_change_refusal, profile_write_condition
 from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
     sessions_text,
     unfinished_permanent_delete,
 )
-from cli.device_management import run_refusal
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import inline_text, record_fields
@@ -116,10 +116,7 @@ def _with_permission_rules(
     An edit that keeps the current rules of an existing agent reads them first.
     """
     edit = changes.get("permission_rules")
-    profile_refusal = run_refusal(
-        "Changing an Agent's permission profile",
-        "the user can select a profile in their terminal or the WebUI",
-    )
+    profile_refusal = profile_change_refusal("Changing an Agent's permission profile")
     if profile_refusal and (
         changes.get("permission_profile") is not None
         or ("permission_profile" in changes and not isinstance(edit, PermissionEdit))
@@ -190,7 +187,7 @@ def agent_create(
     resolved = _with_permission_rules(instance, None, changes)
     if isinstance(resolved, CommandResult):
         return resolved
-    params = {"id": agent_id, "name": name, **resolved}
+    params = {"id": agent_id, "name": name, **resolved, **profile_write_condition()}
     payload = _rpc_call(instance, "agent.create", params)
     if not payload.ok:
         return payload.to_command_result()
@@ -231,7 +228,7 @@ def agent_update(
     resolved = _with_permission_rules(instance, agent_id, changes)
     if isinstance(resolved, CommandResult):
         return resolved
-    params = {"id": agent_id, **resolved}
+    params = {"id": agent_id, **resolved, **profile_write_condition()}
     payload = _rpc_call(instance, "agent.update", params)
     if not payload.ok:
         return payload.to_command_result()
