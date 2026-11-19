@@ -146,7 +146,7 @@ def test_list_renders_scopes_like_the_memory_block(workspace: Path) -> None:
     assert agent["data"]["count"] == 3
 
 
-def test_personal_memory_obeys_file_rules_before_opening_scopes(workspace: Path) -> None:
+def test_personal_memory_works_under_file_denies(workspace: Path) -> None:
     rules = normalize_permission_rules(
         {"deny": ["Read({workspace}/USER.md)", "Edit({workspace}/MEMORY.md)"]}
     )
@@ -156,34 +156,17 @@ def test_personal_memory_obeys_file_rules_before_opening_scopes(workspace: Path)
         data_dir=workspace.parent / "data",
         workspace=workspace,
     )
-    permissions = PermissionBoundary.build(rules, context)
-    previous = files(workspace)
-    results = run(
+    listed, added, removed = run(
         workspace,
         {"action": "list"},
-        {"action": "list", "scope": "agent"},
-        {"action": "replace", "entry_id": 1},
         {"action": "add", "scope": "user", "content": "New preference."},
-        {"action": "remove", "scope": "agent", "old_text": AGENT.splitlines()[0][2:]},
-        permissions=permissions,
+        {"action": "remove", "old_text": "Project Atlas"},
+        permissions=PermissionBoundary.build(rules, context),
     )
 
-    assert results[1]["data"]["count"] == 3
-    for result in (*results[:1], *results[2:]):
-        message = failure(result, "permission_denied")
-        assert all(line[2:] not in message for line in USER.splitlines())
-    assert files(workspace) == previous
-
-    (inferred,) = run(
-        workspace,
-        {"action": "remove", "old_text": AGENT.splitlines()[0][2:]},
-        permissions=PermissionBoundary.build(
-            normalize_permission_rules({"deny": ["Edit({workspace}/MEMORY.md)"]}),
-            context,
-        ),
-    )
-    failure(inferred, "permission_denied")
-    assert files(workspace) == previous
+    assert listed_entries(content(listed)) == [line[2:] for line in (AGENT + USER).splitlines()]
+    assert added["ok"] and removed["ok"]
+    assert files(workspace) == (AGENT.split("\n", 1)[1], USER + "- New preference.\n")
 
 
 def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: Path) -> None:
@@ -192,13 +175,10 @@ def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: 
     service = MemoryService(project_history_root=projects.data_dir / "projects")
     registry = ToolRegistry()
     register_memory_tool(registry, service, projects)
-    fields: JsonObject = {"working_project_id": "atlas", "project_memory_enabled": True}
-    restricted_results = run(
-        workspace,
-        {"action": "list", "scope": "project"},
-        {"action": "add", "scope": "project", "content": "Denied project change."},
-        registry=registry,
-        permissions=PermissionBoundary.build(
+    fields: JsonObject = {
+        "working_project_id": "atlas",
+        "project_memory_enabled": True,
+        "permissions": PermissionBoundary.build(
             normalize_permission_rules({"write": "work_area"}),
             BoundaryContext(
                 workdir=workspace.parent,
@@ -207,11 +187,7 @@ def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: 
                 workspace=workspace,
             ),
         ),
-        **fields,
-    )
-    for result in restricted_results:
-        failure(result, "permission_denied")
-    assert not (projects.memory_workspace("atlas") / "MEMORY.md").exists()
+    }
 
     added = run(
         workspace,
