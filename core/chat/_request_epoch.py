@@ -24,6 +24,7 @@ from core.chat._tool_epoch import (
 from core.chat.messages import (
     ChatMessage,
 )
+from core.skills.skills import SkillRegistry, skill_tool_grants
 from core.tools import (
     SUBAGENT_SESSION_TOOL_NAMES,
     UPDATE_GOAL_TOOL_NAME,
@@ -47,7 +48,12 @@ def _finalize_compaction_checkpoint(
 
 
 def _live_session_tool_grants(
-    session_capability: Any | None, *, agent: Any, subagent_session: bool, goal_session: bool
+    session_capability: Any | None,
+    *,
+    agent: Any,
+    skill_registry: SkillRegistry | None,
+    subagent_session: bool,
+    goal_session: bool,
 ) -> tuple[str, ...]:
     """Return the session-scoped Tools the Session grants now.
 
@@ -61,7 +67,9 @@ def _live_session_tool_grants(
         grants = (*grants, *SUBAGENT_SESSION_TOOL_NAMES)
     if goal_session:
         grants = (*grants, UPDATE_GOAL_TOOL_NAME)
-    return app_chat_tool_grants(agent, grants)
+    return app_chat_tool_grants(
+        agent, skill_tool_grants(skill_registry, agent.allowed_skills, grants)
+    )
 
 
 def _withheld_session_tools(*, subagent_tool_withheld: bool) -> tuple[str, ...]:

@@ -47,6 +47,7 @@ def run(
     argv: Sequence[str] | None = None,
     *,
     app_instance: ServerInstance | None = None,
+    check_app_command: Callable[[argparse.Namespace], None] | None = None,
     resolve: Callable[..., ServerInstance] | None = None,
     start: Callable[[ServerInstance], CommandResult] | None = None,
     stop: Callable[[ServerInstance], CommandResult] | None = None,
@@ -133,6 +134,8 @@ def run(
 
         try:
             bind_target(args, app_instance)
+            if check_app_command is not None:
+                check_app_command(args)
         except ValueError as error:
             print_management_command_result(
                 CommandResult(ok=False, message=str(error), instance=app_instance, refused=True)

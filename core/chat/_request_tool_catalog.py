@@ -90,6 +90,7 @@ class RequestToolCatalog:
             session_tool_grants=_live_session_tool_grants(
                 capability,
                 agent=context.agent,
+                skill_registry=context.skill_registry,
                 subagent_session=context.subagent_session,
                 goal_session=context.goal_session,
             ),

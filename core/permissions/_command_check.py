@@ -553,7 +553,11 @@ class CommandChecker:
                 )
             ):
                 return boundary.refusal(
-                    "command", _shown(command.source), "protected_location", location="vbot_cli"
+                    "command",
+                    _shown(command.source),
+                    "protected_location",
+                    location="vbot_cli",
+                    hint="If you have the vbot Tool, submit the command there.",
                 )
         return None
 

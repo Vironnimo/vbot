@@ -114,8 +114,10 @@ class ApprovalRequirement:
         return cls("url", target, "web", computer_id)
 
     @classmethod
-    def review(cls, target: str, *, computer_id: str = "server") -> ApprovalRequirement:
-        return cls("review", target, "review", computer_id)
+    def review(
+        cls, target: str, *, computer_id: str = "server", shown: str | None = None
+    ) -> ApprovalRequirement:
+        return cls("review", target, "review", computer_id, shown=shown)
 
     def to_dict(self) -> dict[str, Any]:
         return {
