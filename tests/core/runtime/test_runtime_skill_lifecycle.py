@@ -121,7 +121,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
             # Observe the first AgentStore call in each lifecycle path. A
             # nonblocking probe proves contention without sleeping or blocking
             # the test loop on a lock that the loop must release.
-            method_name = "list" if operation == "delete" else "rename"
+            method_name = "personal_roster" if operation == "delete" else "rename"
             original = getattr(runtime.agents, method_name)
 
             def observe_lifecycle(*args: Any, **kwargs: Any) -> Any:
