@@ -277,6 +277,8 @@ class QueuedRunItem:
     steerable: bool = False
     steering: bool = False
     steering_in_flight: bool = field(default=False, repr=False)
+    # Serializes only the final steering append and durable withdrawal for this item.
+    steering_commit: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     # Cleared while its append was in flight: it must leave the Queue, not start a Run.
     withdrawn: bool = field(default=False, repr=False)
     admission: RunAdmission = field(default_factory=RunAdmission, repr=False)

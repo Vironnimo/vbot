@@ -181,7 +181,7 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("steering_transcription", ["success", "failure", "empty"])
+@pytest.mark.parametrize("steering_transcription", ["success", "failure", "empty", "withdrawn"])
 async def test_voice_input_persists_with_its_transcription(
     tmp_path: Path, steering_transcription: str
 ) -> None:
@@ -197,6 +197,13 @@ async def test_voice_input_persists_with_its_transcription(
                 assert not runtime.chat_sessions.write_lock(
                     session_address("coder", "one")
                 ).locked()
+                if steering_transcription == "withdrawn":
+                    assert (
+                        await runtime.chat_run_manager.clear_queued_async(
+                            "coder", "one", project_id=None
+                        )
+                        == 1
+                    )
                 if steering_transcription == "failure":
                     raise SpeechError("transcription unavailable")
                 if steering_transcription == "empty":
@@ -225,12 +232,17 @@ async def test_voice_input_persists_with_its_transcription(
 
     session = runtime.chat_sessions.get(session_address("coder", "one"))
     users = [message for message in session.load() if message.role == "user"]
-    assert [message.content for message in users] == [
-        [replace(blocks[0], transcription="words of a.ogg")],
+    assert users[0].content == [replace(blocks[0], transcription="words of a.ogg")]
+    if steering_transcription == "withdrawn":
+        assert len(users) == len(adapter.requests) == 1
+        assert item.future.cancelled()
+        return
+    assert len(users) == 2
+    assert users[1].content == (
         [replace(blocks[1], transcription="words of b.ogg")]
         if steering_transcription == "success"
-        else [blocks[1]],
-    ]
+        else [blocks[1]]
+    )
     # Each voice message is transcribed once; requests reuse the persisted text.
     assert transcriber.calls == ["a.ogg", "b.ogg"]
     assert ("words of b.ogg" in str(adapter.requests[1]["messages"])) is (
