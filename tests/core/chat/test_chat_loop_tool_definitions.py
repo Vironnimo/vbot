@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
-from core.chat._tool_epoch import tool_change_from_note
+from core.chat._tool_epoch import ToolEpochPin, tool_change_from_note
 from core.extensions.operations import ExtensionOperations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
+from core.prompts.pinned_context import PINNED_TOOL_DEFINITIONS_SLOT
+from core.skills.policy import SkillPackageRef
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     SHELL_TOOL_DESCRIPTION,
@@ -32,6 +34,8 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubModels,
+    StubSkill,
+    StubSkills,
     build_chat_loop,
     history,
 )
@@ -241,6 +245,51 @@ _ORDERED_PARAMETERS = {
     "required": ["zeta"],
     "additionalProperties": False,
 }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_pin", [False, True], ids=["fresh", "previously-granted"])
+async def test_bundled_docs_never_expose_the_app_agents_private_cli_tool(
+    tmp_path: Path, old_pin: bool
+) -> None:
+    registry = ToolRegistry()
+    dispatched: list[str] = []
+    registry.register(
+        "vbot",
+        "Run the CLI.",
+        {"type": "object"},
+        _recording_handler(dispatched),
+        session_scoped=True,
+        catalog_visible=False,
+    )
+    runtime = tool_runtime(
+        tmp_path,
+        registry,
+        [tool_turn(("guessed", "vbot")), final("done")],
+        allowed_tools=["vbot"],
+    )
+    runtime.skills = StubSkills(
+        [
+            StubSkill(
+                "vbot-docs",
+                "Docs",
+                tmp_path / "SKILL.md",
+                package_ref=SkillPackageRef("bundled", "vbot-docs"),
+            )
+        ]
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    if old_pin:
+        definitions = registry.provider_definitions(session_grants=("vbot",))
+        pin = ToolEpochPin(epoch="old", definitions=tuple(definitions))
+        runtime.chat_sessions.ensure_prompt_pin(
+            session.address, PINNED_TOOL_DEFINITIONS_SLOT, pin.to_payload(), lambda _: False
+        )
+    await build_chat_loop(runtime).send("coder", "Check the server", session_id=session.id)
+
+    assert all("vbot" not in _offered(request) for request in runtime.adapter.requests)
+    assert dispatched == []
+    assert not tool_results(history(runtime))[0]["ok"]
 
 
 @pytest.mark.asyncio

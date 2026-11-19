@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from cli._input import _read_stdin_utf8, _read_text_file
-from cli._profile_review import profile_change_refusal, profile_write_condition
+from cli._profile_review import profile_write_condition
 from cli.device_management import run_refusal
 from cli.formatting import inline_text, record_fields
 from cli.rpc_client import RpcPayload, rpc_call
@@ -31,9 +31,6 @@ def dispatch_permission_profiles(
             refused=True,
         )
     if command in {"save", "delete"}:
-        refusal = profile_change_refusal(f"permission-profiles {command}")
-        if refusal:
-            return _failure(instance, args.json, "operator_required", refusal, refused=True)
         method = f"permissions.{command}_profile"
         params["name"] = args.name
         params.update(profile_write_condition())
@@ -106,9 +103,13 @@ def dispatch_permission_profiles(
 
 
 def profile_input(args: argparse.Namespace) -> dict[str, Any]:
+    if isinstance(reviewed := getattr(args, "_profile_input", None), dict):
+        return reviewed
     rules = json.loads(_read_stdin_utf8() if args.stdin else _read_text_file(args.file))
     if not isinstance(rules, dict):
         raise ValueError("expected a JSON object of Permission Rules")
+    # An approval can wait while the input file changes. Write the reviewed rules.
+    args._profile_input = rules
     return rules
 
 

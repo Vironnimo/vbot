@@ -1,4 +1,4 @@
-"""Operate the serving vBot instance through its CLI."""
+"""The built-in App Agent's private Tool for the serving instance's CLI."""
 
 from __future__ import annotations
 
@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.agents.app_chats import app_chat_profile
-from core.agents.temporary import TemporaryAgent
 from core.permissions import ApprovalRequirement
-from core.skills.skills import SkillRegistry, grants_vbot_tool
 from core.tools._permission_preflight import authorize_paths
 from core.tools._tool_workers import run_tool_worker
 from core.tools.availability import TOOL_ACTIVATION_SESSION_GRANT, resolve_tool_access
@@ -44,25 +42,16 @@ def register_vbot_tool(
     registry: ToolRegistry,
     *,
     resolve_agent: Callable[[ToolContext], Awaitable[RuntimeAgent]],
-    resolve_skills: Callable[[str | None, str | None], SkillRegistry],
     data_dir: Path,
     server_bind: Callable[[], tuple[str, int | None]],
     update_handoffs: UpdateHandoffs,
 ) -> None:
-    def skill_granted(context: ToolContext, agent: RuntimeAgent) -> bool:
-        identity = (
-            context.skill_subject_id
-            if context.project_id is None and not isinstance(agent, TemporaryAgent)
-            else None
-        )
-        skills = resolve_skills(context.skill_project_id, identity)
-        if context.skill_ceiling is not None:
-            skills = skills.restricted_to(context.skill_ceiling)
-        return grants_vbot_tool(skills, agent.allowed_skills)
-
     async def check_authority(context: ToolContext) -> None:
         await context.revalidate_permissions(force_refresh=True)
         agent = await resolve_agent(context)
+        profile = app_chat_profile(agent)
+        if profile is None or "vbot" not in profile.tools:
+            raise ToolNotAllowedError("The vbot Tool is available only to the App Agent.")
         access = resolve_tool_access(
             agent.tool_access,
             registry.list_tools(["vbot"]),
@@ -71,10 +60,6 @@ def register_vbot_tool(
         )
         if "vbot" not in access.session_tool_grants:
             raise ToolNotAllowedError("The vbot Tool is unavailable to this Agent.")
-        if app_chat_profile(agent) is not None and not context.permissions.restricted:
-            return
-        if not await run_tool_worker(skill_granted, context, agent):
-            raise ToolNotAllowedError("This Agent needs access to the bundled vbot-docs Skill.")
 
     async def vbot(context: ToolContext, arguments: JsonObject) -> JsonObject:
         await check_authority(context)

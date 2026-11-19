@@ -96,28 +96,38 @@ describe('ChatApprovalCard', () => {
     expect(button(t('approvals.reject')).disabled).toBe(true);
   });
 
-  it('shows the access change and target Agent before the user decides', () => {
-    const command = 'vbot agent update other --permissions full-access';
-    component = mount(ChatApprovalCard, {
-      target: document.body,
-      props: {
-        request: approval({
-          tool_name: 'vbot',
-          requirements: [{ kind: 'review', access: 'review', shown: command }],
-          session_grant: null,
-        }),
-      },
-    });
-    flushSync();
-    expect(document.querySelector('.approval-card__target').textContent).toBe(
-      command,
-    );
-    expect(document.body.textContent).toContain(
-      t('approvals.need.agentAccess'),
-    );
-    expect(button(t('approvals.allowOnce'))).toBeDefined();
-    expect(button(t('approvals.allowSession'))).toBeUndefined();
-  });
+  it.each([
+    ['vbot', 'vbot agent update other --permissions full-access'],
+    [
+      'bash',
+      'vbot config set defaults.agent.permission_rules --stdin\n{"read":"anywhere"}',
+    ],
+  ])(
+    'shows the reviewed %s CLI invocation before the user decides',
+    (tool, command) => {
+      component = mount(ChatApprovalCard, {
+        target: document.body,
+        props: {
+          request: approval({
+            tool_name: tool,
+            requirements: [
+              { kind: 'review', access: 'review', shown: command },
+            ],
+            session_grant: null,
+          }),
+        },
+      });
+      flushSync();
+      expect(document.querySelector('.approval-card__target').textContent).toBe(
+        command,
+      );
+      expect(document.body.textContent).toContain(
+        t('approvals.need.agentAccess'),
+      );
+      expect(button(t('approvals.allowOnce'))).toBeDefined();
+      expect(button(t('approvals.allowSession'))).toBeUndefined();
+    },
+  );
 
   function mountProfile(profile, argv, stdin) {
     component = mount(ChatApprovalCard, {

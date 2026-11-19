@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from cli._server_target import resolve_instance
+from cli import main as cli_main
+from cli._server_target import CommandResult, resolve_instance
 from cli.app_agent import bind_target, changes_agent_access, main
 from cli.parser import parse_args
 from core.tools.shell_environment import RunIdentity
@@ -80,10 +81,14 @@ def test_app_agent_binds_only_instance_selectors(tmp_path: Path) -> None:
         (["agent", "update", "other", "--name", "permission_rules"], False),
         (["config", "get", "defaults.agent.permission_rules"], False),
         (["project", "clear-override", "proj", "member", "temperature"], False),
+        (["archive", "show", "arc_test"], False),
     ],
 )
-def test_agent_access_review_follows_the_parsed_operation(argv: list[str], review: bool) -> None:
-    assert changes_agent_access(parse_args(argv)) is review
+def test_agent_access_review_follows_the_parsed_operation(
+    argv: list[str], review: bool, tmp_path: Path
+) -> None:
+    target = resolve_instance(host="127.0.0.1", port=22000, data_dir=tmp_path)
+    assert changes_agent_access(parse_args(argv), target) is review
 
 
 def test_app_agent_requires_profile_contents_in_approval(
@@ -328,3 +333,206 @@ async def test_app_agent_runs_own_cli_with_run_identity(tmp_path: Path) -> None:
             check_agent_access=True,
         )
     assert not pending.value.rights and pending.value.reads == ((str(source), True),)
+
+
+@pytest.fixture
+def restricted_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # The entrypoint normally runs in its own process.
+    for name in (
+        "VBOT_DATA_DIR",
+        "VBOT_SERVER_PORT",
+        "VBOT_SERVER_URL",
+        "VBOT_RUN_AGENT_ID",
+        "VBOT_RUN_SESSION_ID",
+        "VBOT_RUN_PROJECT_ID",
+        "VBOT_UPDATE_HANDOFF",
+    ):
+        monkeypatch.setenv(name, "")
+    scope = {
+        "agent_id": "coder",
+        "session_id": "shell",
+        "token": "call",
+        "data_dir": str(tmp_path),
+        "host": "127.0.0.1",
+        "port": 22000,
+    }
+
+    def invoke(*argv: str) -> int:
+        monkeypatch.setenv("VBOT_SHELL_CLI", json.dumps(scope))
+        with pytest.raises(SystemExit) as done:
+            cli_main.main(argv)
+        assert isinstance(done.value.code, int)
+        return done.value.code
+
+    return invoke
+
+
+@pytest.mark.parametrize("source", ["--stdin", "--file"])
+def test_shell_cli_reviews_and_writes_the_same_profile_input(
+    restricted_cli, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rpc: FakeRpc, source: str
+) -> None:
+    rules = {"deny": ["Read(~/Verträge/**)"]}
+    body = json.dumps(rules)
+    path = tmp_path / "permissions file.json"
+    path.write_text(body, encoding="utf-16")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(body))
+    files = {str(path): str(path.resolve())} if source == "--file" else {}
+    rpc.reply("permissions.review_cli", {"files": files})
+    rpc.reply("permissions.review_cli", {"files": {}})
+    rpc.reply("permissions.profiles", {"profiles": []})
+    if source == "--file":
+        # The file changes while the user reviews the first version.
+        import cli._shell_cli as shell_cli
+
+        call = shell_cli.rpc_call
+
+        def decide(instance, method, params):
+            if params["rights"]:
+                path.write_text("{}", encoding="utf-8")
+            return call(instance, method, params)
+
+        monkeypatch.setattr(shell_cli, "rpc_call", decide)
+    rpc.reply(
+        "permissions.save_profile",
+        {"profiles": [{"name": "test", "rules": rules, "builtin": False}]},
+    )
+    argv = ["permission-profiles", "save", "test", source, *([path.name] if files else [])]
+    assert restricted_cli(*argv) == 0
+    assert rpc.methods == [
+        "permissions.review_cli",
+        "permissions.profiles",
+        "permissions.review_cli",
+        "permissions.save_profile",
+    ]
+    assert rpc.calls[0][1]["reads"] == ([(str(path), False)] if files else [])
+    preview = rpc.calls[2][1]
+    assert preview["argv"] == argv and preview["rights"] is True
+    assert preview["profile"]["rules"]["deny"] == rules["deny"]
+    assert rpc.params("permissions.save_profile") == {
+        "name": "test",
+        "base": None,
+        "permission_rules": rules,
+    }
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_shell_cli_reviews_the_actual_stdin_before_a_shared_permissions_change(
+    restricted_cli, monkeypatch: pytest.MonkeyPatch, rpc: FakeRpc, approved: bool
+) -> None:
+    path = "defaults.agent.permission_rules"
+    rules = {"read": "work_area"}
+    stdin = json.dumps(rules)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("permissions.review_cli", {"files": {}})
+    if approved:
+        rpc.reply("permissions.review_cli", {"files": {}})
+        rpc.reply("settings.patch", {"changes": [], "changed": []})
+    else:
+        rpc.fail("permissions.review_cli", "permission_denied", "The change was declined.")
+    code = restricted_cli("config", "set", path, "--stdin")
+    assert (code == 0) == approved
+    assert rpc.calls[1][1]["stdin"] == stdin and rpc.calls[1][1]["rights"] is True
+    if approved:
+        assert rpc.params("settings.patch") == {
+            "operations": [{"op": "set", "path": path, "value": rules}]
+        }
+    else:
+        assert "settings.patch" not in rpc.methods
+
+
+def test_shell_cli_refuses_an_expired_call_before_an_ordinary_command(
+    restricted_cli, rpc: FakeRpc
+) -> None:
+    rpc.fail("permissions.review_cli", "permission_denied", "This shell command has ended.")
+    assert restricted_cli("agent", "list") != 0
+    assert rpc.methods == ["permissions.review_cli"]
+
+
+@pytest.mark.parametrize(
+    ("kind", "session_access", "review"),
+    [
+        ("agent", False, True),
+        ("project", False, True),
+        ("session", True, True),
+        ("session", None, True),
+        ("session", False, False),
+        ("owner_group", False, False),
+        ("files", False, False),
+    ],
+)
+def test_restricted_archive_restore_checks_the_stored_entry_before_mutation(
+    restricted_cli, rpc: FakeRpc, kind: str, session_access: bool | None, review: bool
+) -> None:
+    rpc.reply("permissions.review_cli", {"files": {}})
+    rpc.reply(
+        "archive.show",
+        {
+            "entry": {"kind": kind},
+            **({"restores_access": session_access} if session_access is not None else {}),
+        },
+    )
+    if review:
+        rpc.fail("permissions.review_cli", "permission_denied", "The change was declined.")
+    else:
+        rpc.fail("archive.restore", "archive_restore_conflict", "The entry cannot be restored.")
+    assert restricted_cli("archive", "restore", "arc_test", "--as", "other") != 0
+    assert rpc.params("archive.show") == {"entry_id": "arc_test", "session_limit": 1}
+    assert rpc.methods == [
+        "permissions.review_cli",
+        "archive.show",
+        "permissions.review_cli" if review else "archive.restore",
+    ]
+    if review:
+        assert rpc.calls[-1][1]["rights"] is True
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_shell_cli_reviews_remote_skill_source_before_install(
+    restricted_cli, rpc: FakeRpc, approved: bool
+) -> None:
+    url = "https://github.com/example/skill"
+    rpc.reply("permissions.review_cli", {"files": {}})
+    if approved:
+        rpc.reply("skill.install_cli", {"operation": "installed", "name": "example"})
+    else:
+        rpc.fail("skill.install_cli", "permission_denied", "Access to this URL was declined.")
+    assert (restricted_cli("skill", "install", url, "--scope", "own") == 0) is approved
+    assert rpc.methods == ["permissions.review_cli", "skill.install_cli"]
+    params = rpc.params("skill.install_cli")
+    assert (params["token"], params["source"], params["scope"]) == ("call", url, "agent:coder")
+
+
+@pytest.mark.parametrize(
+    ("argv", "review"),
+    [
+        (["snapshot", "verify", "copy"], False),
+        (["snapshot", "restore", "copy", "--documents"], False),
+        (["snapshot", "restore", "copy", "--yes"], True),
+        (["snapshot", "restore", "copy", "--all", "--yes"], True),
+        (["snapshot", "restore", "copy", "--documents", "--yes"], True),
+        (["snapshot", "restore", "copy", "--database", "sessions", "--yes"], True),
+        (["snapshot", "restore", "copy", "--database", "model_usage", "--yes"], False),
+        (["config-backup", "show", "copy"], False),
+        (["config-backup", "restore", "copy", "--all", "--yes"], True),
+        (["config-backup", "restore", "copy", "--file", "settings.json", "--yes"], True),
+        (["config-backup", "restore", "copy", "--file", r"agents\me\agent.json", "--yes"], True),
+        (["config-backup", "restore", "copy", "--file", "projects/x/project.json", "--yes"], True),
+        (["config-backup", "restore", "copy", "--file", "calendar/events.json", "--yes"], False),
+    ],
+)
+def test_restricted_data_restore_reviews_rights_before_maintenance(
+    restricted_cli, rpc: FakeRpc, monkeypatch: pytest.MonkeyPatch, argv: list[str], review: bool
+) -> None:
+    dispatched = []
+
+    def fake_maintenance(args, instance):
+        dispatched.append(args.command)
+        return CommandResult(ok=True, message="maintenance completed", instance=instance)
+
+    monkeypatch.setattr("cli._dispatch_agents.dispatch_data_store_command", fake_maintenance)
+    rpc.reply("permissions.review_cli", {"files": {}})
+    rpc.fail("permissions.review_cli", "permission_denied", "The restore was declined.")
+    assert (restricted_cli("data-store", *argv) != 0) is review
+    assert dispatched == ([] if review else [argv[0]])
+    assert [params["rights"] for _, params in rpc.calls] == ([False, True] if review else [False])

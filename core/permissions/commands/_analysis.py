@@ -542,6 +542,17 @@ class Analysis:
     ) -> None:
         """A program (not a PowerShell cmdlet) and its arguments, its name canonical."""
         lowered = name.lower()
+        # The instance CLI checks its parsed file operands and access changes itself.
+        # Preserve the difference between its bare name and a normalized executable
+        # basename (or a command inside another interpreter that changes its environment).
+        if lowered == "vbot" and context.depth == 0 and context.shell in ("bash", "powershell"):
+            spelling = raw.words[0].source
+            source = raw.source.lstrip()
+            if context.shell == "powershell":
+                spelling, source = spelling.casefold(), source.casefold()
+            if spelling == "vbot" and re.match(r"vbot(?=$|[\s;&|<>])", source):
+                self.emit(context, name, arguments, raw, instance_cli=True)
+                return
         wrapper = TRANSPARENT_WRAPPERS.get(lowered)
         if wrapper is not None:
             saved = context.locations(raw.scope)
@@ -1290,12 +1301,21 @@ class Analysis:
 
     # Output -----------------------------------------------------------------
 
-    def emit(self, context: Context, name: str, arguments: Sequence[Word], raw: RawCommand) -> None:
+    def emit(
+        self,
+        context: Context,
+        name: str,
+        arguments: Sequence[Word],
+        raw: RawCommand,
+        *,
+        instance_cli: bool = False,
+    ) -> None:
         location = self.first(context, raw)
         words = []
         for word in arguments:
             value = self.value(context, word, location)
-            self.collect_urls(value)
+            if not instance_cli:
+                self.collect_urls(value)
             words.append(
                 CommandWord(value.text if value.text is not None else word.source, value.static)
             )
@@ -1305,6 +1325,7 @@ class Analysis:
                 tuple(words),
                 raw.source[:SOURCE_LIMIT] or name,
                 context.shell,
+                instance_cli,
             )
         )
 

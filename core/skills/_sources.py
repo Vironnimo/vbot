@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import stat
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
@@ -22,6 +24,10 @@ from core.skills._packages import (
     unwrap_archive,
 )
 from core.utils.tls import shared_ssl_context
+
+_download_review: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "skill_download_review", default=None
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,11 @@ def _download(url: str, *, limit: int = MAX_DOWNLOAD_BYTES) -> bytes:
             verify=shared_ssl_context(),
         ) as client:
             for _ in range(6):
+                if review := _download_review.get():
+                    waiting = time.monotonic()
+                    review(str(current))
+                    # Human approval time is independent of the transfer deadline.
+                    started += time.monotonic() - waiting
                 with client.stream(
                     "GET", current, headers={"User-Agent": "vBot-Skill-Installer"}
                 ) as response:
@@ -104,11 +115,10 @@ def _download(url: str, *, limit: int = MAX_DOWNLOAD_BYTES) -> bytes:
 
 
 def _json(url: str) -> dict:
+    data = _download(url, limit=1024 * 1024)
     try:
-        value = json.loads(_download(url, limit=1024 * 1024))
+        value = json.loads(data)
     except (ValueError, UnicodeDecodeError) as error:
-        if isinstance(error, PackageError):
-            raise
         raise PackageError("Skill source returned invalid metadata.") from error
     if not isinstance(value, dict):
         raise PackageError("Skill source returned invalid metadata.")
@@ -193,6 +203,15 @@ def _clawhub(owner: str, slug: str, version: str | None) -> SkillSource:
         f"https://clawhub.ai/{owner}/skills/{slug}?{urlencode({'version': version})}",
         slug,
     )
+
+
+def load_reviewed_source(
+    source: str, *, ref: str | None, review_url: Callable[[str], None]
+) -> SkillSource:
+    """Resolve a remote source, checking the supplied link and each outbound request."""
+    review_url(str(_url(source)))
+    with _download_review.set(review_url):
+        return load_source(source, ref=ref)
 
 
 def load_source(source: str, *, ref: str | None = None) -> SkillSource:

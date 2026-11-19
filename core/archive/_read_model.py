@@ -9,7 +9,7 @@ from core.archive import _restore, _retention
 from core.archive._operations import stored_path
 from core.archive._types import ArchiveEntryDetail, ArchiveListing, ArchivePage
 from core.archive.errors import ArchiveRetentionUnknownError
-from core.projects import PROJECT_FORMAT_VERSION
+from core.projects import PROJECT_FORMAT_VERSION, AgentOverrides
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_OWNER_GROUP,
@@ -96,7 +96,27 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
         restore=_restore.check(services, entry_id, None),
         user_folders=tuple(tree for tree in entry.trees if tree.path in named),
         external_workspace=external_workspace,
+        restores_access=_restores_session_access(services, entry),
     )
+
+
+def _restores_session_access(services: ArchiveServices, entry: ArchiveEntry) -> bool | None:
+    if entry.kind != ARCHIVE_KIND_SESSION or entry.state != ARCHIVE_STATE_ARCHIVED:
+        return None
+    for stored in services.sessions.archive_ledger.member_agent_overrides(entry.entry_key):
+        try:
+            overrides = AgentOverrides.from_stored(stored)
+        except ValueError, TypeError:
+            # An older or invalid record cannot establish a restore without access changes.
+            return None
+        if (
+            overrides.permission_rules
+            or overrides.permission_grants
+            or overrides.permission_ceiling is not None
+            or any(overrides.read_folders.values())
+        ):
+            return True
+    return False
 
 
 def listing(

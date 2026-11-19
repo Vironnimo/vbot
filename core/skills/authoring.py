@@ -74,6 +74,7 @@ from core.skills._installation import SkillInstallResult, install_package
 from core.skills._packages import PackageError
 from core.skills._restore_journal import require_idle
 from core.skills._revert_journal import require_revert_idle
+from core.skills._sources import SkillSource
 from core.skills.requirements import RequirementParseError, parse_vbot_requirements
 from core.skills.skill_validator import (
     ValidationResult,
@@ -169,7 +170,7 @@ class SkillAuthoringService:
     def install(
         self,
         target_root: Path,
-        source: str,
+        source: str | SkillSource,
         *,
         writer: SkillWriter = HUMAN_WRITER,
         path: str | None = None,

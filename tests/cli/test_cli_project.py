@@ -422,7 +422,7 @@ def test_a_permission_override_says_how_its_rules_were_saved_and_what_applies(
     assert code == 0
     lines = out.splitlines()
     assert lines[0].startswith("set builder.permission_rules override on")
-    assert rpc.params("project.set_override")["require_no_permission_profile"] is True
+    assert "require_no_permission_profile" not in rpc.params("project.set_override")
     assert lines[1] == "Note: Shell() was saved as Shell(*)."
     assert lines[2].startswith("Note: write anywhere applies as work_area, because the inherited")
 

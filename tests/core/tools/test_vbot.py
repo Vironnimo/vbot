@@ -1,4 +1,4 @@
-"""Skill and profile access to the local CLI, approvals and Run handoffs."""
+"""The App Agent's private CLI Tool, approvals and Run handoffs."""
 
 import asyncio
 import json
@@ -12,8 +12,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.agents.app_chats import APP_CHAT_PROFILES
-from core.skills.policy import SkillPackageRef
-from core.skills.skills import SkillMetadata, SkillRegistry
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
 from core.tools.shell_environment import RunIdentity
@@ -31,7 +29,7 @@ from tests.core.tools.tools_test_support import dispatch_as_executor, make_conte
 
 
 @pytest.mark.asyncio
-async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_calls(
+async def test_vbot_requires_the_app_profile_and_session_grant_and_rechecks_reviewed_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = ToolRegistry()
@@ -40,16 +38,13 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
     monkeypatch.setattr("core.tools.vbot.run_vbot_cli", cli)
     handoffs = UpdateHandoffs(tmp_path)
     acknowledgements: list[Callable[[], None]] = []
-    docs = SkillMetadata(
-        "vbot-docs", "Docs", tmp_path, package_ref=SkillPackageRef("bundled", "vbot-docs")
-    )
-    skills = SkillRegistry({})
+    access = ToolAccess()
 
     async def agent(context: ToolContext) -> Any:
         # A Project may contain an unrelated Agent with the same name.
         return SimpleNamespace(
             builtin=None if context.project_id else profile.builtin,
-            tool_access=ToolAccess(),
+            tool_access=access,
             memory_prompt_mode="agent_user",
             allowed_skills=["vbot-docs"],
             workspace="",
@@ -58,7 +53,6 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
     register_vbot_tool(
         registry,
         resolve_agent=agent,
-        resolve_skills=lambda *_: skills,
         data_dir=tmp_path,
         server_bind=lambda: ("::1", 12345),
         update_handoffs=handoffs,
@@ -70,7 +64,11 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
         ({}, "vbot_unavailable"),
         ({"session_tool_grants": ("vbot",), "project_id": "other"}, "tool_not_allowed"),
         (
-            {"session_tool_grants": ("vbot",), "permissions": restricted(tmp_path)},
+            {
+                "session_tool_grants": ("vbot",),
+                "permissions": restricted(tmp_path),
+                "project_id": "other",
+            },
             "tool_not_allowed",
         ),
     ):
@@ -110,11 +108,8 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
     assert not rejected["ok"]
     assert rejected["error"]["message"] == "vbot exited with code 2.\nunknown subcommand"
 
-    skills = SkillRegistry({docs.name: docs})
     approval = AsyncMock(return_value=False)
-    limited = replace(
-        context, project_id="team", permissions=restricted(tmp_path), approval_hook=approval
-    )
+    limited = replace(context, permissions=restricted(tmp_path), approval_hook=approval)
     cli.return_value = {"exit_code": 0, "stdout": "ok", "stderr": ""}
     assert (await dispatch_as_executor(registry, limited, {"argv": ["agent", "list"]}))["ok"]
     assert cli.await_args is not None and cli.await_args.kwargs["check_agent_access"]
@@ -173,8 +168,8 @@ async def test_vbot_requires_the_profile_or_skill_grant_and_rechecks_reviewed_ca
     approval.assert_not_called()
 
     async def revoke(*_):
-        nonlocal skills
-        skills = SkillRegistry({})
+        nonlocal access
+        access = ToolAccess(denied=("vbot",))
         return True
 
     cli.reset_mock()

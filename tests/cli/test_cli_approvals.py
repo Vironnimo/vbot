@@ -89,13 +89,15 @@ def test_permission_profiles_read_pages_and_write_an_exact_name(
     assert json.loads(deleted[1]) == {"name": "Für Zürich", "deleted": True}
     assert missing[0] == 1 and json.loads(missing[1])["error"]["code"] == "profile_not_found"
     monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
-    assert run_cli("permission-profiles", "delete", "Für Zürich")[0] == 2
-    assert run_cli("agent", "update", "builder", "--permission-profile", "full_access")[0] == 2
+    rpc.reply("agent.update", {})
+    rpc.reply("project.set_override", {"project": {}, "scan": {}})
+    assert run_cli("permission-profiles", "delete", "Für Zürich")[0] == 0
+    assert run_cli("agent", "update", "builder", "--permission-profile", "full_access")[0] == 0
     assert (
         run_cli(
             "project", "override", "set", "repo", "builder", "permission_profile", "full_access"
         )[0]
-        == 2
+        == 0
     )
     assert rpc.calls == [
         ("permissions.profiles", {}),
@@ -103,4 +105,15 @@ def test_permission_profiles_read_pages_and_write_an_exact_name(
         ("permissions.profiles", {}),
         ("permissions.save_profile", {"name": "Für Zürich", "permission_rules": rules}),
         ("permissions.delete_profile", {"name": "Für Zürich"}),
+        ("permissions.delete_profile", {"name": "Für Zürich"}),
+        ("agent.update", {"id": "builder", "permission_profile": "full_access"}),
+        (
+            "project.set_override",
+            {
+                "project_id": "repo",
+                "agent_id": "builder",
+                "field": "permission_profile",
+                "value": "full_access",
+            },
+        ),
     ]

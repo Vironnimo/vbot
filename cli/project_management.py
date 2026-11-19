@@ -19,7 +19,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from cli._profile_review import profile_change_refusal, profile_write_condition
+from cli._profile_review import profile_write_condition
 from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
@@ -136,9 +136,6 @@ def project_set_override(
 ) -> CommandResult:
     """Set one Project Agent override and show the refreshed Project."""
 
-    refusal = profile_change_refusal("Changing a Project Agent's permission profile")
-    if refusal and field == "permission_profile":
-        return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
     try:
         value = _coerce_override_value(field, raw_value)
     except ValueError as exc:
@@ -150,8 +147,6 @@ def project_set_override(
         "value": value,
         **profile_write_condition(),
     }
-    if refusal and field == "permission_rules":
-        params["require_no_permission_profile"] = True
     payload = _rpc_call(instance, "project.set_override", params)
     if not payload.ok:
         return payload.to_command_result()
@@ -180,10 +175,6 @@ def project_clear_override(
 ) -> CommandResult:
     """Clear one Project Agent override and show the refreshed Project."""
 
-    if field == "permission_profile" and (
-        refusal := profile_change_refusal("Changing a Project Agent's permission profile")
-    ):
-        return CommandResult(ok=False, message=refusal, instance=instance, refused=True)
     payload = _rpc_call(
         instance,
         "project.clear_override",

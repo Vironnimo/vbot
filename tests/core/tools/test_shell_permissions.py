@@ -9,8 +9,10 @@ import asyncio
 import os
 import threading
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -248,6 +250,51 @@ async def test_restricted_calls_the_rules_refuse_launch_nothing(
     assert [(line, cwd) for line, _shell, cwd, _env in analyzer.lines] == [
         ("the command", tmp_path)
     ]
+
+
+@pytest.mark.asyncio
+async def test_restricted_shell_keeps_cli_grant_through_review_and_releases_it_after_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    analyzer = FakeAnalyzer(plan("vbot server status"))
+    assert not isinstance(analyzer.result, Exception)
+    analyzer.result = replace(
+        analyzer.result,
+        commands=(replace(analyzer.result.commands[0], instance_cli=True),),
+    )
+    cli = Mock(allows=AsyncMock(return_value=True))
+    grant = cli.issue.return_value
+    grant.environment_value = "grant-for-this-call"
+    grant.reviewing = True
+    release_review = asyncio.Event()
+    grant.wait_for_reviews = AsyncMock(side_effect=release_review.wait)
+    monkeypatch.setattr(shell_environment, "_reviewed_cli_directory", tmp_path / "reviewed")
+    async with started_shell(
+        tmp_path, shell_cli=cli, analyzer=analyzer, permissions=restricted(tmp_path)
+    ) as shell:
+        call = shell.call({"command": "vbot server status", "timeout": 1})
+        process = await shell.started()
+        command, env = launched(shell.launcher)
+        assert command == "vbot server status"
+        assert env["VBOT_SHELL_CLI"] == grant.environment_value
+        assert env["PATH"].split(os.pathsep)[0] == str(tmp_path / "reviewed")
+        assert not {"VBOT_RUN_AGENT_ID", "VBOT_SERVER_PORT", "VBOT_DATA_DIR"} & env.keys()
+        await shell.commands.advance(2)
+        await shell.commands.advance(1)
+        assert not call.done()
+        grant.release.assert_not_called()
+        grant.reviewing = False
+        release_review.set()
+        process.exit(0)
+        assert data(await shell.returned(call))["status"] == "exited"
+        await shell.commands.advance(1)
+        grant.release.assert_called_once()
+        grant.release.reset_mock()
+        cli.allows.return_value = False
+        refused = await shell.call({"command": "vbot server status"})
+        assert refused["error"]["code"] == "permission_denied"
+        assert len(shell.launcher.processes) == 1
+        cli.issue.assert_called_once()
 
 
 @pytest.mark.asyncio

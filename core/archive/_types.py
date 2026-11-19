@@ -231,6 +231,7 @@ class ArchiveEntryDetail:
     restore: RestoreCheck
     user_folders: tuple[ArchiveTree, ...] = ()
     external_workspace: str | None = None
+    restores_access: bool | None = None
 
 
 __all__ = [

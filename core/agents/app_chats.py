@@ -47,6 +47,6 @@ def app_chat_profile(agent: object) -> AppChatProfile | None:
 
 def app_chat_tool_grants(agent: object, grants: Sequence[str]) -> tuple[str, ...]:
     """The profile grants its private Tools in every Session, including a preview."""
-    if (profile := app_chat_profile(agent)) is None:
-        return tuple(grants)
-    return tuple(dict.fromkeys((*grants, *profile.tools)))
+    profile = app_chat_profile(agent)
+    other_grants = tuple(name for name in grants if name != "vbot")
+    return tuple(dict.fromkeys((*other_grants, *profile.tools))) if profile else other_grants

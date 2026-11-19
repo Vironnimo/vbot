@@ -63,7 +63,7 @@ This domain owns the shared dispatch texts (unknown-Tool, validation and executi
 Read these only when your task matches - not by default.
 
 - Project-scoped Session discovery, peer messages, bounded reads and waiting -> `tools/session.md`
-- The `vbot` CLI Tool granted by the bundled `vbot-docs` Skill and the App Agent profile -> `tools/vbot.md`
+- The hidden App Agent's private `vbot` CLI Tool -> `tools/vbot.md`
 
 - Changing how a call is read: called-name resolution, unknown-Tool errors, argument and JSON quote repair, unknown fields, validation messages, `argument_normalizer`/`call_syntax.py`, `tool_lab` replay -> `tools/call-repair.md`
 - Recording or rendering Tool display: detail blocks, media, file diffs, the rich-media artifact -> `tools/display.md`

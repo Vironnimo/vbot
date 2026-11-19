@@ -90,7 +90,6 @@ class RequestToolCatalog:
             session_tool_grants=_live_session_tool_grants(
                 capability,
                 agent=context.agent,
-                skill_registry=context.skill_registry,
                 subagent_session=context.subagent_session,
                 goal_session=context.goal_session,
             ),
@@ -194,26 +193,33 @@ class RequestToolCatalog:
         included, unless the epoch's proxy already reaches them.
         """
         allowed_tool_names = tool_epoch.allowed_names
-        allowed = set(allowed_tool_names)
         loads = tool_loads or {}
+        request_tools = (
+            tool_epoch.fallback_request_tools(loads)
+            if list_all and CALL_TOOL_NAME not in allowed_tool_names
+            else tool_epoch.request_tools()
+        )
+        definitions = [
+            *tool_epoch.definitions(),
+            *(
+                definition
+                for name in tool_epoch.loadable_names
+                if (change := loads.get(name)) is not None
+                and (definition := change.definition) is not None
+            ),
+        ]
+        # Older ordinary Sessions could pin the App Agent's private CLI Tool.
+        # Withdraw that definition even from an existing prompt epoch.
+        if "vbot" in tool_epoch.known_names and "vbot" not in live_tool_grants:
+            request_tools = [tool for tool in request_tools if tool["name"] != "vbot"]
+            allowed_tool_names = tuple(name for name in allowed_tool_names if name != "vbot")
+            definitions = [tool for tool in definitions if tool["name"] != "vbot"]
+        allowed = set(allowed_tool_names)
         tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.tools.contracts_for_provider_definitions,
-            [
-                *tool_epoch.definitions(),
-                *(
-                    definition
-                    for name in tool_epoch.loadable_names
-                    if (change := loads.get(name)) is not None
-                    and (definition := change.definition) is not None
-                ),
-            ],
+            self._dependencies.tools.contracts_for_provider_definitions, definitions
         )
         return (
-            (
-                tool_epoch.fallback_request_tools(loads)
-                if list_all and CALL_TOOL_NAME not in tool_epoch.allowed_names
-                else tool_epoch.request_tools()
-            ),
+            request_tools,
             allowed_tool_names,
             tuple(name for name in live_tool_grants if name in allowed),
             tool_contracts,

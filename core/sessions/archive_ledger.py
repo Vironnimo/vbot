@@ -260,6 +260,12 @@ class SessionArchiveLedger:
             lambda connection: _store_archive.members(connection, entry_key, limit)
         )
 
+    def member_agent_overrides(self, entry_key: int) -> tuple[dict[str, Any], ...]:
+        """Stored Agent overrides of every member generation that carries them."""
+        return self._store._read(
+            lambda connection: _store_archive.member_agent_overrides(connection, entry_key)
+        )
+
     def holds_one_session(self, entry_key: int) -> bool:
         """Whether the entry holds one Session besides the review forks that followed it.
 

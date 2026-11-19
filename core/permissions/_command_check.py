@@ -270,6 +270,7 @@ class CommandChecker:
         workdir_parameter: bool,
         computer_id: str | None = None,
         shell: str = "argv",
+        allow_instance_cli: bool = False,
     ) -> CommandDecision:
         """Decide each access once and prepare its exact grant when requested."""
         from core.permissions.commands.commands import command_pattern_matches
@@ -294,11 +295,14 @@ class CommandChecker:
         add(boundary.check_path(cwd, "start_dir"), root_identity)
         context = boundary.context
         windows = (context.platform if context is not None else sys.platform) == "win32"
-        for check in (self._deny_rules, self._vbot_cli, self._vbot_server):
-            add(check(boundary, plan, cwd, windows))
+        add(self._deny_rules(boundary, plan, cwd, windows))
+        add(self._vbot_cli(boundary, plan, cwd, windows, allow_instance_cli))
+        add(self._vbot_server(boundary, plan, cwd, windows))
         for layer in boundary.layers:
             if layer.commands == "listed":
                 for command in plan.commands:
+                    if allow_instance_cli and command.instance_cli:
+                        continue
                     if not any(
                         command_pattern_matches(pattern, command, case_insensitive=windows)
                         for pattern in layer.shell_allow
@@ -416,6 +420,7 @@ class CommandChecker:
         home: Path,
         workdir_parameter: bool = False,
         computer_id: str = "server",
+        allows_instance_cli: Callable[[], Awaitable[bool]] | None = None,
     ) -> tuple[CommandPlan | None, CommandDecision]:
         """Return the exact plan, refusals and paired grants for Tool preflight."""
         if not boundary.restricted:
@@ -429,6 +434,11 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return None, CommandDecision(((plan, None),))
+        allow_instance_cli = (
+            allows_instance_cli is not None
+            and any(command.instance_cli for command in plan.commands)
+            and await allows_instance_cli()
+        )
         decision = await _decision_pool().run(
             self._decide_all,
             boundary,
@@ -438,6 +448,7 @@ class CommandChecker:
             workdir_parameter,
             computer_id,
             shell,
+            allow_instance_cli,
         )
         return plan, decision
 
@@ -536,7 +547,12 @@ class CommandChecker:
         return None
 
     def _vbot_cli(
-        self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, windows: bool
+        self,
+        boundary: PermissionBoundary,
+        plan: CommandPlan,
+        cwd: Path,
+        windows: bool,
+        allow_instance_cli: bool,
     ) -> PermissionRefusal | None:
         scripts = (
             self._key(self._vbot_root / "cli", windows),
@@ -544,6 +560,8 @@ class CommandChecker:
         )
         folders = [cwd, *(access.path for access in plan.paths if access.kind == "start_dir")]
         for command in plan.commands:
+            if allow_instance_cli and command.instance_cli:
+                continue
             name = command.name.casefold().removesuffix(".ps1")
             if name == "vbot" or (
                 _PYTHONS.match(command.name) is not None
@@ -553,11 +571,7 @@ class CommandChecker:
                 )
             ):
                 return boundary.refusal(
-                    "command",
-                    _shown(command.source),
-                    "protected_location",
-                    location="vbot_cli",
-                    hint="If you have the vbot Tool, submit the command there.",
+                    "command", _shown(command.source), "protected_location", location="vbot_cli"
                 )
         return None
 
@@ -586,6 +600,8 @@ class CommandChecker:
             return None
         wanted = str(port)
         for command in plan.commands:
+            if command.instance_cli:
+                continue  # The checked CLI pins its target, including explicit target options.
             texts = [word.text for word in command.words if word.static]
             hosts = False
             ports = False

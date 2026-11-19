@@ -12,6 +12,7 @@ import shutil
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal
 
 import pytest
 import pytest_asyncio
@@ -264,6 +265,45 @@ async def test_vbots_own_cli_cannot_be_started(
     assert (refusal.reason if refusal else None) == reason
     if reason == "protected_location":
         assert refusal is not None and refusal.location == "vbot_cli"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+async def test_reviewed_instance_cli_only_grants_the_bare_command(
+    real_analyzer: CommandAnalyzer, tmp_path: Path, shell: Literal["bash", "powershell"]
+) -> None:
+    if shell == "powershell" and not _PWSH:
+        pytest.skip("PowerShell not installed")
+    checker = CommandChecker(lambda: real_analyzer)
+    policy = boundary(tmp_path, {"commands": "listed", "deny": ["Shell(vbot agent delete *)"]})
+    lookups = 0
+
+    async def available() -> bool:
+        nonlocal lookups
+        lookups += 1
+        return True
+
+    for line, expected, grant in [
+        ("vbot server status", set(), True),
+        ("vbot agent delete other", {"deny_rule"}, True),
+        ("vbot server status | other", {"not_permitted"}, True),
+        ("python -m cli agent list", {"protected_location", "not_permitted"}, False),
+        ("./vbot agent list", {"protected_location", "not_permitted"}, False),
+        ("vbot.exe agent list", {"protected_location", "not_permitted"}, False),
+        ("other", {"not_permitted"}, False),
+    ]:
+        before = lookups
+        _, decision = await checker.prepare_line(
+            policy,
+            line,
+            shell=shell,
+            cwd=tmp_path,
+            env={},
+            home=tmp_path,
+            allows_instance_cli=available,
+        )
+        assert {item.reason for item in decision.refusals} == expected, (line, decision)
+        assert lookups == before + int(grant)
 
 
 @pytest.mark.parametrize(

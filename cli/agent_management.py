@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
-from cli._profile_review import profile_change_refusal, profile_write_condition
+from cli._profile_review import profile_write_condition
 from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
@@ -116,22 +116,12 @@ def _with_permission_rules(
     An edit that keeps the current rules of an existing agent reads them first.
     """
     edit = changes.get("permission_rules")
-    profile_refusal = profile_change_refusal("Changing an Agent's permission profile")
-    if profile_refusal and (
-        changes.get("permission_profile") is not None
-        or ("permission_profile" in changes and not isinstance(edit, PermissionEdit))
-    ):
-        return CommandResult(ok=False, message=profile_refusal, instance=instance, refused=True)
     if not isinstance(edit, PermissionEdit):
         return dict(changes)
     current: Mapping[str, Any] | None = None
     prepared = dict(changes)
-    if agent_id is not None and (edit.keeps_current or profile_refusal):
-        prepared["require_no_permission_profile"] = True
-    if profile_refusal and edit.clear:
-        # Clearing old inline rules in a Run cannot unbind a concurrently selected profile.
-        prepared.pop("permission_profile", None)
     if agent_id is not None and edit.keeps_current:
+        prepared["require_no_permission_profile"] = True
         payload = _rpc_call(instance, "agent.get", {"id": agent_id})
         if not payload.ok:
             return payload.to_command_result()

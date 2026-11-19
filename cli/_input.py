@@ -9,7 +9,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 
-# A bound vbot Tool reviews all file operands discovered in a live Extension schema
+# A restricted CLI invocation reviews all file operands discovered in a live Extension schema
 # together and supplies the authorized file for each operand before the CLI opens it.
 document_file_review: ContextVar[Callable[[dict[str, str]], dict[str, str]] | None] = ContextVar(
     "document_file_review", default=None

@@ -1017,6 +1017,8 @@ SERVICE_EXCLUSIONS = {
         "Writes global web-service credentials; use the operator credential surface."
     ),
     "permissions.resolve": "Tool approval resolution represents a human consent decision.",
+    "skill.install_cli": "Private remote Skill install bound to one live shell call.",
+    "permissions.review_cli": "Private CLI authorization bound to one live shell call.",
     "permissions.set_session_rules": (
         "Widening or replacing a Session's rules requires an authenticated operator principal."
     ),

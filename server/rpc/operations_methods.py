@@ -11,7 +11,6 @@ from core.projects import (
     runtime_agent_body,
 )
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
-from core.skills.skills import skill_tool_grants
 from core.tools.on_demand import on_demand_tools
 from core.utils.log_viewer import LogViewer
 from core.utils.logging import get_logger
@@ -322,7 +321,6 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             skill_project_id,
             identity_agent_id,
         )
-        grants = skill_tool_grants(skill_registry, agent.allowed_skills)
         text = await prompt_manager.build_system_prompt_async(
             agent,
             scope=prompt_scope,
@@ -331,7 +329,6 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             working_project_context=working_project_context,
             agent_project_id=project_id,
             skill_registry=skill_registry,
-            session_tool_grants=grants,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -339,12 +336,8 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # prompt text but is not part of it — report it separately so the preview
     # reflects the request's real prompt-side footprint. An On-demand Tool is
     # not in that array (the prompt text lists it), so only listed Tools count.
-    tool_definitions = await state.chat_loop.preview_tool_definitions(
-        agent, session_tool_grants=grants
-    )
-    left_out = on_demand_tools(
-        agent, (str(d["name"]) for d in tool_definitions), session_tool_grants=grants
-    )
+    tool_definitions = await state.chat_loop.preview_tool_definitions(agent)
+    left_out = on_demand_tools(agent, (str(d["name"]) for d in tool_definitions))
     listed = [definition for definition in tool_definitions if definition["name"] not in left_out]
 
     def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:

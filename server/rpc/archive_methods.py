@@ -259,6 +259,11 @@ def _detail_payload(detail: ArchiveEntryDetail) -> JsonObject:
     user_folders = {tree.path for tree in detail.user_folders}
     return {
         "entry": _entry_payload(detail.listing),
+        **(
+            {"restores_access": detail.restores_access}
+            if detail.restores_access is not None
+            else {}
+        ),
         "sessions": [
             {
                 "session_id": member.address.session_id,

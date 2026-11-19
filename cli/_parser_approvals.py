@@ -40,8 +40,7 @@ def add_permission_profile_parsers(
             rules.add_argument(
                 "--stdin",
                 action="store_true",
-                help="Read the Permission Rules as one UTF-8 JSON object from stdin. "
-                "Use this input for approval in a restricted Run.",
+                help="Read the Permission Rules as one UTF-8 JSON object from stdin.",
             )
         parser.add_argument("--json", action="store_true", help="Print the result as JSON")
 

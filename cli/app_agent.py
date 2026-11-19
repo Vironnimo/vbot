@@ -6,13 +6,14 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from cli._server_target import ServerInstance, parse_server_url, resolve_instance
 from core.access.local_token import read_local_access
 
 
-def changes_agent_access(args: argparse.Namespace) -> bool:
+def changes_agent_access(args: argparse.Namespace, instance: ServerInstance) -> bool:
     """Classify a parsed command before any command handler or mutation runs."""
     if args.area == "agent" and args.command in {"create", "update"}:
         from cli._dispatch_agents import _agent_changes_from_args
@@ -42,6 +43,21 @@ def changes_agent_access(args: argparse.Namespace) -> bool:
                     "sources",
                 )
             ) or (args.command == "set" and args.cwd is not None)
+    if args.area == "archive" and args.command == "restore":
+        from cli.rpc_client import rpc_call
+
+        result = rpc_call(instance, "archive.show", {"entry_id": args.entry_id, "session_limit": 1})
+        if not result.ok:
+            raise ValueError(result.message)
+        entry = result.data.get("entry")
+        if not isinstance(entry, dict):
+            raise ValueError("The server could not identify the archive entry.")
+        if entry.get("kind") == "session":
+            # Older servers omit the flag. A Session may restore its own rules or grants.
+            return result.data.get("restores_access") is not False
+        return entry.get("kind") not in {"owner_group", "files"}
+    if args.area == "data-store":
+        return _restore_changes_agent_access(args)
     if args.area == "permission-profiles":
         return args.command in {"save", "delete"}
     if args.area == "config":
@@ -62,31 +78,97 @@ def changes_agent_access(args: argparse.Namespace) -> bool:
     return False
 
 
-def _file_inputs(args: argparse.Namespace) -> list[tuple[str, bool]]:
-    """Host files supplied as command data, with the same base as the CLI process."""
-    files = [
-        path
-        for key in (
-            "content_file",
-            "prompt_file",
-            "settings_file",
-            "wire_file",
-            "entries_file",
-            "package",
+def _restore_changes_agent_access(args: argparse.Namespace) -> bool:
+    if not getattr(args, "yes", False):
+        return False
+    if args.command == "snapshot" and args.snapshot_command == "restore":
+        from core.sessions.schema import DATABASE_NAME
+
+        if args.all and (args.documents or args.database):
+            return False  # The restore refuses contradictory selectors.
+        # By default every database is restored. Session records carry their own rules.
+        return args.documents or not args.database or DATABASE_NAME in args.database
+    if args.command == "config-backup" and args.config_backup_command == "restore":
+        from core.json_documents import SNAPSHOT_DOCUMENTS, path_matches_patterns
+
+        if args.all:
+            return not args.file  # The restore refuses --all combined with --file.
+        access_documents = (
+            "settings",
+            "agent",
+            "agent_rename",
+            "agent_retirements",
+            "project",
+            "skill_policy",
+            "cron_jobs",
+            "secrets",
         )
-        if (path := getattr(args, key, None)) is not None
-    ]
-    files.extend(getattr(args, "attachments", ()) or ())
-    reads = [(str(Path(path).absolute()), False) for path in files]
+        patterns = tuple(SNAPSHOT_DOCUMENTS[kind] for kind in access_documents)
+        return any(path_matches_patterns(path.replace("\\", "/"), patterns) for path in args.file)
+    return False
+
+
+def file_operands(
+    args: argparse.Namespace, *, include_profile_file: bool = False
+) -> Iterator[tuple[str, str | list[str], bool]]:
+    """Parsed host file operands and whether they cover a subtree."""
+    for name in (
+        "content_file",
+        "prompt_file",
+        "settings_file",
+        "wire_file",
+        "entries_file",
+        "package",
+    ):
+        if (value := getattr(args, name, None)) is not None:
+            yield name, value, False
+    if attachments := getattr(args, "attachments", None):
+        yield "attachments", attachments, False
     if args.area == "external" and args.command != "sources":
-        reads.append((args.path, args.command != "import-memory"))
+        yield "path", args.path, args.command != "import-memory"
     if (
         args.area == "skill"
         and args.command == "install"
         and not args.source.lower().startswith(("http://", "https://"))
     ):
-        reads.append((str(Path(args.source).expanduser().absolute()), True))
-    return reads
+        yield "source", str(Path(args.source).expanduser()), True
+    if (
+        include_profile_file
+        and args.area == "permission-profiles"
+        and args.command == "save"
+        and args.file is not None
+    ):
+        yield "file", args.file, False
+
+
+def file_reads(operands: list[tuple[str, str | list[str], bool]]) -> list[tuple[str, bool]]:
+    return [
+        (str(Path(path).absolute()), subtree)
+        for _, value, subtree in operands
+        for path in (value if isinstance(value, list) else [value])
+    ]
+
+
+def checked_files(paths: list[str], reviewed: Mapping[str, str]) -> dict[str, str]:
+    """Confirm the authorized targets still match before opening any file."""
+    if set(paths) == reviewed.keys():
+        try:
+            if all(str(Path(path).resolve()) == resolved for path, resolved in reviewed.items()):
+                return dict(reviewed)
+        except OSError:
+            pass
+    raise ValueError(
+        "No documents were read. The reviewed file paths could not be confirmed. "
+        "Submit the command again."
+    )
+
+
+def bound_instance(data_dir: Path, listen_host: str, port: int) -> ServerInstance:
+    local = read_local_access(data_dir, port)
+    # A wildcard or localhost bind can resolve to several interfaces. Use the
+    # loopback literal on which this server actually accepts its own CLI.
+    host = local.loopback[0] if local and local.loopback else listen_host
+    return resolve_instance(host=host, port=port, data_dir=data_dir)
 
 
 def bind_target(args: argparse.Namespace, instance: ServerInstance) -> None:
@@ -100,9 +182,7 @@ def bind_target(args: argparse.Namespace, instance: ServerInstance) -> None:
         or Path(selected.get("data_dir", instance.data_dir)).expanduser().resolve()
         != instance.data_dir
     ):
-        raise ValueError(
-            "This Tool runs commands on the current vBot instance. Omit the target options."
-        )
+        raise ValueError("This command runs on the current vBot instance. Omit the target options.")
     # Pin even commands whose normal default is the last-used Desktop or the installation.
     for name in ("host", "port", "data_dir"):
         if hasattr(args, name):
@@ -127,11 +207,7 @@ def main() -> int:
     data_dir = Path(os.environ["VBOT_DATA_DIR"])
     port = int(os.environ["VBOT_SERVER_PORT"])
     listen_host = os.environ.pop("VBOT_APP_CLI_LISTEN_HOST")
-    local = read_local_access(data_dir, port)
-    # A wildcard or localhost bind can resolve to several interfaces. The server's
-    # access record names the loopback literal on which it actually accepts the CLI.
-    host = local.loopback[0] if local and local.loopback else listen_host
-    target = resolve_instance(host=host, port=port, data_dir=data_dir)
+    target = bound_instance(data_dir, listen_host, port)
     from core.tools.vbot_cli_runner import (
         REVIEW_ENV,
         REVIEW_EXIT,
@@ -155,23 +231,12 @@ def main() -> int:
         paths = {key: str(Path(source).absolute()) for key, source in sources.items()}
         if marker and paths:
             raise VBotAccessReviewRequiredError(False, [(path, False) for path in paths.values()])
-        if set(paths.values()) == reviewed_files.keys():
-            try:
-                if all(
-                    str(Path(path).resolve()) == resolved
-                    for path, resolved in reviewed_files.items()
-                ):
-                    return {key: reviewed_files[path] for key, path in paths.items()}
-            except OSError:
-                pass  # An unavailable target cannot be confirmed either.
-        raise ValueError(
-            "No documents were read. The reviewed file paths could not be confirmed. "
-            "Call the Tool again."
-        )
+        confirmed = checked_files(list(paths.values()), reviewed_files)
+        return {key: confirmed[path] for key, path in paths.items()}
 
     def check_access(args: argparse.Namespace) -> None:
-        rights = changes_agent_access(args)
-        reads = _file_inputs(args)
+        rights = changes_agent_access(args, target)
+        reads = file_reads(list(file_operands(args)))
         if rights or reads:
             profile = prepare_profile_review(target, args) if rights else None
             raise VBotAccessReviewRequiredError(rights, reads, profile=profile)

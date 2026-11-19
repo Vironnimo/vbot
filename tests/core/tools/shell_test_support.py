@@ -21,6 +21,7 @@ from core.tools.shell import (
     SHELL_TOOL_NAME,
     register_shell_tool,
 )
+from core.tools.shell_cli import ShellCliAccess
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
 from core.tools.update_handoff import (
     UpdateHandoffs,
@@ -69,6 +70,7 @@ class Shell:
         scratch_areas: ScratchAreas | None = None,
         secrets: AgentSecrets | None = None,
         analyzer: FakeAnalyzer | None = None,
+        shell_cli: ShellCliAccess | None = None,
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
         credential_names: Container[str] = frozenset(),
         subagents: SubAgentTree | None = None,
@@ -88,6 +90,7 @@ class Shell:
             scratch_areas=scratch_areas,
             secrets=secrets,
             command_checker=self.checker,
+            shell_cli=shell_cli,
             subagents=subagents,
             review_shell=review_shell,
         )
