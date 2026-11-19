@@ -1,13 +1,20 @@
-"""The built-in App Agent's local vBot CLI Tool."""
+"""Operate the serving vBot instance through its CLI."""
 
 from __future__ import annotations
 
+import json
+import shlex
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.agents.app_chats import app_chat_profile
-from core.permissions import PermissionDenied
-from core.tools.availability import TOOL_ACTIVATION_SESSION_GRANT
+from core.agents.temporary import TemporaryAgent
+from core.permissions import ApprovalRequirement
+from core.skills.skills import SkillRegistry, grants_vbot_tool
+from core.tools._permission_preflight import authorize_paths
+from core.tools._tool_workers import run_tool_worker
+from core.tools.availability import TOOL_ACTIVATION_SESSION_GRANT, resolve_tool_access
 from core.tools.shell_environment import RunIdentity
 from core.tools.tools import (
     JsonObject,
@@ -19,28 +26,51 @@ from core.tools.tools import (
     tool_success,
 )
 from core.tools.update_handoff import UpdateHandoffs, issue_for_tool_context
-from core.tools.vbot_cli_runner import run_vbot_cli
+from core.tools.vbot_cli_runner import VBotAccessReviewRequiredError, run_vbot_cli
+
+if TYPE_CHECKING:
+    from core.projects._runtime_agent import RuntimeAgent
 
 
 def register_vbot_tool(
     registry: ToolRegistry,
     *,
-    resolve_agent: Callable[[ToolContext], Awaitable[object]],
+    resolve_agent: Callable[[ToolContext], Awaitable[RuntimeAgent]],
+    resolve_skills: Callable[[str | None, str | None], SkillRegistry],
     data_dir: Path,
     server_bind: Callable[[], tuple[str, int | None]],
     update_handoffs: UpdateHandoffs,
 ) -> None:
-    async def vbot(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        profile = app_chat_profile(await resolve_agent(context))
-        if profile is None or "vbot" not in profile.tools:
-            raise ToolNotAllowedError("The vbot Tool is available only to the App Agent.")
+    def skill_granted(context: ToolContext, agent: RuntimeAgent) -> bool:
+        identity = (
+            context.skill_subject_id
+            if context.project_id is None and not isinstance(agent, TemporaryAgent)
+            else None
+        )
+        skills = resolve_skills(context.skill_project_id, identity)
+        if context.skill_ceiling is not None:
+            skills = skills.restricted_to(context.skill_ceiling)
+        return grants_vbot_tool(skills, agent.allowed_skills)
+
+    async def check_authority(context: ToolContext) -> None:
         await context.revalidate_permissions(force_refresh=True)
-        if context.permissions.restricted:
-            raise PermissionDenied(
-                context.permissions.refusal(
-                    "command", "vbot", "protected_location", location="vbot_cli"
-                )
-            )
+        agent = await resolve_agent(context)
+        access = resolve_tool_access(
+            agent.tool_access,
+            registry.list_tools(["vbot"]),
+            agent.memory_prompt_mode,
+            session_tool_grants=context.session_tool_grants,
+        )
+        if "vbot" not in access.session_tool_grants:
+            raise ToolNotAllowedError("The vbot Tool is unavailable to this Agent.")
+        if app_chat_profile(agent) is not None and not context.permissions.restricted:
+            return
+        if not await run_tool_worker(skill_granted, context, agent):
+            raise ToolNotAllowedError("This Agent needs access to the bundled vbot-docs Skill.")
+
+    async def vbot(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        await check_authority(context)
+        arguments = {**arguments, "argv": list(arguments["argv"])}
         argv = arguments["argv"]
         if argv[:1] == ["vbot"]:
             argv = argv[1:]
@@ -48,13 +78,15 @@ def register_vbot_tool(
         if port is None:
             return tool_failure("vbot_unavailable", "The local vBot server has no active port.")
         grant = issue_for_tool_context(update_handoffs, context)
-        try:
-            result = await run_vbot_cli(
+
+        async def execute(*, check_agent_access: bool) -> JsonObject:
+            return await run_vbot_cli(
                 argv,
                 stdin=arguments.get("stdin"),
                 data_dir=data_dir,
                 port=port,
                 host=host,
+                check_agent_access=check_agent_access,
                 run=RunIdentity(
                     context.agent_id,
                     context.session_id,
@@ -62,6 +94,33 @@ def register_vbot_tool(
                     grant.token if grant is not None else None,
                 ),
             )
+
+        try:
+            try:
+                result = await execute(check_agent_access=context.permissions.restricted)
+            except VBotAccessReviewRequiredError as review:
+                public = context.public_arguments or arguments
+                if review.reads:
+                    await authorize_paths(
+                        context,
+                        [(path, "read", {"subtree": tree}) for path, tree in review.reads],
+                        arguments=public,
+                    )
+                if review.rights:
+                    target = json.dumps(public, ensure_ascii=False, sort_keys=True)
+                    shown = public["argv"]
+                    command = shown if shown[:1] == ["vbot"] else ["vbot", *shown]
+                    requirement = ApprovalRequirement.review(target, shown=shlex.join(command))
+                    if not await context.request_approval(
+                        "This command changes Agent access.",
+                        [requirement],
+                        arguments=public,
+                    ):
+                        return tool_failure(
+                            "permission_denied", "The access change was not approved."
+                        )
+                await check_authority(context)
+                result = await execute(check_agent_access=False)
         finally:
             if grant is not None:
                 grant.release()

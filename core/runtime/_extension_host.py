@@ -59,7 +59,7 @@ from core.runtime.interfaces import (
 )
 from core.sessions import ChatSessionManager, SessionAddress, SessionNotFoundError
 from core.sessions.titles import SessionTitleService
-from core.skills.skills import SkillRegistry
+from core.skills.skills import SkillRegistry, skill_tool_grants
 from core.statistics import StatisticsIndex, StatisticsService
 from core.tools import (
     resolve_tool_access,
@@ -1047,11 +1047,21 @@ class ExtensionHostFactory:
             for tool in record.declarations.tools
             if tool.session_scoped and tool.name not in config.tool_access.denied
         )
+        registry = (
+            await _RUNTIME_WORKERS.run(self.skills_for, project_id, config.identity_agent)
+        ).restricted_to(config.allowed_skills)
+        grants = skill_tool_grants(registry, agent.allowed_skills, grants)
         definitions = await self.chat_loop.preview_tool_definitions(
             agent, session_tool_grants=grants
         )
         result = await _RUNTIME_WORKERS.run(
-            self._extension_prompt_projection, config, project_id, agent, definitions, grants
+            self._extension_prompt_projection,
+            config,
+            project_id,
+            agent,
+            definitions,
+            grants,
+            registry,
         )
         if self._extensions is None or not self._extensions.is_registration_current(identity):
             raise ValueError("Extension registration is no longer current")
@@ -1064,6 +1074,7 @@ class ExtensionHostFactory:
         agent: Any,
         definitions: list[dict[str, Any]],
         grants: tuple[str, ...],
+        registry: SkillRegistry,
     ) -> dict[str, Any]:
         self._ensure_started()
         project = self.projects.get(project_id) if project_id else None
@@ -1085,9 +1096,7 @@ class ExtensionHostFactory:
             agent_body=config.instructions,
             project_context=context,
             agent_project_id=None if config.identity_agent else project_id,
-            skill_registry=self.skills_for(project_id, config.identity_agent).restricted_to(
-                config.allowed_skills
-            ),
+            skill_registry=registry,
             effective_tool_definitions=definitions,
             session_tool_grants=grants,
             block_details=blocks,

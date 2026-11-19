@@ -1,9 +1,11 @@
-"""Run one App-Agent command through the serving installation's CLI."""
+"""Run a vbot Tool command through the serving installation's CLI."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import secrets
 import subprocess
 from collections.abc import Sequence
 from contextlib import suppress
@@ -21,6 +23,18 @@ from core.utils.processes import (
 )
 from core.utils.workers import finish_despite_cancel
 
+REVIEW_ENV = "VBOT_CLI_REVIEW_AGENT_ACCESS"
+REVIEW_EXIT = 79
+
+
+class VBotAccessReviewRequiredError(Exception):
+    """The bound CLI stopped before dispatch and described its actual operands."""
+
+    def __init__(self, rights: bool = True, reads: Sequence[tuple[str, bool]] = ()) -> None:
+        super().__init__()
+        self.rights = rights
+        self.reads = tuple((path, subtree) for path, subtree in reads)
+
 
 async def _capture(reader: asyncio.StreamReader, output: OutputCapture) -> None:
     while chunk := await reader.read(65536):
@@ -35,6 +49,7 @@ async def run_vbot_cli(
     port: int | None,
     run: RunIdentity,
     host: str = DEFAULT_HOST,
+    check_agent_access: bool = False,
 ) -> dict[str, Any]:
     if port is None:
         raise ValueError("The vBot CLI Tool needs a running server.")
@@ -45,6 +60,10 @@ async def run_vbot_cli(
         VBOT_APP_CLI_LISTEN_HOST=host,
     )
     env.pop("VBOT_SERVER_URL", None)
+    env.pop(REVIEW_ENV, None)
+    review_marker = secrets.token_hex(24) if check_agent_access else None
+    if review_marker is not None:
+        env[REVIEW_ENV] = review_marker
     # The CLI owns detached restart/update workers. A shell's POSIX subreaper
     # would wait for those workers, which themselves wait for this Tool Result.
     starting = asyncio.create_task(
@@ -96,6 +115,13 @@ async def run_vbot_cli(
                     await finish_despite_cancel(kill_process_tree_async(process))
                 await finish_despite_cancel(wait_for_exit(process))
     error_output = stderr.text()
+    if review_marker and result == REVIEW_EXIT:
+        lines = stdout.text().splitlines()
+        if lines and lines[0] == review_marker:
+            if len(lines) != 2 or stdout.truncated:
+                raise ValueError("The vbot command has too many input paths. Use fewer per call.")
+            review = json.loads(lines[1])
+            raise VBotAccessReviewRequiredError(review["rights"], review["reads"])
     if timeout:
         error_output += "\nCommand timed out. Inspect the result before repeating a change."
     return {

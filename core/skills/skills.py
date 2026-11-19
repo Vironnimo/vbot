@@ -272,6 +272,26 @@ class SkillScan:
         return result
 
 
+def grants_vbot_tool(registry: SkillRegistry | None, allowed_skills: Sequence[str] | None) -> bool:
+    """Only the available, bundled administrative Skill grants CLI access."""
+    name = "vbot-docs"
+    return (
+        registry is not None
+        and registry.is_allowed(name, allowed_skills)
+        and registry.availability_for(name, allowed_skills).state == "available"
+        and registry.get(name).package_ref == SkillPackageRef("bundled", name)
+    )
+
+
+def skill_tool_grants(
+    registry: SkillRegistry | None, allowed_skills: Sequence[str] | None, grants: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """Include Tools conferred by the scoped Skill selection in this Session or preview."""
+    if "vbot" not in grants and grants_vbot_tool(registry, allowed_skills):
+        return (*grants, "vbot")
+    return tuple(grants)
+
+
 class SkillRegistry:
     """Scans local skill directories and filters prompt-visible metadata."""
 

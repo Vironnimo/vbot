@@ -96,6 +96,29 @@ describe('ChatApprovalCard', () => {
     expect(button(t('approvals.reject')).disabled).toBe(true);
   });
 
+  it('shows the access change and target Agent before the user decides', () => {
+    const command = 'vbot agent update other --permissions full-access';
+    component = mount(ChatApprovalCard, {
+      target: document.body,
+      props: {
+        request: approval({
+          tool_name: 'vbot',
+          requirements: [{ kind: 'review', access: 'review', shown: command }],
+          session_grant: null,
+        }),
+      },
+    });
+    flushSync();
+    expect(document.querySelector('.approval-card__target').textContent).toBe(
+      command,
+    );
+    expect(document.body.textContent).toContain(
+      t('approvals.need.agentAccess'),
+    );
+    expect(button(t('approvals.allowOnce'))).toBeDefined();
+    expect(button(t('approvals.allowSession'))).toBeUndefined();
+  });
+
   it('remembers the suggested, the exact or the edited rules', async () => {
     resolve.mockResolvedValue({ resolved: true });
     const request = approval();

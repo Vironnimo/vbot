@@ -14,7 +14,12 @@ from core.agents import APP_CHAT_PROFILES
 from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
-from core.skills.skills import SKILL_ORIGIN_AGENT, SKILL_ORIGIN_GLOBAL, SkillRegistry
+from core.skills.skills import (
+    SKILL_ORIGIN_AGENT,
+    SKILL_ORIGIN_GLOBAL,
+    SkillRegistry,
+    skill_tool_grants,
+)
 from core.storage.layout import DataDirectoryLayout
 from core.tools import ToolContext, tool_failure
 from core.utils.config import Config
@@ -622,6 +627,10 @@ def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access
         docs = runtime.skills.get("vbot-docs")
         assert docs.origin == "bundled"
         assert docs.package_ref == SkillPackageRef("bundled", "vbot-docs")
+        assert skill_tool_grants(runtime.skills, ["vbot-docs"]) == ("vbot",)
+        assert skill_tool_grants(runtime.skills, ["*"]) == ("vbot",)
+        assert not skill_tool_grants(runtime.skills, [])
+        assert not skill_tool_grants(runtime.skills.restricted_to([]), ["*"])
         assert docs.path.is_relative_to(DataDirectoryLayout(config.data_dir).skill_documentation)
         assert docs.path != source / "SKILL.md"
         assert docs.path.read_bytes() == source.joinpath("SKILL.md").read_bytes()
@@ -654,6 +663,7 @@ def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access
 
         runtime.set_skill_package_disabled(entry["id"], disabled=True)
         runtime.reload_skills()
+        assert not skill_tool_grants(runtime.skills, ["*"])
         for project_id, agent_id in [(None, None), ("p", None), (None, "main"), ("p", "main")]:
             with pytest.raises(KeyError):
                 runtime.skills_for(project_id, agent_id).get("vbot-docs")
@@ -670,6 +680,7 @@ def test_extension_documentation_keeps_bundled_identity_policy_and_scoped_access
         runtime.set_skill_package_disabled(disabled["id"], disabled=False)
         runtime.reload_skills()
         assert runtime.skills.get("vbot-docs").path == override / "SKILL.md"
+        assert not skill_tool_grants(runtime.skills, ["vbot-docs"])
         app_registry = runtime.skills_for(None, profile.agent_id)
         assert runtime.skills_for("p", profile.agent_id) is app_registry
         assert app_registry.get("vbot-docs") == docs

@@ -56,6 +56,7 @@ export default Object.freeze({
   'approvals.need.url': 'Open',
   'approvals.need.other': 'Access',
   'approvals.need.below': 'and everything inside',
+  'approvals.need.agentAccess': 'Change Agent access',
   'approvals.need.review':
     'Run this command, although Shell review could not confirm that your request covers it',
   'approvals.details': 'Details',

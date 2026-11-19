@@ -47,6 +47,7 @@ from core.runs import (
     RunKind,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
+from core.skills.skills import skill_tool_grants
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -94,6 +95,7 @@ class ExternalRun:
         model: str,
         tool_definitions: Sequence[JsonObject],
         allowed_tools: Sequence[str],
+        session_tool_grants: tuple[str, ...],
         on_cancel: Callable[[], None] | None,
         project_cwd: Path | None,
         skill_project_id: str | None,
@@ -105,6 +107,7 @@ class ExternalRun:
         self._model = model
         self._tool_definitions = tuple(dict(definition) for definition in tool_definitions)
         self._allowed_tools = tuple(allowed_tools)
+        self._session_tool_grants = session_tool_grants
         self._on_cancel = on_cancel
         self._project_cwd = project_cwd
         self._skill_project_id = skill_project_id
@@ -435,6 +438,7 @@ class ExternalRun:
             skill_project_id=self._skill_project_id,
             skill_registry=self._skill_registry,
             base_allowed_tools=self._allowed_tools,
+            session_tool_grants=self._session_tool_grants,
             change_tracker=dependencies.change_tracker,
         )
 
@@ -471,7 +475,10 @@ async def start_external_run(
         skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
             dependencies.resolve_skills, skill_project_id, identity_agent_id
         )
-        definitions = await requests.tool_catalog.preview_tool_definitions(agent)
+        grants = skill_tool_grants(skill_registry, agent.allowed_skills)
+        definitions = await requests.tool_catalog.preview_tool_definitions(
+            agent, session_tool_grants=grants
+        )
         offered = {str(definition.get("name")) for definition in definitions}
         extra = [name for name in dict.fromkeys(extra_tools) if name not in offered]
         if extra:
@@ -498,6 +505,7 @@ async def start_external_run(
             model=model,
             tool_definitions=_neutral_definitions(definitions),
             allowed_tools=allowed,
+            session_tool_grants=grants,
             on_cancel=on_cancel,
             project_cwd=project_cwd,
             skill_project_id=skill_project_id,
