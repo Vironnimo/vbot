@@ -324,25 +324,17 @@ public static class VBotGuard {
             (missing ? "null." : "an empty string."), "ParameterArgumentValidationError",
             ErrorCategory.InvalidData, null);
     }
-    // A location that does not exist ends the command, unless it handles errors itself.
-    public static void Enter(PSCmdlet cmdlet, string path, bool literal) {
-        if (string.IsNullOrEmpty(path) || path == "-" || path == "+" ||
-            Bound(cmdlet, "ErrorAction")) return;
-        try {
-            var preference = cmdlet.SessionState.PSVariable.GetValue("ErrorActionPreference");
-            if (!(preference is ActionPreference) ||
-                (ActionPreference)preference != ActionPreference.Continue) return;
-            bool exists;
-            if (literal) exists = cmdlet.InvokeProvider.Item.Exists(path, false, true);
-            else exists = cmdlet.SessionState.Path.GetResolvedPSPathFromPSPath(path).Count != 0;
-            if (exists) return;
+    // Promote errors from the actual location change. A path precheck cannot tell
+    // whether the provider will enter it, and the target can change after a check.
+    // PowerShell exposes ErrorAction on its command runtime only internally.
+    public static void GuardLocation(PSCmdlet cmdlet) {
+        if (Bound(cmdlet, "ErrorAction")) return;
+        var runtime = cmdlet.CommandRuntime;
+        var action = runtime.GetType().GetProperty("ErrorAction",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (Equals(action.GetValue(runtime), ActionPreference.Continue)) {
+            action.SetValue(runtime, ActionPreference.Stop);
         }
-        catch (ItemNotFoundException error) { Stop(cmdlet, error); }
-        catch (DriveNotFoundException error) { Stop(cmdlet, error); }
-        catch (ProviderNotFoundException error) { Stop(cmdlet, error); }
-        catch (RuntimeException error) when (!error.WasThrownFromThrowStatement) { return; }
-        Stop(cmdlet, new ItemNotFoundException(
-            "Cannot find path '" + path + "' because it does not exist."));
     }
 }
 [Cmdlet(VerbsCommon.Remove, "Item", DefaultParameterSetName = "Path", SupportsShouldProcess = true,
@@ -368,11 +360,8 @@ public class VBotMoveItem : MoveItemCommand {
 [OutputType(typeof(PathInfo), typeof(PathInfoStack))]
 public class VBotSetLocation : SetLocationCommand {
     protected override void ProcessRecord() {
-        if (ParameterSetName == "Path") {
-            VBotGuard.Named(this, new[] { Path });
-            if (MyInvocation.BoundParameters.ContainsKey("Path")) VBotGuard.Enter(this, Path, false);
-        }
-        else if (ParameterSetName == "LiteralPath") VBotGuard.Enter(this, LiteralPath, true);
+        if (ParameterSetName == "Path") VBotGuard.Named(this, new[] { Path });
+        VBotGuard.GuardLocation(this);
         base.ProcessRecord();
     }
 }
@@ -380,11 +369,8 @@ public class VBotSetLocation : SetLocationCommand {
     HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097105")]
 public class VBotPushLocation : PushLocationCommand {
     protected override void ProcessRecord() {
-        if (ParameterSetName == "Path") {
-            VBotGuard.Named(this, new[] { Path });
-            if (MyInvocation.BoundParameters.ContainsKey("Path")) VBotGuard.Enter(this, Path, false);
-        }
-        else if (ParameterSetName == "LiteralPath") VBotGuard.Enter(this, LiteralPath, true);
+        if (ParameterSetName == "Path") VBotGuard.Named(this, new[] { Path });
+        VBotGuard.GuardLocation(this);
         base.ProcessRecord();
     }
 }

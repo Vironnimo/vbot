@@ -241,9 +241,10 @@ than waiting for an answer.
   Project cwd and every Workspace anew for each shell Tool or Cron-watch/context
   command, off the Event Loop; unreadable stores add no roots of their own.
   Explicit empty `-Path` values for the location and listing cmdlets terminate
-  with PowerShell's binding message. A missing directory in Set/Push-Location
-  terminates unless the call supplies `-ErrorAction` or changes
-  `$ErrorActionPreference`. Guard refusals behave like `throw`: `try/catch` can
+  with PowerShell's binding message. Set/Push-Location promote the actual cmdlet's errors to
+  terminating errors when its error action is the implicit `Continue`. Explicit
+  `-ErrorAction` and other preference settings retain their meaning. Parameter
+  binding errors occur before this guard runs. Guard refusals behave like `throw`: `try/catch` can
   catch them; `-ErrorAction` cannot silence a protected-root refusal.
   These guards prevent mistakes, not deliberate bypass: child-by-child pipelines
   (`Get-ChildItem folder | Remove-Item`), native programs, .NET calls and

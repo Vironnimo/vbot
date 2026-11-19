@@ -191,6 +191,9 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
         "Set-Location $null",
         "Get-ChildItem ''",
         "Set-Location missing",
+        "Set-Location project/file.txt",
+        "Push-Location -LiteralPath project/file.txt",
+        "Set-Location *",  # More than one matching directory.
     )
     command = "\n".join(
         f"try {{ {statement}; 'ran-{index}' }} catch {{ \"refused-{index}: $_\" }}"
