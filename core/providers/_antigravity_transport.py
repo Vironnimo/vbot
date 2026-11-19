@@ -15,6 +15,7 @@ from typing import Any
 
 from core.providers._antigravity_native import SUBSCRIPTION_SETTINGS, subscription_environment
 from core.providers._native_agent_wire import native_tool_names
+from core.providers.adapter import TOOL_CALL_REJECTION_FIELD, build_tool_call_rejection
 from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
@@ -150,7 +151,7 @@ def _confirmed_call(root: Path, step: dict[str, Any], names: dict[str, str]) -> 
     if (
         not isinstance(info, dict)
         or not isinstance(name, str)
-        or name not in names
+        or not name
         or not isinstance(receipt, dict)
         or receipt.get("name") != name
         or not isinstance(receipt.get("id"), str)
@@ -162,12 +163,26 @@ def _confirmed_call(root: Path, step: dict[str, Any], names: dict[str, str]) -> 
         raise _invalid("returned an unconfirmed Tool call")
     # The hook also receives the harness-only toolSummary field. The public tool_info
     # carries precisely the model's arguments, including fields unknown to vBot.
-    return {
+    parameters = info.get("parameters", {})
+    call: dict[str, Any] = {
         "type": "tool_call_delta",
         "id": receipt["id"],
-        "name_delta": names[name],
-        "arguments_delta": json.dumps(info.get("parameters", {}), ensure_ascii=False),
+        "name_delta": names.get(name, name),
+        "arguments_delta": json.dumps(parameters, ensure_ascii=False),
     }
+    if name not in names:
+        next_action = (
+            "Use a tool from the vbot MCP server or answer directly."
+            if names
+            else "Answer directly."
+        )
+        call[TOOL_CALL_REJECTION_FIELD] = build_tool_call_rejection(
+            code="tool_unavailable",
+            message=f"This tool was blocked before execution. {next_action}",
+            name=name,
+            arguments=parameters,
+        )
+    return call
 
 
 def _usage(value: object) -> dict[str, Any]:
@@ -261,9 +276,11 @@ async def _read_turn(
                     remaining = response[len(accumulated) :]
                     if remaining:
                         yield {"type": "content_delta", "text": remaining}
+            if len({call["id"] for call in calls.values()}) != len(calls):
+                raise _invalid("returned duplicate Tool call IDs")
             yield _usage(body.get("usage"))
-            for call in calls.values():
-                yield call
+            for call_index in sorted(calls):
+                yield calls[call_index]
             yield {"type": "finish", "reason": "tool_calls" if calls else "stop"}
             return
         if tag != "step_update":
@@ -276,8 +293,8 @@ async def _read_turn(
                 yield {"type": "content_delta", "text": text}
         elif step_type == "tool":
             index = body.get("step_index")
-            if body.get("tool_name") not in names or type(index) is not int or index < 0:
-                raise _invalid("proposed a Tool outside vBot's advertised inventory")
+            if type(index) is not int or index < 0:
+                raise _invalid("returned a Tool step without an index")
             if body.get("state") == "ACTIVE":
                 pending.add(index)
             else:

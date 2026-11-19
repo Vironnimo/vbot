@@ -88,7 +88,7 @@ def normalize_tool_call_candidates(
                 name=name,
                 arguments=candidate_arguments,
                 fallback_id=fallback_id,
-                rejection=rejection if index == 0 else None,
+                rejection=rejection,
                 argument_sequence_index=index,
                 argument_sequence_length=sequence_length,
             )
@@ -146,7 +146,9 @@ def normalize_tool_call_candidate(
     ):
         candidate[TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD] = argument_sequence_index
         candidate[TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD] = argument_sequence_length
-    if problems:
+    if normalized_rejection is not None:
+        candidate[TOOL_CALL_REJECTION_FIELD] = normalized_rejection
+    elif problems:
         detail = " ".join(problems)
         if len(problems) == 1 and argument_error:
             code = "malformed_tool_arguments"
@@ -162,13 +164,9 @@ def normalize_tool_call_candidate(
                 "Send the complete call again, with its Tool name and its arguments "
                 "as one JSON object."
             )
-        candidate[TOOL_CALL_REJECTION_FIELD] = {
-            "code": code,
-            "message": message,
-            "fingerprint": _tool_call_rejection_fingerprint(name, arguments, detail),
-        }
-    elif normalized_rejection is not None:
-        candidate[TOOL_CALL_REJECTION_FIELD] = normalized_rejection
+        candidate[TOOL_CALL_REJECTION_FIELD] = build_tool_call_rejection(
+            code=code, message=message, name=name, arguments=arguments, detail=detail
+        )
     return candidate
 
 
@@ -292,7 +290,10 @@ def _normalized_existing_tool_call_rejection(value: Any) -> JsonObject | None:
     return {"code": code, "message": message, "fingerprint": fingerprint}
 
 
-def _tool_call_rejection_fingerprint(name: Any, arguments: Any, detail: str) -> str:
+def build_tool_call_rejection(
+    *, code: str, message: str, name: Any, arguments: Any, detail: str | None = None
+) -> JsonObject:
+    """Describe a rejected attempt and fingerprint it independently of its generated call id."""
     if isinstance(arguments, str):
         argument_evidence = arguments
     else:
@@ -306,8 +307,12 @@ def _tool_call_rejection_fingerprint(name: Any, arguments: Any, detail: str) -> 
             )
         except TypeError, ValueError, OverflowError, RecursionError:
             argument_evidence = f"<{type(arguments).__name__}>"
-    evidence = f"{name!r}\0{argument_evidence}\0{detail}"
-    return hashlib.sha256(evidence.encode("utf-8", errors="replace")).hexdigest()
+    evidence = f"{name!r}\0{argument_evidence}\0{detail if detail is not None else code}"
+    return {
+        "code": code,
+        "message": message,
+        "fingerprint": hashlib.sha256(evidence.encode("utf-8", errors="replace")).hexdigest(),
+    }
 
 
 def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:

@@ -1100,6 +1100,7 @@ async def test_extension_sampling_records_usage_before_returning(
     runtime.start()
     recorder = runtime.usage_recorder
     shutdown = SimpleNamespace(begins_mid_call=False, fails_after_usage=False)
+    tool_delta: dict[str, Any] = {}
     try:
 
         async def stream(*_args: object, **_kwargs: object) -> AsyncIterator[dict[str, object]]:
@@ -1109,7 +1110,9 @@ async def test_extension_sampling_records_usage_before_returning(
             yield {"type": "usage", "input_tokens": 10, "output_tokens": 2}
             if shutdown.fails_after_usage:
                 raise ProviderError("stream dropped", retryable=True)
-            yield {"type": "finish", "reason": "stop"}
+            if tool_delta:
+                yield tool_delta
+            yield {"type": "finish", "reason": "tool_calls" if tool_delta else "stop"}
 
         request_contexts: list[dict[str, Any]] = []
 
@@ -1146,20 +1149,40 @@ async def test_extension_sampling_records_usage_before_returning(
         record = read_ledger(recorder)[1][-1]
         assert (record.status, record.usage["input_tokens"]) == ("failed", 10)
         shutdown.fails_after_usage = False
+        tool_delta.update(
+            type="tool_call_delta", name_delta="sample_tool", id="t", arguments_delta="{}"
+        )
+        sample_request = {"messages": [], "max_tokens": 100, "tools": [{"name": "sample_tool"}]}
+        # External sampling clients can execute every returned call, even a
+        # native proposal whose name coincides with an advertised sampling Tool.
+        tool_delta["rejection"] = {
+            "code": "tool_unavailable",
+            "message": "Blocked",
+            "fingerprint": "hash",
+        }
+        with pytest.raises(ProviderError, match="unavailable Tool"):
+            await runtime._sample_extension(context, sample_request)
+        assert read_ledger(recorder)[1][-1].status == "failed"
+        del tool_delta["rejection"]
+        restrictions: list[dict[str, Any]] = [{"tools": []}, {"tool_choice": "none"}]
+        for restriction in restrictions:
+            with pytest.raises(ProviderError, match="unavailable Tool"):
+                await runtime._sample_extension(context, {**sample_request, **restriction})
         # The second call withdraws readiness mid-call, as a beginning shutdown does.
         for begins_mid_call in (False, True):
             shutdown.begins_mid_call = begins_mid_call
             result = await runtime._sample_extension(  # noqa: SLF001 - Extension sampling seam.
-                context, {"messages": [], "max_tokens": 100}
+                context, sample_request
             )
             assert result["model"] == "p/m"
+            assert result["tool_calls"][0]["name"] == "sample_tool"
             record = read_ledger(recorder)[1][-1]
             assert record.kind == "extension_sampling"
             assert record.usage["input_tokens"] == 10
             assert record.run_id == "run"
             assert record.owner_name == "fixture"
-        assert len(read_ledger(recorder)[1]) == 3
-        assert adapter.aclose.await_count == 3
+        assert len(read_ledger(recorder)[1]) == 6
+        assert adapter.aclose.await_count == 6
         assert (
             request_contexts
             == [
@@ -1170,7 +1193,7 @@ async def test_extension_sampling_records_usage_before_returning(
                     "request_kind": "utility",
                 }
             ]
-            * 3
+            * 6
         )
     finally:
         await runtime.aclose()

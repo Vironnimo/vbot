@@ -18,6 +18,7 @@ _RAW_DEFAULTS: dict[str, dict[str, Any]] = {
     "antigravity": {
         "request": {
             "output_limit_field": None,
+            "on_demand_tools": False,
             "parameters": {
                 "temperature": {"mode": "drop"},
                 "top_p": {"mode": "drop"},

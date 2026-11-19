@@ -19,6 +19,7 @@ from core.chat._step_outcomes import (
     tool_result_facts,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
+from core.providers.adapter import build_tool_call_rejection
 from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import TOOL_CALL_RESULT_EVENT, RunStatus
 from core.sessions import ToolResultFacts
@@ -230,17 +231,25 @@ async def test_unsafe_terminal_outcome_fails_closed_before_tool_handler(
 
 
 @pytest.mark.asyncio
-async def test_malformed_call_fails_without_blocking_valid_sibling(
-    tmp_path: Path,
+@pytest.mark.parametrize("provider_rejected", [False, True], ids=["malformed", "provider-rejected"])
+async def test_rejected_call_fails_without_blocking_same_name_valid_sibling(
+    tmp_path: Path, provider_rejected: bool
 ) -> None:
     invocations: list[JsonObject] = []
+    first = _VALID if provider_rejected else "{not json"
+    turn = tool_turn(("call_bad", "probe", first), ("call_ok", "probe", {"value": "kept"}))
+    if provider_rejected:
+        rejection = build_tool_call_rejection(
+            code="provider_denied",
+            message="The Provider refused this call.",
+            name="probe",
+            arguments=first,
+        )
+        turn["tool_calls"][0]["rejection"] = rejection
     runtime = tool_runtime(
         tmp_path,
         _counting_tool(invocations, parameters=_VALUE_SCHEMA),
-        [
-            tool_turn(("call_bad", "probe", "{not json"), ("call_ok", "probe", {"value": "kept"})),
-            final("Recovered after the rejected sibling."),
-        ],
+        [turn, final("Recovered after the rejected sibling.")],
     )
 
     result = await build_chat_loop(runtime).send("coder", "Run both", session_id="session-one")
@@ -252,7 +261,11 @@ async def test_malformed_call_fails_without_blocking_valid_sibling(
     assert messages[1].tool_calls is not None
     assert [call.rejection is not None for call in messages[1].tool_calls] == [True, False]
     rejected, kept = tool_results(messages)
-    assert rejected["error"]["code"] == "malformed_tool_arguments"
+    if provider_rejected:
+        assert messages[1].tool_calls[0].rejection == ToolCallRejection.from_dict(rejection)
+        assert rejected == tool_failure(rejection["code"], rejection["message"], retryable=False)
+    else:
+        assert rejected["error"]["code"] == "malformed_tool_arguments"
     assert kept == tool_success({"value": "kept"})
     assert last_run(runtime).status == RunStatus.COMPLETED
 

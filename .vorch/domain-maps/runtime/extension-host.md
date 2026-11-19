@@ -24,7 +24,7 @@ The same helper module supplies `host.input_authority` using the latest canonica
 
 The storage scope adapter and Tool/Extension Prompt-block contributions live together in `_prompt_blocks.py`; bootstrap and reload use the same projection.
 
-Extension sampling (`_extension_sampling.py`) resolves the Agent, Model route and Adapter off the Event Loop. It retains the Adapter and UsageRecorder across awaits, so cancellation and readiness withdrawal still finish Usage accounting and close the acquired Adapter; it records its own exposed Adapter request, and it retains its injected recorder through readiness withdrawal during shutdown.
+Extension sampling (`_extension_sampling.py`) resolves the Agent, Model route and Adapter off the Event Loop. External clients can execute each returned Tool call, so a rejected, disabled or unadvertised call fails the sample before any part of its batch leaves the host. It retains the Adapter and UsageRecorder across awaits, so cancellation and readiness withdrawal still finish Usage accounting and close the acquired Adapter; it records its own exposed Adapter request, and it retains its injected recorder through readiness withdrawal during shutdown.
 
 ## Resolving the calling Agent
 

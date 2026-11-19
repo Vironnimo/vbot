@@ -103,6 +103,7 @@ def response_deltas(response: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "type": "tool_call_delta",
                 "slot": index,
                 **({"id": call["id"]} if call.get("id") else {}),
+                **({"rejection": call["rejection"]} if "rejection" in call else {}),
                 "name_delta": str(call.get("name") or ""),
                 "arguments_delta": (
                     arguments if isinstance(arguments, str) else json.dumps(arguments)

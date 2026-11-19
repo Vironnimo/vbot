@@ -66,7 +66,18 @@ async def child(monkeypatch: pytest.MonkeyPatch) -> _Child:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case", ["call", "native", "missing_receipt", "missing_guard", "missing_inventory", "fallback"]
+    "case",
+    [
+        "call",
+        "mixed",
+        "missing_receipt",
+        "missing_denial",
+        "pending_native",
+        "duplicate_id",
+        "missing_guard",
+        "missing_inventory",
+        "fallback",
+    ],
 )
 async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child: _Child, case: str
@@ -78,7 +89,6 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
         "sys",
         SimpleNamespace(platform="win32", executable=str(runtime / "vBot.Server.exe")),
     )
-    tool = "manage_task" if case == "native" else "mcp_vbot_signal"
 
     async def launch(*args: str, cwd: Path, env: dict[str, str], **_: Any) -> _Child:
         root = cwd.parent
@@ -121,29 +131,44 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
             assert bridge._guard("before", root) == {}
             assert bridge._guard("before", root) == {"terminationBehavior": "terminate"}
         child.event("step_update", step_type="agent_response", state="ACTIVE", text_delta="text")
-        if case != "missing_receipt":
+
+        def tool_step(index: int, tool: str, call_id: str) -> None:
+            # The native name can first arrive in the terminal step update.
+            child.event("step_update", step_type="tool", step_index=index, state="ACTIVE")
+            if case == "pending_native":
+                return
             event = {
-                "stepIdx": 2,
-                "toolCall": {"name": tool, "args": {**_ARGS, "toolSummary": "native"}, "id": "c1"},
+                "stepIdx": index,
+                "toolCall": {
+                    "name": tool,
+                    "args": {**_ARGS, "toolSummary": "native"},
+                    "id": call_id,
+                },
             }
-            monkeypatch.setattr(bridge.sys, "stdin", io.StringIO(json.dumps(event)))
-            assert bridge._guard("guard", root) == {"decision": "deny"}
-        info = {"name": tool, "parameters": _ARGS}
-        child.event(
-            "step_update",
-            step_type="tool",
-            step_index=2,
-            state="ACTIVE",
-            tool_name=tool,
-            tool_info=info,
-        )
-        child.event(
-            "step_update",
-            step_type="tool",
-            step_index=2,
-            state="ERROR",
-            tool_name=tool,
-            tool_info={**info, "error": {"message": "tool call denied by pre-tool hook:"}},
+            if case != "missing_receipt":
+                monkeypatch.setattr(bridge.sys, "stdin", io.StringIO(json.dumps(event)))
+                assert bridge._guard("guard", root) == {"decision": "deny"}
+            child.event(
+                "step_update",
+                step_type="tool",
+                step_index=index,
+                tool_name=tool,
+                state="DONE" if case == "missing_denial" else "ERROR",
+                tool_info={
+                    "parameters": _ARGS,
+                    "error": {"message": "tool call denied by pre-tool hook:"},
+                },
+            )
+
+        if case in {"mixed", "duplicate_id"}:
+            # Same canonical name as the advertised Tool, but a native call, completed first.
+            tool_step(3, "signal", "c1" if case == "duplicate_id" else "c2")
+        tool_step(
+            2,
+            "manage_task"
+            if case in {"missing_receipt", "missing_denial", "pending_native"}
+            else "mcp_vbot_signal",
+            "c1",
         )
         child.event(
             "result",
@@ -167,8 +192,21 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
         tools=[_DEFINITION],
         temporary_files=TemporaryFileManager(tmp_path),
     )
-    if case == "call":
-        assert [delta async for delta in stream] == [
+    if case in {"call", "mixed"}:
+        deltas = [delta async for delta in stream]
+        if case == "mixed":
+            native = deltas.pop(-2)
+            rejection = native.pop("rejection")
+            assert native == {
+                "type": "tool_call_delta",
+                "id": "c2",
+                "name_delta": "signal",
+                "arguments_delta": json.dumps(_ARGS),
+            }
+            assert rejection["code"] == "tool_unavailable"
+            assert "vbot MCP server" in rejection["message"]
+            assert rejection["fingerprint"]
+        assert deltas == [
             {"type": "content_delta", "text": "text"},
             {
                 "type": "usage",
@@ -188,8 +226,11 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
         ]
     else:
         expected = {"missing_guard": "pre-invocation hook", "missing_inventory": "Tool inventory"}
+        seen = []
         with pytest.raises(ProviderError, match=expected.get(case)):
-            _ = [delta async for delta in stream]
+            async for delta in stream:
+                seen.append(delta)
+        assert all(delta["type"] != "tool_call_delta" for delta in seen)
     if case == "fallback":
         assert not child.stdin
     else:

@@ -864,6 +864,7 @@ async def test_a_route_without_native_on_demand_calls_loaded_tools_through_a_fix
     assert sent == [sent[0]] * 3
     system = runtime.adapter.requests[0]["messages"][0]["content"]
     assert "Search the web." in system
+    assert "through call_tool" in _loaded_text(tool_results(history(runtime))[0])
     assert _announced(runtime) == [("loaded", "search")]
 
 
@@ -878,7 +879,7 @@ async def test_a_model_change_to_a_listed_only_route_reaches_on_demand_tools_thr
     runtime = tool_runtime(
         tmp_path,
         tools,
-        [final("ready")],
+        [tool_turn(("first-load", "load_tools", {"names": ["search"]})), final("ready")],
         allowed_tools=["read", "search", "fetch"],
         tool_loading=_ON_DEMAND,
     )
@@ -889,7 +890,7 @@ async def test_a_model_change_to_a_listed_only_route_reaches_on_demand_tools_thr
 
     runtime.adapter = StubAdapter(
         [
-            tool_turn(("load", "load_tools", {"names": ["search"]})),
+            tool_turn(("load", "load_tools", {"names": ["search", "fetch"]})),
             tool_turn(("use", "call_tool", {"name": "search", "arguments": {"query": "vbot"}})),
             final("done"),
         ],
@@ -904,7 +905,13 @@ async def test_a_model_change_to_a_listed_only_route_reaches_on_demand_tools_thr
         "call_tool",
     ]
     assert sent == [sent[0]] * 3
-    assert _announced(runtime) == [("added", "call_tool"), ("loaded", "search")]
+    assert _announced(runtime) == [
+        ("loaded", "search"),
+        ("added", "call_tool"),
+        ("loaded", "fetch"),
+    ]
+    reloaded = _loaded_text(tool_results(history(runtime))[1])
+    assert "search: already callable" in reloaded and "otherwise through call_tool" in reloaded
 
 
 @pytest.mark.asyncio

@@ -105,7 +105,7 @@ class NativeAgentAdapter(ProviderAdapter):
             "usage": {},
             "terminal_outcome": "unknown",
         }
-        calls: dict[str, JsonObject] = {}
+        calls: dict[tuple[str, str | int], JsonObject] = {}
         async for delta in self.stream(messages, model_id=model_id, **kwargs):
             delta_type = delta["type"]
             if delta_type == "content_delta":
@@ -113,11 +113,17 @@ class NativeAgentAdapter(ProviderAdapter):
             elif delta_type == "reasoning_delta":
                 response["reasoning"] += delta["text"]
             elif delta_type == "tool_call_delta":
+                slot = delta.get("slot")
+                key = ("id", delta["id"]) if slot is None else ("slot", slot)
                 call = calls.setdefault(
-                    delta["id"], {"id": delta["id"], "name": "", "arguments": ""}
+                    key, {"id": f"tool_call_{key[1]}", "name": "", "arguments": ""}
                 )
+                if delta.get("id"):
+                    call["id"] = delta["id"]
                 call["name"] += delta.get("name_delta", "")
                 call["arguments"] += delta.get("arguments_delta", "")
+                if (rejection := delta.get(TOOL_CALL_REJECTION_FIELD)) is not None:
+                    call.setdefault(TOOL_CALL_REJECTION_FIELD, rejection)
             elif delta_type == "usage":
                 response["usage"] = {key: value for key, value in delta.items() if key != "type"}
             elif delta_type == "finish":

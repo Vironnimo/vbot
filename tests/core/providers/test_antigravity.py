@@ -57,6 +57,7 @@ async def test_subscription_turn_reconstructs_history_and_hands_calls_back_to_vb
     first = await adapter.send(messages, model_id="model-high", tools=tools)
     assert frames[0]["model"] == "model-high"
     assert frames[0]["system_prompt"] == prompt
+    assert "Use the vbot MCP server for tool calls." in frames[0]["prompt"].splitlines()[0]
     assert frames[0]["tools"] == [
         {"name": "lookup", "description": "Look up a name.", "inputSchema": schema}
     ]
@@ -84,6 +85,7 @@ async def test_subscription_turn_reconstructs_history_and_hands_calls_back_to_vb
     assert second["terminal_outcome"] == "stop"
     assert frames[1]["tools"] == []
     sent = frames[1]["prompt"]
+    assert "Answer directly without calling tools." in sent.splitlines()[0]
     assert "@" not in sent
     assert prompt not in sent
     records = [json.loads(line) for line in sent.splitlines()[1:]]
