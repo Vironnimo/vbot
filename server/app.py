@@ -344,6 +344,8 @@ def create_app(
                             await app.state.activity.aclose()
                         with cleanup_step():
                             await app.state.update_availability.aclose()
+                        with cleanup_step():
+                            app.state.usage_unsubscribe()
                         for unregister in (
                             _unregister_run_event_bridge,
                             _unregister_session_activity_bridge,
@@ -647,6 +649,7 @@ def create_app(
                 "replay_status": replay_status,
                 "active_runs": active_runs,
                 "permissions_approvals": _app_chat_runs(websocket.app.state).approvals_snapshot(),
+                "provider_usage": websocket.app.state.runtime.provider_usage.observations(),
                 "queues": _queues_snapshot(websocket.app.state),
                 "session_activity": _session_activity_snapshot(websocket.app.state),
                 "server": websocket.app.state.server_identity,

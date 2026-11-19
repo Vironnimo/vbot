@@ -653,6 +653,8 @@
   });
   const runEvents = appController.runEvents;
   const sessionViewEvents = $derived({
+    providers: setup.settings?.providers?.items ?? [],
+    providerObservations: appControllerState.providerObservations,
     runEvents,
     commandStatuses,
     sessionActivity,

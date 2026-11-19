@@ -86,6 +86,7 @@ class _ChatHistoryRead:
     # ``before`` one.
     subagent_sessions: dict[SessionAddress, str] | None = None
     agent_name: str | None = None
+    session_model: str | None = None
 
 
 async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
@@ -266,6 +267,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         response["context_usage"] = context_usage
         if before is None:
             response["agent_name"] = read.agent_name
+            response["session_model"] = read.session_model
             response["output_speed"] = history.output_speed
             response["output_latency"] = history.output_latency
     if before is None:
@@ -392,6 +394,7 @@ def _read_chat_history(
         return _ChatHistoryRead(history, None, None, subagent_sessions=subagent_sessions)
     agent = _session_agent(state, address) if before is None else None
     agent_name = getattr(agent, "name", None)
+    session_model = getattr(agent, "model", None)
     if agent is None and before is None:
         # A temporary Agent has one binding for its own and delegated Sessions.
         binding = state.runtime.chat_sessions.temporary_agent_binding(
@@ -399,6 +402,7 @@ def _read_chat_history(
         )
         if binding is not None:
             agent_name = binding.config.get("name")
+            session_model = binding.config.get("model")
     return _ChatHistoryRead(
         history,
         _session_compaction_policy(state, address, agent) if agent is not None else None,
@@ -406,6 +410,7 @@ def _read_chat_history(
         _agent_context_window(state, agent) if agent is not None else None,
         subagent_sessions,
         agent_name=agent_name,
+        session_model=session_model,
     )
 
 

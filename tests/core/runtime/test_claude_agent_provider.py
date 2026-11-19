@@ -372,7 +372,7 @@ async def test_usage_reports_ask_claude_code_for_missing_or_stale_windows(
     monkeypatch.setattr(provider_runtime, "time", SimpleNamespace(monotonic=lambda: now))
 
     async def report() -> list[float]:
-        windows = owner.current_claude_usage()
+        _observed_at, windows = owner.current_claude_usage()
         if owner._claude_usage_probe is not None:
             await owner._claude_usage_probe
         return [window.used_percent for window in windows]

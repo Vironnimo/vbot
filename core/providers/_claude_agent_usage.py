@@ -66,14 +66,15 @@ class ClaudeAgentUsage:
             observed_at = self._observed_at if self._windows else None
         return None if observed_at is None else (self._now() - observed_at).total_seconds()
 
-    def windows(self) -> tuple[UsageWindow, ...]:
-        """Return fresh immutable facts; a reset does not imply measured zero usage."""
+    def observation(self) -> tuple[datetime | None, tuple[UsageWindow, ...]]:
+        """Read fresh immutable facts and their measurement time together."""
         now = self._now()
         with self._lock:
             for window_type, window in tuple(self._windows.items()):
                 if window.reset_at is not None and datetime.fromisoformat(window.reset_at) <= now:
                     self._windows.pop(window_type)
-            return tuple(self._windows[key] for key in _WINDOWS if key in self._windows)
+            windows = tuple(self._windows[key] for key in _WINDOWS if key in self._windows)
+            return self._observed_at if windows else None, windows
 
     def clear(self) -> None:
         with self._lock:

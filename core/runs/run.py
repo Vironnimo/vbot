@@ -468,6 +468,7 @@ class Run:
         # serving the Run, retried Model requests, partial answers preserved
         # after a broken stream, and whether the Run executes internal work.
         self.model: str | None = None
+        self.model_reference: str | None = None  # Exact route while this Run is serving.
         self.thinking_effort: str | None = None
         # Chat captures temporary settings for this Run's automatic follow-ups.
         # They are never Session defaults or changes to the Agent itself.

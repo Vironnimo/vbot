@@ -385,6 +385,42 @@ export function parseModelSelectionValue(selectedValue) {
   };
 }
 
+/** Match a selected or already resolved Model route to a passive observation. */
+export function modelProviderLimits(
+  selectedValue,
+  { providers, models, observations, resolved },
+) {
+  const { model, connectionLocalId } = parseModelSelectionValue(selectedValue);
+  const providerId = model.split('/')[0];
+  if (!providerId) return null;
+  const provider = providers.find((entry) => entry.id === providerId);
+  const { localId, accountId } = splitConnectionSuffix(connectionLocalId);
+  const connections = provider?.connections ?? [];
+  const catalogModel = models?.find((entry) => entry.id === model);
+  const usable = connections.filter((entry) => entry.usable);
+  const connection = localId
+    ? connections.find((entry) => entry.id === `${providerId}:${localId}`)
+    : catalogModel || usable.length === 1
+      ? connectionsAllowedForModel(catalogModel, usable)[0]
+      : null;
+  // A running reference omits the default Account. An unqualified selection
+  // instead uses the first usable Account in the Connection's catalog order.
+  const accounts = usableConnectionAccounts(connection);
+  const account = resolved
+    ? accountId || DEFAULT_ACCOUNT_ID
+    : accounts.find((entry) => !accountId || entry.id === accountId)?.id;
+  const connectionId = resolved
+    ? `${providerId}:${localId}`
+    : connection?.usable && connection.id;
+  const observation = observations.find(
+    (entry) => entry.connection === connectionId && entry.account === account,
+  );
+  return {
+    name: provider?.name ?? observation?.display_name ?? providerId,
+    observation,
+  };
+}
+
 /** Whether the selected Model route offers the Session's Fast mode. */
 export function modelSupportsFastMode(selectedValue, models = []) {
   const { model, connectionLocalId } = parseModelSelectionValue(selectedValue);

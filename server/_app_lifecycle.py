@@ -24,6 +24,7 @@ from server.events import (
     ACTIVITY_STATUS_EVENT,
     CRON_FAILURE_ALERT_EVENT,
     EXTENSION_NOTIFICATION_EVENT,
+    PROVIDER_USAGE_OBSERVED_EVENT,
     RESOURCE_KIND_APPLICATION,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_BOOTSTRAP,
@@ -91,6 +92,9 @@ def _initialize_app_state(
                 "revision": revision,
             },
         )
+    )
+    app.state.usage_unsubscribe = runtime.provider_usage.subscribe_observations(
+        lambda observation: app.state.event_bus.publish(PROVIDER_USAGE_OBSERVED_EVENT, observation)
     )
     app.state.client_registry = ClientRegistry()
     app.state.file_delivery = file_delivery

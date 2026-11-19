@@ -254,6 +254,7 @@ export function createSessionSettings(context) {
         team: false,
         value: row?.workingProjectId ?? null,
       },
+      modelKnown: Boolean(row) || Object.hasOwn(changes, 'model'),
       model: override('model'),
       thinkingEffort: override('thinking_effort'),
       fastMode: changes.fast_mode ?? row?.fastMode ?? false,

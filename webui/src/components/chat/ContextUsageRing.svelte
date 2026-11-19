@@ -15,9 +15,11 @@
     contextUsageCardModel,
   } from '$lib/tokenUsageTooltip.js';
   import Button from '../ui/Button.svelte';
+  import ContextProviderUsage from './ContextProviderUsage.svelte';
 
   let {
     contextUsage = null,
+    providerLimits = null,
     contextWindow = null,
     usage = null,
     sessionUsage = null,
@@ -34,6 +36,7 @@
   const RING_RADIUS = 6;
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+  let open = $state(false);
   let fillRatio = $derived.by(() => {
     const tokens = contextUsage?.tokens;
     if (
@@ -139,7 +142,10 @@
     </button>
     <div
       class="floating-card context-card context-card--{level}"
-      use:floatingHoverCard={{ openOnPress: true }}
+      use:floatingHoverCard={{
+        openOnPress: true,
+        onOpenChange: (value) => (open = value),
+      }}
     >
       <div class="context-card__header">
         <span class="context-card__title">{t('chat.contextCardTitle')}</span>
@@ -158,6 +164,9 @@
       </span>
       {#if warning.message}
         <p class="context-card__level">{warning.message}</p>
+      {/if}
+      {#if providerLimits}
+        <ContextProviderUsage provider={providerLimits} {open} />
       {/if}
       {#each card.sections as section (section.id)}
         <section class="context-card__section">

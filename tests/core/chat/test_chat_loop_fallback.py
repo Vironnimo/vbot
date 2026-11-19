@@ -153,6 +153,7 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
     assert (fallback_record.retry_at is not None) is cools_down
     assert "model_fallback" not in json.dumps(fallback_requests[0]["messages"])
     # Usage and cost belong to the Model that actually answered.
+    assert run.model_reference == FALLBACK
     assert messages[2].model == FALLBACK
     assert await _fallback_events(runtime, run) == [(PRIMARY, FALLBACK)]
     assert run.iteration_count == 1

@@ -125,6 +125,7 @@ def capture_run_timeline(run: Run, projection: RunTimeline | None = None) -> Jso
         "items": projection.snapshot(),
         "state": {
             **copy.deepcopy(projection.state),
+            **({"model_reference": run.model_reference} if run.model_reference else {}),
             "status": projection.run["status"],
             "controls": copy.deepcopy(run.controls()),
             "controls_sequence": run.last_sequence,
