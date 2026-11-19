@@ -18,6 +18,7 @@ CONFIG = {
         "allowed_skills": A,
         "allowed_tools": A,
         "denied_tools": A,
+        "permission_ceiling_profile": S,
         "permission_ceiling": {"type": "object"},
     },
 }

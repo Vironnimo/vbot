@@ -24,8 +24,8 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 39
-SDK_VERSION: Final[str] = "39.0.0"
+API_VERSION: Final[int] = 40
+SDK_VERSION: Final[str] = "40.0.0"
 
 def require_api(minimum: int = API_VERSION, *, maximum: int | None = None) -> int: ...
 
@@ -53,6 +53,9 @@ class TemporaryAgentConfig:
     permission_ceiling: Mapping[str, Any] | None = None
     model_override: str | None = None
     thinking_effort_override: str | None = None
+    permission_ceiling_profile: str | None = None
+    inherit_permission_defaults: bool = False
+    permission_profile: str | None = None
     @property
     def has_profile(self) -> bool: ...
 

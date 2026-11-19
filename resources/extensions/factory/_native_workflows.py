@@ -227,6 +227,7 @@ class NativeWorkflows:
             ),
             allowed_skills=skills,
             permission_ceiling=boundary.get("permission_ceiling"),
+            permission_ceiling_profile=boundary.get("permission_ceiling_profile"),
             instructions=config.instructions
             + "\n\n"
             + native_workflow_instructions(factory, member),

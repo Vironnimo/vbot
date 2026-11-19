@@ -454,11 +454,19 @@ describe('Swarm profile settings', () => {
   it('offers the Team agents of the selected Project and drops them outside it', async () => {
     const { bridge, operation } = createBridge();
     extendCatalog(operation, (catalog) => {
+      catalog.permission_profiles = ['Individual', 'Team limit'];
       catalog.projects[0].agent_profiles = [
         { id: 'reviewer', name: 'Reviewer', source: 'claude' },
       ];
     });
     await openEditor(bridge);
+    await choose('swarm-permission-profile-0', 'Individual');
+    await choose('swarm-permission-limit', 'Team limit');
+    await saveAndConfirm();
+    expect(lastSaved(operation).participants[0].permission_profile).toBe(
+      'Individual',
+    );
+    expect(lastSaved(operation).permission_ceiling_profile).toBe('Team limit');
     const teamAgent = () => document.getElementById('swarm-team-agent-0');
     await vi.waitFor(() =>
       expect(document.getElementById('swarm-directory-source')).not.toBeNull(),
@@ -467,7 +475,17 @@ describe('Swarm profile settings', () => {
     await choose('swarm-directory-source', t('swarm.profile.projectOption'));
     await choose('swarm-project', 'Project A');
     await choose('swarm-team-agent-0', 'Reviewer');
+    await choose(
+      'swarm-permission-limit',
+      t('permissions.profile.noGroupLimit'),
+    );
     await saveAndConfirm();
+    expect(lastSaved(operation).participants[0]).not.toHaveProperty(
+      'permission_profile',
+    );
+    expect(lastSaved(operation)).not.toHaveProperty(
+      'permission_ceiling_profile',
+    );
     expect(lastSaved(operation).participants[0].repository_profile).toBe(
       'reviewer',
     );

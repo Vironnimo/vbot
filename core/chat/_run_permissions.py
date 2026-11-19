@@ -105,10 +105,11 @@ class SessionPermissions:
     rule_files: tuple[Path, ...]
     allowed_skills: tuple[str, ...] | None
     read_folders: tuple[str, ...] = ()
+    extension_rules: PermissionRules | None = None
 
     @property
     def restricted(self) -> bool:
-        return self.rules is not None or bool(self.ceilings)
+        return self.rules is not None or self.extension_rules is not None or bool(self.ceilings)
 
     def without_agent_rules(self) -> SessionPermissions:
         """Only the ceilings, as a Cron watch check applies them: it runs no Agent."""
@@ -164,7 +165,9 @@ class SessionPermissions:
             loopback_port=loopback_port,
             own_hosts=own_hosts() if own_hosts is not None and loopback_port is not None else (),
         )
-        return PermissionBoundary.build(self.rules, context, ceilings=self.ceilings)
+        return PermissionBoundary.build(
+            self.rules, context, ceilings=self.ceilings, extension_rules=self.extension_rules
+        )
 
 
 def session_permissions(
@@ -187,7 +190,10 @@ def session_permissions(
     ceilings = tuple(item for item in (ceiling, agent.permission_ceiling) if item is not None)
     workspace = Path(agent.workspace) if agent.workspace else None
     workdir: Path
+    extension_rules = None
     if isinstance(agent, TemporaryAgent | OwnedIdentityAgent):
+        if agent.extension_rules is not None and agent.extension_rules.restricts:
+            extension_rules = agent.extension_rules
         workdir = agent.cwd
     elif project_root is not None:
         workdir = project_root
@@ -196,6 +202,7 @@ def session_permissions(
     allowed = agent.allowed_skills
     return SessionPermissions(
         rules=rules,
+        extension_rules=extension_rules,
         ceilings=ceilings,
         read_folders=read_folders,
         workdir=workdir,

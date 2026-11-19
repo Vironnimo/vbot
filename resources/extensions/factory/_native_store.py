@@ -125,6 +125,7 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
             "allowed_tools",
             "denied_tools",
             "permission_ceiling",
+            "permission_ceiling_profile",
         }
         if any(not isinstance(field, str) or field not in allowed for field in clear_fields):
             raise _error(

@@ -641,6 +641,8 @@ def bootstrap(runtime: Runtime) -> None:
             resolve_identity=lambda agent_id: cast(
                 Agent, runtime.agent_resolver.resolve_agent(None, agent_id)
             ),
+            profile_rules=lambda name: runtime.agent_resolver.permission_rules_for_profile(name),
+            default_rules=lambda: runtime.agent_resolver.default_permission_rules(),
             prepare_config=lambda config, project_id: (
                 runtime.agent_resolver.prepare_temporary_config(config, project_id)
             ),

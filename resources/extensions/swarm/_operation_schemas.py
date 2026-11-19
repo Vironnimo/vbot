@@ -25,7 +25,8 @@ _PROFILE_INPUT = {
         "{kind: project, project_id: <id>}. Formation rows also accept thinking_effort, "
         "temperature, top_p, fallback_models, and repository_profile (a "
         "Team agent id from the selected Project in catalog; omit to use "
-        "participant settings). Optional profile fields: slug, tools (per-Tool "
+        "participant settings). A row without a Team agent can select its own permission_profile "
+        "from catalog.permission_profiles. Optional profile fields: slug, tools (per-Tool "
         "settings), allowed_skills, instructions, prompt_blocks, reminders, delivery, and "
         "compaction_policy. compaction_policy is null to use the global Compaction settings, "
         "or one complete Policy for every participant: {enabled (automatic Compaction), "
@@ -36,6 +37,12 @@ _PROFILE_INPUT = {
         "Save returns the full normalized profile with defaults and revision. Updating "
         "preserves its id and uses that revision as expected_revision; creation uses null."
     ),
+    "properties": {
+        "permission_ceiling_profile": {
+            "type": ["string", "null"],
+            "description": "A name from catalog.permission_profiles that limits every participant.",
+        },
+    },
     "examples": [
         {
             "schema_version": 1,

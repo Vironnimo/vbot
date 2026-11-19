@@ -30,6 +30,11 @@ export default Object.freeze({
   'permissions.createHelp':
     'Manage reusable permission profiles in Agents under Shared defaults.',
   'permissions.profile.label': 'Permission profile',
+  'permissions.profile.groupLimit': 'Group permission limit',
+  'permissions.profile.noGroupLimit': 'No group profile',
+  'permissions.profile.groupLimitHelp':
+    'Every participant must also follow this profile. Each Agent’s own restrictions still apply.',
+  'permissions.profile.agentDefault': 'Use the global Agent default',
   'permissions.profile.restricted': 'Restricted',
   'permissions.profile.inherited': 'Inherited rules',
   'permissions.profile.inheritedFull': 'Inherited rules · Full access',

@@ -188,6 +188,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
     if (name === 'catalog')
       return {
         catalog: {
+          permission_profiles: ['full_access', 'restricted', 'Team limit'],
           projects: ['a', 'b'].map((id) => ({
             id: `project-${id}`,
             name: `Project ${id.toUpperCase()}`,

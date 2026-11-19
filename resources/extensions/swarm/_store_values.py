@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.permissions import normalize_permission_profile_name
 from core.sessions import DeliveryReceipt, SessionAddress
 from core.settings.agent_defaults import validate_fallback_chain
 from core.settings.normalizers import normalize_compaction_policy
@@ -129,6 +130,7 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
         "reminders",
         "delivery",
         "compaction_policy",
+        "permission_ceiling_profile",
     }
     if set(profile) - allowed:
         raise SwarmStoreError("invalid_arguments")
@@ -200,6 +202,8 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     profile["reminders"] = dict(reminders)
     profile["delivery"] = _delivery(profile.get("delivery", {}))
     profile["compaction_policy"] = _compaction_policy(profile.get("compaction_policy"))
+    if profile.get("permission_ceiling_profile") is not None:
+        _profile_name(profile["permission_ceiling_profile"], "permission_ceiling_profile")
     profile.setdefault("tools", {})
     profile.setdefault("allowed_skills", ["*"])
     profile.setdefault("instructions", "")
@@ -208,6 +212,13 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     else:
         profile["revision"] = 0
     return profile
+
+
+def _profile_name(value: object, field: str) -> str:
+    try:
+        return normalize_permission_profile_name(value)
+    except ValueError as error:
+        raise SwarmStoreError("invalid_arguments", field=field) from error
 
 
 def _formation(value: object) -> Json:
@@ -221,6 +232,7 @@ def _formation(value: object) -> Json:
         "top_p",
         "fallback_models",
         "repository_profile",
+        "permission_profile",
     }
     if set(value) - allowed or set(value) < {"model", "count"}:
         raise SwarmStoreError("invalid_arguments", field="participants")
@@ -234,6 +246,12 @@ def _formation(value: object) -> Json:
         if not isinstance(reference, str) or not reference.strip():
             raise SwarmStoreError("invalid_arguments", field="repository_profile")
         formation["repository_profile"] = reference
+    if value.get("permission_profile") is not None:
+        if "repository_profile" in formation:
+            raise SwarmStoreError("invalid_arguments", field="permission_profile")
+        formation["permission_profile"] = _profile_name(
+            value["permission_profile"], "permission_profile"
+        )
     if "thinking_effort" in value:
         try:
             formation["thinking_effort"] = validate_thinking_effort(

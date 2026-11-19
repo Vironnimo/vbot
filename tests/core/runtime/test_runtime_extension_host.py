@@ -426,6 +426,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
 
     catalog = await host.catalog()
 
+    assert {"restricted", "full_access"} <= set(catalog["permission_profiles"])
     assert catalog["projects"] == [
         {
             "id": "project-a",

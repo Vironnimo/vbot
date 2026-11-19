@@ -156,6 +156,7 @@ class NativeSessions:
                             identity_agent=member["agent_id"],
                             identity_incarnation=member.get("agent_proof") or None,
                             permission_ceiling=boundary.get("permission_ceiling"),
+                            permission_ceiling_profile=boundary.get("permission_ceiling_profile"),
                         )
                         if allowed_models is not None:
                             preview = await self.service.host.inspect_prompt(

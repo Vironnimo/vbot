@@ -19,8 +19,10 @@ from ._extension_values import (
     _page_arguments,
     _pagination_arguments,
     _participant_config,
+    _permission_selections,
     _string,
     _swarm_projection,
+    _validate_permission_profiles,
     _validate_profile_catalog,
 )
 from ._registration import session_tool_catalog
@@ -228,6 +230,12 @@ class SwarmManagement:
                 previous = await self._extension._store().get_profile(profile["id"])
             except SwarmStoreError:
                 previous = None  # The save reports the missing profile.
+        selections = _permission_selections(profile)
+        if selections:
+            host = self._extension.host
+            if host is None or host.catalog is None:
+                raise SwarmStoreError("swarm_closed")
+            _validate_permission_profiles(selections, await host.catalog())
         saved = await self._extension._store().save_profile(profile, expected_revision=expected)
         self._extension._changed("profiles", saved["id"], saved["revision"])
         if expected is None:

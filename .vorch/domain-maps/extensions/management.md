@@ -22,6 +22,7 @@ A missing `extension.json` is optional; an unavailable or unreadable manifest fa
 
 ## API versions
 
+- v40: named participant and group Permission Profiles, opt-in Agent defaults and profile names in the host catalog (`agent/temporary-agents.md`).
 - v39: owned identity profiles, catalog ownership metadata and incarnation-bound Agent editing inside an Extension page (`extensions/host.md`, `webui/extension-pages.md`).
 - v38: Extension pages can register clickable references in an embedded Session (see `webui/extension-pages.md` -> Capabilities).
 - v37: `ui.session-chats` for host-rendered participant Session views, the shared App Agent and user-started chats with owner-registered specialist profiles (`webui/extension-pages.md`, `extensions/host.md`).

@@ -5,6 +5,7 @@
   // edits the editor's bound draft; ProfileEditor owns validation and passes
   // the current field errors in by control id.
   import { tick } from 'svelte';
+  import PermissionProfileSelect from '@vbot/extension-sdk/ui/PermissionProfileSelect.svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
@@ -94,8 +95,10 @@
   }
 
   function selectTeamAgent(row, value) {
-    if (value) row.repository_profile = value;
-    else delete row.repository_profile;
+    if (value) {
+      row.repository_profile = value;
+      delete row.permission_profile;
+    } else delete row.repository_profile;
   }
 
   async function focusModel(index) {
@@ -268,6 +271,30 @@
             />
           </div>
         </div>
+        {#if !row.repository_profile}
+          <div class="s-row">
+            <div class="s-row-info">
+              <label
+                class="s-row-label"
+                for={`swarm-permission-profile-${index}`}
+                >{t('permissions.profile.label')}</label
+              >
+            </div>
+            <div class="s-row-control">
+              <PermissionProfileSelect
+                id={`swarm-permission-profile-${index}`}
+                label={t('permissions.profile.label')}
+                names={catalog.permission_profiles}
+                value={row.permission_profile}
+                emptyLabel={t('permissions.profile.agentDefault')}
+                onChange={(value) => {
+                  if (value) row.permission_profile = value;
+                  else delete row.permission_profile;
+                }}
+              />
+            </div>
+          </div>
+        {/if}
         {#if teamAgents && (teamAgents.length > 0 || row.repository_profile)}
           <div class="s-row">
             <div class="s-row-info">

@@ -212,7 +212,7 @@ def _session_summary(
     if not permissions.restricted:
         return {"restricted": False, "layers": [], "stored_ceiling": False, **own}
     layers: list[JsonObject] = []
-    if permissions.rules is not None:
+    if permissions.rules is not None or permissions.extension_rules is not None:
         working = resolver.resolve_working_project(
             project_id, agent, session_id=session_id, requested=requested
         )
@@ -222,10 +222,13 @@ def _session_summary(
             project_root=_project_root(state, working),
             ceiling=ceiling,
         )
-        assert permissions.rules is not None
-        layers.append(
-            describe_permission_rules(permissions.rules, values=permissions.placeholder_values())
-        )
+        for source, rules in (
+            ("agent", permissions.rules),
+            ("extension", permissions.extension_rules),
+        ):
+            if rules is not None:
+                layer = describe_permission_rules(rules, values=permissions.placeholder_values())
+                layers.append({**layer, "source": source})
     for inherited in permissions.ceilings:
         layers.extend(describe_layer(layer) for layer in inherited.layers)
     return {"restricted": True, "layers": layers, "stored_ceiling": ceiling is not None, **own}

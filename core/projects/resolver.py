@@ -14,6 +14,7 @@ from core.permissions import (
     PermissionRules,
     PermissionRulesError,
     normalize_permission_rules,
+    permission_profile_catalog,
     permission_rules_to_dict,
     resolve_permission_profile,
 )
@@ -603,6 +604,12 @@ class AgentResolver:
         except AgentError as error:
             raise _identity_resolution_error(error) from error
         return self._identity_with_permissions(agent)
+
+    def permission_profile_names(self) -> list[str]:
+        return list(permission_profile_catalog(self._permission_profiles()))
+
+    def default_permission_rules(self) -> PermissionRules | None:
+        return resolve_permission_rules((), AgentDefaults.from_dict(self._global_agent_defaults()))
 
     def permission_rules_for_profile(self, name: str) -> PermissionRules:
         """Resolve a selected profile now. A missing reference always prevents execution."""

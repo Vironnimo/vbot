@@ -6,6 +6,7 @@
   // chosen Project's own Skills, which the list does not show, but drops names
   // of Skills that no longer exist: the list cannot show them either.
   import { SvelteSet } from 'svelte/reactivity';
+  import PermissionProfileSelect from '@vbot/extension-sdk/ui/PermissionProfileSelect.svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import SkillSelectionPanel from '@vbot/extension-sdk/ui/SkillSelectionPanel.svelte';
   import ToolAccessEditor from '@vbot/extension-sdk/ui/ToolAccessEditor.svelte';
@@ -88,6 +89,37 @@
     draft.allowed_skills = on ? ['*'] : [...skillNames];
   }
 </script>
+
+<section class="s-section" aria-labelledby="swarm-permissions-heading">
+  <header class="s-section__head">
+    <h3 class="s-section__title" id="swarm-permissions-heading">
+      {t('permissions.profile.groupLimit')}
+    </h3>
+  </header>
+  <p class="s-section__desc">{t('permissions.profile.groupLimitHelp')}</p>
+  <div class="s-section__body">
+    <div class="s-row">
+      <div class="s-row-info">
+        <label class="s-row-label" for="swarm-permission-limit"
+          >{t('permissions.profile.label')}</label
+        >
+      </div>
+      <div class="s-row-control">
+        <PermissionProfileSelect
+          id="swarm-permission-limit"
+          label={t('permissions.profile.groupLimit')}
+          emptyLabel={t('permissions.profile.noGroupLimit')}
+          names={catalog.permission_profiles}
+          value={draft.permission_ceiling_profile}
+          onChange={(value) => {
+            if (value) draft.permission_ceiling_profile = value;
+            else delete draft.permission_ceiling_profile;
+          }}
+        />
+      </div>
+    </div>
+  </div>
+</section>
 
 <section class="s-section" aria-labelledby="swarm-section-tools">
   <header class="s-section__head">

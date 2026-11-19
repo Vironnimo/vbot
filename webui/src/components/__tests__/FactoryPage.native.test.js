@@ -742,17 +742,24 @@ describe('Factory native work', () => {
     expect(document.querySelector('#native-model')).toBeNull();
     button(t('factory.native.settings')).click();
     await settle();
+    await choose('native-permission-limit', 'Team limit');
     fill('native-allowed-models', 'demo/worker, demo/reviewer');
     fill('native-allowed-skills', 'one, two');
     expect(await bridge.autosave.flush()).toBe(true);
     expect(data.factories[0].config).toMatchObject({
+      permission_ceiling_profile: 'Team limit',
       allowed_models: ['demo/worker', 'demo/reviewer'],
       allowed_skills: ['one', 'two'],
     });
+    await choose(
+      'native-permission-limit',
+      t('permissions.profile.noGroupLimit'),
+    );
     fill('native-allowed-skills', '');
     expect(await bridge.autosave.flush()).toBe(true);
     expect(calls(operation, 'factory.update').at(-1)[1].clear_fields).toEqual([
       'allowed_skills',
+      'permission_ceiling_profile',
     ]);
     button(t('factory.native.pauseTeam')).click();
     await settle();
