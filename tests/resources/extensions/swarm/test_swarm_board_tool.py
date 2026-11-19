@@ -495,7 +495,7 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"action": "read", "parameters": {"limit": 200, "path": "verify.py"}}, '"verify.py"'),
         ({"recipient_name": "swarm_wiki", "text": "x"}, "recipient_name"),
         # An action that names another Tool points to calling that Tool directly.
-        ({"action": "search_files"}, BOARD_OTHER_TOOL.format(action="search_files")),
+        ({"action": "web_search"}, BOARD_OTHER_TOOL.format(action="web_search")),
         # Collapsed parameter markup is diagnosed, never executed as an action.
         ({"action": 'read" \nmessage_id">\n#1'}, "message_id as a separate parameter"),
         (

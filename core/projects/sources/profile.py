@@ -42,7 +42,6 @@ class ToolRule:
 DEFAULT_PROFILE_TOOLS: tuple[str, ...] = (
     "read",
     "apply_patch",
-    "search_files",
     "bash",
     "terminal",
     "web_fetch",

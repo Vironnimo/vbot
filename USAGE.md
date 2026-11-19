@@ -858,6 +858,13 @@ Use `--path <directory>` when a source contains multiple Skills. `--dry-run` val
 
 An Identity Agent can follow the bundled `vbot-docs` Skill and install for itself with `--scope own`, including while a Project is loaded. Outside a Run, use `agent:<id>` or `global` explicitly. Private Skills become available to their owner subject to requirements and disable policy; global installs retain the Agent's existing Skill selection. Installation does not grant Tools or credentials. Use `skill inventory` to inspect saved packages and the Agent's `skill` Tool to verify its effective catalog. Uninstall with `skill delete <name> --scope global|agent:<id> --yes`.
 
+Agents with the shell Tool can search local files using the bundled ripgrep on Windows
+(PowerShell) and Linux (Bash). For example, `rg -n 'load_config' .` finds lines and
+`rg --files -g '*.py'` lists matching file names. Add `-uu -g '!.git'` to include
+ignored and hidden files while skipping Git metadata. A known file can be searched
+directly. File search through the shell follows the Agent's existing command and path
+permissions. The former `search_files` permission grants no shell access.
+
 Tools are runtime capabilities exposed according to Agent, Project, Extension, and Settings policy. Inspect the public catalog and one Agent's complete System Prompt with:
 
 ```bash
@@ -1517,7 +1524,7 @@ retained for recovery.
 
 A development checkout is a Git clone of this repository, not an installation.
 It runs on Python 3.14, the version the packages bundle; vBot supports no other.
-Install the development dependencies, the search engine the search Tools need,
+Install the development dependencies, ripgrep for Agent shells and the Chat file picker,
 and the WebUI packages:
 
 ```bash

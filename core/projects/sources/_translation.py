@@ -21,7 +21,7 @@ from core.settings import validate_temperature, validate_thinking_effort, valida
 
 # A foreign shell denial also closes vBot's independent interactive shell.
 SHELL_TOOLS = frozenset({"bash", "terminal"})
-READ_ONLY_TOOLS = frozenset({"read", "search_files", "web_fetch", "web_search", "status"})
+READ_ONLY_TOOLS = frozenset({"read", "web_fetch", "web_search", "status"})
 
 
 def profile(
@@ -173,6 +173,11 @@ def tool_list(
             continue
         mapped = mapping.get(base)
         if mapped is None:
+            if deny and separator and base in translated_scopes:
+                # A scoped Grep/Glob denial still protects the path through a Read rule.
+                if not rest.endswith(")") or not rest[:-1].strip():
+                    raise SourceError("Malformed Tool scope.")
+                continue
             reports.append(
                 Translation(f"{setting}.{entry}", "not_supported", "No matching vBot Tool.")
             )

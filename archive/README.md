@@ -33,3 +33,9 @@ Cua Driver), its focused tests, domain map and Provider probe cases, plus snapsh
 of the shared files it touched, with source commit and SHA-256 hashes. The rebuilt
 Extension at `resources/extensions/computer_use/` replaces it; see
 [Computer Use](../.vorch/domain-maps/extensions/computer-use.md). Restore only in a worktree.
+
+`search_files.zip` preserves the retired `search_files` Tool and its original
+integration, tests, Provider probes, and domain map at the recorded Git commit.
+The manifest gives the SHA-256 of every archived source file. See
+[Archived File Search Tool](../.vorch/domain-maps/tools/search_files.md) for
+the shell replacement, the active Chat file picker and restoration.

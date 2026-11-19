@@ -2,7 +2,7 @@
 
 The composer's ``@`` picker (``files.list`` RPC) lists the mention root, the
 directory relative tool paths resolve against: an index of the files and
-directories the search Tools would search there, and on request the direct
+directories selected by the picker's ignore rules, and on request the direct
 entries of one directory, ignored ones included and marked, so the picker
 reaches them by navigating. On send, every mentioned file is snapshotted once
 into a ``file_mention`` content block — content inline for reasonably sized text
@@ -23,11 +23,11 @@ from typing import TYPE_CHECKING, Any
 from core.agents import default_workspace_dir
 from core.agents.temporary import TemporaryAgent
 from core.attachments import sniff_media_type
+from core.chat._file_picker import list_selected_files, unselected_names
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.chat.errors import ChatError
 from core.prompts import INLINE_FILE_MAX_BYTES
 from core.sessions import AGENT_DEFAULT_PROJECT
-from core.tools.search import SearchBudget, list_selected_files, unselected_names
 from core.utils.directory_listing import DirectoryListingError, EntryKind, list_directory
 from core.utils.file_status import stat_or_none
 from core.utils.logging import get_logger
@@ -67,9 +67,9 @@ _LISTING_WORKERS = BoundedWorkerPool(name="mention-listing", max_workers=2)
 class MentionIndex:
     """The files and directories the ``@`` picker offers under a mention root.
 
-    Paths are relative to the root with ``/`` separators, sorted by name. They are
-    what the search Tools search there: ignore rules apply, hidden files count and
-    ``.git`` is left out. ``directories`` are the directories of the listed files.
+    Paths are relative to the root with ``/`` separators, sorted by name. The index
+    respects ignore rules, includes hidden files and skips ``.git`` and Python
+    bytecode cache directories. ``directories`` are the directories of the listed files.
     ``truncated`` says the index is incomplete: the file cap or the time budget
     cut it.
     """
@@ -179,9 +179,11 @@ def _index(root: Path) -> MentionIndex:
     resolved_root = _listable(root)
     if resolved_root is None:
         return MentionIndex(files=(), directories=(), truncated=False)
-    budget = SearchBudget(None, timeout_seconds=MENTION_FILE_LIST_TIMEOUT_SECONDS)
     files, truncated = list_selected_files(
-        _search_engine(), resolved_root, budget, limit=MENTION_FILE_LIST_LIMIT
+        _search_engine(),
+        resolved_root,
+        timeout=MENTION_FILE_LIST_TIMEOUT_SECONDS,
+        limit=MENTION_FILE_LIST_LIMIT,
     )
     directories: set[str] = set()
     for file in files:
@@ -198,13 +200,20 @@ def _index(root: Path) -> MentionIndex:
 
 
 def _ignored_names(base: Path, listing: DirectoryListing) -> set[str]:
-    budget = SearchBudget(None, timeout_seconds=MENTION_FILE_LIST_TIMEOUT_SECONDS)
     names = [entry.name for entry in listing.entries]
-    ignored = unselected_names(_search_engine(), base.resolve(), listing.path, names, budget)
-    if budget.timed_out:
+    try:
+        return unselected_names(
+            _search_engine(),
+            base.resolve(),
+            listing.path,
+            names,
+            timeout=MENTION_FILE_LIST_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as error:
         shown = listing.path or "The mention root"
-        raise DirectoryListingError("timeout", f"{shown} did not answer in time; try again later.")
-    return ignored
+        raise DirectoryListingError(
+            "timeout", f"{shown} did not answer in time; try again later."
+        ) from error
 
 
 def _listable(root: Path) -> Path | None:

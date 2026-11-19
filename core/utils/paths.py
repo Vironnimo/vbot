@@ -29,6 +29,11 @@ def model_path(path: str | os.PathLike[str]) -> str:
     return Path(path).as_posix()
 
 
+def display_path(path: Path, *, cwd: Path) -> str:
+    """Show a Tool path relative to its working directory when possible."""
+    return model_path(path.relative_to(cwd) if path.is_relative_to(cwd) else path)
+
+
 def file_url_path(url: str) -> str | None:
     """Return the path on this computer that the ``file:`` URL ``url`` names.
 
@@ -50,4 +55,4 @@ def file_url_path(url: str) -> str | None:
         return None
 
 
-__all__ = ["file_url_path", "model_path"]
+__all__ = ["display_path", "file_url_path", "model_path"]

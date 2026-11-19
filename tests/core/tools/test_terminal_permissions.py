@@ -27,7 +27,6 @@ from core.storage.temp_files import artifact_owner, terminal_log_scope
 from core.tools import _workdir
 from core.tools._terminal_permissions import may_attach, permission_scope
 from core.tools._terminal_shell_state import ShellState
-from core.tools.search_files import register_search_files_tool
 from core.tools.terminal import register_terminal_tool
 from core.tools.terminal_manager import (
     TerminalInfo,
@@ -487,29 +486,23 @@ async def test_raw_terminal_logs_use_the_recipient_scope_in_file_tools_and_comma
     link_directory(alias, group.parent)
 
     registry = read_registry()
-    register_search_files_tool(registry)
 
     async def dispatch(
-        tool: str,
         arguments: JsonObject,
         boundary: PermissionBoundary,
     ) -> JsonObject:
         return await dispatch_as_executor(
-            registry, replace(read_context(work, tool), permissions=boundary), arguments
+            registry, replace(read_context(work), permissions=boundary), arguments
         )
 
     for boundary in (launched, later, broader):
-        report = await dispatch("read", {"path": str(log.path)}, boundary)
+        report = await dispatch({"path": str(log.path)}, boundary)
         assert report["ok"] and "terminal sample" in report["data"]["content"]
-    listing = await dispatch("read", {"path": str(group)}, broader)
+    listing = await dispatch({"path": str(group)}, broader)
     assert listing["ok"] and log.path.name in listing["data"]["content"]
-    result = await dispatch(
-        "search_files", {"path": str(group), "pattern": "terminal sample"}, broader
-    )
-    assert result["ok"] and log.path.name in str(result["data"])
 
     for path in (legacy.path, foreign.path, group.parent, record):
-        result = await dispatch("read", {"path": str(path)}, broader)
+        result = await dispatch({"path": str(path)}, broader)
         assert result["error"]["code"] == "permission_denied"
     for boundary in (broader, narrowed):
         refused = boundary.check_path(alias / record.name, "write")
@@ -530,7 +523,7 @@ async def test_raw_terminal_logs_use_the_recipient_scope_in_file_tools_and_comma
         narrowed, "list", shell="bash", cwd=work, env={}, home=tmp_path
     )
     assert refused is not None and refused.location == "data_dir"
-    result = await dispatch("search_files", {"path": str(group), "pattern": "sample"}, narrowed)
+    result = await dispatch({"path": str(group)}, narrowed)
     assert result["error"]["code"] == "permission_denied"
 
     initial = read_context(work)
@@ -549,11 +542,11 @@ async def test_raw_terminal_logs_use_the_recipient_scope_in_file_tools_and_comma
     unreadable = manager.create_terminal_log(owner=owner, scope=permission_scope(denying))
     denied_path = denying.check_path(unreadable.path, "read")
     assert denied_path is not None and denied_path.reason == "deny_rule"
-    denied_result = await dispatch("read", {"path": str(unreadable.path)}, denying)
+    denied_result = await dispatch({"path": str(unreadable.path)}, denying)
     assert denied_result["error"]["code"] == "permission_denied"
 
     record.write_bytes(b"invalid")
-    denied = await dispatch("read", {"path": str(log.path)}, broader)
+    denied = await dispatch({"path": str(log.path)}, broader)
     assert denied["error"]["code"] == "permission_denied"
 
 

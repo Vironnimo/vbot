@@ -187,8 +187,8 @@ def build_run_parser() -> argparse.ArgumentParser:
         "--tools",
         type=_name_list,
         metavar="NAME,NAME,...",
-        help="Tools rotated through the Tool-call rounds; Swarm Tools may name an action "
-        f"(swarm_board.read). Default: {','.join(DEFAULT_TOOLS)} (sessions), "
+        help="Tools rotated through the Tool-call rounds. Use bash.search for rg "
+        f"or a Swarm action like swarm_board.read. Default: {','.join(DEFAULT_TOOLS)} (sessions), "
         f"{','.join(DEFAULT_SWARM_TOOLS)} (swarm)",
     )
     scripted.add_argument("--calls", type=int, default=1, help="parallel Tool calls per round")

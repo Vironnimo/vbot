@@ -92,12 +92,6 @@ if TYPE_CHECKING:
         READ_TOOL_PARAMETERS,
         register_read_tool,
     )
-    from core.tools.search_files import (
-        SEARCH_FILES_TOOL_DESCRIPTION,
-        SEARCH_FILES_TOOL_NAME,
-        SEARCH_FILES_TOOL_PARAMETERS,
-        register_search_files_tool,
-    )
     from core.tools.session_search import (
         SESSION_SEARCH_TOOL_DESCRIPTION,
         SESSION_SEARCH_TOOL_NAME,
@@ -261,10 +255,6 @@ _EXPORT_MODULES = {
     "READ_TOOL_NAME": "core.tools.read",
     "READ_TOOL_PARAMETERS": "core.tools.read",
     "register_read_tool": "core.tools.read",
-    "SEARCH_FILES_TOOL_DESCRIPTION": "core.tools.search_files",
-    "SEARCH_FILES_TOOL_NAME": "core.tools.search_files",
-    "SEARCH_FILES_TOOL_PARAMETERS": "core.tools.search_files",
-    "register_search_files_tool": "core.tools.search_files",
     "SESSION_SEARCH_TOOL_DESCRIPTION": "core.tools.session_search",
     "SESSION_SEARCH_TOOL_NAME": "core.tools.session_search",
     "SESSION_SEARCH_TOOL_PARAMETERS": "core.tools.session_search",
@@ -401,14 +391,6 @@ _SUBMODULES = frozenset(
         "_read_arguments",
         "_read_text",
         "_scratch_identity",
-        "_search_arguments",
-        "_search_definition",
-        "_search_execution",
-        "_search_hints",
-        "_search_native",
-        "_search_query",
-        "_search_results",
-        "_search_roots",
         "_session_recall_results",
         "_shell_arguments",
         "_shell_results",
@@ -473,8 +455,6 @@ _SUBMODULES = frozenset(
         "read",
         "read_extract",
         "scratch_areas",
-        "search",
-        "search_files",
         "session_search",
         "shell",
         "shell_environment",
@@ -517,10 +497,6 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "SEARCH_FILES_TOOL_DESCRIPTION",
-    "SEARCH_FILES_TOOL_NAME",
-    "SEARCH_FILES_TOOL_PARAMETERS",
-    "register_search_files_tool",
     "register_apply_patch_tool",
     "register_edit_tools",
     "EditDialect",

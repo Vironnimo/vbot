@@ -453,7 +453,13 @@ describe('groupTransientCards', () => {
 describe('Tool row presentation', () => {
   it.each([
     [
-      'ripgrep arguments',
+      'a file search through the shell',
+      'bash',
+      { command: "rg --files -g '*.py' ." },
+      "rg --files -g '*.py' .",
+    ],
+    [
+      'archived search tool arguments',
       'search_files',
       { args: ['-F', 'call(', 'src'] },
       '-F call( src',

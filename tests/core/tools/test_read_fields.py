@@ -9,6 +9,7 @@ import pytest
 
 from core.tools import FileReadState
 from core.tools.file_state import StaleReason
+from core.tools.model_names import SHELL_MODEL_NAME
 from tests.core.tools.read_test_support import make_context, read_registry
 
 APP = "".join(f"line {number}\n" for number in range(1, 13))
@@ -333,9 +334,7 @@ async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments:
         ),
         (
             {"path": "src", "pattern": "greet", "glob": "*.py", "output_mode": "content"},
-            "read shows one file or lists one directory and has no glob, output_mode field. "
-            'To search files, call search_files(pattern="greet", path="src", glob="*.py", '
-            'output_mode="content").',
+            "read does not accept glob, output_mode. Pass one file path",
         ),
     ],
 )
@@ -438,24 +437,32 @@ async def test_pattern_that_is_not_a_regex_matches_as_text(project: Path) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "offered", "message"),
     [
         (
             {"path": "src", "pattern": "greet", "ignore_case": True},
-            "src is a directory, and read shows the lines of one file. To find matching lines "
-            'in its files, call search_files(pattern="greet", path="src", args=["-i"]).',
+            ("read", "bash"),
+            f"src is a directory. Search the directory with rg in {SHELL_MODEL_NAME}.",
+        ),
+        (
+            {"path": "src", "pattern": "greet"},
+            ("read",),
+            "src is a directory. Omit pattern to list the directory, "
+            "then read a file from the list.",
         ),
         (
             {"path": "src/code.py", "pattern": "greet", "offset": -1},
+            ("read",),
             "offset counts back from the end, which pattern cannot use; omit offset or give "
             "the line to start searching at",
         ),
     ],
 )
 async def test_a_pattern_the_read_cannot_apply_names_the_fix(
-    project: Path, arguments: dict, message: str
+    project: Path, arguments: dict, offered: tuple[str, ...], message: str
 ) -> None:
-    result = await dispatch(project, arguments)
+    context = replace(make_context(project), offered_tools=offered)
+    result = await read_registry().dispatch(context, arguments)
 
     assert error(result) == message
 

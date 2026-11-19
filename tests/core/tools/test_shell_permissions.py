@@ -170,8 +170,7 @@ async def test_full_access_review_cannot_launch_in_a_retargeted_workdir(tmp_path
         pytest.param(
             {"deny": ["Read({workdir}/secrets/**)"]},
             plan("rg x", subtree_reads=[Path(".")]),
-            "/secrets/**) denies. Use search_files, "
-            "which leaves denied folders out, or name only the folders the command needs.",
+            "/secrets/**) denies. Name only the allowed files or folders the command needs.",
             id="recursive-read-over-denied-folder",
         ),
         pytest.param(

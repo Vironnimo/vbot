@@ -184,6 +184,15 @@ async def test_explicit_argv_executable_survives_dispatch(
             ["git.exe exited with code 128", "python.exe exited with code 128"],
             False,
         ),
+        # An earlier rg with no matches is a normal search result, even beside another command.
+        ("rg absent .; build", (ProgramExit("rg.exe", 1),), 0, None, False),
+        (
+            "rg invalid .; build",
+            (ProgramExit("rg.exe", 2),),
+            0,
+            ["rg.exe exited with code 2"],
+            True,
+        ),
         # A program that failed before the last statement: the exit code is not its.
         (
             _BUILD,
@@ -913,7 +922,9 @@ async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_aft
     monkeypatch.setattr(shell_module, "_CONSOLE_READS_WAIT", True)
     monkeypatch.setattr(shell_results, "_WINDOWS", powershell)
     # The command prints nothing before its pipe stage passes its output on.
-    running = data(await shell.returned(shell.call({"command": command})))
+    invocation = shell.call({"command": command})
+    await shell.started()
+    running = data(await shell.returned(invocation))
     # A holding stage explains the silence: the program is not taken as waiting for
     # the console, and the log file is not called complete.
     assert ("console input" in running["next"]) is (stage is None)
@@ -1790,6 +1801,49 @@ async def test_real_shell_reports_exit_code_and_unicode_output(tmp_path: Path) -
     result = await run_real(tmp_path, command)
 
     assert (result["status"], result["exit_code"], result["output"]) == ("exited", 3, "Grüße")
+
+
+@real_shell_only
+@pytest.mark.asyncio
+async def test_a_shell_without_system_ripgrep_searches_ignored_and_hidden_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.tools import shell_environment
+
+    # Run the real shell with an isolated PATH, even on hosts where rg and
+    # pwsh share an installation directory. Starting PowerShell by its known
+    # path avoids a symlink, which requires a privilege on some Windows hosts.
+    assert _HOST_SHELL is not None
+    shell_path = tmp_path / "bin"
+    shell_path.mkdir()
+    if sys.platform == "win32":
+        pwsh = Path(_HOST_SHELL)
+        monkeypatch.setattr(shell_module, "powershell_executable", lambda _path: pwsh)
+    else:
+        (shell_path / "bash").symlink_to(_HOST_SHELL)
+    assert shutil.which("rg", path=str(shell_path)) is None
+    login = shell_environment._login_environment()
+    monkeypatch.setattr(
+        shell_environment, "_login_environment", lambda: {**login, "PATH": str(shell_path)}
+    )
+    source = tmp_path / "source"
+    (source / ".git").mkdir(parents=True)
+    (source / ".gitignore").write_text("generated/\n.env\n")
+    (source / "generated").mkdir()
+    for name in ("main.py", ".env", "generated/result.txt", ".git/metadata"):
+        (source / name).write_text("sample")
+
+    result = await run_real(
+        tmp_path,
+        "rg --files -g '*.py' source && rg -l sample source && "
+        "rg -l -uu -g '!.git' sample source && rg -n absent source",
+    )
+    assert result["status"] == "exited" and result["exit_code"] == 1
+    assert sorted(result["output"].replace("\\", "/").splitlines()) == [
+        "source/.env",
+        "source/generated/result.txt",
+        *["source/main.py"] * 3,
+    ]
 
 
 @pytest.mark.skipif(

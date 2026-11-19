@@ -17,7 +17,6 @@ from ._shell_hint_code import (
 from ._shell_hint_common import (
     _BASH_SYNTAX_HINT,
     _READ_TOOL,
-    _SEARCH_TOOL,
     _TERMINAL_TOOL,
     _Failure,
 )
@@ -81,14 +80,10 @@ def _hint_command_not_found(failure: _Failure) -> str | None:
     )
 
 
-def _grep_hint(failure: _Failure) -> str:
-    hint = (
-        "`grep` does not exist in PowerShell: filter command output with "
-        "`| Select-String 'text'` (add -CaseSensitive to match grep, -NotMatch for -v)"
-    )
-    if failure.offers(_SEARCH_TOOL):
-        return f"{hint}, and search files with {_SEARCH_TOOL}."
-    return f"{hint}, and search files with `Get-ChildItem -Recurse -File | Select-String 'text'`."
+_GREP_HINT = (
+    "Filter command output with `| Select-String 'text'` (add -CaseSensitive to match "
+    "grep, -NotMatch for -v), and search files with `rg -n 'text' .`."
+)
 
 
 def _sed_hint(failure: _Failure) -> str:
@@ -135,9 +130,9 @@ def _tail_hint(failure: _Failure) -> str:
 
 # PowerShell equivalents for bash commands Agents reach for on a Windows host.
 _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
-    "grep": _grep_hint,
-    "egrep": _grep_hint,
-    "fgrep": _grep_hint,
+    "grep": _GREP_HINT,
+    "egrep": _GREP_HINT,
+    "fgrep": _GREP_HINT,
     "sed": _sed_hint,
     "awk": (
         "`awk` does not exist in PowerShell: split fields with "
@@ -327,13 +322,7 @@ _FIND = re.compile(r"(?<![\w.-])find(?:\.exe)?(?![\w.-])", re.I)
 def _hint_windows_find(failure: _Failure) -> str | None:
     if not _WINDOWS_FIND_MESSAGE.search(failure.output) or not _FIND.search(failure.command):
         return None
-    hint = (
-        "`find` here is the Windows text-search program, not Unix find: list files with "
-        "`Get-ChildItem -Recurse -Filter '*.md'`"
-    )
-    if failure.offers(_SEARCH_TOOL):
-        return f"{hint}, or use {_SEARCH_TOOL}."
-    return f"{hint}."
+    return "`find` here searches file contents. List files by name with `rg --files -g '*.md'`."
 
 
 # PowerShell aliases that look like Unix commands but take cmdlet parameters.
@@ -378,13 +367,7 @@ def _hint_select_string_recurse(failure: _Failure) -> str | None:
         return None
     if not _SELECT_STRING_RECURSE.search(_powershell_code(failure.command).flat):
         return None
-    hint = (
-        "Select-String has no -Recurse: pipe files in with "
-        "`Get-ChildItem -Recurse -File | Select-String 'text'`"
-    )
-    if failure.offers(_SEARCH_TOOL):
-        return f"{hint}, or search with {_SEARCH_TOOL}."
-    return f"{hint}."
+    return "Select-String has no -Recurse. Search recursively with `rg -n 'text' .`."
 
 
 _CONFLICT = re.compile(r"^CONFLICT |Automatic merge failed|needs merge", re.M)

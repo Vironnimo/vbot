@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import os
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -29,6 +32,7 @@ from core.chat.file_mentions import (
 from core.projects import AgentResolutionError, AgentResolver, WorkingProjectMissingError
 from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
 from core.tools.file_state import FileReadState, StaleReason
+from core.utils.directory_listing import DirectoryListingError
 from tests.directory_links import link_directory
 
 # ---------------------------------------------------------------------------
@@ -44,7 +48,7 @@ def _write(root: Path, files: dict[str, str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_index_lists_what_the_search_tools_search(tmp_path: Path) -> None:
+async def test_index_lists_hidden_files_and_respects_ignore_rules(tmp_path: Path) -> None:
     files = {
         ".git/HEAD": "ref: refs/heads/main\n",
         ".git/info/exclude": "excluded.txt\n",
@@ -111,6 +115,47 @@ async def test_index_marks_truncation_at_the_file_cap(
     assert index.truncated is True
 
 
+@pytest.mark.asyncio
+async def test_picker_reaps_a_child_that_closes_its_pipe_before_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A child can close its output, then stall before exiting. A partial index
+    # keeps complete paths, but a partial ignore check must not mark files as included.
+    class Child:
+        pid = os.getpid()
+
+        def __init__(self, *args: Any, **options: Any) -> None:
+            self.stdout = io.BytesIO(b"seen\0") if options["stdout"] == subprocess.PIPE else None
+            self.stderr = io.BytesIO() if options["stderr"] == subprocess.PIPE else None
+            self.returncode: int | None = None
+            children.append(self)
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = 1
+
+        def wait(self, timeout: float) -> int:
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("rg", timeout)
+            return self.returncode
+
+    children: list[Child] = []
+    monkeypatch.setattr("core.chat._file_picker.subprocess.Popen", Child)
+    monkeypatch.setattr(
+        "core.chat._file_picker.psutil.Process",
+        lambda _pid: SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=0)),
+    )
+    assert await list_mention_files(tmp_path) == MentionIndex(("seen",), (), True)
+    with pytest.raises(DirectoryListingError, match="did not answer in time"):
+        await list_mention_directory(tmp_path, "")
+    assert len(children) == 2
+    assert all(child.returncode is not None for child in children)
+    assert children[0].stdout is not None and children[0].stdout.closed
+    assert children[1].stderr is not None and children[1].stderr.closed
+
+
 @pytest.mark.parametrize(
     ("directory", "expected"),
     [
@@ -149,6 +194,11 @@ async def test_directory_lists_ignored_entries_and_marks_them(
             "src/gen/types.py": "x",
         },
     )
+
+    if os.name != "nt" and directory == "src":
+        # A single skipped filename can span two lines in ripgrep's debug stream.
+        _write(tmp_path, {"src/line\nbreak.log": "x"})
+        expected = [*expected, ("line\nbreak.log", "file", True)]
 
     listed = await list_mention_directory(tmp_path, directory)
 

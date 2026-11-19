@@ -442,8 +442,12 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
 
 
 def counted_failures(report: CommandReport) -> tuple[str, ...]:
-    """The command's failed programs, less those whose reader stopped on purpose."""
-    return without_closed_pipes(report.command, report.failed_programs)
+    """The regular search no-match status and a closed output pipe are not errors."""
+    return tuple(
+        failure
+        for failure in without_closed_pipes(report.command, report.failed_programs)
+        if failure.casefold() not in {"rg exited with code 1", "rg.exe exited with code 1"}
+    )
 
 
 def output_encoding_note(report: CommandReport) -> str | None:

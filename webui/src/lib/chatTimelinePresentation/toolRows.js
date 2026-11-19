@@ -448,9 +448,7 @@ function humanReadableToolLabel(toolName, argumentsValue) {
   return '';
 }
 
-// Streaming previews and older calls can lack the Tool's display payload.
-// Show the supplied spellings, including flag fields, without running a
-// second implementation of the server's search argument interpreter.
+// Older Sessions can contain search_files calls saved without a display payload.
 function searchFilesLabel(args) {
   const {
     pattern,

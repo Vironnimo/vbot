@@ -46,9 +46,7 @@ def write(root: Path, path: str, content: str) -> Path:
     return target
 
 
-ALL_TOOLS = frozenset(
-    {"read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"}
-)
+ALL_TOOLS = frozenset({"read", "apply_patch", "bash", "terminal", "status", "skill", "subagent"})
 NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
 
 
@@ -56,6 +54,14 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
     ("source", "path", "document", "expected", "status"),
     [
         ("claude", ".claude/agents/reviewer.md", "---\ntools: []\n---\nReview.", set(), "ready"),
+        # Local search now uses a shell. A search-only profile cannot gain one at import.
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ntools: Grep, Glob\n---\nReview.",
+            set(),
+            "limited",
+        ),
         (
             "codex",
             ".codex/agents/reviewer.toml",
@@ -119,6 +125,13 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
             "---\npermission:\n  '*': deny\n  read: allow\n---\nReview.",
             {"read"},
             "ready",
+        ),
+        (
+            "opencode",
+            ".opencode/agents/reviewer.md",
+            "---\npermission:\n  '*': deny\n  grep: allow\n---\nReview.",
+            set(),
+            "limited",
         ),
         (
             "opencode",
@@ -194,7 +207,7 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
             "cursor",
             ".cursor/agents/reviewer.md",
             "---\nreadonly: true\n---\nReview.",
-            {"read", "search_files", "status"},
+            {"read", "status"},
             "ready",
         ),
         (
@@ -240,6 +253,7 @@ _DRIVE_DATA = "C:/data/**" if sys.platform == "win32" else "/c/data/**"
                             "deny": [
                                 "Read(./.env)",
                                 "Read(secrets/**)",
+                                "Grep(private/**)",
                                 "Edit(/src/gen/**)",
                                 "Read(~/.ssh/**)",
                                 "Read(//c/data/**)",
@@ -262,6 +276,7 @@ _DRIVE_DATA = "C:/data/**" if sys.platform == "win32" else "/c/data/**"
                 "deny": [
                     "Read({workdir}/**/.env)",
                     "Read({workdir}/**/secrets/**)",
+                    "Read({workdir}/**/private/**)",
                     "Edit({project}/src/gen/**)",
                     "Read(~/.ssh/**)",
                     f"Read({_DRIVE_DATA})",

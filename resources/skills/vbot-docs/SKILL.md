@@ -45,7 +45,7 @@ For finding past conversations by content, use `session_search` first. Read `ref
 | Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
-Read a reference with the `skill` Tool using `name: "vbot-docs"` and its relative `file_path`. When no row fits and `search_files` is available, search the `references` folder inside the loaded Skill directory for the command, flag or term.
+Read a reference with the `skill` Tool using `name: "vbot-docs"` and its relative `file_path`. When no row fits and a shell is available, use `rg` in the loaded Skill's `references` folder to find the command, flag or term.
 
 ## Inputs, credentials and failures
 

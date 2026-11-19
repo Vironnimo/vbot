@@ -465,9 +465,7 @@ def _render_project_context(
     preamble = f"Project Context loaded for '{project.display_name}'."
     if has_instructions:
         preamble += " Follow the files below when working in this Project."
-    if any(
-        context.can_call(name) for name in ("read", "search_files", "edit", "write", "apply_patch")
-    ):
+    if any(context.can_call(name) for name in ("read", "edit", "write", "apply_patch")):
         preamble += " For file work in this Project, use absolute file paths."
     if context.can_call("bash"):
         preamble += (

@@ -26,9 +26,6 @@ _MAPPING = {
     "write": frozenset({"apply_patch"}),
     "apply_patch": frozenset({"apply_patch"}),
     "bash": SHELL_TOOLS,
-    "grep": frozenset({"search_files"}),
-    "glob": frozenset({"search_files"}),
-    "list": frozenset({"search_files"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
     "task": frozenset({"subagent"}),
@@ -204,11 +201,14 @@ class OpenCodeAdapter:
                 for foreign in states:
                     if fnmatchcase(foreign, _capability(pattern)):
                         states[foreign] = enabled
+                mapped = _mapped(pattern)
                 reports.append(
                     Translation(
                         f"tools.{pattern}",
-                        "translated" if _mapped(pattern) else "not_supported",
-                        "Applied to matching vBot capabilities.",
+                        "translated" if mapped else "not_supported",
+                        "Applied to matching vBot capabilities."
+                        if mapped
+                        else "No matching vBot Tool.",
                     )
                 )
             permissions = layer.get("permission", {})
@@ -258,7 +258,13 @@ class OpenCodeAdapter:
                     )
                 else:
                     detail = "Applied to matching capabilities."
-                reports.append(Translation(f"permission.{pattern}", "translated", detail))
+                reports.append(
+                    Translation(
+                        f"permission.{pattern}",
+                        "not_supported" if usable and not matches else "translated",
+                        detail,
+                    )
+                )
         # Several foreign capabilities can share one vBot Tool; any allowed one grants it.
         requirements: dict[str, list[str]] = {}
         for foreign, mapped in _MAPPING.items():

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from argparse import Namespace
 from pathlib import Path
 from typing import Any, override
 
@@ -235,22 +234,6 @@ def test_terminal_probe_case_reaches_the_production_terminal_tool(case_id: str) 
     row = asyncio.run(_probe_terminal_case(EchoAdapter("terminal"), args, case))
 
     assert row["passed"], row
-
-
-@pytest.mark.parametrize(
-    "case_id", ["unrestricted", "ignore_controls", "early_stop", "diagnostics"]
-)
-def test_search_probe_case_reaches_the_production_search_tool(case_id: str) -> None:
-    # Holds core/tools/search_files.py and its ripgrep flag handling: `-uuu`, disabled
-    # ignore sources, early-stop flags, and the silent `--stats` and `--debug`.
-    from scripts.provider_probe.workflow_search_files import _case, search_cases
-
-    case = next(case for case in search_cases() if case["id"] == case_id)
-    namespace = Namespace(total_timeout=30, model="fixture", thinking_effort="low", max_tokens=1500)
-
-    result = asyncio.run(_case(EchoAdapter("search_files", case["arguments"]), namespace, case))
-
-    assert result["passed"], result
 
 
 def test_shell_probe_reports_the_violated_env_keys_keyword() -> None:

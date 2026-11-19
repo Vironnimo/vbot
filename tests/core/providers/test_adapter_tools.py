@@ -258,7 +258,7 @@ def test_bare_argument_values_are_read_as_text_only_when_that_is_their_one_readi
     arguments: str, expected: dict[str, Any] | None, named: str | None
 ) -> None:
     [candidate] = normalize_tool_call_candidates(
-        tool_call_id="call_bare", name="search_files", arguments=arguments, fallback_id="t0"
+        tool_call_id="call_bare", name="fixture", arguments=arguments, fallback_id="t0"
     )
 
     if expected is not None:

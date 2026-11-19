@@ -44,8 +44,8 @@ Every explicit edit target is preflighted together before any file change.
   allowlist adds them, so a call to a sibling the route did not offer runs under its
   own registered contract when policy allows it (`chat/request-building.md` ->
   Dispatch). `offered_edit_tool(context)` names the edit Tool a result may point to
-  (`apply_patch`, then `edit`, through `ToolContext.offers`; `read`'s change-command
-  refusal and `search_files`' `--replace` note use it).
+  (`apply_patch`, then `edit`, through `ToolContext.offers`; `read` uses it for a change-command
+  refusal).
 - **Schema:** `path` plus `edits` (at least one item of `old_string`, `new_string`,
   optional `replace_all`), open model-facing schema. Unknown root fields follow
   the shared rule (`tools.md` -> Unknown fields): inert fields run without effect
@@ -402,8 +402,7 @@ where every form a Model sends is accepted (relative and absolute paths).
   unknown parameters, a race during the call.
 - `tests/core/chat/test_chat_loop_tool_definitions.py` (offered dialect per family,
   epoch pin across a Model change), `test_tool_dispatch.py` (one permission),
-  `test_model_names.py` (harness names), `test_read_fields.py`,
-  `test_search_files_arguments.py` and `test_shell.py` (texts naming the offered
+  `test_model_names.py` (harness names), `test_read_fields.py` and `test_shell.py` (texts naming the offered
   edit Tool).
 - `scripts/tool_lab/cases/files.json` holds edit and write cases for
   `python -m scripts.tool_lab probe`.

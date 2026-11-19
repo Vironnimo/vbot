@@ -52,8 +52,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
 - `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
   runtime wording. Outside the Extension, `core/tools/_swarm_references.py` names the
   `swarm_wiki` read/update and `swarm_board` read calls in file Tool errors for a
-  Wiki page number or Board post sent to `read`, `edit`, `apply_patch` or
-  `search_files`, and for a Wiki page sent as `page_id` to `edit` or `write`
+  Wiki page number or Board post sent to `read`, `edit` or `apply_patch`,
+  and for a Wiki page sent as `page_id` to `edit` or `write`
   (`tools/read.md`); a rename of these Tools or fields updates it.
   `_store_wiki.py` implements Wiki transactions within the existing
   Swarm database owner.

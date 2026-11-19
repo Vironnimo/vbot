@@ -29,11 +29,9 @@ from core.tools import (
     ChangeTracker,
     FileReadState,
     ToolContractError,
-    ToolRegistry,
     tool_failure_for_exception,
 )
 from core.tools.file_state import StaleReason
-from core.tools.search_files import register_search_files_tool
 from tests.core.tools.file_state_test_support import held_by_another_program
 from tests.core.tools.read_test_support import (
     FakeAttachmentStore,
@@ -467,21 +465,15 @@ async def test_text_files_are_shown_with_a_line_number_gutter(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["\f", "\v", "\x1c", "\x85", " ", " "])
-async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
-    tmp_path: Path, separator: str
-) -> None:
+async def test_line_numbers_break_only_at_lf_crlf_and_cr(tmp_path: Path, separator: str) -> None:
     raw = f"import os\n{separator}\ndef foo():\r\n    pass\nx = 1\n".encode()
     tmp_path.joinpath("ff.py").write_bytes(raw)
-    search = ToolRegistry()
-    register_search_files_tool(search)
 
     whole = content(await read(tmp_path, {"path": "ff.py"}))
     line = content(await read(tmp_path, {"path": "ff.py", "offset": 4, "limit": 1}))
-    found = await search.dispatch(make_context(tmp_path, "search_files"), {"args": ["pass"]})
 
     assert whole == f"1| import os\n2| {separator}\n3| def foo():\n4|     pass\n5| x = 1\n"
     assert line.startswith("4|     pass\n")
-    assert found["data"]["content"] == "ff.py\n4:    pass"
     assert read_module.render_text_file(raw) == whole
 
 

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
 from typing import Any
 
 from core.tools._background_tasks_arguments import normalize_background_tasks_arguments
-from core.tools.search_files import interpret_search_call
 
 BASE_FILES = {
     "src/a.py": "alpha alpha\nbeta\nUPPER\n",
@@ -91,8 +89,7 @@ def _file_edit_cases() -> list[dict[str, Any]]:
     def case(case_id: str, task: str, files: dict, expected: dict, **extra: Any) -> dict:
         return {
             "id": case_id,
-            "tool": "search_files",
-            "expected_tool": "file_edit",
+            "tool": "file_edit",
             "task": task + " Tell me when it is done.",
             "files": files,
             "expected_files": expected,
@@ -217,111 +214,14 @@ def _file_edit_cases() -> list[dict[str, Any]]:
 def first_use_cases() -> list[dict[str, Any]]:
     return [
         {
-            "id": "search_symbols",
-            "tool": "search_files",
-            "task": (
-                "Find lines containing add_recipe( in Python files under src. "
-                "Include file paths and line numbers."
-            ),
-            "rows": {"src/recipes.py:2:def add_recipe(title):"},
-        },
-        {
-            "id": "search_word",
-            "tool": "search_files",
-            "task": (
-                "Find the whole word alpha in Python files under src and tests. "
-                "Show the matching lines with their locations."
-            ),
-            "rows": {"src/a.py:1:alpha alpha", "tests/b.PY:1:alpha"},
-        },
-        {
-            "id": "search_names",
-            "tool": "search_files",
-            "task": (
-                "List every Python file below this directory, ignoring "
-                "capitalization of the filename extension. Return paths only."
-            ),
-            "rows": {"check.py", "src/a.py", "src/recipes.py", "tests/b.PY"},
-        },
-        {
-            "id": "search_dirs",
-            "tool": "search_files",
-            "task": (
-                "Find directories named empty anywhere below this directory, "
-                "including ones containing no files."
-            ),
-            "rows": {"src/empty/"},
-        },
-        {
-            "id": "search_count",
-            "tool": "search_files",
-            "task": (
-                "How many individual occurrences of alpha does each file contain? "
-                "Return per-file occurrence counts; two on the same line count "
-                "twice."
-            ),
-            "rows": {"src/a.py:2", "tests/b.PY:1"},
-        },
-        {
-            "id": "search_absent",
-            "tool": "search_files",
-            "task": (
-                "Find references to retired_handler anywhere under src and report "
-                "their locations, or tell me if there are none."
-            ),
-            "rows": {"No results."},
-        },
-        {
-            "id": "search_pages",
-            "tool": "search_files",
-            "task": (
-                "List every EVENT line in events.log, with line numbers. I need the complete list."
-            ),
-            "files": {"events.log": "".join(f"EVENT item-{i:03}\n" for i in range(1, 136))},
-            "rows": {f"events.log:{i}:EVENT item-{i:03}" for i in range(1, 136)},
-        },
-        {
-            "id": "search_other_cwd",
-            "tool": "search_files",
-            "outside_cwd": True,
-            "task": (
-                "The repository is {repo}. Find lines containing add_recipe( in its "
-                "src directory, with file paths and line numbers."
-            ),
-            "rows": {"src/recipes.py:2:def add_recipe(title):"},
-        },
-        {
             "id": "read_control",
-            "tool": "search_files",
-            "expected_tool": "read",
+            "tool": "read",
             "task": "Read README.md and tell me the release tag.",
             "final_contains": "ORCHID-73",
         },
         {
-            "id": "search_hidden_config",
-            "tool": "search_files",
-            "task": (
-                "Find where cache_timeout is configured in this directory, including dotfiles. "
-                "Show matching lines with paths and line numbers."
-            ),
-            "files": {".settings.ini": "cache_timeout = 37\n"},
-            "rows": {".settings.ini:1:cache_timeout = 37"},
-        },
-        {
-            "id": "search_exclusions",
-            "tool": "search_files",
-            "task": (
-                "Find every ERROR line in this directory except those under vendor. "
-                "Include file paths and line numbers."
-            ),
-            "files": {"app.log": "ERROR startup\n", "vendor/build.log": "ERROR external\n"},
-            "rows": {"app.log:1:ERROR startup"},
-            "final_excludes": ["ERROR external"],
-        },
-        {
             "id": "edit_control",
-            "tool": "search_files",
-            "expected_tool": "file_edit",
+            "tool": "file_edit",
             "task": (
                 "In notes.md, move the 'Validation' section below 'Release', keeping the "
                 "section text and everything else unchanged. Tell me when it is done."
@@ -338,8 +238,7 @@ def first_use_cases() -> list[dict[str, Any]]:
         *_file_edit_cases(),
         {
             "id": "shell_control",
-            "tool": "search_files",
-            "expected_tool": "bash",
+            "tool": "bash",
             "task": (
                 "Run python check.py in this directory and tell me its output and "
                 "whether it exited successfully."
@@ -427,23 +326,6 @@ def first_use_cases() -> list[dict[str, Any]]:
     ]
 
 
-_EXCLUSION_WORDS = re.compile(r"exclud|omit|skip|ignor|left out|not included|filtered", re.I)
-
-
-def _reported_as_excluded(value: str, final: str) -> bool:
-    """Whether every mention of value in the answer says it was left out, as asked.
-
-    A mention counts as excluded when its line, or one of the two non-empty
-    lines before it (such as an "Excluded:" heading), says so.
-    """
-    lines = [line for line in final.splitlines() if line.strip()]
-    return all(
-        _EXCLUSION_WORDS.search(" ".join(lines[max(0, index - 2) : index + 1]))
-        for index, line in enumerate(lines)
-        if value in line
-    )
-
-
 def _background_tasks_action(arguments: Any) -> str | None:
     """The action a ``background_tasks`` call meant, read as the Tool reads it."""
     try:
@@ -465,124 +347,11 @@ def assess(
     """Judge effects, not JSON identity or a fixed number/order of Tool calls."""
     successful = [c for c in calls if (c.get("result") or {}).get("ok")]
     details: dict[str, Any] = {}
-    if case["tool"] == "search_files":
-        expected_tool = case.get("expected_tool", "search_files")
+    if case["tool"] != "subagent":
+        expected_tool = case["tool"]
         expected_names = preferred_tools(case)
         selected = [c for c in successful if c["name"] in expected_names]
-        if "rows" in case:
-            actual = set()
-            raw_lines = []
-            for call in selected:
-                content = call["result"]["data"].get("content", "")
-                content = content.replace(fixture.repo.as_posix() + "/", "")
-                raw_lines.extend(content.splitlines())
-                for line in content.splitlines():
-                    line = line.removeprefix("./")
-                    # --column is a valid alternative presentation of matching lines.
-                    line = re.sub(r"^(.*?:\d+):\d+:(?=\D)", r"\1:", line)
-                    actual.add(line)
-            # Reading a known file is also valid evidence for matching-line tasks.
-            # The oracle checks the requested facts, not an exact Tool sequence.
-            for call in successful:
-                if call["name"] == "bash":
-                    # Only these full-file reads are allowed by this fixture;
-                    # arbitrary script output is not evidence of reading a file.
-                    command = call["arguments"].get("command", "")
-                    match = re.search(r"(?:README\.md|src[/\\]recipes\.py)", command, re.I)
-                    if match and command.lower().startswith(("get-content ", "cat ")):
-                        label = match.group().replace("\\", "/")
-                        for number, line in enumerate(
-                            call["result"]["data"].get("output", "").splitlines(), 1
-                        ):
-                            actual.add(f"{label}:{number}:{line}")
-                    continue
-                if call["name"] != "read":
-                    continue
-                path = (fixture.cwd / call["arguments"]["path"]).resolve()
-                if not path.is_relative_to(fixture.repo):
-                    continue
-                label = path.relative_to(fixture.repo).as_posix()
-                for line in call["result"]["data"].get("content", "").splitlines():
-                    match = re.match(r"(\d+)\| (.*)", line)
-                    if match:
-                        actual.add(f"{label}:{match[1]}:{match[2]}")
-            if (
-                case["id"] == "search_count"
-                and raw_lines
-                and all(re.match(r"^.+?:\d+(?::\d+)?:alpha$", line) for line in raw_lines)
-            ):
-                counts = Counter(re.sub(r":\d+(?::\d+)?:alpha$", "", line) for line in raw_lines)
-                actual = {f"{path}:{count}" for path, count in counts.items()}
-            elif case["id"] == "search_count":
-                # Matching lines shown in full, by search or read, also prove the counts.
-                counts = Counter()
-                for row in actual:
-                    match = re.match(r"^(.+?):\d+:(.*)$", row)
-                    if match:
-                        counts[match[1]] += len(re.findall(r"\balpha\b", match[2]))
-                actual |= {f"{path}:{count}" for path, count in counts.items() if count}
-            outcome = case["rows"].issubset(actual)
-            if case["id"] == "search_absent":
-                # Empty output alone proves nothing about the intended query/scope.
-                scope = fixture.repo / "src"
-                absence_verified = False
-                for call in selected:
-                    if call["name"] != "search_files":
-                        continue
-                    data = call["result"]["data"]
-                    # Results do not echo the query, so read it from the call.
-                    try:
-                        query = interpret_search_call(call["arguments"])
-                    except ValueError:
-                        continue
-                    try:
-                        covers_pattern = any(
-                            re.search(pattern, "retired_handler") for pattern in query.patterns
-                        )
-                    except re.error:
-                        covers_pattern = False
-                    roots = [(fixture.cwd / root).resolve() for root in query.roots or ["."]]
-                    covers_scope = any(scope.is_relative_to(root) for root in roots)
-                    absence_verified |= bool(
-                        covers_pattern
-                        and covers_scope
-                        # A complete search without results has no warnings and no next page.
-                        and str(data.get("summary", "")).startswith("No matches")
-                        and not data.get("warnings")
-                        and "next_offset" not in data
-                    )
-                outcome = absence_verified
-            answer = final.replace("\\", "/").replace("`", "")
-            final_ok = True
-            for row in case["rows"]:
-                if row == "No results.":
-                    final_ok &= bool(
-                        re.search(
-                            r"\bno\b|not found|none|zero|0 (matches|references)", answer, re.I
-                        )
-                    )
-                elif case["id"] == "search_count":
-                    path, count = row.rsplit(":", 1)
-                    final_ok &= bool(
-                        re.search(re.escape(path) + r"[^\n]*\b" + count + r"\b", answer)
-                    )
-                else:
-                    path, *rest = row.split(":", 2)
-                    final_ok &= path.rstrip("/") in answer
-                    if len(rest) == 2:
-                        final_ok &= (
-                            bool(re.search(r"\b" + rest[0] + r"\b", answer)) and rest[1] in answer
-                        )
-            outcome = outcome and final_ok
-            outcome = outcome and all(
-                _reported_as_excluded(value, final) for value in case.get("final_excludes", [])
-            )
-            details = {
-                "missing_rows": sorted(case["rows"] - actual),
-                "unexpected_rows": sorted(actual - case["rows"]),
-            }
-            details["final_facts_verified"] = final_ok
-        elif "final_contains" in case:
+        if "final_contains" in case:
             fact = case["final_contains"]
             evidence = [
                 c
@@ -599,9 +368,6 @@ def assess(
             # The exact durable file comparison below decides edit success.
             outcome = bool(final.strip())
         outcome = outcome and bool(final.strip())
-        if expected_tool == "search_files" and fixture.received:
-            outcome = False
-            details["unnecessary_delegation"] = True
         before = {**BASE_FILES, **case.get("files", {})}
         expected_files = {**before, **case.get("expected_files", {})}
         actual_files = {

@@ -355,12 +355,11 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("computer", ["server", "laptop"])
-async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
+async def test_one_folder_decision_resumes_parallel_library_reads(
     tmp_path: Path, computer: str
 ) -> None:
     from core.tools.file_state import FileReadState
     from core.tools.read import register_read_tool
-    from core.tools.search_files import register_search_files_tool
     from tests.core.chat.chat_loop_tools_test_support import tool_results
 
     client = tmp_path / "library" / "client"
@@ -374,7 +373,7 @@ async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
         None,
         turns=[
             tool_turn(
-                ("search", "search_files", {"pattern": "library_marker", "path": str(auth)}),
+                ("auth", "read", {"path": str(auth)}),
                 ("read", "read", {"path": str(stdio)}),
             ),
             tool_turn(("list", "read", {"path": str(client)})),
@@ -390,7 +389,6 @@ async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
         file_state=FileReadState(),
         speech_max_size_bytes=1024,
     )
-    register_search_files_tool(runtime.tools)
     creator = PermissionBoundary.build(
         normalize_permission_rules({"read": "work_area"}),
         BoundaryContext(workdir=tmp_path / "work", home=tmp_path, data_dir=tmp_path / "data"),
@@ -416,8 +414,10 @@ async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
     async with asyncio.timeout(8):
         await waiting.wait()
         requests = runtime.chat_runs.approvals_snapshot()["requests"]
-        search = next(r for r in requests if r["tool_name"] == "search_files")
-        assert search["session_grant"]["folders"][:2] == [auth.parent.as_posix(), client.as_posix()]
+        request = next(
+            r for r in requests if r["session_grant"]["folders"][0] == auth.parent.as_posix()
+        )
+        assert request["session_grant"]["folders"][1] == client.as_posix()
 
         async def save(_request):
             resolver = runtime.agent_resolver
@@ -426,7 +426,7 @@ async def test_one_folder_decision_resumes_a_library_search_and_a_parallel_read(
             )
             resolver._session_overrides[address] = updated.session_metadata()["agent_overrides"]
 
-        assert await runtime.chat_runs.remember_approval(search["id"], save, folder_read=True)
+        assert await runtime.chat_runs.remember_approval(request["id"], save, folder_read=True)
         await run.wait()
     results = tool_results(history(runtime, "s1"))
     assert len(results) == 3

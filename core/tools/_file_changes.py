@@ -54,9 +54,9 @@ from core.tools.file_state import (
     os_error_reason,
 )
 from core.tools.model_names import model_tool_name
-from core.tools.search import display_search_path
 from core.tools.tools import JsonObject, ToolContext
 from core.utils.file_status import is_file_strict
+from core.utils.paths import display_path
 
 _BOM = b"\xef\xbb\xbf"
 _WRITE_FAILED = "Could not change {path}: {reason}. Check this path before resending this change."
@@ -290,7 +290,7 @@ def change_batch(context: ToolContext, templates: Mapping[str, str] | None = Non
     """Start the batch of one call, showing paths relative to its working directory."""
     cwd = _call_cwd(context)
     return ChangeBatch(
-        shown=lambda path: display_search_path(path, cwd=cwd),
+        shown=lambda path: display_path(path, cwd=cwd),
         cwd=cwd,
         templates=templates or {},
         permissions=context.permissions,

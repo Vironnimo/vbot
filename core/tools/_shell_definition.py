@@ -65,7 +65,10 @@ def _culture_sentence(culture: PowerShellCulture | None) -> str:
 # that follow it up, the results say when it happens. The culture is read once
 # per process, so the definition stays the same for the Provider's cache.
 SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING}{_culture_sentence(powershell_culture())} Long output keeps its first and last "
+    f"{_OPENING}{_culture_sentence(powershell_culture())} "
+    "Search file contents with rg -n 'pattern' . and find files by name with rg --files -g '*.py'. "
+    "To include ignored and hidden files, add -uu -g '!.git'. "
+    "An rg exit code of 1 means no matches. Long output keeps its first and last "
     f"lines, and the result names a file with all of it, so there is no need to trim it with "
     f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
     "call. When another tool covers the task, use it instead of a shell command."

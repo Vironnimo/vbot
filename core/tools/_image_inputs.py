@@ -20,10 +20,9 @@ from core.tools._image_downloads import ImageDownloadError, download_images, ima
 from core.tools._path_suggestions import corrected_paths
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract
-from core.tools.search import display_search_path
 from core.tools.tools import ToolContext
 from core.utils.file_status import stat_or_none
-from core.utils.paths import file_url_path
+from core.utils.paths import display_path, file_url_path
 
 # Names other image Tools and Agents use for analyze_image fields.
 ANALYZE_FIELD_ALIASES = SpellingAliases(
@@ -267,7 +266,7 @@ def _folder_problem(
             f"{label} is a folder with no image files, not an image. "
             "Pass the path of an image file instead.",
         )
-    example = _call(field, [display_search_path(image, cwd=cwd) for image in images], single)
+    example = _call(field, [display_path(image, cwd=cwd) for image in images], single)
     files = "an image file" if single else "image files"
     return UnusableImageError(
         "image_read_error",
@@ -437,14 +436,14 @@ def _missing_message(
     lines = []
     for _, raw, similar in missing:
         if similar:
-            names = ", ".join(display_search_path(item, cwd=cwd) for item in similar)
+            names = ", ".join(display_path(item, cwd=cwd) for item in similar)
             lines.append(f"No image at {raw} (similar: {names}).")
         else:
             lines.append(f"No image at {raw}, and no similar file is beside it.")
     if all(similar for _, _, similar in missing):
         corrected = list(items)
         for index, _, similar in missing:
-            corrected[index] = display_search_path(similar[0], cwd=cwd)
+            corrected[index] = display_path(similar[0], cwd=cwd)
         call = _call(field, corrected, single)
         meant = "that file" if len(missing) == 1 else "those files"
         lines.append(f"If you meant {meant}, pass {call}.")

@@ -136,7 +136,7 @@ _BOARD_ELSEWHERE = {
     "swarminbox": "swarm_inbox",
     "swarmwiki": "swarm_wiki",
 }
-# An unknown action spelled like a Tool name, such as "search_files", may be a call meant for
+# An unknown action spelled like a Tool name, such as "web_search", may be a call meant for
 # another of the Agent's Tools; the normalizer cannot see which Tools the Agent has.
 _TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 # A file path means the call was meant for a Tool that works with files.

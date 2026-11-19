@@ -141,7 +141,6 @@ from core.tools import (
     register_memory_tool,
     register_project_tool,
     register_read_tool,
-    register_search_files_tool,
     register_shell_tool,
     register_skill_manage_tool,
     register_skill_tool,
@@ -484,7 +483,6 @@ def bootstrap(runtime: Runtime) -> None:
             render=lambda context: backend_instructions(context.tool_available),
             owner=f"builtin:{LIVE_BACKEND_BUILTIN}",
         )
-        register_search_files_tool(runtime._tools)
         # The local browser starts with the first page that needs it.
         runtime._page_browser = PageBrowser(runtime._storage.layout.temporary / "browser")
         register_web_fetch_tool(

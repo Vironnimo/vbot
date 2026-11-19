@@ -115,6 +115,10 @@ def test_all_selected_and_none_resolve_direct_tools_explicitly() -> None:
         ToolAccess(mode="selected", allowed=("write",)), tools, "off"
     ).allowed_tools == ("write",)
     assert resolve_tool_access(ToolAccess(mode="none"), tools, "agent_user").allowed_tools == ()
+    search_only = normalize_tool_access(
+        {"mode": "selected", "allowed": ["search_files"], "granted": ["search_files"]}
+    )
+    assert not resolve_tool_access(search_only, _catalog(("bash", {})), "off").allowed_tools
 
 
 def test_identity_constraint_is_enforced_for_all_and_selected_modes() -> None:

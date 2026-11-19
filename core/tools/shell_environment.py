@@ -13,7 +13,8 @@ One owner builds it from explicit layers, each applied over the previous one:
    decides otherwise. A server that runs from a source checkout also leads
    ``PATH`` with its own ``vbot`` command (``provide_instance_command``): the
    ``vbot`` an installation put on ``PATH`` always reaches the installed
-   instance.
+   instance. Commands and terminals can run the packaged ripgrep from PATH,
+   including in restricted Sessions.
 3. **Output.** ``TERM``: a Terminal Session runs in a real terminal
    (``xterm-256color``); a command writes to a pipe that no one answers or
    renders (``dumb``).
@@ -48,6 +49,7 @@ millisecond, so no cache can go stale.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.resources
 import io
 import os
@@ -61,6 +63,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from core.utils.logging import get_logger
+from core.utils.search_binary import require_binary
 
 if TYPE_CHECKING:
     from core.tools.scratch_areas import ScratchFolder
@@ -327,10 +330,16 @@ def _instance_environment() -> dict[str, str]:
     environment = _login_environment()
     _remove(environment, (SHELL_CLI_ENV,))
     _apply(environment, _instance_variables())
+    # A broken or unprovisioned search dependency must leave other commands usable.
+    leading = []
+    with contextlib.suppress(ValueError):
+        leading.append(str(require_binary().parent))
     if _instance_command_directory is not None:
-        path = _get(environment, "PATH")
-        leading = str(_instance_command_directory)
-        _apply(environment, {"PATH": f"{leading}{os.pathsep}{path}" if path else leading})
+        leading.append(str(_instance_command_directory))
+    if leading:
+        if path := _get(environment, "PATH"):
+            leading.append(path)
+        _apply(environment, {"PATH": os.pathsep.join(leading)})
     return environment
 
 

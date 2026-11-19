@@ -31,7 +31,6 @@ from core.tools.edit import (
 )
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
-from core.tools.search_files import interpret_search_call, register_search_files_tool
 from core.tools.shell import register_shell_tool
 from core.tools.subagent import _render_subagent_prompt_block, register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
@@ -44,12 +43,12 @@ class FixtureBoundaryError(ValueError):
 
 
 class FirstUseFixture:
-    def __init__(self, root: Path, *, outside_cwd: bool = False):
+    def __init__(self, root: Path):
         self.root = root.resolve()
-        self.cwd = self.root / "workspace" if outside_cwd else self.root / "repo"
         self.repo = self.root / "repo"
+        self.cwd = self.repo
         self.data = self.root / "state"
-        for path in (self.cwd, self.repo, self.data):
+        for path in (self.repo, self.data):
             path.mkdir(parents=True, exist_ok=True)
         write_bootstrap_marker(self.data)
         self.sessions = ChatSessionManager(self.data)
@@ -96,7 +95,6 @@ class FirstUseFixture:
         self.coordinator = SubAgentCoordinator(runtime, self)
         self.coordinator.install(self.runs)
         self.registry = ToolRegistry()
-        register_search_files_tool(self.registry)
         register_subagent_tools(self.registry, self.coordinator)
         register_shell_tool(self.registry, self.commands)
         register_background_tasks_tool(self.registry, self.commands, subagents=self.coordinator)
@@ -249,13 +247,7 @@ class FirstUseFixture:
 
     async def dispatch(self, call: dict[str, Any]):
         name, arguments = call["name"], call["arguments"]
-        if name == "search_files":
-            query = interpret_search_call(arguments)
-            if any(not self.inside(path) for path in query.roots or [str(self.cwd)]):
-                raise FixtureBoundaryError(
-                    "Search selected roots outside the disposable repository"
-                )
-        elif name == "read":
+        if name == "read":
             if not isinstance(arguments.get("path"), str) or not self.inside(arguments["path"]):
                 raise FixtureBoundaryError("Read selected a path outside the disposable repository")
         elif name == "apply_patch":

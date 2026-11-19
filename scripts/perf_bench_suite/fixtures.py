@@ -1,9 +1,9 @@
 """Deterministic synthetic fixtures shared by the Python benchmark groups.
 
 Histories model realistic Agent Sessions: each Run starts with a user message,
-takes two to five Model steps that call Tools (``bash``, ``read``,
-``search_files``) and ends with a Markdown answer and its Run summary. Message
-sizes follow per-role weights with jitter and are scaled so the whole history
+takes two to five Model steps that call Tools (``bash``, ``read``) and ends
+with a Markdown answer and its Run summary. Message sizes follow per-role
+weights with jitter and are scaled so the whole history
 reaches its character budget (four characters per token). The last Run is left
 running, as it is while Chat builds the next request.
 
@@ -159,7 +159,7 @@ class TextFactory:
 # --- histories --------------------------------------------------------------
 
 _ROLE_WEIGHTS = {"user": 2.0, "assistant_tools": 0.4, "tool": 3.0, "final": 3.0}
-_TOOL_NAMES = ("bash", "read", "search_files")
+_TOOL_NAMES = ("bash", "read")
 
 
 @dataclass
@@ -362,23 +362,13 @@ def _tool_arguments(name: str, text: TextFactory) -> dict[str, Any]:
     path = f"src/{text.choice(_WORDS)}/{text.choice(_WORDS)}.py"
     if name == "bash":
         return {"command": f"python -m pytest tests/{text.choice(_WORDS)} -q", "timeout": 120}
-    if name == "read":
-        return {"path": path, "offset": text.randint(1, 400), "limit": 200}
-    return {"pattern": text.choice(_WORDS), "path": "src", "glob": "*.py"}
+    return {"path": path, "offset": text.randint(1, 400), "limit": 200}
 
 
 def _tool_data(name: str, chars: int, text: TextFactory) -> dict[str, Any]:
     if name == "bash":
         return {"exit_code": 0, "output": text.code(chars)}
-    if name == "read":
-        return {"content": text.code(chars)}
-    lines = []
-    size = 0
-    while size < chars:
-        line = f"src/{text.choice(_WORDS)}.py:{text.randint(1, 900)}: {text.words(60)}"
-        lines.append(line)
-        size += len(line) + 1
-    return {"matches": "\n".join(lines)[:chars]}
+    return {"content": text.code(chars)}
 
 
 # --- session store ----------------------------------------------------------

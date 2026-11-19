@@ -32,7 +32,6 @@ from core.tools.image import ANALYZE_IMAGE_TOOL_PARAMETERS, GENERATE_IMAGE_TOOL_
 from core.tools.memory import MEMORY_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_PARAMETERS
-from core.tools.search_files import SEARCH_FILES_TOOL_PARAMETERS
 from core.tools.session_search import SESSION_SEARCH_TOOL_PARAMETERS
 from core.tools.shell import SHELL_TOOL_PARAMETERS
 from core.tools.skill import SKILL_TOOL_PARAMETERS
@@ -508,7 +507,6 @@ _BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
     "memory": MEMORY_TOOL_PARAMETERS,
     "project": PROJECT_TOOL_PARAMETERS,
     "read": READ_TOOL_PARAMETERS,
-    "search_files": SEARCH_FILES_TOOL_PARAMETERS,
     "session_search": SESSION_SEARCH_TOOL_PARAMETERS,
     "skill": SKILL_TOOL_PARAMETERS,
     "skill_manage": SKILL_MANAGE_TOOL_PARAMETERS,

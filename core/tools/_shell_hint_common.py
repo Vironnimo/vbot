@@ -17,11 +17,10 @@ _POWERSHELL = sys.platform == "win32"
 _SCAN_CHARS = 4000
 
 # Registry names of the Tools hints can point to.
-_SEARCH_TOOL = "search_files"
 _READ_TOOL = "read"
 _EDIT_TOOLS = ("apply_patch", "edit")
 _TERMINAL_TOOL = "terminal"
-HINT_TOOL_NAMES = (_SEARCH_TOOL, _READ_TOOL, *_EDIT_TOOLS, _TERMINAL_TOOL)
+HINT_TOOL_NAMES = (_READ_TOOL, *_EDIT_TOOLS, _TERMINAL_TOOL)
 
 
 def _offers_none(_name: str) -> bool:

@@ -121,7 +121,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 **Setup:** Python 3.14 (Python version below), Node.js for WebUI (Node.js >=22 plus npm on the server for optional WhatsApp Channels); editable install with dev extras:
 ```bash
 pip install -e ".[dev]"
-python -m cli.search_runtime          # private ripgrep for the search Tools (tools/search_files.md)
+python -m cli.search_runtime          # bundled rg for Agent shells and the Chat file picker
 git config core.hooksPath .githooks   # once per clone; worktrees share it
 ```
 Use the current interpreter; do not assume a virtual environment for installs, checks or runtime commands. It must run the SQLite the packages bundle; how to set that up, and why: `development.md` -> Interpreter and SQLite. Before editing the installers in `scripts/`, read [USAGE.md](../USAGE.md#installation) and `cli/application.md`.

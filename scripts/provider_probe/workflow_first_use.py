@@ -37,10 +37,9 @@ async def first_use_trial(
         "first_attempt_success": False,
     }
     with TemporaryDirectory(prefix="vbot-first-use-") as directory:
-        fixture = FirstUseFixture(Path(directory), outside_cwd=case.get("outside_cwd", False))
+        fixture = FirstUseFixture(Path(directory))
         try:
             fixture.write({**BASE_FILES, **case.get("files", {})})
-            (fixture.repo / "src/empty").mkdir()
             messages: list[dict] = [{"role": "system", "content": fixture.system_prompt()}]
             if case.get("seed"):
                 fixture.hold_children = True
@@ -233,7 +232,7 @@ async def _probe_first_use(adapter: Any, args: argparse.Namespace) -> dict:
             "passed": len(results) == len(cases) * args.repetitions
             and all(r["first_attempt_success"] for r in results),
             "fixture_limits": (
-                "Real search/read/edit/safe-shell dispatch and Sub-Agent lifecycle. Child Model "
+                "Real read/edit/safe-shell dispatch and Sub-Agent lifecycle. Child Model "
                 "work is a deterministic receiver; unexpected shell commands are recorded "
                 "and stopped, never substituted; a stopped shell check after the preferred "
                 "Tool succeeded lets the trial finish and costs only the first attempt. "
