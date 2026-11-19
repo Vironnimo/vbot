@@ -119,6 +119,7 @@ class StubAgent:
     tool_loading: JsonObject | None = None
     librarian_enabled: bool = True
     permission_rules: Any = None
+    permission_profile: str | None = None
     permission_ceiling: Any = None
     rule_files: tuple[Any, ...] = ()
     builtin: str | None = None
