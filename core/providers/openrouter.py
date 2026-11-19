@@ -77,6 +77,7 @@ from core.providers._wire_learning import (
     stream_learning_from_rejections,
 )
 from core.providers.errors import (
+    CatalogEntrySkipped,
     ProviderRateLimitError,
     classify_in_band_provider_error,
 )
@@ -634,6 +635,8 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     ) -> Model:
         """Normalize one OpenRouter ``/models`` entry into a vBot ``Model``."""
 
+        if raw.get("endpoints") == ["/api/v1/batches"]:
+            raise CatalogEntrySkipped("OpenRouter exposes this Model only through its Batch API")
         architecture = _read_mapping(raw, "architecture")
         top_provider = _read_mapping(raw, "top_provider")
         supported_parameters = _read_string_list(raw, "supported_parameters")

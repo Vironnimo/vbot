@@ -102,7 +102,7 @@ def test_bundled_catalog_models_are_admitted_on_their_reviewed_wire(
         pytest.param("glm-5.3-flash-free", CHAT_MODEL, True, id="glm-free-tier-stream"),
         pytest.param("nemotron-3.5-super-vl-free", CHAT_MODEL, False, id="nemotron-free-tier-send"),
         pytest.param("claude-opus-4-1", MESSAGES_MODEL, True, id="hinted-retired-stream"),
-        pytest.param("jev-1.13", CHAT_MODEL, False, id="unsupported-task-route"),
+        pytest.param("gpt-live-1", RESPONSES_MODEL, False, id="missing-live-control-channel"),
     ],
 )
 @pytest.mark.asyncio
@@ -126,6 +126,54 @@ async def test_unusable_selection_fails_before_network(
     assert caught.value.retryable is False
     assert str(caught.value).startswith(f"Model '{model_id}' is ")
     assert not route.called
+
+
+@pytest.mark.parametrize(
+    "model_id,task",
+    [
+        ("jev-1.13", "decision"),
+        ("jev-1.13-free", "decision"),
+        ("gemini-decision-1", "decision"),
+        ("gpt-6-luna-decision", "decision"),
+        ("gemini-nano-banana-2.1", "image_generation"),
+        ("gpt-image-2.5-sunburst", "image_generation"),
+        ("grok-imagine-image-2.0", "image_generation"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_task_models_are_selectable_for_their_task_and_refused_by_chat(
+    model_id: str, task: str
+) -> None:
+    lookup = _bundled_lookup()
+    model = lookup(model_id)
+    assert model is not None and task in model.capabilities.task_types
+    assert "chat" not in model.capabilities.task_types
+    adapter = OpenCodeZenAdapter(zen_config(), "key", model_lookup=lookup)
+    if task == "decision":
+        assert model.pricing is not None and model.pricing.rates.output == 0
+        expected = {
+            "jev-1.13": 0.042,
+            "jev-1.13-free": 0,
+            "gemini-decision-1": 0.1,
+            "gpt-6-luna-decision": 0.1,
+        }
+        assert model.pricing.rates.input == expected[model_id]
+        if model_id == "gpt-6-luna-decision":
+            (tier,) = model.pricing.tiers
+            assert (tier.above_tokens, tier.rates.input, tier.rates.cache_read) == (
+                272_000,
+                0.2,
+                0.02,
+            )
+            assert tier.rates.cache_write is None
+        route = adapter.wire_profile(model_id).decision
+        assert (route.protocol, route.endpoint) == (
+            "system_one",
+            "/inference/systemone/v1/systemone",
+        )
+    with pytest.raises(ProviderError, match="specialized OpenCode"):
+        await _request(adapter, model_id, streaming=True)
+    await adapter.aclose()
 
 
 # ---------------------------------------------------------------------------

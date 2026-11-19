@@ -466,6 +466,7 @@ class _RecordingImageClient:
         *,
         options: dict[str, Any],
         input_images: tuple[Any, ...] = (),
+        wire: str | None = None,
     ) -> ImageGenerationResult:
         self.prompt = prompt
         self.options = options

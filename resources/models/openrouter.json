@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T19:12:11.963447+00:00",
+  "fetched_at": "2026-11-19T21:41:39.226590+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -1518,57 +1518,6 @@
         "source": "models.dev:openrouter/anthropic/claude-fable-5.1"
       }
     },
-    "anthropic/claude-fable-5.1:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Fable 5.1 (batch)"
-    },
     "anthropic/claude-fable-5.2": {
       "capabilities": {
         "input_modalities": [
@@ -1638,57 +1587,6 @@
         },
         "source": "models.dev:openrouter/anthropic/claude-fable-5.2"
       }
-    },
-    "anthropic/claude-fable-5.2:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Fable 5.2 (batch)"
     },
     "anthropic/claude-haiku-4.5": {
       "capabilities": {
@@ -1834,56 +1732,6 @@
         },
         "source": "models.dev:openrouter/anthropic/claude-haiku-5.5"
       }
-    },
-    "anthropic/claude-haiku-5.5:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Haiku 5.5 (batch)"
     },
     "anthropic/claude-opus-4.1": {
       "capabilities": {
@@ -2384,107 +2232,6 @@
         "source": "models.dev:openrouter/anthropic/claude-opus-5.5"
       }
     },
-    "anthropic/claude-opus-5.5:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Opus 5.5 (batch)"
-    },
-    "anthropic/claude-opus-5:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Opus 5 (batch)"
-    },
     "anthropic/claude-sonnet-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -2783,57 +2530,6 @@
         },
         "source": "models.dev:openrouter/anthropic/claude-sonnet-5.5"
       }
-    },
-    "anthropic/claude-sonnet-5.5:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Sonnet 5.5 (batch)"
     },
     "arcee-ai/maestro-reasoning": {
       "capabilities": {
@@ -6431,7 +6127,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek-thinking",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 32000,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6440,9 +6136,8 @@
       "name": "DeepSeek: R1 0528",
       "pricing": {
         "rates": {
-          "cache_read": 0.35,
-          "input": 0.5,
-          "output": 2.15
+          "input": 0.571,
+          "output": 2.286
         },
         "source": "models.dev:openrouter/deepseek/deepseek-r1-0528"
       }
@@ -6638,7 +6333,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6647,64 +6342,12 @@
       "name": "DeepSeek: DeepSeek V4 Flash 0731",
       "pricing": {
         "rates": {
-          "cache_read": 0.015,
-          "input": 0.06,
-          "output": 0.18
+          "cache_read": 0.035,
+          "input": 0.062,
+          "output": 0.3
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-0731"
       }
-    },
-    "deepseek/deepseek-v4-flash-0731:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 384000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "DeepSeek: DeepSeek V4 Flash 0731 (batch)"
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
       "capabilities": {
@@ -6913,9 +6556,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0813",
       "pricing": {
         "rates": {
-          "cache_read": 0.097,
-          "input": 0.111,
-          "output": 4.44
+          "cache_read": 0.11,
+          "input": 0.13,
+          "output": 5.5
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro-0813"
       }
@@ -6988,9 +6631,9 @@
       "name": "DeepSeek: DeepSeek V4.1 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.006,
-          "input": 0.3,
-          "output": 1.2
+          "cache_read": 0.001014,
+          "input": 0.0507,
+          "output": 0.2028
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash"
       }
@@ -7063,121 +6706,12 @@
       "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
       "pricing": {
         "rates": {
-          "cache_read": 0.01,
-          "input": 0.036,
-          "output": 0.5
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash-1017"
       }
-    },
-    "deepseek/deepseek-v4.1-flash-1017:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "DeepSeek: DeepSeek V4.1 Flash 1017 (batch)"
-    },
-    "deepseek/deepseek-v4.1-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "DeepSeek: DeepSeek V4.1 Flash (batch)"
     },
     "elevenlabs/eleven-flash-v2": {
       "capabilities": {
@@ -8551,64 +8085,6 @@
         "source": "models.dev:openrouter/google/gemini-3-flash-preview"
       }
     },
-    "google/gemini-3-flash-preview:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file",
-          "audio",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3 Flash Preview (batch)"
-    },
     "google/gemini-3-pro-image": {
       "capabilities": {
         "input_modalities": [
@@ -9314,64 +8790,6 @@
         "source": "models.dev:openrouter/google/gemini-3.1-flash-lite-preview"
       }
     },
-    "google/gemini-3.1-flash-lite:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.1 Flash Lite (batch)"
-    },
     "google/gemini-3.1-flash-tts-preview": {
       "capabilities": {
         "input_modalities": [
@@ -9615,65 +9033,6 @@
         "source": "models.dev:openrouter/google/gemini-3.1-pro-preview-customtools"
       }
     },
-    "google/gemini-3.1-pro-preview:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "audio",
-          "file",
-          "image",
-          "text",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.1 Pro Preview (batch)"
-    },
     "google/gemini-3.5-flash": {
       "capabilities": {
         "input_modalities": [
@@ -9828,122 +9187,6 @@
         "source": "models.dev:openrouter/google/gemini-3.5-flash-lite"
       }
     },
-    "google/gemini-3.5-flash-lite:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.5 Flash Lite (batch)"
-    },
-    "google/gemini-3.5-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.5 Flash (batch)"
-    },
     "google/gemini-3.5-transcribe": {
       "capabilities": {
         "input_modalities": [
@@ -10055,63 +9298,6 @@
         "source": "models.dev:openrouter/google/gemini-3.6-flash"
       }
     },
-    "google/gemini-3.6-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.6 Flash (batch)"
-    },
     "google/gemini-3.7-flash": {
       "capabilities": {
         "input_modalities": [
@@ -10187,63 +9373,6 @@
         },
         "source": "models.dev:openrouter/google/gemini-3.7-flash"
       }
-    },
-    "google/gemini-3.7-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.7 Flash (batch)"
     },
     "google/gemini-3.8-flash": {
       "capabilities": {
@@ -10449,63 +9578,6 @@
       },
       "name": "Google: Gemini 3.8 Flash TTS"
     },
-    "google/gemini-3.8-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 3.8 Flash (batch)"
-    },
     "google/gemini-4-argon": {
       "capabilities": {
         "input_modalities": [
@@ -10582,65 +9654,6 @@
         "source": "models.dev:openrouter/google/gemini-4-argon"
       }
     },
-    "google/gemini-4-argon:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "audio",
-          "file",
-          "image",
-          "text",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 4 Argon (batch)"
-    },
     "google/gemini-4-carbon": {
       "capabilities": {
         "input_modalities": [
@@ -10716,65 +9729,6 @@
         },
         "source": "models.dev:openrouter/google/gemini-4-carbon"
       }
-    },
-    "google/gemini-4-carbon:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "audio",
-          "file",
-          "image",
-          "text",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding",
-          "audio_input",
-          "speech_to_text",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->text"
-        }
-      },
-      "name": "Google: Gemini 4 Carbon (batch)"
     },
     "google/gemini-4-hydrogen": {
       "capabilities": {
@@ -10853,7 +9807,7 @@
         "source": "models.dev:openrouter/google/gemini-4-hydrogen"
       }
     },
-    "google/gemini-4-hydrogen:batch": {
+    "google/gemini-4-neon": {
       "capabilities": {
         "input_modalities": [
           "audio",
@@ -10867,6 +9821,13 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "mandatory": true,
           "supported": true
         },
@@ -10904,13 +9865,24 @@
         "api-key"
       ],
       "context_window": 1048576,
+      "family": "gemini",
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 4 Hydrogen (batch)"
+      "name": "Google: Gemini 4 Neon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "cache_write": 0.083333,
+          "input": 3.0,
+          "output": 15.0,
+          "reasoning": 15.0
+        },
+        "source": "models.dev:openrouter/google/gemini-4-neon"
+      }
     },
     "google/gemini-decision-1": {
       "capabilities": {
@@ -10996,45 +9968,6 @@
           "output": 0.0
         },
         "source": "openrouter:google/gemini-embedding-001"
-      }
-    },
-    "google/gemini-embedding-001:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "embeddings"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "text_embedding"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 20000,
-      "max_output_tokens": 18000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->embeddings"
-        }
-      },
-      "name": "Google: Gemini Embedding 001 (batch)",
-      "pricing": {
-        "rates": {
-          "input": 0.075,
-          "output": 0.0
-        },
-        "source": "openrouter:google/gemini-embedding-001:batch"
       }
     },
     "google/gemini-embedding-2": {
@@ -11129,53 +10062,6 @@
           "output": 0.0
         },
         "source": "openrouter:google/gemini-embedding-2-preview"
-      }
-    },
-    "google/gemini-embedding-2:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file",
-          "audio",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "embeddings"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "image_input",
-          "file_input",
-          "audio_input",
-          "video_input",
-          "text_embedding"
-        ],
-        "tools": false,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 8192,
-      "max_output_tokens": 7372,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file+audio+video->embeddings"
-        }
-      },
-      "name": "Google: Gemini Embedding 2 (batch)",
-      "pricing": {
-        "rates": {
-          "input": 0.1,
-          "output": 0.0
-        },
-        "source": "openrouter:google/gemini-embedding-2:batch"
       }
     },
     "google/gemini-nano-banana-2.1": {
@@ -11659,9 +10545,8 @@
       "name": "Google: Gemma 3 27B",
       "pricing": {
         "rates": {
-          "cache_read": 0.04,
           "input": 0.08,
-          "output": 0.35
+          "output": 0.16
         },
         "source": "models.dev:openrouter/google/gemma-3-27b-it"
       }
@@ -15337,62 +14222,6 @@
         "source": "models.dev:openrouter/meta/muse-glimmer-30b"
       }
     },
-    "meta/muse-glimmer-30b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "max_output_tokens": 16384,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Meta: Muse Glimmer 30B (batch)"
-    },
     "meta/muse-image": {
       "capabilities": {
         "input_modalities": [
@@ -17549,62 +16378,6 @@
         "source": "models.dev:openrouter/minimax/minimax-m3.1-flash"
       }
     },
-    "minimax/minimax-m3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 524288,
-      "max_output_tokens": 512000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "MiniMax: MiniMax M3 (batch)"
-    },
     "minimax/speech-2.8-hd": {
       "capabilities": {
         "input_modalities": [
@@ -18495,60 +17268,6 @@
         },
         "source": "models.dev:openrouter/mistralai/mistral-medium-3-5"
       }
-    },
-    "mistralai/mistral-medium-3-5:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 209715,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Mistral: Mistral Medium 3.5 (batch)"
     },
     "mistralai/mistral-medium-3.1": {
       "capabilities": {
@@ -20150,9 +18869,9 @@
       "name": "MoonshotAI: Kimi K2.7 Code",
       "pricing": {
         "rates": {
-          "cache_read": 0.17,
-          "input": 0.7,
-          "output": 3.75
+          "cache_read": 0.16,
+          "input": 0.65,
+          "output": 3.5
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k2.7-code"
       }
@@ -20302,124 +19021,12 @@
       "name": "MoonshotAI: Kimi K3.1 Pro",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
-          "input": 0.2403,
-          "output": 8.4023
+          "cache_read": 0.18,
+          "input": 0.253,
+          "output": 8.8
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k3.1-pro"
       }
-    },
-    "moonshotai/kimi-k3.1-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": false,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "MoonshotAI: Kimi K3.1 Pro (batch)"
-    },
-    "moonshotai/kimi-k3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 16384,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "MoonshotAI: Kimi K3 (batch)"
     },
     "morph/morph-v3-fast": {
       "capabilities": {
@@ -20470,43 +19077,6 @@
         "source": "models.dev:openrouter/morph/morph-v3-fast"
       }
     },
-    "morph/morph-v3-fast:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "stop",
-          "temperature"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 81920,
-      "max_output_tokens": 38000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Morph: Morph V3 Fast (batch)"
-    },
     "morph/morph-v3-large": {
       "capabilities": {
         "input_modalities": [
@@ -20555,47 +19125,6 @@
         },
         "source": "models.dev:openrouter/morph/morph-v3-large"
       }
-    },
-    "morph/morph-v3-large:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "logprobs",
-          "max_tokens",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_logprobs"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Morph: Morph V3 Large (batch)"
     },
     "morph/reflex": {
       "capabilities": {
@@ -23308,57 +21837,6 @@
         "source": "models.dev:openrouter/openai/gpt-5-nano"
       }
     },
-    "openai/gpt-5-nano:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 400000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5 Nano (batch)"
-    },
     "openai/gpt-5-pro": {
       "capabilities": {
         "input_modalities": [
@@ -24688,106 +23166,6 @@
         "source": "models.dev:openrouter/openai/gpt-5.6-luna-pro"
       }
     },
-    "openai/gpt-5.6-luna-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Luna Pro (batch)"
-    },
-    "openai/gpt-5.6-luna:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Luna (batch)"
-    },
     "openai/gpt-5.6-sol": {
       "capabilities": {
         "input_modalities": [
@@ -24951,106 +23329,6 @@
         },
         "source": "models.dev:openrouter/openai/gpt-5.6-sol-pro"
       }
-    },
-    "openai/gpt-5.6-sol-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Sol Pro (batch)"
-    },
-    "openai/gpt-5.6-sol:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Sol (batch)"
     },
     "openai/gpt-5.6-terra": {
       "capabilities": {
@@ -25216,106 +23494,6 @@
         "source": "models.dev:openrouter/openai/gpt-5.6-terra-pro"
       }
     },
-    "openai/gpt-5.6-terra-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Terra Pro (batch)"
-    },
-    "openai/gpt-5.6-terra:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-5.6 Terra (batch)"
-    },
     "openai/gpt-6-astra": {
       "capabilities": {
         "input_modalities": [
@@ -25479,108 +23657,6 @@
         },
         "source": "models.dev:openrouter/openai/gpt-6-astra-pro"
       }
-    },
-    "openai/gpt-6-astra-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Astra Pro (batch)"
-    },
-    "openai/gpt-6-astra:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Astra (batch)"
     },
     "openai/gpt-6-luna": {
       "capabilities": {
@@ -25789,106 +23865,6 @@
         "source": "models.dev:openrouter/openai/gpt-6-luna-pro"
       }
     },
-    "openai/gpt-6-luna-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Luna Pro (batch)"
-    },
-    "openai/gpt-6-luna:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Luna (batch)"
-    },
     "openai/gpt-6-sol": {
       "capabilities": {
         "input_modalities": [
@@ -26052,106 +24028,6 @@
         },
         "source": "models.dev:openrouter/openai/gpt-6-sol-pro"
       }
-    },
-    "openai/gpt-6-sol-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Sol Pro (batch)"
-    },
-    "openai/gpt-6-sol:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6 Sol (batch)"
     },
     "openai/gpt-6.1-sol": {
       "capabilities": {
@@ -26317,108 +24193,6 @@
         "source": "models.dev:openrouter/openai/gpt-6.1-sol-pro"
       }
     },
-    "openai/gpt-6.1-sol-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6.1 Sol Pro (batch)"
-    },
-    "openai/gpt-6.1-sol:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6.1 Sol (batch)"
-    },
     "openai/gpt-6.1-terra": {
       "capabilities": {
         "input_modalities": [
@@ -26583,107 +24357,6 @@
         "source": "models.dev:openrouter/openai/gpt-6.1-terra-pro"
       }
     },
-    "openai/gpt-6.1-terra-pro:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6.1 Terra Pro (batch)"
-    },
-    "openai/gpt-6.1-terra:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "file",
-          "image",
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "tool_choice",
-          "tools",
-          "verbosity"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1050000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "OpenAI: GPT-6.1 Terra (batch)"
-    },
     "openai/gpt-6.2-astra": {
       "capabilities": {
         "input_modalities": [
@@ -26791,6 +24464,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -26954,6 +24628,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -28009,59 +25684,6 @@
         "source": "models.dev:openrouter/openai/gpt-oss-120b"
       }
     },
-    "openai/gpt-oss-120b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "max_output_tokens": 117964,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "OpenAI: gpt-oss-120b (batch)"
-    },
     "openai/gpt-oss-20b": {
       "capabilities": {
         "input_modalities": [
@@ -28116,7 +25738,7 @@
       ],
       "context_window": 131072,
       "family": "gpt-oss",
-      "max_output_tokens": 117964,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -28131,59 +25753,6 @@
         },
         "source": "models.dev:openrouter/openai/gpt-oss-20b"
       }
-    },
-    "openai/gpt-oss-20b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "max_output_tokens": 117964,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "OpenAI: gpt-oss-20b (batch)"
     },
     "openai/gpt-oss-safeguard-20b": {
       "capabilities": {
@@ -28215,6 +25784,7 @@
           "temperature",
           "tool_choice",
           "tools",
+          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -28752,7 +26322,7 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": 64000,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text+image"
@@ -28824,7 +26394,7 @@
         "api-key"
       ],
       "context_window": 2000000,
-      "max_output_tokens": 64000,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text+image"
@@ -31370,7 +28940,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -31379,7 +28949,8 @@
       "name": "Qwen: Qwen3 Next 80B A3B Instruct",
       "pricing": {
         "rates": {
-          "input": 0.09,
+          "cache_read": 0.07,
+          "input": 0.1,
           "output": 1.1
         },
         "source": "models.dev:openrouter/qwen/qwen3-next-80b-a3b-instruct"
@@ -31691,7 +29262,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 81920,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -31700,8 +29271,8 @@
       "name": "Qwen: Qwen3.5-27B",
       "pricing": {
         "rates": {
-          "input": 0.26,
-          "output": 2.6
+          "input": 0.195,
+          "output": 1.56
         },
         "source": "models.dev:openrouter/qwen/qwen3.5-27b"
       }
@@ -31898,7 +29469,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 40960,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -31907,7 +29478,6 @@
       "name": "Qwen: Qwen3.5-9B",
       "pricing": {
         "rates": {
-          "cache_read": 0.153,
           "input": 0.17,
           "output": 0.25
         },
@@ -32642,59 +30212,6 @@
         "source": "models.dev:openrouter/qwen/qwen3.7-plus"
       }
     },
-    "qwen/qwen3.7-plus:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Qwen: Qwen3.7 Plus (batch)"
-    },
     "qwen/qwen3.8-2.4t-a95b": {
       "capabilities": {
         "input_modalities": [
@@ -32833,70 +30350,12 @@
       "name": "Qwen: Qwen3.8 27B",
       "pricing": {
         "rates": {
-          "cache_read": 0.0375,
-          "input": 0.15,
-          "output": 1.875
+          "cache_read": 0.059,
+          "input": 0.06,
+          "output": 2.2
         },
         "source": "models.dev:openrouter/qwen/qwen3.8-27b"
       }
-    },
-    "qwen/qwen3.8-27b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 235929,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "Qwen: Qwen3.8 27B (batch)"
     },
     "qwen/qwen3.8-flash": {
       "capabilities": {
@@ -33038,64 +30497,6 @@
         },
         "source": "models.dev:openrouter/qwen/qwen3.8-max-0902"
       }
-    },
-    "qwen/qwen3.8-max-0902:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "Qwen: Qwen3.8 Max (0902) (batch)"
     },
     "qwen/qwen3.8-max-prime": {
       "capabilities": {
@@ -34736,7 +32137,7 @@
       ],
       "context_window": 1048576,
       "family": "beam",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -34745,8 +32146,8 @@
       "name": "Reflection: Beam 1.0 501B A23B",
       "pricing": {
         "rates": {
-          "cache_read": 0.04,
-          "input": 0.3,
+          "cache_read": 0.05,
+          "input": 0.25,
           "output": 1.0
         },
         "source": "models.dev:openrouter/reflection/beam-1.0-501b-a23b"
@@ -37711,69 +35112,6 @@
         "source": "models.dev:openrouter/thinkingmachines/inkling-2-small"
       }
     },
-    "thinkingmachines/inkling-2-small:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "seed",
-          "stop",
-          "temperature",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "family": "ling",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Thinking Machines: Inkling 2 Small (free)",
-      "pricing": {
-        "rates": {
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:openrouter/thinkingmachines/inkling-2-small:free"
-      }
-    },
     "thinkingmachines/inkling-small": {
       "capabilities": {
         "input_modalities": [
@@ -37847,62 +35185,6 @@
         },
         "source": "models.dev:openrouter/thinkingmachines/inkling-small"
       }
-    },
-    "thinkingmachines/inkling-small:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "audio"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "audio_input",
-          "speech_to_text"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 524288,
-      "max_output_tokens": 262144,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+audio->text"
-        }
-      },
-      "name": "Thinking Machines: Inkling Small (batch)"
     },
     "typesafe/jev-1.13": {
       "capabilities": {
@@ -38048,7 +35330,7 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "max_output_tokens": 64000,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text"
@@ -38761,59 +36043,6 @@
         "source": "models.dev:openrouter/x-ai/grok-4.3"
       }
     },
-    "x-ai/grok-4.3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 900000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "SpaceXAI: Grok 4.3 (batch)"
-    },
     "x-ai/grok-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -38975,60 +36204,6 @@
         "source": "models.dev:openrouter/x-ai/grok-4.6"
       }
     },
-    "x-ai/grok-4.6:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 500000,
-      "max_output_tokens": 450000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "SpaceXAI: Grok 4.6 (batch)"
-    },
     "x-ai/grok-4.7": {
       "capabilities": {
         "input_modalities": [
@@ -39111,60 +36286,6 @@
         },
         "source": "models.dev:openrouter/x-ai/grok-4.7"
       }
-    },
-    "x-ai/grok-4.7:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "response_format",
-          "seed",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 500000,
-      "max_output_tokens": 450000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "SpaceXAI: Grok 4.7 (batch)"
     },
     "x-ai/grok-build-0.1": {
       "capabilities": {
@@ -39756,9 +36877,9 @@
       "name": "Xiaomi: MiMo-V2.5-Pro",
       "pricing": {
         "rates": {
-          "cache_read": 0.0036,
-          "input": 0.435,
-          "output": 0.87
+          "cache_read": 0.096,
+          "input": 0.48,
+          "output": 1.8
         },
         "source": "models.dev:openrouter/xiaomi/mimo-v2.5-pro"
       }
@@ -40336,7 +37457,7 @@
       "name": "Z.ai: GLM 4.6V",
       "pricing": {
         "rates": {
-          "cache_read": 0.055,
+          "cache_read": 0.05,
           "input": 0.3,
           "output": 0.9
         },
@@ -40630,7 +37751,7 @@
       ],
       "context_window": 204800,
       "family": "glm",
-      "max_output_tokens": 65535,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "interleaved_field": "reasoning_content",
@@ -40640,9 +37761,9 @@
       "name": "Z.ai: GLM 5.1",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
+          "cache_read": 0.6,
+          "input": 1.19,
+          "output": 3.74
         },
         "source": "models.dev:openrouter/z-ai/glm-5.1"
       }
@@ -40710,66 +37831,12 @@
       "name": "Z.ai: GLM 5.2",
       "pricing": {
         "rates": {
-          "cache_read": 0.006,
-          "input": 0.007,
-          "output": 6.8
+          "cache_read": 0.14,
+          "input": 0.62,
+          "output": 2.42
         },
         "source": "models.dev:openrouter/z-ai/glm-5.2"
       }
-    },
-    "z-ai/glm-5.2:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Z.ai: GLM 5.2 (batch)"
     },
     "z-ai/glm-5.3": {
       "capabilities": {
@@ -40918,67 +37985,6 @@
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3-flash"
       }
-    },
-    "z-ai/glm-5.3-flash:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "Z.ai: GLM 5.3 Flash (batch)"
     },
     "z-ai/glm-5.3-flashx": {
       "capabilities": {
@@ -41179,61 +38185,6 @@
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3-prime"
       }
-    },
-    "z-ai/glm-5.3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "mandatory": true,
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Z.ai: GLM 5.3 (batch)"
     },
     "z-ai/glm-5v-turbo": {
       "capabilities": {
@@ -41724,8 +38675,8 @@
       "name": "DeepSeek: DeepSeek Pro Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.0999,
-          "input": 0.0999,
+          "cache_read": 0.12,
+          "input": 0.117,
           "output": 8.0
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-pro-latest"
@@ -41787,7 +38738,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -41796,9 +38747,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.035,
-          "input": 0.0434,
-          "output": 0.3
+          "cache_read": 0.001484,
+          "input": 0.04664,
+          "output": 0.13992
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-v4-flash-latest"
       }
@@ -42121,7 +39072,7 @@
       "pricing": {
         "rates": {
           "cache_read": 0.18,
-          "input": 0.1824,
+          "input": 0.1805,
           "output": 11.0055
         },
         "source": "models.dev:openrouter/~moonshotai/kimi-latest"
@@ -42189,16 +39140,16 @@
       "name": "OpenAI: GPT Astra Latest",
       "pricing": {
         "rates": {
-          "cache_read": 1.0,
-          "cache_write": 12.5,
-          "input": 10.0,
-          "output": 50.0,
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
           "tiers": [
             {
-              "cache_read": 2.0,
-              "cache_write": 25.0,
-              "input": 20.0,
-              "output": 75.0,
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
               "tier": {
                 "size": 272000,
                 "type": "context"

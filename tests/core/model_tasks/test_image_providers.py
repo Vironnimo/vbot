@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -17,14 +18,16 @@ import httpx
 import pytest
 import respx
 
+from core.model_tasks.image_profile import image_wire
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import ImageInput
+from core.models import ModelRegistry
 from core.providers.errors import (
     ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
 )
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from tests.core.model_tasks.image_providers_test_support import (
     GOOGLE_BASE,
     OPENROUTER_IMAGES_URL,
@@ -72,6 +75,54 @@ def _google_answer(*parts: dict[str, Any], finish: str = "STOP", **fields: Any) 
 def _inline_image(data: bytes, mime_type: str = "image/png", **fields: Any) -> dict[str, Any]:
     encoded = base64.b64encode(data).decode()
     return {"inlineData": {"mimeType": mime_type, "data": encoded}, **fields}
+
+
+@pytest.mark.parametrize(
+    "model_id,path",
+    [
+        ("gemini-nano-banana-2.1", "google/v1beta/models/gemini-nano-banana-2.1:generateContent"),
+        ("gpt-image-2.5-sunburst", "openai/v1/images/edits"),
+        ("grok-imagine-image-2.0", "xai/v1/images/edits"),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_console_edits_use_the_catalog_native_image_wire(model_id: str, path: str) -> None:
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    provider = ProviderRegistry.load(resources).get("opencode-zen")
+    model = ModelRegistry.load(resources).get(provider.id, model_id)
+    wire = image_wire(provider.id, provider.adapter, None, model)
+    client = ProviderImageClient(
+        provider=provider,
+        connection=provider.get_connection("api-key"),
+        credential="test",
+        model_id=model_id,
+    )
+    output = (
+        _google_answer(_inline_image(b"test"))
+        if wire == "google"
+        else {"data": [{"b64_json": "dGVzdA==", "mime_type": "image/png"}]}
+    )
+    route = respx.post("https://opencode.ai/inference/" + path).respond(200, json=output)
+    inputs = (ImageInput("a.png", "image/png", b"one"), ImageInput("b.png", "image/png", b"two"))
+    result = await client.generate("edit", options={}, input_images=inputs, wire=wire)
+    assert result.images[0].data == b"test" and result.images[0].media_type == "image/png"
+    request = route.calls[0].request
+    if wire == "google":
+        assert request.headers["x-goog-api-key"] == "test"
+        parts = json.loads(request.content)["contents"][0]["parts"]
+        assert parts[2]["inlineData"]["data"] == "dHdv"
+    elif wire == "xai_images":
+        assert request.headers["Authorization"] == "Bearer test"
+        body = json.loads(request.content)
+        assert [part["url"] for part in body["images"]] == [
+            "data:image/png;base64,b25l",
+            "data:image/png;base64,dHdv",
+        ]
+        assert body["response_format"] == "b64_json"
+    else:
+        assert request.headers["Authorization"] == "Bearer test"
+        assert b'name="image[]"' in request.content
 
 
 _UNIFIED_OPTIONS = {

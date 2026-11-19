@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T19:12:11.092867+00:00",
+  "fetched_at": "2026-11-19T21:42:50.777854+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -1538,54 +1538,14 @@
         "source": "models.dev:opencode/gemini-4-hydrogen"
       }
     },
-    "glm-5.1": {
+    "gemini-4-neon": {
       "capabilities": {
         "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 204800,
-      "family": "glm",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "GLM-5.1",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
-        },
-        "source": "models.dev:opencode/glm-5.1"
-      }
-    },
-    "glm-5.2": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1594,8 +1554,10 @@
         "reasoning": {
           "control": "levels",
           "levels": [
+            "low",
+            "medium",
             "high",
-            "max"
+            "xhigh"
           ],
           "supported": true
         },
@@ -1606,29 +1568,98 @@
           "text_output"
         ],
         "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
+      "name": "Gemini 4 Neon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:opencode/gemini-4-neon"
+      }
+    },
+    "gemini-decision-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
         "vision": false
       },
       "connections": [
         "api-key",
         "account"
       ],
-      "context_window": 1000000,
-      "family": "glm",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "GLM-5.2",
+      "context_window": 262144,
+      "max_output_tokens": null,
+      "name": "Gemini Decision 1",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
+          "input": 0.1,
+          "output": 0.0
         },
-        "source": "models.dev:opencode/glm-5.2"
+        "source": "opencode-zen:gemini-decision-1"
       }
+    },
+    "gemini-nano-banana-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "opencode_zen": {
+          "image_sdk": "@ai-sdk/google"
+        }
+      },
+      "name": "Nano Banana 2.1"
     },
     "glm-5.3": {
       "capabilities": {
@@ -1728,56 +1759,6 @@
           "output": 0.5
         },
         "source": "models.dev:opencode/glm-5.3-flash"
-      }
-    },
-    "glm-5.3-flash-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "account"
-      ],
-      "context_window": 200000,
-      "family": "glm-flash",
-      "max_output_tokens": 32000,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "GLM-5.3-Flash Free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/glm-5.3-flash-free"
       }
     },
     "gpt-5": {
@@ -2758,6 +2739,60 @@
         "source": "models.dev:opencode/gpt-6-luna"
       }
     },
+    "gpt-6-luna-decision": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "decision": {
+            "limits": {
+              "max_input_tokens": 922000
+            }
+          }
+        },
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Luna Decision",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.0,
+          "tiers": [
+            {
+              "cache_read": 0.02,
+              "input": 0.2,
+              "output": 0.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "opencode-zen:gpt-6-luna-decision"
+      }
+    },
     "gpt-6-sol": {
       "capabilities": {
         "input_modalities": [
@@ -3023,6 +3058,40 @@
         "source": "models.dev:opencode/gpt-6.2-sol"
       }
     },
+    "gpt-image-2.5-sunburst": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": null,
+      "max_output_tokens": null,
+      "metadata": {
+        "opencode_zen": {
+          "image_sdk": "@ai-sdk/openai"
+        }
+      },
+      "name": "GPT Image 2.5 Sunburst"
+    },
     "grok-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -3254,6 +3323,40 @@
         "source": "models.dev:opencode/grok-build-0.1"
       }
     },
+    "grok-imagine-image-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 64000,
+      "max_output_tokens": null,
+      "metadata": {
+        "opencode_zen": {
+          "image_sdk": "@ai-sdk/xai"
+        }
+      },
+      "name": "Grok Imagine Image 2.0"
+    },
     "hy4-flash-free": {
       "capabilities": {
         "input_modalities": [
@@ -3335,104 +3438,74 @@
         "source": "models.dev:opencode/iceman-free"
       }
     },
-    "inkling-2-small-free": {
+    "jev-1.13": {
       "capabilities": {
         "input_modalities": [
-          "text",
-          "image"
+          "text"
         ],
         "json_mode": false,
         "output_modalities": [
-          "text"
+          "decisions"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "max"
-          ],
-          "supported": true
+          "supported": false
         },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
-          "chat",
-          "text_output"
+          "decision"
         ],
-        "tools": true,
-        "vision": true
+        "tools": false,
+        "vision": false
       },
       "connections": [
         "api-key",
         "account"
       ],
-      "context_window": 1048576,
-      "family": "ling",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "Inkling 2 Small Free",
+      "context_window": 64000,
+      "max_output_tokens": null,
+      "name": "Jev 1.13",
       "pricing": {
         "rates": {
-          "cache_read": 0.0,
-          "cache_write": 0.0,
+          "input": 0.042,
+          "output": 0.0
+        },
+        "source": "opencode-zen:jev-1.13"
+      }
+    },
+    "jev-1.13-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 64000,
+      "max_output_tokens": null,
+      "name": "Jev 1.13 Free",
+      "pricing": {
+        "rates": {
           "input": 0.0,
           "output": 0.0
         },
-        "source": "models.dev:opencode/inkling-2-small-free"
-      }
-    },
-    "kimi-k2.6": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 262144,
-      "family": "kimi-k2",
-      "max_output_tokens": 65536,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "Kimi K2.6",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.16,
-          "input": 0.95,
-          "output": 4.0
-        },
-        "source": "models.dev:opencode/kimi-k2.6"
+        "source": "opencode-zen:jev-1.13-free"
       }
     },
     "kimi-k2.7-code": {
@@ -4234,6 +4307,57 @@
           "output": 6.0
         },
         "source": "models.dev:opencode/qwen3.8-max"
+      }
+    },
+    "tidepool-alpha-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "Tidepool Alpha Free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/tidepool-alpha-free"
       }
     }
   },

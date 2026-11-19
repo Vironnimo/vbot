@@ -22,18 +22,6 @@
         }
       }
     },
-    "glm-5.2": {
-      "capabilities": {
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "high",
-            "max"
-          ],
-          "supported": true
-        }
-      }
-    },
     "kimi-k3": {
       "capabilities": {
         "reasoning": {

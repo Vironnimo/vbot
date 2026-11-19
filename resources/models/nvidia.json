@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T19:12:04.592914+00:00",
+  "fetched_at": "2026-11-19T21:41:35.664988+00:00",
   "models": {
     "bigcode/starcoder2-15b": {
       "capabilities": {
@@ -265,6 +265,31 @@
       "context_window": null,
       "max_output_tokens": null,
       "name": "mistralai/mistral-large-4-1t-a52b"
+    },
+    "moonshotai/kimi-k3.1-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "name": "moonshotai/kimi-k3.1-pro"
     },
     "nvidia/cosmos-reason2-8b": {
       "capabilities": {
@@ -550,48 +575,6 @@
       "context_window": null,
       "max_output_tokens": null,
       "name": "nvidia/riva-translate-4b-instruct-v2"
-    },
-    "openai/gpt-oss-20b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "family": "gpt-oss",
-      "max_output_tokens": 131072,
-      "name": "openai/gpt-oss-20b",
-      "pricing": {
-        "rates": {
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:nvidia/openai/gpt-oss-20b"
-      }
     },
     "poolside/laguna-xs-2.1": {
       "capabilities": {

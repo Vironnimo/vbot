@@ -8,11 +8,12 @@ The Model DB publishes raw parameter facts per Model (`capabilities.task_options
 
 ## Image wires
 
-`image_wire(provider_id, adapter, connection_mode)` picks the wire:
+`image_wire(provider_id, adapter, connection_mode, model)` picks the wire:
 - `openrouter` for Provider `openrouter`;
 - `openai_subscription` for Adapter `openai`/`openai_compatible` with Connection mode `codex_responses`;
 - `google` for Adapter `google` (Google AI Studio, native `generateContent`);
 - `openai_images` for every other `openai`/`openai_compatible` Connection;
+- OpenCode Console uses the selected Model's reported image SDK to pick `google`, `openai_images` or `xai_images` (`providers/opencode-zen.md`).
 - `unsupported` otherwise.
 
 `TaskModelService.image_profile(target_ref)` builds the profile from the resolved Model and the target Connection's wire; local targets get `unsupported`. `ImageService.generation_profile()` returns the profile of the configured binding, or `ImageProfile(wire="unsupported")` when the binding cannot run.

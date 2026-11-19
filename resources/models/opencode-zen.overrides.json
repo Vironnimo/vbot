@@ -1,6 +1,36 @@
 {
   "_comment": "Hand-authored OpenCode Zen Model facts. Wire decisions (each Model's wire, admission of free and retired Models, thinking controls, cheapest rung for none, response carrier, replay scope, media) live in resources/wire/opencode-zen.json. GPT 6.1 Sol: JSON schema support (verified 2026-10-02); it is a complete record so it stays usable when a refreshed catalog lacks it (listed live on 2026-10-02).",
   "models": {
+    "gemini-nano-banana-2.1": {
+      "capabilities": {
+        "task_options": {"image_generation": {"parameters": {
+          "aspect_ratio": {"type": "enum", "values": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1"]},
+          "resolution": {"type": "enum", "values": ["1K", "2K", "4K"]},
+          "thinking_level": {"type": "enum", "values": ["minimal", "medium", "high"]},
+          "input_references": {"max": 14}
+        }}}
+      }
+    },
+    "gpt-image-2.5-sunburst": {
+      "capabilities": {
+        "task_options": {"image_generation": {"parameters": {
+          "size": {"type": "string"},
+          "quality": {"type": "enum", "values": ["auto", "low", "medium", "high", "xhigh", "max"]},
+          "background": {"type": "enum", "values": ["auto", "opaque", "transparent"]},
+          "output_format": {"type": "enum", "values": ["png", "jpeg", "webp"]}
+        }}}
+      }
+    },
+    "grok-imagine-image-2.0": {
+      "capabilities": {
+        "task_options": {"image_generation": {"parameters": {
+          "quality": {"type": "enum", "values": ["auto", "low", "medium"]},
+          "aspect_ratio": {"type": "enum", "values": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "19.5:9", "9:19.5", "20:9", "9:20", "21:9", "5:2"]},
+          "resolution": {"type": "enum", "values": ["1k", "2k"]},
+          "input_references": {"max": 5}
+        }}}
+      }
+    },
     "claude-fable-5-2": {
       "capabilities": {
         "reasoning": {"mandatory": true}
@@ -43,9 +73,6 @@
     },
     "beam-free": {
       "name": "Beam Free"
-    },
-    "glm-5.3-flash-free": {
-      "name": "GLM-5.3-Flash Free"
     },
     "nemotron-3.5-super-vl-free": {
       "name": "Nemotron 3.5 Super VL Free"

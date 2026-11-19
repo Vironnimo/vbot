@@ -1,0 +1,14 @@
+{
+  "_comment": "NVIDIA's hosted Kimi K3.1 Pro API accepts image_url inputs and limits one request to 65,536 output tokens. Its reasoning control has no off value.",
+  "models": {
+    "moonshotai/kimi-k3.1-pro": {
+      "name": "Kimi K3.1 Pro",
+      "max_output_tokens": 65536,
+      "capabilities": {
+        "input_modalities": ["text", "image"],
+        "vision": true,
+        "reasoning": {"mandatory": true}
+      }
+    }
+  }
+}

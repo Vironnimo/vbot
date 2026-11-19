@@ -48,7 +48,10 @@ def _adapter() -> NvidiaAdapter:
     )
 
     def lookup(model_id: str) -> Model | None:
-        return _REGISTRY.get("nvidia", model_id)
+        try:
+            return _REGISTRY.get("nvidia", model_id)
+        except KeyError:
+            return None
 
     adapter = NvidiaAdapter(config, "nvapi-secret", model_lookup=lookup)
     return bind_connection(
@@ -115,6 +118,12 @@ def test_catalog_keeps_chat_models_only() -> None:
             "none",
             {"reasoning_effort": "low", "chat_template_kwargs": ABSENT},
             id="gpt-oss-cannot-switch-off",
+        ),
+        pytest.param(
+            "moonshotai/kimi-k3.1-pro",
+            "none",
+            {"reasoning_effort": "low"},
+            id="kimi-cannot-switch-off",
         ),
     ],
 )

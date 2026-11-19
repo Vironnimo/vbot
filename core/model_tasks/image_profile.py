@@ -20,7 +20,9 @@ from typing import Any, Literal
 from core.model_tasks.constants import TASK_IMAGE_GENERATION
 
 JsonObject = dict[str, Any]
-ImageWire = Literal["openrouter", "openai_images", "openai_subscription", "google", "unsupported"]
+ImageWire = Literal[
+    "openrouter", "openai_images", "openai_subscription", "google", "xai_images", "unsupported"
+]
 
 # Per-call intent the image Tool can carry; every other image option is Settings-only.
 CALL_OPTION_NAMES: tuple[str, ...] = ("aspect_ratio", "resolution", "background")
@@ -57,6 +59,7 @@ _WIRE_HIDDEN_PARAMETERS: Mapping[ImageWire, frozenset[str]] = MappingProxyType(
         "openai_images": frozenset({"response_format", "stream"}),
         "openai_subscription": frozenset({"n", "response_format", "stream", "model"}),
         "google": frozenset({"input_references"}),
+        "xai_images": frozenset({"input_references", "response_format"}),
         "unsupported": frozenset(),
     }
 )
@@ -69,7 +72,9 @@ _FREE_NUMBER_PARAMETERS: frozenset[str] = frozenset({"seed"})
 _OPENAI_MAX_SOURCE_IMAGES = 16
 
 
-def image_wire(provider_id: str, adapter: str, connection_mode: str | None) -> ImageWire:
+def image_wire(
+    provider_id: str, adapter: str, connection_mode: str | None, model: Any | None = None
+) -> ImageWire:
     """Return which image wire serves a Provider Connection."""
 
     # Imported here: the Provider package imports Settings, which import this module.
@@ -77,6 +82,16 @@ def image_wire(provider_id: str, adapter: str, connection_mode: str | None) -> I
 
     if provider_id == "openrouter":
         return "openrouter"
+    if provider_id == "opencode-zen":
+        metadata = getattr(model, "metadata", {}).get("opencode_zen", {})
+        sdk = metadata.get("image_sdk") if isinstance(metadata, Mapping) else None
+        if sdk == "@ai-sdk/google":
+            return "google"
+        if sdk == "@ai-sdk/openai":
+            return "openai_images"
+        if sdk == "@ai-sdk/xai":
+            return "xai_images"
+        return "unsupported"
     if adapter == "google":
         return "google"
     if adapter in {"openai", "openai_compatible"}:

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.openrouter import OpenRouterAdapter
 
 
@@ -39,6 +40,7 @@ def raw_openrouter_model(
 def test_catalog_entry_maps_all_openrouter_fields() -> None:
     raw = raw_openrouter_model()
     raw["reasoning"] = {"mandatory": True, "supported_efforts": ["low", "high"]}
+    raw["endpoints"] = ["/api/v1/chat/completions", "/api/v1/batches"]
 
     model = OpenRouterAdapter.normalize_catalog_entry(raw, {"max_tokens": 8192})
 
@@ -59,6 +61,9 @@ def test_catalog_entry_maps_all_openrouter_fields() -> None:
         max_output_tokens=64000,
         metadata={"openrouter": {"modality": "text+image->text"}},
     )
+    raw["endpoints"] = ["/api/v1/batches"]
+    with pytest.raises(CatalogEntrySkipped, match="Batch API"):
+        OpenRouterAdapter.normalize_catalog_entry(raw)
 
 
 def test_unknown_limits_stay_unknown_instead_of_copying_defaults() -> None:

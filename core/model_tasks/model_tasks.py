@@ -646,7 +646,7 @@ class TaskModelService:
             target_ref.provider_id,
             target_ref.target,
             model=model,
-            wire=self._image_wire(target_ref),
+            wire=self._image_wire(target_ref, model),
         )
 
     def decision_profile(self, target_ref: TaskModelTargetRef) -> DecisionProfile:
@@ -678,16 +678,14 @@ class TaskModelService:
 
         if target_ref.kind == "local":
             return build_image_profile(None, "unsupported")
-        return build_image_profile(
-            self._resolve_model(target_ref.provider_id, target_ref.model_id),
-            self._image_wire(target_ref),
-        )
+        model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
+        return build_image_profile(model, self._image_wire(target_ref, model))
 
-    def _image_wire(self, target_ref: TaskModelTargetRef) -> ImageWire:
+    def _image_wire(self, target_ref: TaskModelTargetRef, model: Any | None) -> ImageWire:
         try:
             provider = self._providers.get(target_ref.provider_id)
         except KeyError:
-            return image_wire(target_ref.provider_id, target_ref.provider_id, None)
+            return image_wire(target_ref.provider_id, target_ref.provider_id, None, model)
         connection = next(
             (
                 connection
@@ -700,6 +698,7 @@ class TaskModelService:
             target_ref.provider_id,
             getattr(provider, "adapter", target_ref.provider_id),
             getattr(connection, "mode", None),
+            model,
         )
 
     def model_for_target(self, target_ref: TaskModelTargetRef) -> Any | None:

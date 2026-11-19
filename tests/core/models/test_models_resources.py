@@ -303,7 +303,6 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "longcat-2.5-free",
             "glm-5.3-flash",
             "glm-5.3",
-            "glm-5.2",
             "kimi-k3",
             "kimi-k3.1-pro",
             "kimi-k2.7-code",
@@ -424,9 +423,8 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
             id="deepseek-v4.1-flash",
         ),
         # Every Go Model replays full history. Exact vBot probes on 2026-09-02
-        # showed persisted ``reasoning_content`` of GLM 5.2/5.3 is billed in a
+        # showed persisted ``reasoning_content`` of GLM 5.3 is billed in a
         # Tool continuation. No ``reasoning_request_format`` field.
-        pytest.param("glm-5.2", {"replay_scope": "full_history"}, id="glm-5.2"),
         pytest.param("glm-5.3", {"replay_scope": "full_history"}, id="glm-5.3"),
         pytest.param(
             "glm-5.3-flash",
