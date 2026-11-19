@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -45,7 +44,7 @@ def test_tui_opens_only_in_an_interactive_terminal(
         calls.append(kwargs)
         return 0
 
-    monkeypatch.setitem(sys.modules, "cli.tui", SimpleNamespace(run_tui=open_tui))
+    monkeypatch.setattr("cli.tui.run_tui", open_tui)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: interactive)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: interactive)
     result = cli_main.run(
