@@ -514,6 +514,11 @@ def test_invalid_optional_facts_are_ignored_without_hiding_the_model(
             id="override-entry-not-an-object",
         ),
         pytest.param(
+            {"healthy.overrides.json": {"discovered_only": "false", "models": {}}},
+            ["healthy.overrides.json", "'discovered_only' must be a boolean"],
+            id="invalid-override-discovery-scope",
+        ),
+        pytest.param(
             {"models.json": '{"models":'},
             ["models.json"],
             id="corrupt-canonical-file",

@@ -271,7 +271,7 @@ def option_schema_for(
         fields = _text_to_speech_fields(provider_id, model)
     elif task_type == TASK_IMAGE_GENERATION:
         profile = build_image_profile(
-            model, wire if wire is not None else image_wire(provider_id, provider_id, None)
+            model, wire if wire is not None else image_wire(provider_id, provider_id, None, model)
         )
         fields = _image_generation_fields(profile, model)
     elif task_type == TASK_VIDEO_GENERATION:

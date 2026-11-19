@@ -45,11 +45,10 @@
   "models_endpoint": "/models",
   "models_dev_id": "opencode",
   "catalog_exclusions": [
+    "gpt-live-1",
     "fledge-alpha-free",
     "longcat-2.5-preview-free",
     "mimo-v2.6-flash-free",
-    "jev-1.13-free",
-    "jev-1.13",
     "claude-opus-4-1",
     "kimi-k2.5",
     "minimax-m2.5",

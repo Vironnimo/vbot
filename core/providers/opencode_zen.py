@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 import httpx
 
 from core.models.models import Model
+from core.providers._opencode_zen_tasks import task_model
 from core.providers.adapter import (
     ModelLookup,
 )
@@ -230,13 +231,23 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one listed Model as a plain OpenAI-compatible entry.
+        """Project native task records separately from text Models.
 
         Discovery drops a Model the wire profile does not admit once the
         models.dev protocol hint is projected.
         """
 
-        return OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
+        return task_model(raw) or OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
+
+    def _chat_protocol(self, model_id: str) -> Protocol:
+        model = self._model_lookup(model_id) if self._model_lookup else None
+        if model is not None and "chat" not in model.capabilities.task_types:
+            raise ProviderError(
+                f"Model '{model_id}' is a specialized OpenCode task Model. "
+                "Select it in Task Model settings.",
+                retryable=False,
+            )
+        return self.wire_profile(model_id).protocol
 
     @override
     def request_context_kwargs(
@@ -283,7 +294,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        protocol = self.wire_profile(model_id).protocol
+        protocol = self._chat_protocol(model_id)
         if protocol == "messages":
             return await self._messages.send(messages, model_id=model_id, **kwargs)
         if protocol == "gemini":
@@ -298,7 +309,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        protocol = self.wire_profile(model_id).protocol
+        protocol = self._chat_protocol(model_id)
         if protocol == "messages":
             return self._messages.stream(messages, model_id=model_id, **kwargs)
         if protocol == "gemini":

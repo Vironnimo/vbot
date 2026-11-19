@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T19:51:08.053780+00:00",
+  "fetched_at": "2026-11-19T21:34:05.552857+00:00",
   "models": {
     "gemini-2.5-computer-use-preview-10-2025": {
       "canonical": "google/gemini-2.5-computer-use-preview-10-2025",
@@ -2151,6 +2151,45 @@
           "output": 7.5
         },
         "source": "models.dev:google/gemini-4-hydrogen"
+      }
+    },
+    "gemini-4-neon": {
+      "canonical": "google/gemini-4-neon",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "gemini",
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Neon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:google/gemini-4-neon"
       }
     },
     "gemini-decision-1": {

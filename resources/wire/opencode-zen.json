@@ -2,7 +2,8 @@
   "format_version": 1,
   "_comment": "OpenCode Zen gateway. One credential reaches four wires. Exact catalog protocol hints override inferred family defaults; unfamiliar families use Chat Completions. Models are available unless an exact evidenced exception says otherwise, independent of a free suffix. Messages carries images and PDFs with prompt-cache breakpoints and sends only temperature when a request carries temperature and top_p (Claude Haiku 4.5 rejected both, live 2026-10-03); Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
   "defaults": {
-    "protocol": "chat_completions"
+    "protocol": "chat_completions",
+    "decision": {"protocol": "system_one", "endpoint": "/inference/systemone/v1/systemone"}
   },
   "protocols": {
     "chat_completions": {
@@ -135,6 +136,11 @@
   ],
   "rules": [
     {
+      "when": {"ids": ["gpt-live-1"]},
+      "set": {"admission": {"state": "restricted", "message": "OpenCode's hosted GPT-Live route lacks the server control channel required by vBot."}},
+      "note": "2026-11-19: the native WebRTC session was created, but the control WebSocket's attach endpoint returned HTTP 404."
+    },
+    {
       "when": {"ids": ["minimax-m3.1-flash-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "M3.1 Flash always reasons; none selects its lowest effort on the documented Chat Completions route (https://opencode.ai/v2/docs/console/models/, 2026-10-19)."
@@ -187,16 +193,6 @@
         }
       },
       "note": "HTTP 403 FreeTierError through independent raw requests and Adapter send/stream on 2026-10-18. Only the API-key Connection was tested; account and other free ids retain their existing admission."
-    },
-    {
-      "when": {"ids": ["jev-1.13", "jev-1.13-free"]},
-      "set": {
-        "admission": {
-          "state": "restricted",
-          "message": "This Model requires the System One endpoint, which this Connection does not support."
-        }
-      },
-      "note": "Jev exposes structured decisions through /systemone, not a supported chat wire."
     },
     {
       "when": {

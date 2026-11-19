@@ -312,6 +312,8 @@ The 2026-09-16 checks establish the tested wire features, not reliable completio
 
 ## Catalog Integrity
 
+The November 19, 2026 [Go listing](https://opencode.ai/inference/go/v1/models) no longer returned `glm-5.2`; its former partial Override was removed.
+
 The 2026-11-03 [Go listing](https://opencode.ai/inference/go/v1/models) contains 28 Models. Four ids that would have remained through Overrides also failed on the live API-key Connection. GLM 5.1 and Kimi K2.6 returned HTTP 410 `ModelDeprecated`, while Omen Alpha and MiniMax M2.5 returned HTTP 400 with an unavailable Model message. Removing those Overrides takes the four ids out of the Model DB.
 
 The 2026-10-18 refresh lists 37 Go Models. It adds `beam-free` and replaces the listed `step-5-preview-free` with `step-5-preview`; `cat-jam-free`, `deepseek-flash`, `deepseek-v4-flash`, and `deepseek-v4-flash-vision-exp` also leave the listing. Their partial Model Overrides are removed rather than retaining invalid Override-only entries; historical wire corrections remain available if an id returns. The [current Go table](https://opencode.ai/v2/docs/console/go/) names both new ids on Chat Completions. Both passed Adapter send/stream smoke requests with the API-key Connection on 2026-10-18, and Beam also passed an independent raw request. Their limits and effort ladders remain catalog facts and their wire status remains inferred; these checks establish basic access, not a full capability or replay audit. Step's new id has nonzero catalog pricing; do not carry the former free offer's price forward.

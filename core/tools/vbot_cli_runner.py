@@ -12,7 +12,6 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from core.tools._python_process import OutputCapture, python_executable
 from core.tools.shell_environment import RunIdentity, command_environment
 from core.utils.config import DEFAULT_HOST, VBOT_ROOT
 from core.utils.processes import (
@@ -21,6 +20,7 @@ from core.utils.processes import (
     subprocess_creation_flags,
     wait_for_exit,
 )
+from core.utils.python_process import OutputCapture, python_executable
 from core.utils.workers import finish_despite_cancel
 
 REVIEW_ENV = "VBOT_CLI_REVIEW_AGENT_ACCESS"

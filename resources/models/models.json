@@ -7979,6 +7979,49 @@
       "release_date": "2026-11-12",
       "temperature": false
     },
+    "google/gemini-4-neon": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini",
+      "knowledge": "2026-03",
+      "last_updated": "2026-11-18",
+      "max_output_tokens": 65536,
+      "name": "Gemini 4 Neon",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:google/gemini-4-neon"
+      },
+      "release_date": "2026-11-18",
+      "temperature": false
+    },
     "google/gemini-embedding-001": {
       "capabilities": {
         "input_modalities": [
@@ -10276,6 +10319,54 @@
       "max_output_tokens": 128000,
       "name": "MAI-Code-1.1-Flash",
       "release_date": "2026-08-11",
+      "temperature": false
+    },
+    "microsoft/mai-code-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "mai",
+      "last_updated": "2026-11-17",
+      "max_output_tokens": 128000,
+      "name": "MAI Code 2",
+      "release_date": "2026-11-17",
+      "temperature": false
+    },
+    "microsoft/mai-code-2-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "mai",
+      "last_updated": "2026-11-17",
+      "max_output_tokens": 128000,
+      "name": "MAI Code 2 Flash",
+      "release_date": "2026-11-17",
       "temperature": false
     },
     "microsoft/phi-4-mini": {

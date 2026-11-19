@@ -18,7 +18,6 @@ from typing import Any, BinaryIO, Literal, cast
 
 import psutil  # type: ignore[import-untyped]
 
-from core.tools._python_process import OutputCapture, python_executable
 from core.tools._tool_results import tool_failure, tool_failure_for_exception, tool_success
 from core.tools._tool_workers import run_tool_worker
 from core.tools.contracts import JsonObject
@@ -29,6 +28,7 @@ from core.utils.processes import (
     subprocess_creation_flags,
     wait_for_exit,
 )
+from core.utils.python_process import OutputCapture, python_executable
 from core.utils.workers import cancel_and_wait, finish_despite_cancel
 
 MAX_TOOL_CALLS = 1000

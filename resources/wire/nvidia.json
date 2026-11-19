@@ -44,5 +44,16 @@
       },
       "note": "gpt-oss takes reasoning_effort low|medium|high and always reasons (docs.api.nvidia.com/nim/reference/openai-gpt-oss-20b, read 2026-11-17)."
     }
-  ]
+  ],
+  "models": {
+    "moonshotai/kimi-k3.1-pro": {
+      "set": {
+        "reasoning": {"off": "lowest"},
+        "request": {
+          "allowed_parameters": ["temperature", "max_tokens", "max_output_tokens"],
+          "parameters": {"temperature": {"minimum": 0, "maximum": 1, "out_of_range": "reject"}}
+        }
+      }
+    }
+  }
 }

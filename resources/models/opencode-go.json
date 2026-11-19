@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-17T19:12:10.087352+00:00",
+  "fetched_at": "2026-11-19T21:41:38.310399+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -262,53 +262,6 @@
           "output": 10.0
         },
         "source": "models.dev:opencode-go/gemini-4-argon"
-      }
-    },
-    "glm-5.2": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1000000,
-      "family": "glm",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_go": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "GLM-5.2",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
-        },
-        "source": "models.dev:opencode-go/glm-5.2"
       }
     },
     "glm-5.3": {

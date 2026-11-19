@@ -43,6 +43,7 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         assert kwargs["stdin"] == subprocess.DEVNULL
         assert kwargs["env"]["HOME"] == kwargs["cwd"]
         assert kwargs["env"]["AGY_ADC_AUTH"] == "false"
+        assert kwargs["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
         assert "GEMINI_API_KEY" not in kwargs["env"]
         assert "GOOGLE_APPLICATION_CREDENTIALS" not in kwargs["env"]
         settings = json.loads(command[command.index("--settings") + 1])
@@ -53,7 +54,7 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         data = (
             {
                 "models": [
-                    {"id": "example-high", "label": "Example (High)"},
+                    {"id": "gemini-4-hydrogen-high", "label": "Gemini 4 Hydrogen (High)"},
                     {"id": "gemini-pro-orchestrator-neon", "label": "Orchestrator (Neon)"},
                 ]
             }
@@ -82,10 +83,11 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         assert (await runtime.refresh_external_connection("antigravity", _CONNECTION))["connected"]
         assert calls == ["usage", "usage", "models"]
         assert [row.model_id for row in runtime.models.list_for_provider("antigravity")] == [
-            "example-high"
+            "gemini-4-hydrogen-high"
         ]
-        model = runtime.models.get("antigravity", "example-high")
-        assert model.name == "Example (High)" and model.connections == ("subscription",)
+        model = runtime.models.get("antigravity", "gemini-4-hydrogen-high")
+        assert model.name == "Gemini 4 Hydrogen (High)" and model.connections == ("subscription",)
+        assert model.context_window_for("subscription") == 1_048_576
         adapter = runtime.get_adapter(ConnectionRef("antigravity", _CONNECTION))
         assert isinstance(adapter, AntigravityAdapter)
         report = await runtime.provider_usage.report([_CONNECTION])
@@ -98,7 +100,7 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         buckets.clear()
         with pytest.raises(ProviderAuthError, match="subscription quotas"):
             async with aclosing(
-                adapter.stream([{"role": "user", "content": "hello"}], model_id="example-high")
+                adapter.stream([{"role": "user", "content": "hello"}], model_id=model.model_id)
             ) as stream:
                 await anext(stream)
         assert (
@@ -106,7 +108,7 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
             == "subscription_unconfirmed"
         )
         assert runtime.connection_reachability(_CONNECTION) is False
-        assert runtime.models.get("antigravity", "example-high") == model
+        assert runtime.models.get("antigravity", model.model_id) == model
     finally:
         await runtime.aclose()
 

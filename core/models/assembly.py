@@ -62,6 +62,8 @@ Three layers, each a different home with a clear responsibility:
    - ``<provider>.overrides.json`` is keyed by wire-id, MAY omit ``provider_id``
      (the provider id is derived from the filename), and ALWAYS wins. It is the
      home for a **manual** ``canonical`` pointer and per-provider corrections.
+     A file with ``discovered_only: true`` corrects only ids in the selected
+     generated catalog, keeping availability subject to the installation's login.
 
 3. (Adapter fallbacks at send time are out of scope here.)
 

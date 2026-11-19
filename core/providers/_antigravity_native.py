@@ -61,6 +61,9 @@ def subscription_environment(home: Path) -> dict[str, str]:
         GEMINI_HOME=str(home),
         XDG_CONFIG_HOME=str(home),
         AGY_ADC_AUTH="false",
+        # A disposable profile has no updater debounce marker. Its detached
+        # version check otherwise opens Windows Terminal on every invocation.
+        AGY_CLI_DISABLE_AUTO_UPDATE="true",
     )
     if os.name == "nt":
         environment.update(APPDATA=str(home), LOCALAPPDATA=str(home))
@@ -106,8 +109,8 @@ def _command(executable: Path, name: str) -> dict[str, Any]:
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=15,
-                creationflags=subprocess_creation_flags(),
                 check=False,
+                creationflags=subprocess_creation_flags(),
             )
         except subprocess.TimeoutExpired:
             raise _LoginError(

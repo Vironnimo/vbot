@@ -9,7 +9,6 @@ import os
 import shlex
 import site
 import subprocess
-import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ from core.utils.processes import (
     subprocess_creation_flags,
     wait_for_exit,
 )
+from core.utils.python_process import python_executable
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _FILES = BoundedWorkerPool(name="antigravity-workspaces", max_workers=4)
@@ -59,7 +59,7 @@ def _json_file(path: Path, value: object) -> None:
 
 
 def _configuration(
-    root: Path, system_prompt: str, tools: list[dict[str, Any]]
+    root: Path, system_prompt: str, tools: list[dict[str, Any]], python: Path
 ) -> tuple[Path, Path]:
     home, work = root / "home", root / "workspace"
     config = work / ".agents"
@@ -82,7 +82,7 @@ def _configuration(
         if site.ENABLE_USER_SITE:
             mcp_argv.append(site.getusersitepackages())
         server = {
-            "command": sys.executable,
+            "command": str(python),
             "args": mcp_argv,
             "tools": {tool["name"]: {"eager": True} for tool in tools},
         }
@@ -99,11 +99,11 @@ def _configuration(
     # source. The launch environment puts the vBot interpreter's directory first;
     # the hook wrapper itself lives at a fixed relative path in the private workspace.
     if os.name == "nt":
-        interpreter = Path(sys.executable).name
+        interpreter = python.name
         if not interpreter.replace(".", "").isalnum():
             raise _invalid("requires a Python executable with a shell-safe basename")
     else:
-        interpreter = shlex.quote(Path(sys.executable).name)
+        interpreter = shlex.quote(python.name)
     # agy starts each hook in the directory containing its hooks.json.
     bridge_copy = config / "vbot_hook.py"
     bridge_copy.write_bytes(_BRIDGE.read_bytes())
@@ -246,7 +246,11 @@ async def _read_turn(
         if not checked_guard:
             checked_guard = await _FILES.run(is_file_strict, root / "invocation")
             if not checked_guard:
-                raise _invalid("did not activate vBot's execution guard or Tool inventory")
+                if names and not await _FILES.run(is_file_strict, root / "listed"):
+                    raise _invalid(
+                        "did not load vBot's Tool inventory from its local Python process"
+                    )
+                raise _invalid("did not run vBot's pre-invocation hook")
         if tag == "result":
             if pending:
                 raise _invalid("finished without a pre-execution denial for every Tool")
@@ -295,20 +299,21 @@ async def stream_turn(
     """Run the official CLI as an isolated one-turn child, always reaping its tree."""
     stack = contextlib.ExitStack()
     process: asyncio.subprocess.Process | None = None
+    python = Path(python_executable())
     short_names = native_tool_names(tools, 64 - len(_TOOL_PREFIX))
     names = {_TOOL_PREFIX + short: original for original, short in short_names.items()}
 
     def prepare() -> tuple[Path, Path, Path]:
         root = stack.enter_context(temporary_files.provider_directory())
         manifest = [{**tool, "name": short_names[tool["name"]]} for tool in tools]
-        home, work = _configuration(root, system_prompt, manifest)
+        home, work = _configuration(root, system_prompt, manifest, python)
         return root, home, work
 
     async def start(root: Path, home: Path, work: Path) -> None:
         nonlocal process
         env = subscription_environment(home)
         env["GIT_CEILING_DIRECTORIES"] = str(root)
-        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+        env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
         command = [
             str(executable),
             "--input-format",
@@ -335,8 +340,8 @@ async def stream_turn(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             start_new_session=os.name != "nt",
-            creationflags=subprocess_creation_flags(),
             limit=16 * 1024 * 1024,
+            creationflags=subprocess_creation_flags(),
         )
 
     async def stop() -> None:

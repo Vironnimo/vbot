@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
+from core.model_tasks.image_profile import ImageWire, image_wire
 from core.model_tasks.image_types import (
     GeneratedImage,
     ImageGenerationFailure,
@@ -19,6 +20,7 @@ from core.model_tasks.image_types import (
     JsonObject,
 )
 from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
+from core.providers._opencode_zen_tasks import zen_api_base
 from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.http import parse_sse_json_data, split_stream_lines
@@ -151,24 +153,50 @@ class ProviderImageClient(ProviderTaskClient):
         *,
         options: JsonObject,
         input_images: tuple[ImageInput, ...] = (),
+        wire: ImageWire | None = None,
     ) -> ImageGenerationResult:
         """Call the selected provider's image generation or edit endpoint."""
 
-        if self._provider.id == "openrouter":
+        selected = wire or image_wire(
+            self._provider.id, self._provider.adapter, self._connection.mode
+        )
+        if self._provider.id == "opencode-zen":
+            namespace = {
+                "google": "google/v1beta",
+                "openai_images": "openai/v1",
+                "xai_images": "xai/v1",
+            }.get(selected)
+            if namespace is None:
+                raise ProviderError(
+                    "This OpenCode image Model has no supported native route.", retryable=False
+                )
+            self._base_url = zen_api_base(self._base_url, namespace)
+        if selected == "openrouter":
             return await self._generate_openrouter(
                 prompt,
                 options=options,
                 input_images=input_images,
             )
-        if self._provider.adapter == "google":
+        if selected == "google":
             return await self._generate_google(prompt, options=options, input_images=input_images)
-        if self._provider.adapter in {"openai", "openai_compatible"}:
-            if self._connection.mode == CODEX_RESPONSES_MODE:
-                return await self._generate_openai_codex_responses(
-                    prompt,
-                    options=options,
-                    input_images=input_images,
-                )
+        if selected == "openai_subscription":
+            return await self._generate_openai_codex_responses(
+                prompt, options=options, input_images=input_images
+            )
+        if selected == "xai_images":
+            from core.model_tasks._xai_image import xai_image_request
+
+            endpoint, payload = xai_image_request(self._model_id, prompt, options, input_images)
+            return await self.post_and_parse(
+                endpoint,
+                timeout=_DEFAULT_IMAGE_TIMEOUT,
+                json=payload,
+                parse=lambda response: _parse_unified_image_response(
+                    response.json(), model=self._model_id, requested_output_format="jpeg"
+                ),
+                retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+            )
+        if selected == "openai_images":
             if input_images:
                 return await self._edit_openai(
                     prompt,
@@ -242,8 +270,12 @@ class ProviderImageClient(ProviderTaskClient):
                 response.json(), model=self._model_id
             ),
             json=payload,
+            headers=self._zen_google_headers if self._provider.id == "opencode-zen" else None,
             retry_policy=_GOOGLE_IMAGE_RETRY_POLICY,
         )
+
+    async def _zen_google_headers(self) -> dict[str, str]:
+        return {**self._provider.extra_headers, "x-goog-api-key": await self._credential_value()}
 
     async def _edit_openai(
         self,
@@ -721,7 +753,7 @@ def _decode_image_entries(
                 ImageGenerationFailure(index, "The returned image data could not be decoded.")
             )
             continue
-        media_type = entry.get("media_type")
+        media_type = entry.get("media_type") or entry.get("mime_type")
         if not isinstance(media_type, str) or not media_type.strip():
             media_type = _media_type_from_output_format(
                 entry.get("output_format") or requested_output_format

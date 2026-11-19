@@ -396,6 +396,7 @@ class ImageService:
                     raise ImageConfigurationError(_safe_error_text(exc, target_ref)) from exc
                 result = await provider_client.generate(
                     normalized_prompt,
+                    wire=profile.wire,
                     options=merged_options,
                     input_images=input_images,
                 )
