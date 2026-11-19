@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import codecs
 import io
-import json
 import os
 import stat
 from dataclasses import dataclass, replace
@@ -52,7 +51,6 @@ from core.tools.read_extract import (
     identifies_document,
     unreadable_document_problem,
 )
-from core.tools.search import display_search_path
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -65,6 +63,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.file_status import stat_or_none
+from core.utils.paths import display_path
 
 # A NUL byte within this leading window marks a file as binary (the classic
 # heuristic): text — even non-UTF-8 text shown with replacement chars — has none.
@@ -133,7 +132,7 @@ class _FileInputTooLargeError(Exception):
 
 def _path_label(path: Path, cwd: Path) -> str:
     """Show a path relative to the working directory, absolute outside it."""
-    return display_search_path(path, cwd=cwd)
+    return display_path(path, cwd=cwd)
 
 
 def _call_cwd(context: ToolContext) -> Path:
@@ -250,9 +249,12 @@ def make_read_handler(
         context.record_worked_paths(resolved)
         if stat.S_ISDIR(status.st_mode):
             if arguments.get("pattern") is not None:
-                return tool_failure(
-                    "invalid_arguments", _directory_search_message(arguments, label)
+                advice = (
+                    f"Search the directory with rg in {SHELL_MODEL_NAME}."
+                    if context.offers(BASH_TOOL_NAME)
+                    else "Omit pattern to list the directory, then read a file from the list."
                 )
+                return tool_failure("invalid_arguments", f"{label} is a directory. {advice}")
             return _list_directory(resolved, arguments, label, context)
         if not stat.S_ISREG(status.st_mode):
             return tool_failure("not_a_file", f"{label} is neither a file nor a directory.")
@@ -649,22 +651,6 @@ def _entry_label(entry: os.DirEntry[str]) -> str:
     except OSError:
         directory = False
     return f"{entry.name}/" if directory else entry.name
-
-
-def _directory_search_message(arguments: JsonObject, label: str) -> str:
-    """Name the search_files call that finds matching lines across a directory."""
-    call: dict[str, Any] = {"pattern": arguments["pattern"], "path": label}
-    if arguments.get("ignore_case") is True:
-        call["args"] = ["-i"]
-    if arguments.get("context"):
-        call["context"] = arguments["context"]
-    rendered = ", ".join(
-        f"{key}={json.dumps(value, ensure_ascii=False)}" for key, value in call.items()
-    )
-    return (
-        f"{label} is a directory, and read shows the lines of one file. To find matching "
-        f"lines in its files, call search_files({rendered})."
-    )
 
 
 def _normalized_for_display(arguments: Any) -> JsonObject:

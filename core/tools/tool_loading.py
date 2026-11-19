@@ -34,7 +34,6 @@ DEFAULT_ALWAYS_LOADED_TOOLS: tuple[str, ...] = (
     "edit",
     "apply_patch",
     "bash",
-    "search_files",
     "skill",
     "skill_manage",
     "memory",

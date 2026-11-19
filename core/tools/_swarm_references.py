@@ -1,7 +1,7 @@
 """Swarm references that Agents send to file Tools, and the Swarm Tool calls they mean.
 
 Swarm participants see Wiki pages as ``w3`` and Board posts as ``#42``, and some
-send them to ``read``, ``edit`` or ``search_files``: a page number as a path, a
+send them to file Tools: a page number as a path, a
 post as ``message_id`` (Swarm Sessions, 2026-10-12), a page as ``page_id`` of an
 ``edit`` (2026-10-13). The file Tools cannot run such a call, but their errors
 name the Swarm call that reads or changes the page or post, when the Agent is
@@ -35,15 +35,13 @@ def wiki_page_call(
     offers: Callable[[str], bool],
     *,
     change: bool = False,
-    fields: Mapping[str, Any] | None = None,
     positions: Mapping[str, int] | None = None,
 ) -> str | None:
     """Name the swarm_wiki call for a missing path that is a bare Wiki page number.
 
     ``missing`` is the resolved path; only a page number in the working directory
     itself (``w3``, ``w3.md``) counts, and only when the Agent is offered swarm_wiki.
-    A read call carries ``fields`` (such as a query) along. ``positions`` are a
-    file read's ``offset`` and ``limit``: the call carries them only when every one
+    A file read's ``positions`` are its ``offset`` and ``limit``. The call carries them when each
     reads as a character count, and otherwise says they were left out.
     """
     match = _PAGE_NUMBER.fullmatch(missing.name)
@@ -54,7 +52,7 @@ def wiki_page_call(
     page = f"w{int(match[1])}"
     if change:
         return _change_call(page)
-    arguments = {"action": "read", "page_id": page, **(fields or {})}
+    arguments: dict[str, str | int] = {"action": "read", "page_id": page}
     left_out = ""
     if positions and all(value >= _CHARACTER_POSITIONS for value in positions.values()):
         arguments.update(positions)

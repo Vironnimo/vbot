@@ -105,20 +105,20 @@ _GIT_141 = ("git.exe exited with code 141",)
             "Select-String -Pattern todo -Recurse",
             1,
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
-            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+            ["`rg -n 'text' .`"],
         ),
         pytest.param(
             "Select-String todo " * 40_000 + "| Select-String -Pattern todo -Recurse",
             1,
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
-            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+            ["`rg -n 'text' .`"],
             id="long_command_is_scanned_once",
         ),
         pytest.param(
             'Select-String -Path *.py -Pattern "todo|fixme" -Recurse',
             1,
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
-            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+            ["`rg -n 'text' .`"],
             id="pipe_inside_the_quoted_pattern",
         ),
         # Windows' app execution alias stands in for python3, not for python.
@@ -595,12 +595,6 @@ def test_missing_powershell_command_names_the_equivalent(
     assert "Select-Object" not in hint
 
 
-_WINDOWS_FIND = (
-    "`find` here is the Windows text-search program, not Unix find: list files with "
-    "`Get-ChildItem -Recurse -Filter '*.md'`"
-)
-
-
 @pytest.mark.parametrize(
     ("command", "output", "offered", "expected"),
     [
@@ -608,21 +602,8 @@ _WINDOWS_FIND = (
             "git log | grep fix",
             _NOT_RECOGNIZED_DE.format(name="grep"),
             set(),
-            "filter command output with `| Select-String 'text'` (add -CaseSensitive to match "
-            "grep, -NotMatch for -v), and search files with "
-            "`Get-ChildItem -Recurse -File | Select-String 'text'`.",
-        ),
-        (
-            "grep -r todo .",
-            _NOT_RECOGNIZED_DE.format(name="grep"),
-            {"search_files"},
-            "and search files with search_files.",
-        ),
-        (
-            "Select-String -Pattern todo -Recurse",
-            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
-            {"search_files"},
-            "Select-String 'text'`, or search with search_files.",
+            "Filter command output with `| Select-String 'text'` (add -CaseSensitive to match "
+            "grep, -NotMatch for -v), and search files with `rg -n 'text' .`.",
         ),
         (
             "sed -i 's/a/b/' f",
@@ -658,12 +639,17 @@ _WINDOWS_FIND = (
             "with read and a negative offset, such as -20.",
         ),
         # find.exe's messages follow the Windows display language.
-        ("find . -name '*.md'", "FIND: Parameter format not correct", set(), f"{_WINDOWS_FIND}."),
         (
-            "find src -type f | Select-Object -First 5",
+            "find . -name '*.md'",
+            "FIND: Parameter format not correct",
+            set(),
+            "`rg --files -g '*.md'`",
+        ),
+        (
+            "find src -type f",
             "FIND: Parameterformat falsch",
-            {"search_files"},
-            f"{_WINDOWS_FIND}, or use search_files.",
+            set(),
+            "`rg --files -g '*.md'`",
         ),
         (
             "python ask.py",
@@ -688,7 +674,7 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
 
     assert hint is not None
     assert expected in hint
-    for tool in {"search_files", "read", "apply_patch", "edit", "terminal"} - offered:
+    for tool in {"read", "apply_patch", "edit", "terminal"} - offered:
         assert f" {tool}." not in hint and f" {tool}," not in hint
 
 

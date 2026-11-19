@@ -110,7 +110,7 @@ _FIELD_ALIASES = SpellingAliases(
     }
 )
 
-# Fields that only a search over many files uses; read names the search instead.
+# Fields for multi-file searches cannot be applied to a read.
 _SEARCH_FIELDS = SpellingAliases(
     {
         field: (field,)
@@ -271,17 +271,12 @@ def _read_call(fields: dict[str, Any]) -> str:
 
 
 def _reject_search_fields(arguments: dict[str, Any]) -> None:
-    fields = {key: value for key, value in arguments.items() if key in _SEARCH_FIELDS}
-    if not fields:
-        return
-    call = {
-        key: arguments[key] for key in ("pattern", "path") if arguments.get(key) not in (None, "")
-    } | fields
-    rendered = ", ".join(f"{key}={_literal(value)}" for key, value in call.items())
-    raise ValueError(
-        f"read shows one file or lists one directory and has no {', '.join(fields)} field. "
-        f"To search files, call search_files({rendered})."
-    )
+    fields = [key for key in arguments if key in _SEARCH_FIELDS]
+    if fields:
+        raise ValueError(
+            f"read does not accept {', '.join(fields)}. "
+            "Pass one file path to read its lines, or a directory path to list its entries."
+        )
 
 
 def _translate_line_window(arguments: dict[str, Any]) -> dict[str, Any]:

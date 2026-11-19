@@ -386,8 +386,8 @@ def scripted_arguments(name: str, *, tag: str, slot: int) -> dict[str, Any]:
     if name == "read":
         paths = source_file_paths()
         return {"path": paths[(zlib.crc32(tag.encode("utf-8")) + slot) % len(paths)]}
-    if name == "search_files":
-        return {"args": ["-F", SEARCH_NEEDLE, SOURCE_DIRECTORY]}
+    if name == "bash.search":
+        return {"command": f"rg -n -F {SEARCH_NEEDLE} {SOURCE_DIRECTORY}"}
     if name == "bash":
         return {"command": BASH_COMMAND}
     raise PlanError(f"the fake Provider has no scripted arguments for Tool {name!r}")

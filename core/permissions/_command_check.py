@@ -86,9 +86,7 @@ _CWD_HINT_WITH_WORKDIR: Final = (
 )
 _UNAVAILABLE_HINT: Final = "Run it again; if this repeats, tell the user."
 # A recursive read over a denied folder: what reads the same files and works.
-_DENIED_BELOW_HINT: Final = (
-    "Use search_files, which leaves denied folders out, or name only the folders the command needs."
-)
+_DENIED_BELOW_HINT: Final = "Name only the allowed files or folders the command needs."
 
 
 @dataclass(frozen=True, slots=True)

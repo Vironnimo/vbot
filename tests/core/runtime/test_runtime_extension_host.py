@@ -648,7 +648,7 @@ async def test_temporary_group_preflight_validates_participants_before_opening(
             "peer",
             replace(
                 _participant(valid_cwd),
-                tool_access=ToolAccess(mode="selected", allowed=("read", "search_files")),
+                tool_access=ToolAccess(mode="selected", allowed=("read", "web_fetch")),
                 project_memory_enabled=False,
             ),
             project_id="narrow",

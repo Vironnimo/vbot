@@ -34,7 +34,7 @@ def test_exact_match_keeps_the_files_line_endings_and_counts_them(ending: str) -
 
 
 def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
-    # Like read and search_files, U+2028 is an ordinary in-line character.
+    # Like read, treat U+2028 as an ordinary in-line character.
     result = replace_fuzzy("alpha\u2028beta\u2028", "beta", "one\ntwo", replace_all=False)
 
     assert isinstance(result, FuzzyReplacement)

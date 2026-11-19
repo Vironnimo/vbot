@@ -11,7 +11,6 @@ import pytest
 from core.tools import FileReadState, ToolRegistry, register_read_tool
 from core.tools.apply_patch import register_apply_patch_tool
 from core.tools.edit import register_edit_tools
-from core.tools.search_files import register_search_files_tool
 from tests.core.tools.read_test_support import make_context
 
 EDIT = {"path": "w3.md", "edits": [{"old_string": "draft", "new_string": "final"}]}
@@ -30,7 +29,6 @@ def file_tools() -> ToolRegistry:
     )
     register_apply_patch_tool(tools, file_state=state)
     register_edit_tools(tools, file_state=state)
-    register_search_files_tool(tools)
     return tools
 
 
@@ -58,18 +56,6 @@ async def message(root: Path, tool: str, arguments: dict, offered: set[str]) -> 
             'swarm_wiki {"action": "read", "page_id": "w2"}.',
         ),
         ("read", {"path": "W12.md"}, 'swarm_wiki {"action": "read", "page_id": "w12"}.'),
-        # A search for one plain text reads the page lines that hold it.
-        (
-            "search_files",
-            {"pattern": "retry budget", "path": "w2"},
-            'swarm_wiki {"action": "read", "page_id": "w2", "query": "retry budget"}.',
-        ),
-        # A regular expression is no text the page could be searched for.
-        (
-            "search_files",
-            {"pattern": "retr(y|ies)", "path": "w2"},
-            'swarm_wiki {"action": "read", "page_id": "w2"}.',
-        ),
         ("edit", EDIT, 'swarm_wiki: action "update", page_id "w3"'),
         ("apply_patch", PATCH, 'swarm_wiki: action "update", page_id "w3"'),
         # A change that names the page as page_id instead of a path.

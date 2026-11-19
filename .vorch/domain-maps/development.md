@@ -28,7 +28,7 @@ A Python version change also checks that `sqlite3`'s `autocommit` default is sti
 
 ## Interpreter and SQLite
 
-The development interpreter must run the SQLite the packages bundle, because its SQLite decides the journal mode of every database (`database.md`), so tests and measurements see what installations run. On Windows install the pinned library into it once from an elevated terminal (`python -m cli.application.runtime_sqlite`); on Linux use a Python whose SQLite runs WAL, such as the packages' runtime of `scripts/linux/python.lock.json`. `cli.application.runtime_sqlite.interpreter_problem` names a mismatch, and `scripts/push.py` (its `sqlite` step), `perf_bench.py` and `perf_load.py` refuse to run on one. Worktree creation, the push check, CI and packaging run `cli.search_runtime` (`tools/search_files.md` -> Provisioning).
+The development interpreter must run the SQLite the packages bundle, because its SQLite decides the journal mode of every database (`database.md`), so tests and measurements see what installations run. On Windows install the pinned library into it once from an elevated terminal (`python -m cli.application.runtime_sqlite`); on Linux use a Python whose SQLite runs WAL, such as the packages' runtime of `scripts/linux/python.lock.json`. `cli.application.runtime_sqlite.interpreter_problem` names a mismatch, and `scripts/push.py` (its `sqlite` step), `perf_bench.py` and `perf_load.py` refuse to run on one. Worktrees, push checks, CI and packaging provision rg via `cli.search_runtime`.
 
 ## Dependencies
 

@@ -1,4 +1,4 @@
-"""Provisioned search assets must be pinned, atomic, offline reusable and private."""
+"""Bundled ripgrep must be pinned, verified and reusable offline."""
 
 import hashlib
 import io
@@ -79,13 +79,28 @@ def test_bad_archive_preserves_previous_binary(tmp_path, monkeypatch):
     assert target.read_bytes() == b"old"
 
 
-def test_tool_call_never_uses_path_fallback_or_download(tmp_path, monkeypatch):
+def test_bundled_ripgrep_recovers_when_provisioned_and_rechecks_changed_resources(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(
+        "core.utils.search_binary.target_platform", lambda: "x86_64-pc-windows-msvc"
+    )
     with pytest.raises(ValueError, match="Repair the vBot installation"):
         require_binary(tmp_path)
+    path, _ = asset(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"fixture")
+    assert require_binary(tmp_path) == path
+
+    path.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="integrity verification"):
+        require_binary(tmp_path)
+    asset(tmp_path, executable=b"changed")
+    assert require_binary(tmp_path) == path
 
 
-def test_shipped_lock_is_complete_and_private_engine_has_pcre2():
+def test_shipped_lock_is_complete_and_bundled_ripgrep_has_pcre2():
     engine = require_binary()
     from core.utils.processes import subprocess_creation_flags
 

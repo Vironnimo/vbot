@@ -154,7 +154,8 @@ def test_server_environment_base_drops_what_vbot_added(monkeypatch: pytest.Monke
 
     environment = terminal_environment()
 
-    assert environment["PATH"] == "/usr/bin"
+    assert environment["PATH"].split(os.pathsep)[-1] == "/usr/bin"
+    assert str(scripts) not in environment["PATH"].split(os.pathsep)
     assert environment["LANG"] == "C.UTF-8"
     assert not {"VIRTUAL_ENV", "PYTHONPATH", "VBOT_RUN_AGENT_ID"} & environment.keys()
 
@@ -218,7 +219,7 @@ def test_checkout_server_leads_shell_path_with_a_vbot_for_itself(
 
     assert directory == data_dir / "bin"
     environment = terminal_environment()
-    assert environment["PATH"] == os.pathsep.join([str(directory), "/usr/bin"])
+    assert environment["PATH"].split(os.pathsep)[-2:] == [str(directory), "/usr/bin"]
     arguments = ["agent", "update", "a", "--name", "Mi ra", '{"mode":"selected"}']
     shell_path = os.pathsep.join([str(directory), os.environ.get("PATH", "")])
     if sys.platform == "win32":

@@ -994,6 +994,7 @@ def register_shell_tool(
         tool,
         summary="Run shell commands.",
         family="execution",
+        announce_changes=("description",),
         open_input_schema=True,
         unadvertised_parameters=SHELL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_shell_arguments,

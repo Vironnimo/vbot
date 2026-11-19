@@ -13,7 +13,6 @@ OFFERED = (
     BASH_TOOL_NAME,
     "read",
     "apply_patch",
-    "search_files",
     "web_fetch",
     "web_search",
     "subagent",
@@ -51,7 +50,6 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         # Other harnesses' names for an offered capability.
         ("run_shell_command", BASH_TOOL_NAME),
         ("read_file", "read"),
-        ("Grep", "search_files"),
         ("Task", "subagent"),
         ("fetch", "web_fetch"),
         ("google_web_search", "web_search"),
@@ -69,7 +67,6 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
             marks=pytest.mark.skipif(os.name != "nt", reason="PowerShell host name"),
         ),
         ("apply_pach", "apply_patch"),
-        ("serach_files", "search_files"),
         ("web_fetchh", "web_fetch"),
         ("subagant", "subagent"),
         # Tool-call markup leaked after the name is cut off; an unknown rest stays
@@ -92,7 +89,7 @@ def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expecte
         pytest.param("web_fetche", ("web_fetch", "web_fetcher"), (), id="ambiguous-typo"),
         pytest.param("", OFFERED, (), id="empty"),
         pytest.param("memory", OFFERED, (), id="tool-not-offered"),
-        pytest.param("Grep", ("read", "apply_patch"), (), id="harness-target-not-offered"),
+        pytest.param("Grep", OFFERED, (), id="search-is-a-shell-command"),
         pytest.param("fetch", OFFERED, ("fetch", "web_fetch"), id="registered-tool-name"),
         pytest.param(
             "computer_action",

@@ -228,7 +228,7 @@
    "expect": {
     "ok": false,
     "contains": [
-     "search_files(pattern=\"greet\", path=\"src\")"
+     "rg"
     ]
    }
   },
@@ -657,57 +657,23 @@
    }
   },
   {
-   "name": "search: rg args list",
-   "tool": "search_files",
+   "name": "rg: search file contents",
+   "tool": "bash",
    "arguments": {
-    "args": [
-     "Greeter",
-     "src"
-    ]
+    "command": "rg -n -F 'def greet' src"
    },
    "expect": {
     "ok": true,
     "contains": [
-     "app.py"
+     "app.py:8:    def greet(self):"
     ]
    }
   },
   {
-   "name": "search: rg args as one string",
-   "tool": "search_files",
+   "name": "rg: list files by name",
+   "tool": "bash",
    "arguments": {
-    "args": "-F Greeter src"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: pattern and path",
-   "tool": "search_files",
-   "arguments": {
-    "pattern": "Greeter",
-    "path": "src"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: list files by glob",
-   "tool": "search_files",
-   "arguments": {
-    "args": [
-     "--files",
-     "-g",
-     "*.go"
-    ]
+    "command": "rg --files -g '*.go'"
    },
    "expect": {
     "ok": true,
@@ -716,100 +682,6 @@
     ],
     "absent": [
      "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: pattern that is not a valid regex",
-   "tool": "search_files",
-   "arguments": {
-    "args": [
-     "greet(",
-     "src"
-    ]
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: no match",
-   "tool": "search_files",
-   "arguments": {
-    "args": [
-     "zzzqqq"
-    ]
-   },
-   "expect": {
-    "ok": true
-   }
-  },
-  {
-   "name": "search: grep-style fields",
-   "tool": "search_files",
-   "arguments": {
-    "pattern": "GREETER",
-    "-i": true,
-    "output_mode": "files_with_matches"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "src/app.py"
-    ],
-    "absent": [
-     "greeter.go"
-    ]
-   }
-  },
-  {
-   "name": "search: list files without pattern",
-   "tool": "search_files",
-   "arguments": {
-    "path": "src",
-    "glob": "*.go"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "greeter.go"
-    ],
-    "absent": [
-     "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: file glob given as pattern",
-   "tool": "search_files",
-   "arguments": {
-    "pattern": "*.go"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "greeter.go",
-     "file name glob"
-    ],
-    "absent": [
-     "app.py"
-    ]
-   }
-  },
-  {
-   "name": "search: misspelled path",
-   "tool": "search_files",
-   "arguments": {
-    "pattern": "greet",
-    "path": "scr"
-   },
-   "expect": {
-    "ok": false,
-    "contains": [
-     "similar: src"
     ]
    }
   },

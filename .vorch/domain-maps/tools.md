@@ -46,7 +46,7 @@ The codes with which Agent-facing text tables name the kind of Agent failure a s
 
 ## Conventions
 
-- **Tool families** hand data to each other and change together with their guidance blocks and notifications: `read` -> `apply_patch` or `edit`/`write`; `search_files` -> `read`; `bash` -> `background_tasks` (commands that outlive their call) and `terminal` (programs that need input or a terminal); `subagent` -> `background_tasks` (Sub-Agent list, status and stop); `subagent` with its block and completion delivery, and `status`; `web_search` -> `web_fetch`; `memory`, `skill`/`skill_manage` with the Skills prompt section, and `session_search`.
+- **Tool families** hand data to each other and change together with their guidance blocks and notifications: `read` -> `apply_patch` or `edit`/`write`; shell `rg` -> `read`; `bash` -> `background_tasks` (commands that outlive their call) and `terminal` (programs that need input or a terminal); `subagent` -> `background_tasks` (Sub-Agent list, status and stop); `subagent` with its block and completion delivery, and `status`; `web_search` -> `web_fetch`; `memory`, `skill`/`skill_manage` with the Skills prompt section, and `session_search`.
 - Renaming a Tool or one of its parameters reaches beyond the definition: inventory every place first and keep older call shapes interpreted (`tools/registry-dispatch.md` -> Renaming a Tool).
 
 ## Constraints & Gotchas
@@ -70,10 +70,10 @@ Read these only when your task matches - not by default.
 - Changing policy resolution, followers, opt-in, `fixed`/`live_call`, readiness filtering, visibility flags or listing -> `tools/access-policy.md`
 - Changing ToolRegistry, ToolExecutor or ToolContext internals: registration, dispatch steps, failure wording, batches, removed Tools, catalog publication, prompt blocks, Tool-change comparison -> `tools/registry-dispatch.md`
 - Scratch working files of a Sub-Agent tree: retention, environment, announcement -> `tools/scratch.md`
-- The retired `history` Tool and its restoration -> `tools/history.md`
+- Restoring the retired `history` or `search_files` Tool -> `tools/history.md`, `tools/search_files.md`
 - V4A patches, the shared change pipeline and edit engine, tolerant patch parsing, patch results -> `tools/apply_patch.md`
 - The replacement dialect (`edit`, `write`), its follower activation, or the edit dialect per Model family -> `tools/edit.md`, `tools/write.md`
-- Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (read stamps, mutation locks, atomic replace, `resolve_path`), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell`, `CommandManager`, `background_tasks`; its Sub-Agent branch: `tools/subagent.md`), `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (`skill_manage`: `skills/skill-manage.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md`, `tools/channel_send.md`, `tools/speech.md`, `tools/show_widget.md`, `tools/portal.md`
+- Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (read stamps, mutation locks, atomic replace, `resolve_path`), `tools/change_tracker.md` (run-delta statistics), `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell`, bundled `rg`, `CommandManager`, `background_tasks`; its Sub-Agent branch: `tools/subagent.md`), `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (`skill_manage`: `skills/skill-manage.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md`, `tools/channel_send.md`, `tools/speech.md`, `tools/show_widget.md`, `tools/portal.md`
 - Launching or killing OS child processes -> `tools/os-processes.md`
 - Python programs that call Tools, the `execute_code` client, output or execution lifecycle -> `tools/execute_code.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`

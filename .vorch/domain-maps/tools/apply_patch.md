@@ -133,7 +133,7 @@ Every parsed source and destination is preflighted together before the first ope
   (replay, probes) derives `applied`, `partial` or `unchanged` with
   `_patch_report.edit_outcome`; results recorded before 2026-10-10 still carry
   `status`. Paths show relative to the call's cwd when inside it
-  (`display_search_path`). Each file's net effect reads once: `Created X (N
+  (`core.utils.paths.display_path`). Each file's net effect reads once: `Created X (N
   lines).`, `Replaced the content of X (...)`, `Deleted X.`, `Moved A to B.`, or
   `Updated X (places).` / `Updated A (places) and moved it to B.`, where places
   name changed and added lines as they are now and removed lines by their

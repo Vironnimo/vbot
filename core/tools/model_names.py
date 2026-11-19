@@ -111,24 +111,6 @@ _HARNESS_NAMES: dict[str, tuple[str, ...]] = {
     ),
     **dict.fromkeys(
         (
-            "grep",
-            "glob",
-            "rg",
-            "ripgrep",
-            "find",
-            "findfiles",
-            "filesearch",
-            "searchfilecontent",
-            "grepsearch",
-            "listfiles",
-            "listdir",
-            "listdirectory",
-            "ls",
-        ),
-        ("search_files",),
-    ),
-    **dict.fromkeys(
-        (
             "fetch",
             "fetchurl",
             "urlfetch",

@@ -68,7 +68,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "portal",
     "project",
     "read",
-    "search_files",
     "secrets",
     "session",
     "session_search",

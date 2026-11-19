@@ -290,7 +290,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
       ![
         ...SHELL_TOOL_NAMES,
         "apply_patch",
-        "search_files",
         "skill_manage",
       ].some((name) => offeredTools.includes(name));
     if (!catalogIsRestricted) {

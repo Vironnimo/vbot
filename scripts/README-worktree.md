@@ -56,7 +56,7 @@ vBot-data/dev      -> primary development data dir
 22333              -> primary development server port
 ```
 
-Data directories stay outside the user profile, so a folder excluded from antivirus scanning for development (such as Windows Defender's exclusion of the projects folder) covers their database and log writes too. They stay outside the repository, because an Agent Workspace inside it would inherit the repository's Git context and ignore rules: `git` commands would act on vBot itself and the Search Tool would skip every file. Worktrees created before this layout keep their `~/.vbot-<name>` data directory until deleted; `delete` and `merge` recognize it from the marker.
+Data directories stay outside the user profile, so a folder excluded from antivirus scanning for development (such as Windows Defender's exclusion of the projects folder) covers their database and log writes too. They stay outside the repository, because an Agent Workspace inside it would inherit the repository's Git context and ignore rules: `git` commands would act on vBot itself and ripgrep would skip ignored Workspace files. Worktrees created before this layout keep their `~/.vbot-<name>` data directory until deleted; `delete` and `merge` recognize it from the marker.
 
 The separately installed application retains the product defaults `~/.vbot` and `22332`. Development ports follow that default: the primary development server uses the next port (`22333`), and the first generated Worktree server port starts at `22334`; its paired fake Provider uses `32334`. Additional Worktrees get the next server port whose paired fake-Provider port is also unassigned and unbound.
 

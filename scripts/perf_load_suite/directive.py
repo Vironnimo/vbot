@@ -8,9 +8,9 @@ Agent already completed since that message.
 Syntax (whitespace-separated ``key=value`` pairs, ``id`` required)::
 
     [[perf id=L10-s003-t1 steps=4 tokens=400 rate=80 think_ms=600
-      tools=read,search_files,bash calls=1]]
+      tools=read,bash.search,bash calls=1]]
     [[perf id=L10-s003-w1 warmup_tokens=20000 rate=0]]
-    [[perf id=L1-ui-h0001 steps=4 tokens=300 tools=read,search_files,bash calls=1
+    [[perf id=L1-ui-h0001 steps=4 tokens=300 tools=read,bash.search,bash calls=1
       markdown=1 rate=0 think_ms=0]]
 
 - ``steps``: Model requests per turn. The first ``steps - 1`` responses are
@@ -27,8 +27,8 @@ Syntax (whitespace-separated ``key=value`` pairs, ``id`` required)::
 - ``turns``: turn budget of one Swarm participant (``0`` = unbounded); see
   :mod:`scripts.perf_load_suite.swarm_script`.
 
-A Tool name may carry an action suffix (``swarm_board.read``) that selects
-the scripted arguments of a Tool with several actions.
+A Tool name may carry a suffix to select the scripted call, such as
+``bash.search`` for a ripgrep command or ``swarm_board.read`` for a board read.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 DIRECTIVE_PATTERN = re.compile(r"\[\[perf\s+([^\[\]]*)\]\]")
-DEFAULT_TOOLS: tuple[str, ...] = ("read", "search_files", "bash")
+DEFAULT_TOOLS: tuple[str, ...] = ("read", "bash.search", "bash")
 MAX_CALLS_PER_ROUND = 8
 _TAG_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}(\.[a-z_]{1,32})?$")
