@@ -195,12 +195,18 @@ async def test_reviewed_team_changes_check_the_policy_before_writing(tmp_path: P
         assert state.runtime.projects.get("vbot").overrides["builder"] == {
             "permission_profile": "restricted"
         }
+        state.runtime.projects.set_override("vbot", "builder", "permission_profile", "Missing")
         updated = _member(await rpc_result(state, "project.show", project_id="vbot"))
+        assert updated["effective"]["permission_rules"]["error"]
+        preview = await rpc_result(
+            state, "permissions.validate", agent_id="builder@vbot", permission_rules=None
+        )
+        assert preview["effective"] == updated["permission_rules_default"]
         cleared = await rpc_result(
             state,
             "project.clear_override",
             **selection,
-            expected_profile_rules=updated["permission_rules_default"],
+            expected_profile_rules=preview["effective"],
         )
         assert _member(cleared)["overrides"] is None
 

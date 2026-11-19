@@ -674,11 +674,29 @@ async def test_reviewed_agent_change_requires_the_same_effective_rules(tmp_path:
             state, "agent.create", id="new", expected_profile_rules=_FULL_ACCESS, **selection
         )
         inherited = created["permission_rules_default"]
-        defaults["permission_rules"] = {"read": "work_area"}
+        # A missing current profile can be repaired by a clear. Review only
+        # what this Agent would inherit, including refusal of broken defaults.
+        state.runtime.agents.update("new", permission_profile="Missing")
+        before = await rpc_result(state, "agent.get", id="new")
+        assert before["effective"]["permission_rules"]["error"]
+        preview = {"agent_id": "new", "permission_rules": None}
+        reviewed_clear = await rpc_result(state, "permissions.validate", **preview)
+        assert reviewed_clear["effective"] == inherited
         clear = {"id": "new", "permission_rules": None, "permission_profile": None}
+        defaults["permission_rules"] = None
+        full_access = await rpc_result(state, "permissions.validate", **preview)
+        assert full_access["valid"] and full_access["effective"] is None
+        defaults["permission_rules"] = {"unknown": "part"}
+        invalid = await rpc_error(state, "permissions.validate", **preview)
+        assert invalid["code"] == "domain_error"
+        refused = await rpc_error(
+            state, "agent.update", **clear, expected_profile_rules=full_access["effective"]
+        )
+        assert refused["code"] == "settings_conflict"
+        defaults["permission_rules"] = {"read": "work_area"}
         refused = await rpc_error(state, "agent.update", **clear, expected_profile_rules=inherited)
         assert refused["code"] == "settings_conflict"
-        assert state.runtime.agents.get_raw("new").permission_profile == "Shared"
+        assert state.runtime.agents.get_raw("new").permission_profile == "Missing"
         # An unknown Agent parameter with a Project field name must reach the Agent validator.
         async with asyncio.timeout(2):
             malformed = await rpc_error(state, "agent.update", **clear, field="permission_profile")

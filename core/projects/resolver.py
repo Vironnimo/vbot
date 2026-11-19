@@ -612,8 +612,15 @@ class AgentResolver:
     def permission_profile_names(self) -> list[str]:
         return list(permission_profile_catalog(self._permission_profiles()))
 
-    def default_permission_rules(self) -> PermissionRules | None:
-        return resolve_permission_rules((), AgentDefaults.from_dict(self._global_agent_defaults()))
+    def default_permission_rules(
+        self, member: AgentProfile | None = None
+    ) -> PermissionRules | None:
+        """Resolve the effective inherited rules, refusing an unreadable shared default."""
+        return resolve_permission_rules(
+            (),
+            AgentDefaults.from_dict(self._global_agent_defaults()),
+            repository=member.permission_rules if member is not None else None,
+        )
 
     def permission_rules_for_profile(self, name: str) -> PermissionRules:
         """Resolve a selected profile now. A missing reference always prevents execution."""
