@@ -53,7 +53,7 @@ An objective set for a Session by the user or its Agent from a direct user reque
 
 - Runtime startup without asyncio loop wires Cron but never starts scheduler tasks.
 - Bootstrap activates only via the server's post-ready hook - never inside `Runtime.start()`.
-- Busy-session queueing shares `ChatRunManager`'s 32-item system ceiling; queued triggered work dies on restart. Removing one queued item surfaces `RunCancelledError` to its producer without cancelling the producer task (whose own cancellation propagates); recurring Cron jobs keep scheduling, a removed one-shot settles as failed and releases its fire claim.
+- Only a busy Session queues a trigger. An admission guard or invalidated event fire releases the reservation and returns its refusal directly. Busy-session queueing shares `ChatRunManager`'s 32-item system ceiling; queued triggered work dies on restart. Removing one queued item surfaces `RunCancelledError` to its producer without cancelling the producer task (whose own cancellation propagates); recurring Cron jobs keep scheduling, a removed one-shot settles as failed and releases its fire claim.
 - `TriggerService` owns each supplied Waiting-Work Admission through admission: Queue transfer consumes it; immediate starts (fresh Sessions too), failures and cancellation release it, so callers never rely on a later cleanup to return shared capacity (`test_automation.py`).
 - Completion delivery state is process-local; closing it (`TriggerService.aclose`) persists pending notices without an owner as a System Reminder, so Runtime closes it before canonical Sessions (`automation/completion-delivery.md`).
 
