@@ -694,8 +694,8 @@ class AgentSecrets:
                     sessions=tuple(dict.fromkeys((*secret.sessions, child.session_id))),
                     session_grants=(*secret.session_grants, grant),
                 )
-                self._write(updated)
                 changed.append(updated)
+            self._write_grants(changed)
         for secret in changed:
             self._notify(SecretChange("changed", secret, f"session:{address.session_id}"))
         return granted
@@ -828,15 +828,7 @@ class AgentSecrets:
                 )
                 if agents != secret.agents or grants != secret.session_grants:
                     changed.append(replace(secret, agents=agents, session_grants=grants))
-            if changed:
-                texts = {secret.id: encode_record(secret) for secret in changed}
-
-                def write(change: SecretTransaction) -> None:
-                    for key, text in texts.items():
-                        change.set(AGENT_SECRETS, key, text)
-
-                self._store.update(write)
-                self._commit({secret.id: secret for secret in changed})
+            self._write_grants(changed)
         for secret in changed:
             self._notify(SecretChange("changed", secret, "agent renamed"))
         return len(changed)
@@ -1244,6 +1236,19 @@ class AgentSecrets:
             both_agent_wide = secret.session_id is None and other.session_id is None
             if same_session or both_agent_wide:
                 raise SecretRecordError(f"A Secret named {secret.name} already exists.")
+
+    def _write_grants(self, changed: Sequence[AgentSecret]) -> None:
+        """Commit a pass or rename as a unit before publishing the new grants."""
+        if not changed:
+            return
+        texts = {secret.id: encode_record(secret) for secret in changed}
+
+        def write(change: SecretTransaction) -> None:
+            for key, text in texts.items():
+                change.set(AGENT_SECRETS, key, text)
+
+        self._store.update(write)
+        self._commit({secret.id: secret for secret in changed})
 
     def _write(self, secret: AgentSecret) -> None:
         text = encode_record(secret)

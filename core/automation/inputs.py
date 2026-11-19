@@ -33,7 +33,7 @@ from core.json_documents import (
 )
 from core.projects import AgentOverrides
 from core.runs import SILENT_ANSWER
-from core.secrets import WEBHOOK_SECRETS
+from core.secrets import WEBHOOK_SECRETS, SecretStoreError
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.errors import VBotError
 from core.utils.ids import is_safe_id, new_id
@@ -296,10 +296,8 @@ class DirectInputService:
         try:
             row = self.get(identity)
             expected = await self.secret(identity)
-        except DirectInputNotFoundError:
+        except DirectInputError, SecretStoreError:
             row, expected = {}, self._decoy
-        except DirectInputError:
-            return False
         scheme, _, token = authorization.partition(" ")
         valid = hmac.compare_digest(expected.encode(), token.encode())
         return (

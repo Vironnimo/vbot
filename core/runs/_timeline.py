@@ -318,7 +318,7 @@ class RunTimeline:
                 else {**payload, "timestamp": timestamp},
             )
         elif kind.removeprefix("run_") in _TERMINAL and kind.startswith("run_"):
-            self._finish(event)
+            self._finish(payload.get("status") or kind.removeprefix("run_"), event)
 
     def _message(self, target: list[JsonObject], message: JsonObject) -> None:
         item = {
@@ -816,9 +816,21 @@ class RunTimeline:
             child["message"] = copy.deepcopy(message)
             self._row_message_ids.add(message.get("id"))
 
-    def _finish(self, event: JsonObject) -> None:
+    def finish_history(self, status: str | None) -> None:
+        """Settle a historical projection even when its records end before the summary."""
+        if self.run["status"] != "running" or status == "running":
+            return
+        if status is None:
+            unfinished = any(
+                child["type"] == "tool_call" and not child["finished"]
+                for child in self.run["items"]
+            )
+            status = "interrupted" if unfinished else "completed"
+        self._finish(status, {})
+
+    def _finish(self, status: str, event: JsonObject) -> None:
+        self._snapshot = None
         payload = event.get("payload") or {}
-        status = payload.get("status") or event["type"].removeprefix("run_")
         timing = payload.get("timing") or {}
         self.run.update(
             status=status,
@@ -829,7 +841,8 @@ class RunTimeline:
             providerRequestStatus=None,
         )
         self.run["startTimestamp"] = timing.get("started_at") or self.run["startTimestamp"]
-        self.run["terminalEvent"] = copy.deepcopy(event)
+        if event:
+            self.run["terminalEvent"] = copy.deepcopy(event)
         self.state["status"] = status
         self.run["items"] = [
             item

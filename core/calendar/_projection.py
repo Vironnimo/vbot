@@ -31,6 +31,7 @@ from core.calendar._time import (
 )
 from core.calendar.errors import (
     CalendarEventNotFoundError,
+    CalendarStorageError,
     CalendarValidationError,
 )
 from core.calendar.recurrence import (
@@ -46,12 +47,17 @@ class CalendarProjection:
     It can be expanded in a worker while the live catalog changes on the loop.
     """
 
-    def __init__(self, events: list[CalendarEvent], timezone: ZoneInfo) -> None:
+    def __init__(
+        self, events: list[CalendarEvent], timezone: ZoneInfo, *, load_error: str | None = None
+    ) -> None:
         self._events = {event.id: _clone_event(event) for event in events}
         self._timezone = timezone
+        self._storage_load_error = load_error
 
     def _ensure_events_loaded(self, *, allow_degraded: bool = False) -> None:
-        """A detached projection is already fully loaded."""
+        """A snapshot retains the catalog availability observed when it was captured."""
+        if self._storage_load_error is not None and not allow_degraded:
+            raise CalendarStorageError(self._storage_load_error)
 
     def system_timezone_name(self) -> str:
         """Return the calendar's configured canonical IANA timezone name."""
@@ -169,7 +175,6 @@ class CalendarProjection:
                 f"duration_minutes must not exceed {MAX_DURATION_MINUTES}"
             )
         window_start, window_end = _checked_window(window_start_utc, window_end_utc)
-        self._ensure_events_loaded(allow_degraded=True)
         reference_now = _as_utc(now_utc) if now_utc is not None else datetime.now(UTC)
         duration = timedelta(minutes=duration_minutes)
         cursor = max(window_start, reference_now)

@@ -197,7 +197,7 @@ class AgentResolver:
         source_adapters: dict[str, AgentAdapter] | None = None,
         project_skill_names: ProjectSkillNamesProvider | None = None,
         profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
-        skill_pool_names: ProjectSkillNamesProvider | None = None,
+        skill_pool_names: Callable[[str | None], frozenset[str]] | None = None,
         tool_names: Callable[[], tuple[str, ...]] | None = None,
         temporary_agents: Any | None = None,
         sessions: SessionMetadataStore | None = None,
@@ -217,7 +217,11 @@ class AgentResolver:
         self._profile_skill_content = profile_skill_content or (
             lambda project_id, name, allowed: None
         )
-        self._skill_pool_names = skill_pool_names or self._project_skill_names
+        self._skill_pool_names = skill_pool_names or (
+            lambda project_id: (
+                self._project_skill_names(project_id) if project_id is not None else frozenset()
+            )
+        )
         self._tool_names = tool_names or (lambda: ())
         self._temporary_agents = temporary_agents
         # Without Sessions (tests of the chains alone) no Session has overrides.
@@ -1064,7 +1068,7 @@ def build_agent_resolver(
     source_adapters: dict[str, AgentAdapter] | None = None,
     project_skill_names: ProjectSkillNamesProvider | None = None,
     profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
-    skill_pool_names: ProjectSkillNamesProvider | None = None,
+    skill_pool_names: Callable[[str | None], frozenset[str]] | None = None,
     tool_names: Callable[[], tuple[str, ...]] | None = None,
     temporary_agents: Any | None = None,
     sessions: SessionMetadataStore | None = None,

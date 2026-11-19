@@ -9,6 +9,7 @@ from typing import Any
 from core.computers import ComputerError, ComputerRegistry
 from core.computers.computers import MAX_FRAME_BYTES, ComputerConnection
 from core.utils.workers import cancel_and_wait, settle_before_cancelling
+from server._http_dependencies import WebSocketDisconnect
 from server.access import scope_principal
 
 
@@ -84,7 +85,12 @@ async def _exchange(
 
 
 async def _receive(websocket: Any) -> Any:
-    raw = await websocket.receive_text()
+    frame = await websocket.receive()
+    if frame["type"] == "websocket.disconnect":
+        raise WebSocketDisconnect(frame.get("code", 1000), frame.get("reason", ""))
+    raw = frame.get("text")
+    if not isinstance(raw, str):
+        raise ValueError("Expected a text frame")
     if len(raw.encode("utf-8")) > MAX_FRAME_BYTES:
         raise ValueError("Computer frame too large")
     return json.loads(raw)

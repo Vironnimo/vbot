@@ -33,6 +33,7 @@ from cli.application.state import (
     contained,
     discover,
     exclusive,
+    load_installation,
     loaded_version_id,
     read_json,
     write_json,
@@ -91,7 +92,7 @@ class ApplicationFacade:
         self._display_version = ""
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
-        self._server_target_value: ServerInstance | None = None
+        self._observed_target = processes.target(install) if install.owns_server else None
         self._desktop_server: tuple[str, ServerInstance] | None = None
         self._source_label: str | None = None
         self._monitor: ServerMonitor | None = None
@@ -210,7 +211,7 @@ class ApplicationFacade:
             self._recording("Could not start the server"),
             exclusive(self._install.root, "operation"),
         ):
-            result = processes.start(self._install)
+            result = processes.start(load_installation(self._install.root))
             self._require_success(result)
         self._clear_status_error()
         self._reconnect()
@@ -223,7 +224,8 @@ class ApplicationFacade:
             self._recording("Could not stop the server"),
             exclusive(self._install.root, "operation", allow_removal=True),
         ):
-            self._require_success(processes.stop(self._install, initiator=initiator))
+            install = load_installation(self._install.root)
+            self._require_success(processes.stop(install, initiator=initiator))
         self._clear_status_error()
 
     def restart_server(self) -> None:
@@ -236,8 +238,9 @@ class ApplicationFacade:
             self._recording("Could not restart the server"),
             exclusive(self._install.root, "operation"),
         ):
-            self._require_success(processes.stop(self._install, initiator="tray_restart"))
-            result = processes.start(self._install)
+            install = load_installation(self._install.root)
+            self._require_success(processes.stop(install, initiator="tray_restart"))
+            result = processes.start(install)
             self._require_success(result)
         self._clear_status_error()
         self._reconnect()
@@ -302,7 +305,6 @@ class ApplicationFacade:
         is minted.
         """
 
-        from cli.application.state import load_installation
         from cli.device_management import run_refusal
         from cli.device_pairing import device_name
         from cli.rpc_client import rpc_call
@@ -520,9 +522,9 @@ class ApplicationFacade:
         return self._server_target().url
 
     def _server_target(self) -> ServerInstance:
-        if self._server_target_value is None:
-            self._server_target_value = processes.target(self._install)
-        return self._server_target_value
+        """The target of the monitor's current observation, initially the startup target."""
+        assert self._observed_target is not None
+        return self._observed_target
 
     def _classify_server(self, health: HealthProbeResult) -> ServerState:
         """Classify the owned target from the monitor's unanswered ``/health`` request.
@@ -536,7 +538,14 @@ class ApplicationFacade:
 
     def _monitor_target(self) -> ServerInstance | None:
         if self._install.owns_server:
-            return self._server_target()
+            try:
+                install = load_installation(self._install.root)
+            except ApplicationError:
+                # The monitor retries a missing target, including after a record repair.
+                return None
+            target = processes.target(install)
+            self._observed_target = target
+            return target
         from cli.application.desktop import desktop_server
 
         server = desktop_server()
@@ -701,8 +710,6 @@ class ApplicationFacade:
 
     def _update_source(self) -> str:
         if self._source_label is None:
-            from cli.application.state import load_installation
-
             # `vbot application channel` rewrites the record while the tray runs.
             try:
                 channel = load_installation(self._install.root).channel

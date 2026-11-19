@@ -686,20 +686,26 @@ class ChatRunManager:
                 withdrawn = 0
                 for address in addresses:
                     for item in list(self._queues.get(address, ())):
-                        if item.admission.accessor_input_id is not None:
-                            if self._input_withdrawer is None:
-                                raise RuntimeError("durable input withdrawal is unavailable")
-                            await self._input_withdrawer(address, item.admission.accessor_input_id)
-                        if item.steering_in_flight:
-                            item.withdrawn = True
-                            withdrawn += 1
-                        elif self.remove_queued(
-                            address.agent_id,
-                            address.session_id,
-                            item.item_id,
-                            project_id=address.project_id,
-                        ):
-                            withdrawn += 1
+                        async with item.steering_commit:
+                            # The append may have finished while clear waited for it.
+                            if item.withdrawn or item not in self._queues.get(address, ()):
+                                continue
+                            if item.admission.accessor_input_id is not None:
+                                if self._input_withdrawer is None:
+                                    raise RuntimeError("durable input withdrawal is unavailable")
+                                await self._input_withdrawer(
+                                    address, item.admission.accessor_input_id
+                                )
+                            if item.steering_in_flight:
+                                item.withdrawn = True
+                                withdrawn += 1
+                            elif self.remove_queued(
+                                address.agent_id,
+                                address.session_id,
+                                item.item_id,
+                                project_id=address.project_id,
+                            ):
+                                withdrawn += 1
                 return withdrawn
 
             return await settle_before_cancelling(clear())
@@ -819,23 +825,24 @@ class ChatRunManager:
         ]
 
     async def deliver_steering(
-        self, run: Run, persist: Callable[[QueuedRunItem], Awaitable[None]]
+        self, run: Run, persist: Callable[[QueuedRunItem], Awaitable[bool | None]]
     ) -> bool:
-        """Keep input queued until its append succeeds, without locking across I/O."""
+        """Deliver selected items. The persistence callback returns False for a withdrawn input."""
         delivered = False
         address = _session_address(run.project_id, run.agent_id, run.session_id)
         for item in self.pending_steering(run):
-            # Another selected item can be removed while the previous append awaits I/O.
-            # An accepted input's cancelled waiter does not withdraw it, so only
-            # its continued Queue membership proves that it still needs delivery.
-            if item not in self._queues.get(address, ()):
-                continue
-            if item.future.done() and item.admission.accessor_input_id is None:
-                continue
-            run.raise_if_cancelled()
-            item.steering_in_flight = True
+            # Claim selection together with Queue mutations, so a durable removal
+            # already in progress can finish before this item starts preparing.
+            async with self._lock:
+                if item not in self._queues.get(address, ()):
+                    continue
+                if item.future.done() and item.admission.accessor_input_id is None:
+                    continue
+                run.raise_if_cancelled()
+                item.steering_in_flight = True
             try:
-                await persist(item)
+                if await persist(item) is False:
+                    continue
                 # A new Parent input replaces its predecessor's continuation
                 # source only once Chat has durably accepted the steering.
                 run.parent_source = item.admission.parent_source
@@ -1243,30 +1250,27 @@ class ChatRunManager:
                     queue_item_id=item.item_id,
                     admission=item.admission,
                 )
-            except RunAdmissionBlockedError as error:
-                if (
-                    item.admission.accessor_input_id is not None
-                    and self._input_withdrawer is not None
-                ):
-                    await self._input_withdrawer(address, item.admission.accessor_input_id)
-                if not item.future.done():
-                    item.future.set_exception(error)
-                continue
             except Exception as error:
-                # One broken item must not strand the rest of the Queue. Its
-                # owner receives the failure; the remaining items keep draining.
-                _LOGGER.error(
-                    "Queued Run could not start (agent=%s session=%s item=%s)",
-                    address.agent_id,
-                    address.session_id,
-                    item.item_id,
-                    exc_info=True,
-                )
+                if not isinstance(error, RunAdmissionBlockedError):
+                    _LOGGER.exception(
+                        "Queued Run could not start (agent=%s session=%s item=%s)",
+                        address.agent_id,
+                        address.session_id,
+                        item.item_id,
+                    )
                 if (
                     item.admission.accessor_input_id is not None
                     and self._input_withdrawer is not None
                 ):
-                    await self._input_withdrawer(address, item.admission.accessor_input_id)
+                    try:
+                        await self._input_withdrawer(address, item.admission.accessor_input_id)
+                    except Exception:
+                        _LOGGER.exception(
+                            "Queue receipt withdrawal failed (agent=%s session=%s item=%s)",
+                            address.agent_id,
+                            address.session_id,
+                            item.item_id,
+                        )
                 if not item.future.done():
                     item.future.set_exception(error)
                 continue

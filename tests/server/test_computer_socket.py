@@ -37,21 +37,19 @@ class _Socket:
         self.app = SimpleNamespace(state=SimpleNamespace(event_bus=self.event_bus))
         self.accepted = False
         self.close_codes: list[int] = []
-        self.incoming: asyncio.Queue[str | Exception] = asyncio.Queue()
+        self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.sent: list[dict[str, Any]] = []
         self.send_started: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.call_send_gate = asyncio.Event()
         self.call_send_gate.set()
 
-    def receive(self, value: Any) -> None:
-        self.incoming.put_nowait(json.dumps(value))
+    def send_to_server(self, value: Any) -> None:
+        payload = {"bytes": value} if isinstance(value, bytes) else {"text": json.dumps(value)}
+        self.incoming.put_nowait({"type": "websocket.receive", **payload})
 
-    async def receive_text(self) -> str:
-        value = await self.incoming.get()
-        if isinstance(value, Exception):
-            raise value
-        return value
+    async def receive(self) -> dict[str, Any]:
+        return await self.incoming.get()
 
     async def send_json(self, value: dict[str, Any]) -> None:
         if value.get("type") == "call":
@@ -104,7 +102,7 @@ async def _connected(
     socket = _Socket()
     socket.app.state.runtime = SimpleNamespace(computers=registry)
     unsubscribe = _register_computer_change_bridge(socket.app.state)
-    socket.receive(_hello(computer_id, name=f"Laptop {computer_id}"))
+    socket.send_to_server(_hello(computer_id, name=f"Laptop {computer_id}"))
     serving = asyncio.create_task(serve_computer_socket(socket, registry))
     try:
         welcome = await _output(socket, serving)
@@ -135,7 +133,7 @@ async def test_only_a_native_admitted_client_can_register_a_computer(
 ) -> None:
     registry = ComputerRegistry()
     socket = _Socket(principal=principal, origin=origin)
-    socket.receive(_hello())
+    socket.send_to_server(_hello())
     try:
         await serve_computer_socket(socket, registry)
         assert not socket.accepted
@@ -146,19 +144,24 @@ async def test_only_a_native_admitted_client_can_register_a_computer(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("registration", [[], _hello(protocol=2), _hello(capabilities="terminal")])
+@pytest.mark.parametrize(
+    "registration", [[], _hello(protocol=2), _hello(capabilities="terminal"), b"{}"]
+)
 async def test_invalid_registration_is_refused_before_the_computer_becomes_available(
     registration: Any,
 ) -> None:
     registry = ComputerRegistry()
     socket = _Socket()
-    socket.receive(registration)
+    socket.send_to_server(registration)
     try:
         await serve_computer_socket(socket, registry)
         assert socket.accepted
         assert socket.close_codes == [1008]
-        assert socket.sent[0]["type"] == "error"
-        assert socket.sent[0]["error"]["code"] == "computer_protocol"
+        if isinstance(registration, bytes):
+            assert not socket.sent
+        else:
+            assert socket.sent[0]["type"] == "error"
+            assert socket.sent[0]["error"]["code"] == "computer_protocol"
         assert [computer.id for computer in registry.list()] == ["server"]
     finally:
         registry.close()
@@ -186,19 +189,19 @@ async def test_link_correlates_replies_to_the_computer_that_received_the_request
             assert request["capability"] == "terminal"
             assert request["operation"] == "write"
             assert request["params"] == {"text": "task"}
-            other.receive(
+            other.send_to_server(
                 {"type": "result", "id": request["id"], "ok": True, "result": {"wrong": True}}
             )
-            other.receive(
+            other.send_to_server(
                 {"type": "event", "capability": "computer_use", "event": "stopped", "data": {}}
             )
             await processed.wait()
             assert not call.done()
             socket.event_bus.events.clear()
-            socket.receive(
+            socket.send_to_server(
                 {"type": "capabilities", "capabilities": ["terminal", "extension:office:printer"]}
             )
-            socket.receive(
+            socket.send_to_server(
                 {"type": "result", "id": request["id"], "ok": True, "result": {"written": True}}
             )
             assert await call == {"written": True}
@@ -223,7 +226,7 @@ async def test_disconnect_marks_computer_offline_and_does_not_replay_uncertain_i
                 registry.call("pc_laptop", "terminal", "write", {"text": "one input"})
             )
             request = await _output(socket, serving)
-            socket.incoming.put_nowait(WebSocketDisconnect(1006))
+            socket.incoming.put_nowait({"type": "websocket.disconnect", "code": 1006})
             with pytest.raises(WebSocketDisconnect):
                 await serving
             with pytest.raises(ComputerError) as failure:
@@ -241,7 +244,7 @@ async def test_disconnect_marks_computer_offline_and_does_not_replay_uncertain_i
             next_request = await _output(reconnected, serving)
             assert next_request["operation"] == "status"
             assert next_request["id"] != request["id"]
-            reconnected.receive(
+            reconnected.send_to_server(
                 {"type": "result", "id": next_request["id"], "ok": True, "result": {"alive": True}}
             )
             assert await status == {"alive": True}
@@ -292,7 +295,7 @@ async def test_cancelled_queued_request_is_not_sent_after_an_earlier_write_unblo
                 await second
             socket.call_send_gate.set()
             first_request = await _output(socket, serving)
-            socket.receive(
+            socket.send_to_server(
                 {
                     "type": "result",
                     "id": first_request["id"],
@@ -314,7 +317,9 @@ async def test_wrong_registration_key_cannot_replace_an_existing_computer_link()
     try:
         async with _connected(registry):
             attacker = _Socket()
-            attacker.receive(_hello(key="another-registration-key-with-at-least-32-characters"))
+            attacker.send_to_server(
+                _hello(key="another-registration-key-with-at-least-32-characters")
+            )
             await serve_computer_socket(attacker, registry)
             assert attacker.close_codes == [4403]
             assert attacker.sent[0]["error"]["code"] == "computer_identity_conflict"
@@ -343,7 +348,7 @@ async def test_cancelled_socket_registration_publishes_the_offline_identity(
         claim(*args)
 
     monkeypatch.setattr(registry._store, "claim", delayed_claim)
-    socket.receive(_hello())
+    socket.send_to_server(_hello())
     serving = asyncio.create_task(serve_computer_socket(socket, registry))
     try:
         await asyncio.wait_for(started, 2)

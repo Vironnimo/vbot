@@ -1,5 +1,5 @@
 import { getContext, setContext } from 'svelte';
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import {
   createAppChat,
   createSideChat,
@@ -34,7 +34,7 @@ function newLaunch(source) {
   const launch = $state({
     id: newSessionId(),
     address: null,
-    admitted: null,
+    admitted: false,
     firstCommand: null,
     pending: null,
     source,
@@ -99,10 +99,15 @@ export function createAppChats(currentView) {
       if (launch.address) return Promise.resolve(launch.address);
       if (!launch.pending) {
         launch.pending = Promise.resolve()
-          .then(() => createSession(launch.id))
+          .then(() => createSession(launch.id, launch.source))
           .then((address) => {
             if (launch.invalidated) throw new Error(t('common.viewLoadError'));
-            return (launch.address = address);
+            // The server forks into the source's scope. A rename can overtake
+            // the creation response, so install the address with its current owner.
+            launch.address = launch.source
+              ? { ...address, agent_id: launch.source.agent_id }
+              : address;
+            return launch.address;
           })
           .finally(() => (launch.pending = null));
       }
@@ -122,8 +127,16 @@ export function createAppChats(currentView) {
       if (source && launches.get(reuse) === launch) launches.delete(reuse);
       launch.source = null;
       launch.firstCommand = response?.command_handled ? response : null;
-      launch.admitted = address;
-      return { address, response, draftKey };
+      launch.admitted = true;
+      const currentAgent = qualifyAgentAddress(
+        address.agent_id,
+        address.project_id,
+      );
+      return {
+        address,
+        response,
+        draftKey: sessionKey(currentAgent, address.session_id),
+      };
     }
     // A specialist has no trustworthy file scope before the user sends. At
     // submission its actual Session can resolve typed @mentions normally.
@@ -153,20 +166,21 @@ export function createAppChats(currentView) {
     { address, sourceGenerationId, ...config },
     fromPopup,
   ) {
-    const agent = qualifyAgentAddress(address.agent_id, address.project_id);
-    const reuse = JSON.stringify([
-      'side',
-      agent,
-      address.session_id,
-      sourceGenerationId,
-    ]);
+    // The source generation is unique and follows an Identity Agent rename.
+    const reuse = JSON.stringify(['side', sourceGenerationId]);
     // A fresh draft outcome is the server's decision that no live child exists.
     // Keep an unresolved launch id (including a lost create acknowledgement),
     // but never resurrect a previously resolved destination from this cache.
     if (launches.get(reuse)?.address) launches.delete(reuse);
     return openDraft(
       config,
-      (id) => createSideChat(agent, address.session_id, sourceGenerationId, id),
+      (id, source) =>
+        createSideChat(
+          qualifyAgentAddress(source.agent_id, source.project_id),
+          source.session_id,
+          sourceGenerationId,
+          id,
+        ),
       {
         reuse,
         fromPopup,
@@ -199,6 +213,14 @@ export function createAppChats(currentView) {
   }
 
   function renameAgent(oldId, newId) {
+    const drafts = new SvelteSet(launches.values());
+    for (const entry of popups) if (entry.launch) drafts.add(entry.launch);
+    for (const launch of drafts) {
+      for (const address of [launch.source, launch.address]) {
+        if (address?.agent_id === oldId && !address.project_id)
+          address.agent_id = newId;
+      }
+    }
     popups = popups.map((entry) => {
       const address = entry.address;
       return address?.agent_id === oldId && !address.project_id

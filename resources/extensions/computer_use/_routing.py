@@ -154,6 +154,7 @@ class ComputerRouting:
                 service.access.cancel_all()
             else:
                 # Recheck the native desktop on the next call after reconnecting.
+                remote.target.reconnected()
                 service._unready = None
         elif event == "stopped" and data.get("capability") == "computer_use":
             service.native_stopped(str(data.get("control_id", "")))

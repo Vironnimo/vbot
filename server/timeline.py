@@ -152,7 +152,14 @@ def project_timeline_history(
     )
     if last_usage is not None or not history_response.get("incremental"):
         response["last_usage"] = last_usage
-    items = history_timeline(history_response.get("messages") or [])
+    items = history_timeline(
+        history_response.get("messages") or [],
+        run_statuses={
+            row["run_id"]: row["status"]
+            for row in history_response.get("runs", [])
+            if row.get("status")
+        },
+    )
     if active_run_snapshot is not None:
         for field in ("output_speed", "output_latency"):
             if field in active_run_snapshot.get("state", {}):
@@ -216,7 +223,7 @@ async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> Js
                             message_id=message.id,
                         )
                     )
-            return history_timeline(records), output
+            return history_timeline(records, run_statuses={run.id: run.status.value}), output
 
         items, output = await FILE_PREVIEW_WORKERS.run(project)
         if not any(item["type"] == "assistant_run" for item in items):

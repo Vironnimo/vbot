@@ -83,10 +83,8 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                     self._qr = None
                     self._report_connected()
                 elif event.get("event") in {"closed", "failed"}:
-                    self._qr = None
-                    self._connected = False
                     self._pairing_state = event.get("reason", "disconnected")
-                    self._fail_pending_calls()
+                    self._disconnect()
                     if self._pairing_state == "logged_out":
                         # Remain idle until an explicit new pairing request; repeated
                         # restarts cannot repair revoked device credentials.
@@ -104,10 +102,12 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             reader.cancel()
             worker.cancel()
             await asyncio.gather(reader, worker, return_exceptions=True)
-            self._qr = None
-            self._fail_pending_calls()
+            self._disconnect()
 
-    def _fail_pending_calls(self) -> None:
+    def _disconnect(self) -> None:
+        self._qr = None
+        self._connected = False
+        self._engine.set_connected(False)
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(
@@ -116,8 +116,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
 
     @override
     async def stop(self) -> None:
-        self._qr = None
-        self._fail_pending_calls()
+        self._disconnect()
         process = self._process
         if process is not None:
             if process.stdin:
@@ -144,10 +143,12 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         self._sequence += 1
         request_id = str(self._sequence)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
         try:
             async with asyncio.timeout(90):
                 async with self._write_lock:
+                    if not self._connected:
+                        raise ChannelError("WhatsApp is not connected")
+                    self._pending[request_id] = future
                     process.stdin.write((json.dumps({**payload, "id": request_id}) + "\n").encode())
                     await process.stdin.drain()
                 response = await future
@@ -160,7 +161,8 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         except TimeoutError, OSError:
             # Delivery might already have happened; do not automatically resend.
             raise ChannelError(
-                "WhatsApp operation could not be confirmed", possibly_delivered=True
+                "WhatsApp operation could not be confirmed",
+                possibly_delivered=request_id in self._pending,
             ) from None
         finally:
             self._pending.pop(request_id, None)

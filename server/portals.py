@@ -37,9 +37,9 @@ from core.utils.logging import get_logger
 from core.utils.tls import ssl_context_for
 from server.access import AccessError, AccessService, Principal, track_device_request
 from server.access._principal import OPEN
+from server.access.tls import TlsContextHolder, http_protocol_class
 
 if TYPE_CHECKING:
-    from server.access.tls import TlsContextHolder
     from server.file_delivery import FileDelivery
 
 _LOGGER = get_logger("server.portals")
@@ -51,7 +51,6 @@ Send = Callable[[Message], Awaitable[None]]
 
 PORTAL_QUERY = "vbot_portal"
 PORTAL_COOKIE_PREFIX = "vbot_portal_"
-_ABORT_HTTP_CONNECTION = "vbot.portal_abort_connection"
 #: WebSocket close code for a Portal request without its credential.
 WEBSOCKET_PRIVATE = 4401
 # Every forwarded request goes to an app on this computer over plain HTTP.
@@ -166,11 +165,6 @@ class _Listener:
         import uvicorn
         from uvicorn.server import ServerState
 
-        protocol: dict[str, Any] = {}
-        if tls is not None:
-            from server.access.tls import sniffing_protocol_class
-
-            protocol["http"] = sniffing_protocol_class(tls)
         # log_config=None: building a Config must not reconfigure the process's logging.
         config = uvicorn.Config(
             app,
@@ -183,27 +177,15 @@ class _Listener:
             ws_per_message_deflate=False,
             access_log=False,
             log_config=None,
-            **protocol,
+            http=http_protocol_class(tls),
         )
         config.load()
         state = ServerState()
 
         def create_protocol(_loop: asyncio.AbstractEventLoop | None = None) -> asyncio.Protocol:
-            connection_state: dict[str, Any] = {}
-            protocol = config.http_protocol_class(  # type: ignore[call-arg]
-                config=config, server_state=state, app_state=connection_state, _loop=_loop
+            return config.http_protocol_class(  # type: ignore[call-arg]
+                config=config, server_state=state, app_state={}, _loop=_loop
             )
-
-            def abort_connection() -> None:
-                if tls is not None:
-                    # The sniffing protocol still owns the underlying TCP transport.
-                    protocol.shutdown()  # type: ignore[attr-defined]
-                else:
-                    protocol.transport.abort()  # type: ignore[attr-defined]
-
-            # uvicorn copies the connection's state into each ASGI request.
-            connection_state[_ABORT_HTTP_CONNECTION] = abort_connection
-            return protocol
 
         loop = asyncio.get_running_loop()
         addresses = await loop.getaddrinfo(
@@ -296,7 +278,6 @@ class _PortalApp:
                 connections=access.connections,
                 device_id=principal.device.id,
                 app=serve,
-                abort_http=scope.get("state", {}).get(_ABORT_HTTP_CONNECTION),
             )
         else:
             await serve(scope, receive, send)

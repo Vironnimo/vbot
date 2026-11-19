@@ -344,11 +344,18 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
         try:
             await queued.wait()
             await link.disconnect()
+            await computer.service._routing._remotes["pc_laptop"].target.drain()
         finally:
             # Hold admission until the same native instance has reconnected.
             await link.connect()
             service._lock.release()
         assert (await pending)["error"]["code"] == "computer_use_state_expired"
+        listed = await computer.call(
+            "computer_apps",
+            {"action": "list"},
+            computer.context_for("computer_apps", execution=context.execution, run_id="next_run"),
+        )
+        assert listed["ok"], listed
         await link.disconnect()
         offline = await computer.call(
             "computer", {"action": "type", "text": "no"}, remote_context(computer)

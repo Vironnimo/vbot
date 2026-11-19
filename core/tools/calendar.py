@@ -16,7 +16,6 @@ from core.calendar import (
     occurrence_id,
     parse_occurrence_id,
 )
-from core.calendar.when import looks_like_date
 from core.projects import format_agent_address
 from core.tools._calendar_arguments import (
     ATTENDEES_FIELD,
@@ -404,15 +403,9 @@ class _CalendarTool(_CalendarRead):
                     "Use an offset in start/end to name an instant in another zone, or"
                     " update the series id to change its timezone."
                 )
-        event = self._calendar.get_event(parsed[0])
-        if event.tz_name:
-            for name in ("start", "end"):
-                # A date stays untouched, so the service refuses it for a timed occurrence.
-                if name in fields and not looks_like_date(fields[name].strip()):
-                    moment = datetime.fromisoformat(fields[name].strip())
-                    if moment.tzinfo is None:
-                        fields[name] = moment.replace(tzinfo=ZoneInfo(event.tz_name)).isoformat()
-        occurrence = await self._calendar.update_occurrence(item_id, actor="tool", **fields)
+        occurrence = await self._calendar.update_occurrence(
+            item_id, times_in_event_zone=True, actor="tool", **fields
+        )
         return tool_success(
             self._occurrence_fields(occurrence, self._calendar.get_event(occurrence.event_id))
         )

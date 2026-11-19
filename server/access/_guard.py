@@ -27,6 +27,7 @@ from server.access._service import (
     AccessError,
     AccessService,
 )
+from server.access.tls import ABORT_HTTP_CONNECTION
 
 if TYPE_CHECKING:
     from server.access._connections import LiveConnections
@@ -120,6 +121,10 @@ class AccessGuard:
             service.refused(facts.refusal, facts, path)
             await _refuse(scope, receive, send, 403, ACCESS_DENIED, "Access denied")
             return
+        if facts.proxied:
+            # Only an admitted trusted proxy reaches here. URL builders and the
+            # Origin guard need the scheme at the browser-facing end of the hop.
+            scope = {**scope, "scheme": "wss" if scope_type == "websocket" else "https"}
         method = str(scope.get("method") or "")
         if scope_type == "http" and (
             is_webhook_route(method, path) or is_task_input_route(method, path)
@@ -216,7 +221,6 @@ async def track_device_request(
     connections: LiveConnections,
     device_id: str,
     app: AsgiApp,
-    abort_http: Callable[[], None] | None = None,
 ) -> None:
     """Run a device's request so that revoking the device ends or refuses it.
 
@@ -227,6 +231,7 @@ async def track_device_request(
     websocket = scope.get("type") == "websocket"
     state = {"accepted": False, "closed": False, "started": False, "finished": False}
     connection = connections.register(device_id)
+    abort_http = scope.get("state", {}).get(ABORT_HTTP_CONNECTION)
     remaining_bytes: int | None = None
 
     async def tracked_send(message: Message) -> None:

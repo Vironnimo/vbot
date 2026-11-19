@@ -139,7 +139,7 @@ from core.tools.tools import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import finish_despite_cancel
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
@@ -692,15 +692,29 @@ class SubAgentCoordinator:
                 overrides,
             )
             address = session.address
-            executor = runtime.chat_loop.run_executor(
-                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
-            )
+            parent = _caller(context)
+            passed_only = context.subagent_session
+
+            async def execute(run: Run) -> Any:
+                # The manager invokes the executor only after this exact generation
+                # has admitted the Run. Chat commits the grant note with its input.
+                note = None
+                if secrets:
+                    note = await self._pass_secrets(
+                        parent, address, secrets, passed_only=passed_only
+                    )
+                executor = runtime.chat_loop.run_executor(
+                    content,
+                    parent_agent_input=True,
+                    temporary_parent_binding=temporary_parent,
+                    context_note=note,
+                )
+                return await executor(run)
+
             try:
-                if secrets and self._secrets is not None:
-                    await self._pass_secrets(context, session, secrets)
                 run = await runtime.chat_run_manager.start(
                     address,
-                    executor,
+                    execute,
                     admission=_admission(
                         runtime,
                         context,
@@ -748,21 +762,21 @@ class SubAgentCoordinator:
         return tool_success(result)
 
     async def _pass_secrets(
-        self, context: ToolContext, session: ChatSession, names: list[str]
-    ) -> None:
+        self, parent: SessionAddress, child: SessionAddress, names: list[str], *, passed_only: bool
+    ) -> str:
         """Grant the Sub-Agent's Session the named Secrets and tell it which they are."""
         assert self._secrets is not None
-        granted = await asyncio.to_thread(
-            self._secrets.pass_to_session,
-            SessionAddress(context.project_id, context.agent_id, context.session_id),
-            names,
-            session.address,
-            passed_only=context.subagent_session,
+        granted = await settle_before_cancelling(
+            asyncio.to_thread(
+                self._secrets.pass_to_session,
+                parent,
+                names,
+                child,
+                passed_only=passed_only,
+            )
         )
         lines = "\n".join(secret_line(secret) for secret in granted)
-        await session.add_note_async(
-            SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines, use_hint=SECRET_USE_HINT)
-        )
+        return SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines, use_hint=SECRET_USE_HINT)
 
     # send
 
@@ -856,8 +870,9 @@ class SubAgentCoordinator:
                 )
             await preparation.bind_working_project(working_project_id)
             steerable = context.execution_owner is None and temporary_parent is None
-            # A message to an idle Sub-Agent starts its next Run, which counts against the limits.
-            async with self._admission_lock:
+            # Child Tool rounds can themselves need coordinator admission. Wait for
+            # their Session before taking the coordinator lock or protecting delivery.
+            async with sessions.write_lock(address), self._admission_lock:
                 if not is_working(runtime, address):
                     refusal = await self._limit_refusal(
                         caller,
@@ -874,7 +889,7 @@ class SubAgentCoordinator:
                 # Past this check the message is sent even when the calling Run is
                 # cancelled meanwhile, and the Parent receives the result, so it
                 # never sends the same message a second time.
-                return await finish_despite_cancel(
+                result = await finish_despite_cancel(
                     self._deliver_send(
                         context,
                         link.id,
@@ -887,6 +902,14 @@ class SubAgentCoordinator:
                         generation_id=generation_id,
                     )
                 )
+
+            if result["ok"]:
+                await finish_despite_cancel(
+                    self._announce_send(
+                        context, link.id, address, generation_id, result["data"]["status"]
+                    )
+                )
+            return result
 
     async def _deliver_send(
         self,
@@ -905,83 +928,77 @@ class SubAgentCoordinator:
         runtime = self._runtime
         sessions = runtime.chat_sessions
         manager = runtime.chat_run_manager
-        # Lock order is Session -> manager admission. Never hold the manager lock
-        # over metadata I/O: the admitted Run/Queue item already claims this
-        # Session and, when busy, its waiting-work capacity.
-        async with sessions.write_lock(address):
-            session: ChatSession | None
-            try:
-                session = await sessions.get_async(address)
-            except SessionNotFoundError:
-                session = None
-            current_link = await sessions.run_async(read_link, sessions, address, strict=True)
-            if (
-                session is None
-                or session.generation_id != generation_id
-                or current_link is None
-                or current_link.id != subagent_id
-                or current_link.parent != _caller(context)
-            ):
-                return _not_found(
-                    subagent_id, await sessions.run_async(children, sessions, _caller(context))
-                )
-            executor = runtime.chat_loop.run_executor(
-                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+        session: ChatSession | None
+        try:
+            session = await sessions.get_async(address)
+        except SessionNotFoundError:
+            session = None
+        current_link = await sessions.run_async(read_link, sessions, address, strict=True)
+        if (
+            session is None
+            or session.generation_id != generation_id
+            or current_link is None
+            or current_link.id != subagent_id
+            or current_link.parent != _caller(context)
+        ):
+            return _not_found(
+                subagent_id, await sessions.run_async(children, sessions, _caller(context))
             )
-            prepared = asyncio.Event()
-            preparation_error: BaseException | None = None
+        executor = runtime.chat_loop.run_executor(
+            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+        )
+        prepared = asyncio.Event()
+        preparation_error: BaseException | None = None
 
-            async def execute_prepared(run: Run) -> Any:
-                await prepared.wait()
-                if preparation_error is not None:
-                    raise preparation_error
-                return await executor(run)
+        async def execute_prepared(run: Run) -> Any:
+            await prepared.wait()
+            if preparation_error is not None:
+                raise preparation_error
+            return await executor(run)
 
-            item = await manager.enqueue(
-                address,
-                execute_prepared,
-                display_content=content,
-                admission=_admission(
-                    runtime,
-                    context,
-                    subagent_id,
-                    working_project_id,
-                    expected_session_generation_id=generation_id,
-                ),
-            )
-            try:
-                if overrides:
-                    await sessions.run_async(
-                        runtime.agent_resolver.update_session_overrides, address, overrides
-                    )
-                # The Parent's boundary now narrows the stored one: a Parent whose
-                # rules were tightened since the spawn passes that on.
-                ceiling = context.permissions.ceiling(source="parent")
-                if ceiling is not None:
-                    await sessions.run_async(
-                        runtime.agent_resolver.join_session_ceiling, address, ceiling
-                    )
+        item = await manager.enqueue(
+            address,
+            execute_prepared,
+            display_content=content,
+            admission=_admission(
+                runtime,
+                context,
+                subagent_id,
+                working_project_id,
+                expected_session_generation_id=generation_id,
+            ),
+        )
+        try:
+            if overrides:
                 await sessions.run_async(
-                    _narrow_session_execution, runtime, address, context.execution
+                    runtime.agent_resolver.update_session_overrides, address, overrides
                 )
-                # Queued input cannot be steered before its settings commit;
-                # an idle or drained Run waits at the executor gate instead.
-                if not item.future.cancelled() and not item.withdrawn and not item.steering:
-                    # Steering needs Chat's captured request, not the admission
-                    # gate. Already-started Runs retain the gate closure.
-                    item.executor = executor
-                    item.steerable = steerable
-            except BaseException as error:
-                preparation_error = error
-                manager.remove_queued(
-                    address.agent_id,
-                    address.session_id,
-                    item.item_id,
-                    project_id=address.project_id,
+            # The Parent's boundary now narrows the stored one: a Parent whose
+            # rules were tightened since the spawn passes that on.
+            ceiling = context.permissions.ceiling(source="parent")
+            if ceiling is not None:
+                await sessions.run_async(
+                    runtime.agent_resolver.join_session_ceiling, address, ceiling
                 )
-                raise
-            finally:
-                prepared.set()
+            await sessions.run_async(_narrow_session_execution, runtime, address, context.execution)
+            # Queued input cannot be steered before its settings commit;
+            # an idle or drained Run waits at the executor gate instead.
+            if not item.future.cancelled() and not item.withdrawn and not item.steering:
+                # Steering needs Chat's captured request, not the admission
+                # gate. Already-started Runs retain the gate closure.
+                item.executor = executor
+                item.steerable = steerable
+        except BaseException as error:
+            preparation_error = error
+            manager.remove_queued(
+                address.agent_id,
+                address.session_id,
+                item.item_id,
+                project_id=address.project_id,
+            )
+            raise
+        finally:
+            prepared.set()
         status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
         if item.future.done() and not item.future.cancelled():
             status, note = "started", SUBAGENT_SEND_STARTED_NOTE
@@ -997,6 +1014,19 @@ class SubAgentCoordinator:
                 pass
             else:
                 status, note = "steered", SUBAGENT_SEND_STEERED_NOTE
+        result = _public_identity(subagent_id, address)
+        result["status"] = status
+        result["note"] = note
+        return tool_success(result)
+
+    async def _announce_send(
+        self,
+        context: ToolContext,
+        subagent_id: str,
+        address: SessionAddress,
+        generation_id: str,
+        status: str,
+    ) -> None:
         await self._activities.ensure(address, generation_id, parent=_caller(context))
         await _emit(
             context,
@@ -1008,10 +1038,6 @@ class SubAgentCoordinator:
                 activity_file=self._activities.path(address, generation_id),
             ),
         )
-        result = _public_identity(subagent_id, address)
-        result["status"] = status
-        result["note"] = note
-        return tool_success(result)
 
     async def _temporary_parent(
         self, context: ToolContext, target_agent_id: str, target_project_id: str | None

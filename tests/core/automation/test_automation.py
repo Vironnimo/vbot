@@ -12,7 +12,7 @@ import pytest
 from core.automation import TriggerService
 from core.chat import MessageSender, ReplySurface
 from core.projects import AgentOverrides
-from core.runs import ActiveRunError, ChatRunManager, Run
+from core.runs import ActiveRunError, ChatRunManager, Run, RunAdmissionBlockedError
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -133,6 +133,24 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
     chat_loop.queue_run.assert_not_awaited()
     chat_run_manager.active_run.assert_not_called()
     assert run.id == "run-one"
+
+
+async def test_blocked_trigger_releases_its_reservation_without_queueing() -> None:
+    blocked = RunAdmissionBlockedError("occurrence expired")
+    chat_loop = SimpleNamespace(start_run=AsyncMock(side_effect=blocked), queue_run=AsyncMock())
+    manager = ChatRunManager(waiting_work_limit=1)
+    service = TriggerService(cast(Any, chat_loop), manager, cast(Any, Mock()))
+    reservation = service.reserve_waiting_work(scope="producer", scope_limit=1)
+    try:
+        with pytest.raises(RunAdmissionBlockedError) as failure:
+            await service.trigger_run(
+                "coder", "Work", session_id="one", waiting_work_admission=reservation
+            )
+        assert failure.value is blocked
+        chat_loop.queue_run.assert_not_awaited()
+        assert manager.waiting_work_count() == 0
+    finally:
+        await manager.aclose()
 
 
 async def test_trigger_run_queues_busy_session_until_active_run_terminal_event() -> None:

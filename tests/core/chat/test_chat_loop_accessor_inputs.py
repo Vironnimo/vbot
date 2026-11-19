@@ -324,7 +324,7 @@ async def test_cancelled_submission_keeps_committed_queue_work_and_retry_identit
 
 
 @pytest.mark.asyncio
-async def test_selected_input_steers_once_and_never_returns_on_restart(tmp_path):
+async def test_selected_input_steers_once_and_never_returns_on_restart(tmp_path, monkeypatch):
     adapter = HeldFirstAdapter()
     async with _harness(tmp_path, adapter) as (runtime, loop):
         active = await _submit(loop, "active", "original", new_session=True)
@@ -332,8 +332,25 @@ async def test_selected_input_steers_once_and_never_returns_on_restart(tmp_path)
         selected = await _submit(
             loop, "selected", "correction", session_id=active.record.address.session_id
         )
-        await loop.steer_accessor_queued(active.record.address, selected.record.queue_id)
+        address = active.record.address
+        await loop.steer_accessor_queued(address, selected.record.queue_id)
+        appending, release = asyncio.Event(), asyncio.Event()
+        append = ChatSession.append_many_async
+
+        async def held_append(session, messages, **kwargs):
+            if kwargs.get("accessor_input_ids") == ("selected",):
+                appending.set()
+                await release.wait()
+            await append(session, messages, **kwargs)
+
+        monkeypatch.setattr(ChatSession, "append_many_async", held_append)
         adapter.release.set()
+        await appending.wait()
+        clear = asyncio.create_task(runtime.chat_runs.clear_queued_many((address,)))
+        # Let clearing begin while the append owns this input.
+        await asyncio.sleep(0)
+        release.set()
+        assert await clear == 0
         await active.run.wait()
         retry = await loop.lookup_accessor_input("selected", request_hash="original-selected")
         assert retry.record.state == "steered" and retry.run is active.run
@@ -348,7 +365,8 @@ async def test_selected_input_steers_once_and_never_returns_on_restart(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_stop_all_withdraws_durable_queue_before_restart(tmp_path):
+@pytest.mark.parametrize("preparing", [False, True], ids=["queued", "steering-in-flight"])
+async def test_stop_all_withdraws_durable_queue_before_restart(tmp_path, monkeypatch, preparing):
     adapter = HeldFirstAdapter()
     async with _harness(tmp_path, adapter) as (runtime, loop):
         active = await _submit(loop, "active", "original", new_session=True)
@@ -357,15 +375,36 @@ async def test_stop_all_withdraws_durable_queue_before_restart(tmp_path):
         ordinary = await _submit(loop, "ordinary", "later", session_id=address.session_id)
         selected = await _submit(loop, "selected", "steering", session_id=address.session_id)
         await loop.steer_accessor_queued(address, selected.record.queue_id)
+        release = asyncio.Event()
+        if preparing:
+            entered = asyncio.Event()
+
+            async def prepare(content):
+                entered.set()
+                await release.wait()
+                return content
+
+            monkeypatch.setattr(loop._requests.media, "transcribe_user_audio", prepare)  # noqa: SLF001
+            adapter.release.set()
+            await entered.wait()
         assert (
             await runtime.chat_runs.clear_queued_async(
                 address.agent_id, address.session_id, project_id=address.project_id
             )
             == 2
         )
-        await runtime.chat_runs.cancel(active.run.id, reason="user")
-        with pytest.raises(RunCancelledError):
+        if preparing:
+            release.set()
             await active.run.wait()
+            assert len(adapter.requests) == 1
+            messages = runtime.chat_sessions.get(address).load()
+            assert [message.content for message in messages if message.role == "user"] == [
+                "original"
+            ]
+        else:
+            await runtime.chat_runs.cancel(active.run.id, reason="user")
+            with pytest.raises(RunCancelledError):
+                await active.run.wait()
         assert ordinary.queued_item.future.cancelled()
         assert selected.queued_item.future.cancelled()
         assert runtime.chat_runs.all_queued() == []

@@ -14,10 +14,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.channels.adapter import FileData
+from core.channels.adapter import FileData, ReplyPlanFacts
 from core.channels.config import ChannelError
 
 from .channels_test_support import wait_until
+from .engine_test_support import FakeTransport, connect, make_completed_run, settle_replies
 from .network_test_support import make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
@@ -183,6 +184,20 @@ async def test_logout_fails_pending_calls_without_leaving_pairing_idle(
             assert adapter.pairing_status()["state"] == "logged_out"
             # Revoked credentials cannot recover by restarting; the loop stays idle.
             assert not listener.done()
+
+        # A Run finishing during logout waits for the next connected transport.
+        send_on_old_connection = AsyncMock(wraps=adapter.send_text)
+        monkeypatch.setattr(adapter, "send_text", send_on_old_connection)
+        engine = adapter._engine
+        await engine.relay_run(
+            make_completed_run(output_text="answer"), ReplyPlanFacts("test-whatsapp", "self")
+        )
+        await asyncio.sleep(0)  # let the scheduled delivery select its transport
+        next_transport = FakeTransport()
+        connect(engine, next_transport)
+        await settle_replies(engine)
+        send_on_old_connection.assert_not_awaited()
+        assert next_transport.sent == [("self", "answer")]
     finally:
         await stop_bridge(adapter, listener, sending)
 
@@ -198,22 +213,34 @@ async def test_drain_failure_retrieves_pending_disconnect_error(
     unhandled: list[dict[str, Any]] = []
     loop.set_exception_handler(lambda _, context: unhandled.append(context))
 
+    disconnect = asyncio.Event()
+
     async def disconnect_during_drain() -> None:
-        # The disconnect fails the pending reply before the pipe write itself fails.
+        # The first send has left. The second still waits for the write lock.
+        await disconnect.wait()
         bridge.emit({"event": "closed"})
         await wait_until(lambda: adapter.pairing_status()["state"] == "disconnected")
         raise BrokenPipeError
 
     bridge.stdin.drain = disconnect_during_drain
     listener = await start_bridge(adapter, bridge, monkeypatch)
+    written = asyncio.create_task(adapter.call_bridge({"action": "send"}))
+    await bridge.written.wait()
+    queued = asyncio.create_task(adapter.call_bridge({"action": "send"}))
+    disconnect.set()
     try:
-        with pytest.raises(ChannelError, match="could not be confirmed"):
-            await adapter.call_bridge({"action": "send"})
+        with pytest.raises(ChannelError) as first:
+            await written
+        with pytest.raises(ChannelError) as second:
+            await queued
+        assert first.value.possibly_delivered
+        assert not second.value.possibly_delivered
+        assert len(bridge.requests) == 1
         gc.collect()
         assert unhandled == []
     finally:
         loop.set_exception_handler(previous_handler)
-        await stop_bridge(adapter, listener)
+        await stop_bridge(adapter, listener, written, queued)
 
 
 def test_bridge_gate_real_javascript() -> None:

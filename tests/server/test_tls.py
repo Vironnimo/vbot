@@ -24,9 +24,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from core.access.config import AccessConfigError
-from server.access import tls
-from server.access.tls import TlsContextHolder, sniffing_protocol_class
+from core.access.config import AccessConfigError, access_config
+from core.access.devices import DeviceStore, new_device
+from server.access import AccessGuard, AccessService, Principal, tls
+from server.access.tls import TlsContextHolder, http_protocol_class
 
 
 def _write_certificate(directory: Path, serial: int) -> tuple[str, str]:
@@ -79,11 +80,11 @@ async def _scheme_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
 
 @asynccontextmanager
 async def _serving(
-    holder: TlsContextHolder, app: Any = _scheme_app
+    holder: TlsContextHolder | None, app: Any = _scheme_app
 ) -> AsyncIterator[tuple[uvicorn.Server, int]]:
     config = uvicorn.Config(
         app,
-        http=sniffing_protocol_class(holder),
+        http=http_protocol_class(holder),
         lifespan="off",
         log_config=None,
         timeout_graceful_shutdown=30,
@@ -157,6 +158,69 @@ def test_one_listener_serves_https_and_plain_http_and_reloads_its_certificate(
     assert served == [("http", None), ("https", 1), ("https", 2), ("https", 2)]
     failures = [r for r in caplog.records if "TLS certificate reload failed" in r.getMessage()]
     assert len(failures) == 1 and failures[0].levelname == "WARNING"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct_tls", [False, True])
+async def test_revocation_aborts_a_partly_sent_fixed_length_response(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    direct_tls: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DeviceStore(tmp_path)
+    store.load()
+    device, token = new_device(
+        name="Client",
+        kind="cli",
+        approved_by="host",
+        client=None,
+        now=datetime.datetime.now(datetime.UTC),
+    )
+    store.add(device)
+    service = AccessService(access_config("local"), local_token=None)
+    await service.start(tmp_path)
+    holder = None
+    client_tls = None
+    if direct_tls:
+        cert, key = _write_certificate(tmp_path, serial=1)
+        holder = TlsContextHolder(cert, key)
+        client_tls = _trusting(cert)
+    else:
+        # Exercise the h11 path even in installations that prefer httptools.
+        from uvicorn.protocols.http.h11_impl import H11Protocol
+
+        monkeypatch.setattr("uvicorn.protocols.http.auto.AutoHTTPProtocol", H11Protocol)
+
+    async def download(scope: Any, receive: Any, send: Any) -> None:
+        await send(
+            {"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"8")]}
+        )
+        await send({"type": "http.response.body", "body": b"part", "more_body": True})
+        await asyncio.Future()
+
+    try:
+        async with _serving(holder, AccessGuard(download, service=service)) as (_server, port):
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                port,
+                ssl=client_tls,
+                server_hostname="localhost" if direct_tls else None,
+            )
+            try:
+                writer.write(
+                    b"GET /download HTTP/1.1\r\nHost: localhost\r\n"
+                    + f"Authorization: Bearer {token}\r\n\r\n".encode()
+                )
+                assert b"content-length: 8" in (await reader.readuntil(b"\r\n\r\n")).lower()
+                assert await reader.readexactly(4) == b"part"
+                await service.revoke_devices([device.id], Principal("host"))
+                assert await asyncio.wait_for(reader.read(), 2) == b""
+            finally:
+                writer.close()
+    finally:
+        await service.close()
+    assert not any(r.name == "uvicorn.error" and r.levelname == "ERROR" for r in caplog.records)
 
 
 def _blocking_tls_request(port: int, cert: str, path: str) -> ssl.SSLSocket:

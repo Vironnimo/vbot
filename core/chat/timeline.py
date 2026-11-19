@@ -7,7 +7,7 @@ persisted records their canonical Run identity; rendering is left to clients.
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.runs import RunTimeline
@@ -28,9 +28,11 @@ _DISPLAY_ROWS = {
 }
 
 
-def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
+def history_timeline(
+    messages: Sequence[JsonObject], *, run_statuses: Mapping[str, str] | None = None
+) -> list[JsonObject]:
     """Project complete Run segments from public Session History records."""
-    return _project(messages)[0]
+    return _project(messages, run_statuses)[0]
 
 
 def history_tool_call(messages: Sequence[JsonObject], tool_id: str) -> JsonObject | None:
@@ -44,7 +46,9 @@ def history_tool_call(messages: Sequence[JsonObject], tool_id: str) -> JsonObjec
     return None
 
 
-def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[RunTimeline]]:
+def _project(
+    messages: Sequence[JsonObject], run_statuses: Mapping[str, str] | None = None
+) -> tuple[list[JsonObject], list[RunTimeline]]:
     items: list[JsonObject] = []
     runs: list[RunTimeline] = []
     run: RunTimeline | None = None
@@ -56,6 +60,7 @@ def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[Run
     def flush() -> None:
         nonlocal run
         if run is not None:
+            run.finish_history(run_statuses.get(run.run_id) if run_statuses else None)
             # This fold is discarded: its elements need no isolating copies.
             items.extend(
                 item
@@ -143,7 +148,6 @@ def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[Run
         if run is None:
             run = RunTimeline(str(run_id), timestamp=message.get("timestamp"))
             runs.append(run)
-            run.run["status"] = "completed"
             run.run["source"] = "history"
         event: JsonObject = {
             "run_id": run.run_id,

@@ -44,11 +44,12 @@ def open_desktop(
     restart into a version activated while it runs. On Windows the launch first
     completes the shortcuts' taskbar identity, because updates do not reach them.
     """
-    from cli.application.state import ensure_not_removing
+    from cli.application.state import ensure_not_removing, load_installation
 
     # Serialize launch with the uninstaller's removal reservation.
     with exclusive(install.root, "dispatch", timeout=5):
         ensure_not_removing(install.root)
+        install = load_installation(install.root)
         if install.install_shape not in {"server-desktop", "desktop-client"}:
             raise ApplicationError("This installation does not include the Desktop app")
         version = install.version()

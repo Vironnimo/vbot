@@ -822,6 +822,19 @@ def test_named_zone_mutations_and_results_keep_local_intent(tool: CalendarTool) 
     assert listed["data"]["occurrences"] == 6
     assert text.count("timezone: America/New_York") == 6
     assert "2030-03-03T09:00-05:00" in text and "2030-03-10T09:00-04:00" in text
+    moved, text = tool.call(
+        {
+            "action": "update",
+            "id": occurrence_id(event.id, "2030-03-10T09:00:00"),
+            "start": "2030-03-10T02:30",
+            "end": "2030-03-10T03:30",
+        }
+    )
+    assert moved["ok"], text
+    assert (moved["data"]["start"], moved["data"]["end"]) == (
+        "2030-03-10T03:30-04:00",
+        "2030-03-10T04:30-04:00",
+    )
     tool.succeeded({"action": "update", "id": event.id, "start": "2030-03-03T10:00"})
     assert tool.only_event().start == "2030-03-03T10:00:00"
     assert tool.only_event().tz_name == "America/New_York"

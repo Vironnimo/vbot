@@ -200,7 +200,8 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     assert calls[0]["port"] == 8765
     # Only the access guard reads forwarding headers, and only from trusted proxies.
     assert calls[0]["proxy_headers"] is False
-    assert "http" not in calls[0]
+    # Both plain and direct-TLS listeners supply the per-connection revocation hook.
+    assert issubclass(calls[0]["http"], asyncio.Protocol)
     assert calls[0]["app"]["access"] == access_config("local")
     # The local access token exists exactly while this server listens.
     assert served_tokens == [

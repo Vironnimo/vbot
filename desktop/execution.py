@@ -716,6 +716,14 @@ class ComputerSharing:
                 waiting = [serving, changed]
                 if configuring is not None:
                     waiting.append(configuring)
+                elif not scope.ready:
+                    # Keep the originating link for replies from retiring handlers.
+                    # Once its last call settles an empty offer has no work to serve.
+                    pending = [task for task in scope.capability_calls if not task.done()]
+                    if not pending:
+                        self._changed.set()
+                        return
+                    waiting.extend(pending)
                 done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
                 if serving in done:
                     await serving

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,7 @@ def _resolver(
     global_tool_loading: dict[str, Any] | None = None,
     global_permission_rules: dict[str, Any] | None = None,
     project_skill_names: dict[str, frozenset[str]] | None = None,
+    skill_pool_names: Callable[[str | None], frozenset[str]] | None = None,
 ) -> AgentResolver:
     """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
 
@@ -238,6 +240,7 @@ def _resolver(
         checker,
         lambda: defaults,
         project_skill_names=lambda project_id: skill_names.get(project_id, frozenset()),
+        skill_pool_names=skill_pool_names,
         # The Agent store's own Session database, which it also closes.
         sessions=agents._session_manager(),
     )

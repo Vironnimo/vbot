@@ -241,7 +241,10 @@ def test_identity_profile_snapshots_an_agent_bounded_by_the_owner_selection(
         agents,
         projects,
         _openai_configured(),
-        project_skill_names={project.project_id: frozenset({"review", "private"})},
+        skill_pool_names=lambda project_id: (
+            frozenset({"global", "private"})
+            | ({"review"} if project_id == project.project_id else set())
+        ),
     )
     config = TemporaryAgentConfig(
         model="",
@@ -262,7 +265,8 @@ def test_identity_profile_snapshots_an_agent_bounded_by_the_owner_selection(
     assert prepared.tool_access.mode == "selected"
     assert prepared.tool_access.allowed == ("grep", "read")
     assert "bash" in prepared.tool_access.denied
-    assert prepared.allowed_skills == ["review"]
+    assert prepared.allowed_skills == ["global", "review"]
+    assert resolver.prepare_temporary_config(config, None).allowed_skills == ["global"]
     assert prepared.tools == {"bash": {"allowed_env": ["CI"]}}
     assert prepared.instructions == "You review carefully.\n\nReview the Factory candidate."
     assert prepared.identity_profile == "reviewer"

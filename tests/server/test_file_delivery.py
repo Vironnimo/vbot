@@ -115,6 +115,8 @@ def test_internal_links_stop_serving_on_issuer_revocation_even_with_another_cred
     site.mkdir()
     entry = site / "index.html"
     entry.write_text("<h1>Before</h1>")
+    (site / "sub").mkdir()
+    (site / "sub" / "index.html").write_text("<h1>Subpage</h1>")
     (site / "app.js").write_text("const before = 1;")
     data = tmp_path / "data"
     store = DeviceStore(data)
@@ -174,6 +176,14 @@ def test_internal_links_stop_serving_on_issuer_revocation_even_with_another_cred
         assert child_claims["actor"] == issuer.id
         assert child_claims["expires_at"] == parent_claims["expires_at"]
         base = preview["url"].rsplit("/", 1)[0]
+        proxy = {"X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"}
+        document = client.get(f"http://testserver{preview['url']}", headers=proxy)
+        assert f"https://testserver{base}/" in document.headers["content-security-policy"]
+        directory = client.get(
+            f"http://testserver{base}/sub", headers=proxy, follow_redirects=False
+        )
+        assert directory.status_code == 307
+        assert directory.headers["location"] == f"https://testserver{base}/sub/"
         urls = [issued + "?download=true", preview["url"], f"{base}/app.js", f"{base}/.revision"]
         for url in urls:
             assert client.get(url).status_code == 200

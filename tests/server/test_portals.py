@@ -21,9 +21,10 @@ from core.tools.portal import register_portal_tool
 from core.tools.portal_registry import PortalRegistry
 from server.access._principal import HOST, HOST_PRINCIPAL
 from server.access._service import AccessService
+from server.access.tls import ABORT_HTTP_CONNECTION
 from server.app import create_app
 from server.file_delivery import FileDelivery
-from server.portals import _ABORT_HTTP_CONNECTION, PortalServer, _PortalApp
+from server.portals import PortalServer, _PortalApp
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
@@ -434,7 +435,7 @@ async def test_device_revocation_ends_open_portal_requests(
     browser_aborted = asyncio.Event()
     upstream_read_ended = asyncio.Event()
     sent: list[MutableMapping[str, Any]] = []
-    scope["state"] = {_ABORT_HTTP_CONNECTION: browser_aborted.set}
+    scope["state"] = {ABORT_HTTP_CONNECTION: browser_aborted.set}
 
     class Events(httpx.AsyncByteStream):
         @override

@@ -14,6 +14,7 @@ from core.runs import (
     ChatRunManager,
     CompletionActivity,
     Run,
+    RunAdmissionBlockedError,
     RunCancelledError,
     RunExecutionOwner,
     RunKind,
@@ -354,6 +355,9 @@ class TriggerService:
                     **tool_kwargs,
                     **run_kwargs,
                 )
+        except RunAdmissionBlockedError:
+            self.release_waiting_work(waiting_work_admission)
+            raise
         except ActiveRunError:
             try:
                 if internal:

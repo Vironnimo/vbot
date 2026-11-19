@@ -44,6 +44,7 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
     (version / "app" / "desktop").mkdir(parents=True)
     (version / "release.json").write_text('{"version":"0.4.2"}', encoding="utf-8")
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
+    install.save()
     return install
 
 
@@ -72,7 +73,6 @@ def test_client_state_never_resolves_a_local_server_target(
 
 def test_tray_version_and_pending_restart_refresh_only_on_activation(tmp_path, monkeypatch):
     install = _install(tmp_path, shape="desktop-client")
-    install.save()
     manifest = install.version() / "release.json"
     manifest.write_text(json.dumps({"version": "1.0", "files": {"fixture": "x" * 1024**2}}))
     # The tray runs the code of the version that was active when it started.
@@ -503,11 +503,16 @@ def test_malformed_host_exit_request_is_ignored(tmp_path: Path, monkeypatch: pyt
 def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    facade = host.ApplicationFacade(_install(tmp_path))
+    install = _install(tmp_path)
+    monkeypatch.setattr(host, "ServerMonitor", _Monitor)
+    facade = host.ApplicationFacade(install)
+    facade.watch(_Sink())
+    monitor = _Monitor.instances[-1]
+    assert monitor.target().host == "127.0.0.1"
     calls: list[str] = []
 
     @contextmanager
-    def lock(_root: Path, name: str):
+    def lock(_root: Path, name: str, **_kwargs: object):
         calls.append(f"lock:{name}")
         yield
 
@@ -520,17 +525,33 @@ def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     assert calls == ["lock:operation"]
     assert _activity(facade._install) == ["action_failed"]
 
-    monkeypatch.setattr(
-        host.processes,
-        "stop",
-        lambda _install, **_kwargs: SimpleNamespace(ok=True, message="stopped"),
-    )
-    monkeypatch.setattr(
-        host.processes, "start", lambda _install: SimpleNamespace(ok=True, message="started")
-    )
+    selected = replace(install, server_host="0.0.0.0", server_access=access_config("lan"))
+    selected.save()
+    assert monitor.target().host == selected.server_host
+
+    def record_start(current):
+        calls.append(f"start:{current.server_host}")
+        return SimpleNamespace(ok=True)
+
+    def record_stop(current, *, initiator):
+        calls.append(f"{initiator}:{current.server_host}")
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(host.processes, "stop", record_stop)
+    monkeypatch.setattr(host.processes, "start", record_start)
     facade.report_error("Startup failed: port is occupied")
+    facade.stop_server()
+    facade.start_server()
     facade.restart_server()
-    assert calls[-1] == "lock:operation"
+    assert calls[1:] == [
+        "lock:operation",
+        "tray_stop:0.0.0.0",
+        "lock:operation",
+        "start:0.0.0.0",
+        "lock:operation",
+        "tray_restart:0.0.0.0",
+        "start:0.0.0.0",
+    ]
     assert facade._status_error == ""
 
 
@@ -542,7 +563,7 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_host: str, loopback: str
 ):
     # A wildcard bind is reached over loopback, where the local access token works.
-    install = replace(_install(tmp_path, shape="server-desktop"), server_host=server_host)
+    install = _install(tmp_path, shape="server-desktop")
     executable = _desktop_interpreter(install)
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"")
@@ -565,6 +586,7 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
 
         claimed: list[Path] = []
         monkeypatch.setattr(windows_shortcuts, "claim_desktop_shortcuts", claimed.append)
+    replace(install, server_host=server_host).save()
     facade.open_desktop()
     if sys.platform == "win32":
         assert claimed == [install.root]
@@ -936,6 +958,7 @@ def test_a_browser_opens_signed_in_when_the_server_requires_login(
             "authenticated", public_url="https://vbot.example.com", trusted_proxies=["127.0.0.1"]
         ),
     )
+    install.save()
     target = SimpleNamespace(url="http://127.0.0.1:8420")
     calls: list[tuple[str, dict[str, Any]]] = []
 

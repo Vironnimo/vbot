@@ -16,6 +16,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunAdmission,
+    RunAdmissionBlockedError,
     RunExecutionOwner,
     RunExecutor,
     RunStatus,
@@ -505,7 +506,7 @@ async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
     assert manager.list_queued("coder", "session-one", project_id=None) == []
 
 
-@pytest.mark.parametrize("fault", ["validator", "preparer"])
+@pytest.mark.parametrize("fault", ["validator", "preparer", "withdrawal"])
 async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
     caplog: pytest.LogCaptureFixture,
     fault: str,
@@ -513,13 +514,19 @@ async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
     broken_work_id = "broken"
 
     def admission_validator(_address: SessionAddress, admission: RunAdmission) -> None:
-        if fault == "validator" and admission.work_id == broken_work_id and active_release.is_set():
-            raise RuntimeError("validator exploded")
+        if admission.work_id == broken_work_id and active_release.is_set():
+            if fault == "validator":
+                raise RuntimeError("admission failed")
+            if fault == "withdrawal":
+                raise RunAdmissionBlockedError("admission failed")
 
     def prepare(_executor: RunExecutor) -> RunExecutor:
-        raise RuntimeError("validator exploded")
+        raise RuntimeError("admission failed")
 
-    manager = ChatRunManager(admission_validator=admission_validator)
+    async def withdraw(_address: SessionAddress, _input_id: str) -> bool:
+        raise OSError("withdrawal failed")
+
+    manager = ChatRunManager(admission_validator=admission_validator, input_withdrawer=withdraw)
     active_release = asyncio.Event()
     address = SESSION
 
@@ -535,7 +542,9 @@ async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
         address,
         queued_execute,
         admission=RunAdmission(
-            work_id=broken_work_id, prepare_executor=prepare if fault == "preparer" else None
+            work_id=broken_work_id,
+            prepare_executor=prepare if fault == "preparer" else None,
+            accessor_input_id="input" if fault == "withdrawal" else None,
         ),
     )
     healthy_item = await manager.enqueue(address, queued_execute)
@@ -545,7 +554,8 @@ async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
         assert await active_run.wait() == "active"
         await asyncio.sleep(0)
 
-    with pytest.raises(RuntimeError, match="validator exploded"):
+    expected = RunAdmissionBlockedError if fault == "withdrawal" else RuntimeError
+    with pytest.raises(expected, match="admission failed"):
         broken_item.future.result()
     healthy_run = await asyncio.wait_for(healthy_item.future, 1)
     assert await healthy_run.wait() == "queued"

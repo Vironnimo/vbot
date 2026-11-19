@@ -293,11 +293,8 @@ def main(argv: list[str] | None = None) -> None:
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
             app = create_app(**app_kwargs)
-            protocol: dict[str, Any] = {}
-            if tls is not None:
-                from server.access.tls import sniffing_protocol_class
+            from server.access.tls import http_protocol_class
 
-                protocol["http"] = sniffing_protocol_class(tls)
             uvicorn_config = uvicorn.Config(
                 app,
                 host=server_bind["listen_host"],
@@ -307,7 +304,7 @@ def main(argv: list[str] | None = None) -> None:
                 proxy_headers=False,
                 # Keep synchronous WebSocket compression off the shared Event Loop.
                 ws_per_message_deflate=False,
-                **protocol,
+                http=http_protocol_class(tls),
                 timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_SECONDS,
                 log_level="info",
                 access_log=False,

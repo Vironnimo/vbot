@@ -718,10 +718,23 @@ async def test_side_chat_pages_its_own_messages_and_defaults_to_the_full_convers
 ) -> None:
     parent = history.session()
     parent.append(_user(1))
+    active = parent.start_run("source-run")
+    pending = ChatMessage.assistant(
+        model="test", content="", tool_calls=[ToolCall(id="call", name="read", arguments={})]
+    )
+    active.append(pending)
     side = await history.sessions.fork(parent.address, side_chat_note="Side chat")
     side.append_many([_user(2), _user(3)])
     full = await history.read(method=method, session_id=side.id)
-    assert [row["id"] for row in full["messages"]] == ["message-001", "message-002", "message-003"]
+    assert [row["id"] for row in full["messages"]] == [
+        "message-001",
+        pending.id,
+        "message-002",
+        "message-003",
+    ]
+    if method == "chat.timeline":
+        inherited = next(row for row in full["items"] if row["type"] == "assistant_run")
+        assert inherited["status"] == inherited["items"][0]["status"] == "interrupted"
 
     params = {"session_id": side.id, "include_inherited": False, "limit": 1}
     latest = await history.read(method=method, **params)

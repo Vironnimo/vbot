@@ -188,7 +188,7 @@ class AgenticProgression:
             context.request_build_started = None
             run.raise_if_cancelled()
 
-            async def persist_input(item: QueuedRunItem) -> None:
+            async def persist_input(item: QueuedRunItem) -> bool:
                 executor = item.executor
                 if not isinstance(executor, QueuedChatInput) or executor.request.content is None:
                     raise ChatError("steering requires queued Chat input")
@@ -196,12 +196,18 @@ class AgenticProgression:
                 # Pass its result directly: failed attempts have no cached text
                 # and must not retry inside the protected persistence boundary.
                 content = await self._requests.media.transcribe_user_audio(executor.request.content)
-                async with self._dependencies.sessions.write_lock(session_address):
+                async with (
+                    self._dependencies.sessions.write_lock(session_address),
+                    item.steering_commit,
+                ):
+                    if item.withdrawn:
+                        return False
                     await _finish_visible_boundary(
                         persist_steering_input(context, item, self._dependencies, content),
                         run,
                         True,
                     )
+                    return True
 
             delivered = await self._dependencies.run_manager.deliver_steering(run, persist_input)
             if awaiting_steering and not delivered:

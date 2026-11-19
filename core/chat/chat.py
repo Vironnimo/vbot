@@ -286,6 +286,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         temporary_parent_binding: TemporarySessionBinding | None = None,
         parent_agent_input: bool = False,
+        context_note: str | None = None,
     ) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
@@ -303,6 +304,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             temporary_parent_binding=temporary_parent_binding,
             parent_agent_input=parent_agent_input,
+            context_note=context_note,
         )
         return _QueuedRunExecutor(self, request)
 
