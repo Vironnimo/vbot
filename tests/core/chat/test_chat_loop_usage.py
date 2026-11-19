@@ -265,9 +265,19 @@ async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
     # Every saved Assistant snapshot counts the exact request, including a hook's
     # latest replacement and the previous Tool results, then its replayed answer.
     saved_steps = [message for message in history(runtime) if message.role == "assistant"]
-    assert len(saved_steps) == len(adapter.requests)
-    for step, sent in zip(saved_steps, adapter.requests, strict=True):
+    events = await runtime.timelines.events(last_run(runtime, "session-one"))
+    starts = [
+        event
+        for event in events
+        if event.type == "provider_request_status" and event.payload["state"] == "waiting"
+    ]
+    finishes = [event for event in events if event.type == "model_step_usage"]
+    for start, finish, step, sent in zip(
+        starts, finishes, saved_steps, adapter.requests, strict=True
+    ):
+        assert start.sequence < finish.sequence
         assert step.usage is not None
+        assert start.payload["context_usage"]["tokens"] == step.usage["input_tokens"]
         replay: JsonObject = {"role": "assistant", "content": step.content}
         if step.tool_calls:
             replay["tool_calls"] = [call.to_dict() for call in step.tool_calls]

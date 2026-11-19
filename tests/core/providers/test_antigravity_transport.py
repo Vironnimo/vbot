@@ -240,6 +240,88 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wire_input", "cache_read", "model_input", "checkpoint"),
+    [
+        (5, 10, 15, None),
+        (5, 10, 15, {"input_tokens": 3, "output_tokens": 1}),
+        (0, 0, None, {"input_tokens": 3, "output_tokens": 1}),
+        (None, 0, None, {}),
+        (0, 10, 10, {"input_tokens": 3, "output_tokens": 1}),
+    ],
+)
+async def test_stream_delivers_model_usage_before_the_native_turn_total(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    child: _Child,
+    wire_input: int | None,
+    cache_read: int,
+    model_input: int | None,
+    checkpoint: dict[str, int] | None,
+) -> None:
+    agent_usage = {"output_tokens": 4, "cache_read_tokens": cache_read}
+    if wire_input is not None:
+        agent_usage["input_tokens"] = wire_input
+
+    async def launch(*_args: str, cwd: Path, **_kwargs: Any) -> _Child:
+        child.event("init", agent="vbot", permission_mode="strict", cwd=str(cwd), model=_MODEL)
+        (cwd.parent / "invocation").touch()
+        child.event(
+            "step_update",
+            step_type="agent_response",
+            state="DONE",
+            usage=agent_usage,
+        )
+        return child
+
+    monkeypatch.setattr(transport, "create_subprocess_exec", launch)
+    async with aclosing(
+        transport.stream_turn(
+            "/agy",
+            model=_MODEL,
+            system_prompt="prompt",
+            prompt="turn",
+            tools=[],
+            temporary_files=TemporaryFileManager(tmp_path),
+        )
+    ) as stream:
+        model_counts = {"cache_read_tokens": cache_read, "output_tokens": 4}
+        if model_input is not None:
+            model_counts["input_tokens"] = model_input
+        assert await anext(stream) == {"type": "usage", "reported_cost_usd": 0.0, **model_counts}
+        if checkpoint is not None:
+            child.event(
+                "step_update",
+                step_type="checkpoint",
+                state="DONE",
+                usage=checkpoint,
+            )
+        # A turn can supply input even when the physical model step omitted it.
+        total_input = (wire_input or 0) + (3 if checkpoint is not None else 0)
+        total_output = 5 if checkpoint else 4
+        child.event(
+            "result",
+            status="SUCCESS",
+            response="",
+            usage={
+                "input_tokens": total_input,
+                "cache_read_tokens": cache_read,
+                "output_tokens": total_output,
+            },
+        )
+        if checkpoint is not None:
+            assert await anext(stream) == {
+                "type": "usage",
+                "reported_cost_usd": 0.0,
+                "input_tokens": total_input + cache_read,
+                "cache_read_tokens": cache_read,
+                "output_tokens": total_output,
+                "last_request_usage": model_counts,
+            }
+        assert [event async for event in stream] == [{"type": "finish", "reason": "stop"}]
+
+
+@pytest.mark.asyncio
 async def test_cancelling_a_turn_during_process_creation_reaps_it_and_releases_its_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

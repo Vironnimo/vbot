@@ -576,6 +576,7 @@ class AgenticProgression:
                             stream_draft=context.stream_draft,
                             output_scope=output_scope,
                             public_model=target.public_model,
+                            request_context_usage=request_context_usage,
                             provider_id=target.provider_id,
                             connection_id=target.connection_id,
                             recovery=context.recovery,

@@ -172,6 +172,7 @@ class WireRequestRunner:
         stream_draft: StreamDraft | None = None,
         *,
         public_model: str,
+        request_context_usage: JsonObject,
         provider_id: str = "",
         connection_id: str = "",
         recovery: RecoveryBudget | None = None,
@@ -244,7 +245,13 @@ class WireRequestRunner:
                     type(notice.error).__name__,
                 )
 
-        run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "waiting", "model": response_model})
+        # Publish the guard's projection while the Provider is working. Active
+        # History reads and the live stream must describe the same request.
+        run.terminal_payload_extras["context_usage"] = request_context_usage
+        run.emit(
+            PROVIDER_REQUEST_STATUS_EVENT,
+            {"state": "waiting", "model": response_model, "context_usage": request_context_usage},
+        )
         budget = recovery if recovery is not None else RecoveryBudget()
         use_streaming = True
         try:

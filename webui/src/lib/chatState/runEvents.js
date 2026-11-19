@@ -8,7 +8,7 @@ import {
   CHAT_STATUS_FAILED,
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_INTERRUPTED,
-  nextContextUsage,
+  applyRunContextUsage,
 } from './sessionState.js';
 import { t } from '../i18n.js';
 import { qualifyAgentAddress } from '../agentAddress.js';
@@ -82,16 +82,12 @@ export function appendRunEvent(sessionState, event) {
   retainedKeys.add(eventKey);
   runEventKeyIndexes.delete(previousRunEvents);
   runEventKeyIndexes.set(sessionState.runEvents, retainedKeys);
-  if (
-    normalizedEvent.payload?.context_usage &&
-    (!sessionState.currentRun ||
-      sessionState.currentRun.runId === normalizedEvent.run_id)
-  ) {
-    sessionState.contextUsage = nextContextUsage(
-      sessionState.contextUsage,
-      normalizedEvent.payload.context_usage,
-    );
-  }
+  applyRunContextUsage(
+    sessionState,
+    normalizedEvent.run_id,
+    normalizedEvent.sequence,
+    normalizedEvent.payload,
+  );
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
   }
@@ -240,6 +236,7 @@ function beginRunFromEvent(sessionState, event) {
     runId: event.run_id,
     controls: isSameRun ? currentRun.controls : {},
     controlsSequence: isSameRun ? currentRun.controlsSequence : 0,
+    contextUsageSequence: isSameRun ? currentRun.contextUsageSequence : 0,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
     startedAt:
