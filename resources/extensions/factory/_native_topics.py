@@ -391,7 +391,8 @@ class NativeTopicStore(NativeRecordStore):
                     COALESCE(json_extract(body_json,'$.evidence'),'') FROM native_results
                   WHERE task_id=?
                 )
-                SELECT msg.*, COALESCE(json_extract(m.body_json,'$.name'),
+                SELECT msg.id, msg.created_at, msg.author, msg.text, msg.evidence,
+                    COALESCE(json_extract(m.body_json,'$.name'),
                     json_extract(m.body_json,'$.role'),m.agent_id) AS author_name
                 FROM messages msg LEFT JOIN native_members m ON m.id=substr(msg.author,8)
                 WHERE msg.text IS NOT NULL AND (?='' OR (msg.created_at,msg.id)<(?,?))

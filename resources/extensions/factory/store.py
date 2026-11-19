@@ -741,7 +741,8 @@ class FactoryStore:
                   JOIN native_posts p ON p.topic_id=t.id AND p.author='member:'||m.id
                   WHERE ? AND f.project_id=? AND trim(p.text)!=''
                 )
-                SELECT * FROM work WHERE instr(lower(title),lower(?))>0
+                SELECT id, title, state, kind, updated_at, attention, author
+                FROM work WHERE instr(lower(title),lower(?))>0
                     AND (? IS NULL OR (attention, updated_at, id) < (?,?,?))
                 ORDER BY attention DESC, updated_at DESC, id DESC LIMIT ?
                 """,

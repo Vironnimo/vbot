@@ -355,7 +355,10 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
         """Creation receipts still needing a membership commit or its acknowledgement."""
 
         def read(connection: sqlite3.Connection) -> list[Json]:
-            query = "SELECT * FROM native_identity_reservations WHERE state != 'complete'"
+            query = (
+                "SELECT request_id, agent_id, state, payload_json, detail_json, created_at, "
+                "updated_at FROM native_identity_reservations WHERE state != 'complete'"
+            )
             if agent_id is not None:
                 query += " AND agent_id = ?"
             return [
