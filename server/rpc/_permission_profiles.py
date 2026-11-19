@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from core.permissions import (
@@ -18,7 +19,6 @@ from server.access import ACCESS_DENIED, current_principal
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SETTINGS
 from server.rpc._mutations import (
     MutationHandler,
-    require_mutation_available,
     serialized_mutation,
     serialized_read,
     state_read_lock,
@@ -43,35 +43,30 @@ def _require_operator() -> str:
     return principal.actor
 
 
-def guard_profile_assignment(handler: MutationHandler) -> MutationHandler:
+def guard_profile_assignment(
+    handler: MutationHandler, *, team_override: bool = False
+) -> MutationHandler:
     async def guarded(state: Any, params: JsonObject) -> JsonObject:
-        if "expected_profile_rules" in params:
+        reviewed = "expected_profile_rules" in params
+        if team_override:
+            selects_profile = params.get("field") == "permission_profile"
+            changes_permissions = params.get("field") in ("permission_profile", "permission_rules")
+        else:
+            selects_profile = "permission_profile" in params
+            changes_permissions = selects_profile or "permission_rules" in params
+        if reviewed or selects_profile:
             _require_operator()
-            if not ({"permission_profile", "permission_rules"} & params.keys()) and params.get(
-                "field"
-            ) not in ("permission_profile", "permission_rules"):
-                raise RpcError(
-                    RPC_ERROR_INVALID_REQUEST, "expected_profile_rules needs a permission change."
-                )
-        if params.get("field") == "permission_profile":
-            _require_operator()
-            async with _agent_reference_lock(state):
-                return await handler(state, params)
-        if "permission_profile" in params:
-            _require_operator()
-        return await handler(state, params)
-
-    return guarded
-
-
-def guard_reviewed_rules(handler: MutationHandler) -> MutationHandler:
-    """Keep operator Settings writes out between a reviewed comparison and its Agent write."""
-
-    async def guarded(state: Any, params: JsonObject) -> JsonObject:
-        if "expected_profile_rules" in params:
-            async with state_read_lock(state, _SETTINGS_LOCK):
-                return await handler(state, params)
-        return await handler(state, params)
+        if reviewed and not changes_permissions:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "expected_profile_rules needs a permission change."
+            )
+        settings = state_read_lock(state, _SETTINGS_LOCK) if reviewed else nullcontext()
+        reference = (
+            _agent_reference_lock(state) if team_override and selects_profile else nullcontext()
+        )
+        # Settings publication callbacks may themselves need an Agent reference.
+        async with settings, reference:
+            return await handler(state, params)
 
     return guarded
 
@@ -203,12 +198,11 @@ def _operator_mutation(*, delete: bool) -> MutationHandler:
         async def change(state: Any, params: JsonObject) -> JsonObject:
             return await _change_profile(state, params, delete=delete, actor=actor)
 
-        serialized = serialized_mutation(change, lock_attribute=_SETTINGS_LOCK)
-        if delete:
-            require_mutation_available(state, _SETTINGS_LOCK)
-            async with _agent_reference_lock(state):
-                return await serialized(state, params)
-        return await serialized(state, params)
+        return await serialized_mutation(
+            change,
+            lock_attribute=_SETTINGS_LOCK,
+            admission_lock=_agent_reference_lock if delete else None,
+        )(state, params)
 
     return guarded
 

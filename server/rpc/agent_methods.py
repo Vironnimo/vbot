@@ -53,7 +53,6 @@ from server.events import (
 from server.rpc._permission_profiles import (
     check_reviewed_rules,
     guard_profile_assignment,
-    guard_reviewed_rules,
     inline_profile_precondition,
     validate_profile_selection,
 )
@@ -339,7 +338,6 @@ async def _run_agent_operation[Result](
 
 
 @_guard_agent_lifecycle
-@guard_reviewed_rules
 async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     # Agent and Session files are written on a worker; publication stays on the loop.
     response = await _run_agent_operation(state, _create_agent_record, state, params)
@@ -351,7 +349,6 @@ async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
 
 
 @_guard_agent_lifecycle
-@guard_reviewed_rules
 async def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     response, changed_fields = await _run_agent_operation(
         state, _update_agent_record, state, params, profile=params

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, override
 
 import pytest
 
@@ -679,7 +679,62 @@ async def test_reviewed_agent_change_requires_the_same_effective_rules(tmp_path:
         refused = await rpc_error(state, "agent.update", **clear, expected_profile_rules=inherited)
         assert refused["code"] == "settings_conflict"
         assert state.runtime.agents.get_raw("new").permission_profile == "Shared"
+        # An unknown Agent parameter with a Project field name must reach the Agent validator.
+        async with asyncio.timeout(2):
+            malformed = await rpc_error(state, "agent.update", **clear, field="permission_profile")
+        assert malformed["code"] == "invalid_request"
         cleared = await rpc_result(
             state, "agent.update", **clear, expected_profile_rules={"read": "work_area"}
         )
         assert cleared["config"]["permission_profile"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        (
+            "agent.update",
+            {"id": "coder", "permission_profile": "full_access", "expected_profile_rules": None},
+        ),
+        ("permissions.delete_profile", {"name": "Shared"}),
+        ("channel.create", {"id": "notify", "platform": "telegram", "agent_id": "coder"}),
+    ],
+)
+async def test_settings_waiter_leaves_agent_references_available_for_callbacks(
+    tmp_path: Path, method: str, params: JsonObject
+) -> None:
+    waiting = asyncio.Event()
+
+    class PublicationLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if self.locked():
+                waiting.set()
+            return await super().acquire()
+
+    state = _state(tmp_path, {})
+    state.agent_delete_lock = asyncio.Lock()
+    state._settings_mutation_lock = PublicationLock()
+    state.runtime.models = _NoModels()
+    state.runtime.agents.create("coder")
+
+    async def external_request() -> JsonObject:
+        with bound_principal(HOST):
+            return await rpc_result(state, method, **params)
+
+    async with state._settings_mutation_lock:
+        request = asyncio.create_task(external_request())
+        async with asyncio.timeout(2):
+            await waiting.wait()
+        references_available = not state.agent_delete_lock.locked()
+        if references_available:
+            # An Extension callback can update an Agent during Settings publication.
+            await rpc_result(state, "agent.update", id="coder", name="from callback")
+        request.cancel()
+        await asyncio.sleep(0)
+
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert references_available
+    assert state.runtime.agents.get_raw("coder").permission_profile is None

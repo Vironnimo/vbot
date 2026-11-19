@@ -72,7 +72,6 @@ from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc._permission_profiles import (
     check_reviewed_rules,
     guard_profile_assignment,
-    guard_reviewed_rules,
     inline_profile_precondition,
     validate_profile_selection,
 )
@@ -1037,10 +1036,10 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.show": _show_project,
         "project.set": _serialized(_set_project),
         "project.set_override": guard_profile_assignment(
-            guard_reviewed_rules(_serialized(_set_override))
+            _serialized(_set_override), team_override=True
         ),
         "project.clear_override": guard_profile_assignment(
-            guard_reviewed_rules(_serialized(_clear_override))
+            _serialized(_clear_override), team_override=True
         ),
         "project.rm": _remove_project,
         "project.reorder": _serialized(_reorder_projects),
