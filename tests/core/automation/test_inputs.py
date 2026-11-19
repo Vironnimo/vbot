@@ -12,6 +12,7 @@ import pytest
 
 from core.automation.inputs import DirectInputError, DirectInputNotFoundError, DirectInputService
 from core.runs import ChatRunManager
+from core.secrets import SecretStoreError
 from core.sessions.errors import AccessorInputConflictError, SessionNotFoundError
 from tests.core.automation.cron_test_support import secret_store
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
@@ -216,7 +217,7 @@ async def test_receipts_are_scoped_retryable_and_survive_a_service_restart(tmp_p
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_overrides", [False, True])
 async def test_configuration_preserves_future_fields_and_revokes_secrets(
-    tmp_path, missing_overrides
+    tmp_path, missing_overrides, monkeypatch
 ):
     async with harness(tmp_path) as (runtime, inputs, store, loop):
         row = await inputs.configure(None, {"name": "Tasks", "agent_id": "coder"})
@@ -248,6 +249,16 @@ async def test_configuration_preserves_future_fields_and_revokes_secrets(
         assert saved["inputs"][0].get("run_overrides", {}) == {}
         assert not await inputs.authenticate(identity, f"Bearer {replacement}", submitting=True)
         assert await inputs.authenticate(identity, f"Bearer {replacement}", submitting=False)
+
+        def unavailable(*_args):
+            raise SecretStoreError("credentials unavailable")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(store, "entry", unavailable)
+            for candidate in (identity, "unknown"):
+                assert not await inputs.authenticate(
+                    candidate, f"Bearer {replacement}", submitting=False
+                )
         with pytest.raises(DirectInputError):
             await inputs.configure(identity, {"run_overrides": {"permission_ceiling": {}}})
         await inputs.delete(identity)
