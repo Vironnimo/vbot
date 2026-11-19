@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
@@ -191,9 +192,11 @@ class AntigravityNative:
         *,
         temporary_files: TemporaryFileManager | None,
         on_auth_error: Callable[[str, str], None] | None = None,
+        on_usage: Callable[[int, tuple[UsageWindow, ...]], None] | None = None,
     ) -> None:
         self.temporary_files = temporary_files
         self._on_auth_error = on_auth_error
+        self._on_usage = on_usage
         self._closed = False
         self._capacity = asyncio.Semaphore(16)
         self._leases: set[asyncio.Future[None]] = set()
@@ -292,11 +295,15 @@ class AntigravityNative:
         async with self._lease():
             try:
                 executable = await _PROBES.run(_executable)
-                await _PROBES.run(_windows, executable)
+                started_at_ns = time.monotonic_ns()
+                windows = await _PROBES.run(_windows, executable)
             except OSError as exc:
                 raise _LoginError(
                     "unavailable", "Cannot start the Antigravity CLI on the vBot server."
                 ) from exc
+            self._check_open()
+            if self._on_usage is not None:
+                self._on_usage(started_at_ns, windows)
             yield executable
 
     def abort(self) -> None:
