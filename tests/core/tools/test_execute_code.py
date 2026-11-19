@@ -13,7 +13,7 @@ import pytest
 
 import core.tools.execute_code as execute_code
 import core.tools.shell_environment as shell_environment
-from core.tools import ToolContext, ToolRegistry, _code_process, tool_success
+from core.tools import ToolContext, ToolRegistry, _python_process, tool_success
 from core.tools._code_process import CodeExecutionResult
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
@@ -184,7 +184,7 @@ async def test_python_launch_uses_existing_command_rules_and_confined_environmen
     if packaged:
         runtime = tmp_path / "runtime"
         monkeypatch.setattr(
-            _code_process,
+            _python_process,
             "sys",
             SimpleNamespace(platform="win32", executable=str(runtime / "vBot.Server.exe")),
         )
