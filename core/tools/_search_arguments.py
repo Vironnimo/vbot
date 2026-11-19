@@ -252,7 +252,9 @@ def _values(value: Any) -> list[str] | None:
     return [str(item) for item in items]
 
 
-def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
+def _translate_flag_fields(
+    arguments: dict[str, Any], *, preserve_pattern_list: bool
+) -> dict[str, Any]:
     """Turn flag-shaped fields from other search interfaces into args.
 
     A field is translated only when its meaning is exact. A flag field whose
@@ -337,7 +339,11 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
             continue
         del result[key]
     pattern = result.get("pattern")
-    if isinstance(pattern, list) and all(isinstance(item, str) for item in pattern):
+    if (
+        not preserve_pattern_list
+        and isinstance(pattern, list)
+        and all(isinstance(item, str) for item in pattern)
+    ):
         # Several patterns match any of them, like repeated -e.
         tokens.extend(token for item in pattern[1:] for token in ("-e", item))
         if pattern:
@@ -375,7 +381,7 @@ def _repair_contract():
     )
 
 
-def normalize_search_arguments(arguments: Any) -> Any:
+def normalize_search_arguments(arguments: Any, *, preserve_pattern_list: bool = False) -> Any:
     normalized = normalize_call_arguments(
         _repair_contract(),
         arguments,
@@ -390,7 +396,7 @@ def normalize_search_arguments(arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
-    return _translate_flag_fields(normalized)
+    return _translate_flag_fields(normalized, preserve_pattern_list=preserve_pattern_list)
 
 
 def _strings(arguments: JsonObject, name: str) -> list[str]:

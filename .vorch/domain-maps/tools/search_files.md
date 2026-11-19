@@ -439,6 +439,10 @@ A content search runs in two phases:
    effective `--max-count` is the smaller of the requested per-file cap and the
    page requirement. Matching events beyond the counted cap are rendered as
    trailing context when they fall inside its window.
+   If the counted multiline matches in a file exceed that cap, vBot streams
+   that file's complete JSON events and closes the child after the page and
+   its context. This avoids a ripgrep JSON printer failure when the cap falls
+   between two multiline matches sharing a line.
 
 Neither phase runs with `--debug`: its skip reports name every file a glob or
 file type leaves out, which made such searches three times slower (probe on this
@@ -601,14 +605,17 @@ Content lines:
   characters). `test_content_results_equal_ripgreps_across_pages` compares the
   output with `rg --heading`.
 - Paths are relative to the cwd when possible and absolute otherwise.
-  Directory entries end in `/`.
+  Directory entries end in `/`, inside any quotes. A content heading such as
+  `./2024-notes.md` gains `./` when its name resembles a numbered line or `--`.
 - Names with control characters are JSON-quoted so they can be passed back.
 - Line numbers equal `read`'s, except in files with lone-CR line endings, which
-  ripgrep does not count. Those CRs are shown as `\r` within the physical
+  ripgrep does not count. Those CRs are shown as `␍` within the physical
   LF line, the whole line gets one bounded excerpt, and a note explains the
   difference from `read`.
-- Lines longer than 1000 characters become excerpts around the match, with
-  `[N characters omitted]` markers.
+- Lines longer than 1000 characters share that excerpt budget across the
+  page's matches on the line. Long matches show both ends. Omission markers
+  count the skipped characters and report additional matches left out.
+  Multiline `-o` fragments number each physical line and page as one match.
 
 Paging:
 
@@ -645,9 +652,11 @@ Paging:
   paths. The glob-shaped pattern notes repeated their advice on 19 calls and
   now state only the repair.
 
-The display (`_display_details`) shows the user the `results` text, an info
-notice about the next page and each warning
-(`test_the_user_sees_the_results_further_pages_and_warnings`).
+The Tool row shows the patterns, scope and supplied options from the normalized
+arguments. Its count covers the whole search, including pages beyond the offset
+cap, in files, directories, lines or matches. An incomplete search marks that
+count as a lower bound. The details show the summary (including continuation),
+interpretation notes, ignored paths, result text and warnings.
 
 ## Bounds, Cancellation and Errors
 
@@ -828,7 +837,8 @@ blank placeholders, so no sentence has to warn about them.
 | `Counting stopped to leave time to return matching lines; totals are partial.` / `Narrow path or glob to search the rest.` | Keeps an interrupted count from consuming the content page's budget and reports its incomplete scope (review 2026-11-09, F3). |
 | `Found ... but no result lines could be returned.` / `Narrow path or glob and retry.` | Replaces impossible `1-0` ranges with the actual page state and a recovery action (F3). |
 | `Nothing was searched. --null-data uses NUL-separated records ...` / `Remove it; use -U ... or -a ...` | Refuses a record format the renderer cannot represent, with supported alternatives, instead of a false negative (F4). |
-| `<file> contains lone CR line endings, shown as \r; line numbers count LF boundaries and can differ from read.` | Explains one bounded physical-line excerpt instead of marking thousands of CR pieces as separate matches (F6). |
+| `<file> contains lone CR line endings, shown as ␍. Line numbers count LF boundaries and can differ from read.` | Explains the physical-line numbers and keeps a CR distinct from literal backslash-r text (F6). |
+| `[N matches omitted]` | A bounded excerpt with many widely separated matches otherwise implies the visible occurrences are all the line contains (F4). |
 | `The written glob selected no files, so its separate wildcard filters were read as glob [...]` | Reports a comma/space-list repair only after preserving the original literal selection (F7). |
 | `No results were returned. The search engine returned unreadable data.` / `Retry with a narrower path or glob; if this repeats, repair the vBot installation.` | Separates internal failures from bad arguments and suppresses raw decoder messages (F8). |
 | `Nothing was searched. Invalid path spelling: ...` / `Send a local file path, a file: URL, or a glob in glob.` | A Windows invalid-name error needs a different spelling, not an access retry (F10). |

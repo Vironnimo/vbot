@@ -469,7 +469,19 @@ describe('Tool row presentation', () => {
       'search pattern arrays',
       'search_files',
       { action: 'content', patterns: ['alpha', 'beta'] },
-      'alpha, beta',
+      '["alpha", "beta"]',
+    ],
+    [
+      'search aliases and flag fields',
+      'search_files',
+      {
+        query: ['foo', 'bar baz', ' '],
+        include: '*.md',
+        context: 2,
+        argv: ['-w', '-e', ''],
+        '-i': true,
+      },
+      '["foo", "bar baz", " "] · *.md · context=2 · -w -e "" · -i',
     ],
     [
       'the edit path without replacement text',
@@ -716,6 +728,8 @@ describe('Tool row presentation', () => {
           { kind: 'count', value: 10, unit: 'matches', at_least: true },
           { kind: 'count', value: 3, unit: 'edits', at_least: false },
           { kind: 'count', value: 2, unit: 'files', at_least: false },
+          { kind: 'count', value: 1, unit: 'directories', at_least: false },
+          { kind: 'count', value: 2, unit: 'lines', at_least: true },
           { kind: 'count', value: 1, unit: 'failures', at_least: false },
         ],
       },
@@ -728,6 +742,8 @@ describe('Tool row presentation', () => {
       t('chat.toolFact.matches', { count: '10+' }),
       t('chat.toolFact.edits', { count: '3' }),
       t('chat.toolFact.files', { count: '2' }),
+      t('chat.toolFact.directory', { count: '1' }),
+      t('chat.toolFact.lineCount', { count: '2+' }),
       t('chat.toolFact.failure', { count: '1' }),
     ]);
   });

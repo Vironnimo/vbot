@@ -580,7 +580,7 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
         )
         if "next_offset" not in data:
             break
-        assert "stopped at the 50 KB output limit" in data["summary"]
+        assert "stopped at the 50 KiB output limit" in data["summary"]
         offset = data["next_offset"]
     assert seen == [str(number) for number in range(1, 151)] + ["61"]
     # A result left without its context, or itself trimmed, says so: paging cannot show the rest.
@@ -588,11 +588,12 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
     assert alone["content"] == "b\n61:needle in b"
     assert "context lines were left out" in alone["summary"]
     _write(tmp_path, {"c": "begin\n" + ("z" * 900 + "\n") * 100 + "end\n"})
-    cut = search(tmp_path, pattern="begin[\\s\\S]*?end", path="c", args=["-U"])
-    shown = _results(cut["content"].splitlines())
-    assert 1 < len(shown) < 102 and "next_offset" not in cut
-    assert "spans lines 1-102" in cut["summary"]
-    assert f"from line {len(shown) + 1} " in cut["summary"]
+    for flag in ("-U", "-Uo"):
+        cut = search(tmp_path, pattern="begin[\\s\\S]*?end", path="c", args=[flag])
+        shown = _results(cut["content"].splitlines())
+        assert 1 < len(shown) < 102 and "next_offset" not in cut
+        assert "spans lines 1-102" in cut["summary"]
+        assert f"from line {len(shown) + 1} " in cut["summary"]
 
 
 def test_multiline_matches_count_and_page_as_whole_matches(tmp_path: Path) -> None:
@@ -608,6 +609,19 @@ def test_multiline_matches_count_and_page_as_whole_matches(tmp_path: Path) -> No
     assert _results(_all_pages(tmp_path, arguments, limit=1)) == _results(
         whole["content"].split("\n")
     )
+    _write(tmp_path, {"2024-notes.md": b"prefix start\r\nmiddle\r\nend tail start\r\nend\n"})
+    fragments = _all_pages(
+        tmp_path, {**arguments, "path": "2024-notes.md", "args": ["-Uo", "--crlf"]}, limit=1
+    )
+    assert fragments == [
+        "./2024-notes.md",
+        "1:start",
+        "2:middle",
+        "3:end",
+        "./2024-notes.md",
+        "3:start",
+        "4:end",
+    ]
     # Matches that share a line are separate results; the line appears once per page.
     _write(tmp_path, {"b": "a a\nb\na\n"})
     shared = search(tmp_path, pattern="a", path="b", args=["-U"])
@@ -691,6 +705,24 @@ def test_long_lines_show_the_match_in_an_excerpt(tmp_path: Path, separator: str)
     assert content.startswith(f"a\n1:[{100000 * (1 + len(separator)) - 200} characters omitted] ")
     assert content.endswith(" [99206 characters omitted]")
     assert bool(data.get("note")) == bool(separator)
+
+
+def test_excerpts_cover_separated_matches_and_multiline_endpoints(tmp_path: Path) -> None:
+    padding = "ä" * 2500
+    _write(tmp_path, {"a": f"start\n{padding}FIRST{padding}LAST\r\\r\r"})
+    content = search(tmp_path, pattern="FIRST|LAST")["content"].splitlines()
+    assert len(content) == 2 and "FIRST" in content[1] and "LAST␍\\r␍" in content[1]
+    span = search(tmp_path, pattern=r"start\n.*FIRST|LAST", args=["-U"])
+    assert "FIRST" in span["content"].splitlines()[2] and "LAST" in span["content"].splitlines()[2]
+    last = search(tmp_path, pattern=r"start\n.*FIRST|LAST", args=["-U"], offset=1, limit=1)
+    assert last["content"].splitlines()[1].startswith("2:") and "LAST" in last["content"]
+    _write(tmp_path, {"b": "x" * 1300 + "é" * 50 + "y" * 3000 + "TARGET" + "z" * 1000})
+    byte_matches = search(tmp_path, path="b", pattern=r"(?-u:\xa9)|TARGET")
+    assert "TARGET" in byte_matches["content"]
+    tokens = [f"hit{index:02}" for index in range(15)]
+    _write(tmp_path, {"c": padding.join(tokens)})
+    many = search(tmp_path, path="c", pattern=r"hit\d+")
+    assert all(token in many["content"] for token in tokens)
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
@@ -803,6 +835,12 @@ def test_unusual_file_names_are_labelled_so_they_can_be_passed_back(tmp_path: Pa
     _write(tmp_path, {'"quoted"': "needle\n", "back\\slash": "needle\n", "new\nline": "needle\n"})
     content = search(tmp_path, pattern="needle", output="files")["content"].splitlines()
     assert sorted(content) == sorted(['"quoted"', "back\\slash", '"new\\nline"'])
+    (tmp_path / "a\nb").mkdir()
+    assert search(tmp_path, args=["--dirs"])["content"] == '"a\\nb/"'
+    _write(tmp_path, {"a\nb/file": "needle"})
+    assert search(tmp_path, args=["--files", "-Fx", "-e", "a\nb/file"])["content"] == '"a\\nb/file"'
+    _write(tmp_path, {".ignore": "tab*/\n", "tab\tdir/file": ""})
+    assert '"tab\\tdir/"' in search(tmp_path)["skipped"]
 
 
 @pytest.mark.asyncio
@@ -862,6 +900,21 @@ def test_schema_display_and_registry_repairs(project: Path) -> None:
         {"args": ["-e", "alpha", "-e", "beta", "src", "tests"]}
     )
     assert [part["value"] for part in display["primary"]] == ["-e alpha -e beta src tests"]
+    args = {
+        "query": ["foo", "bar baz", " "],
+        "path": "src",
+        "include": "*.py",
+        "output_mode": "files",
+        "context_lines": 2,
+        "options": ["-l", "-e", ""],
+        "-i": True,
+    }
+    row = registry.display_for_call("search_files", args)
+    assert (
+        row["summary"]
+        == '["foo", "bar baz", " "] · src · *.py · output=files · context=2 · -i -l -e ""'
+    )
+    assert row["summary"] == " · ".join(part["value"] for part in row["primary"])
     result = asyncio.run(dispatch(project, {"argv": ["-n", "needle", "src/pkg"], "limit": "1"}))
     assert result["data"]["content"] == "src/pkg/mod.py\n1:x = 'needle'"
 
@@ -885,20 +938,19 @@ async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Pa
     arguments = {"pattern": "needle", "path": ["missing", "src"], "limit": 1}
     registry = search_registry()
 
-    result = await registry.dispatch(context(tmp_path), arguments)
-    details = registry.display_for_call("search_files", arguments, result=result)["details"]
+    ctx = context(tmp_path)
+    result = await registry.dispatch(ctx, arguments)
+    row = registry.display_for_call("search_files", arguments, context=ctx, result=result)
+    details = row["details"]
+    assert row["facts"] == [{"kind": "count", "unit": "lines", "value": 2, "at_least": False}]
 
     # The content is read from the result, not copied; paging fields stay raw.
     assert details == [
+        {"type": "notice", "level": "info", "text": result["data"]["summary"]},
         {
             "type": "text",
             "label": "results",
             "source": {"from": "result", "path": ["data", "content"]},
-        },
-        {
-            "type": "notice",
-            "level": "info",
-            "text": "More results follow; the next page starts at result 2.",
         },
         {
             "type": "notice",
@@ -907,6 +959,26 @@ async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Pa
             f"{tmp_path.as_posix()}).",
         },
     ]
+    _write(tmp_path, {".ignore": "ignored/\n", "ignored/a.py": "needle"})
+    cases: list[tuple[dict[str, Any], str, int]] = [
+        ({"query": "absent"}, "lines", 0),
+        ({"pattern": "*.py", "offset": 10}, "files", 1),
+        ({"args": ["--dirs"]}, "directories", 1),
+        ({"pattern": "e", "path": "src", "args": ["--count-matches"]}, "matches", 6),
+    ]
+    for arguments, unit, total in cases:
+        ctx = context(tmp_path)
+        result = await registry.dispatch(ctx, arguments)
+        row = registry.display_for_call("search_files", arguments, context=ctx, result=result)
+        data = result["data"]
+        assert row["facts"] == [{"kind": "count", "unit": unit, "value": total, "at_least": False}]
+        if arguments.get("offset"):
+            assert data["note"] and "ignored/" in data["skipped"]
+        if not total:
+            assert "content" not in data and "ignored/" in data["skipped"]
+        assert [item["text"] for item in row["details"] if item["type"] == "notice"] == [
+            data[key] for key in ("summary", "note", "skipped") if key in data
+        ]
 
 
 _DENYING = {
