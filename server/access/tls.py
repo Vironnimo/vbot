@@ -23,7 +23,7 @@ import asyncio
 import os
 import ssl
 from asyncio.sslproto import SSLProtocol
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 
 from core.access.config import AccessConfigError, load_tls_context
 from core.utils.log_conditions import LoggedConditions
@@ -35,6 +35,7 @@ _LOGGER = get_logger("server.access")
 _TLS_HANDSHAKE_RECORD = 0x16
 #: A connection that sends nothing for this long is closed before it is classified.
 FIRST_BYTE_TIMEOUT_SECONDS = 10.0
+ABORT_HTTP_CONNECTION = "vbot.abort_http_connection"
 TLS_HANDSHAKE_TIMEOUT_SECONDS = 30
 CERTIFICATE_CHECK_INTERVAL_SECONDS = 60.0
 
@@ -100,16 +101,30 @@ class TlsContextHolder:
         return (cert.st_mtime_ns, cert.st_size), (key.st_mtime_ns, key.st_size)
 
 
-def sniffing_protocol_class(holder: TlsContextHolder) -> type[asyncio.Protocol]:
-    """The uvicorn ``http`` protocol class for a direct-TLS listener."""
-    from uvicorn.config import HTTP_PROTOCOLS
-    from uvicorn.importer import import_from_string
+def http_protocol_class(holder: TlsContextHolder | None) -> type[asyncio.Protocol]:
+    """Select uvicorn's protocol and expose this connection's abort to Device revocation."""
+    if TYPE_CHECKING:
+        from uvicorn.protocols.http.h11_impl import H11Protocol as HttpProtocol
+    else:
+        from uvicorn.protocols.http.auto import AutoHTTPProtocol as HttpProtocol
 
-    inner_class = import_from_string(HTTP_PROTOCOLS["auto"])
+    class _DeviceHttpProtocol(HttpProtocol):
+        @override
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            assert isinstance(transport, asyncio.Transport)
+            super().connection_made(transport)
+            # Uvicorn shares lifespan state across connections and copies this
+            # dict per request. Only requests on this transport may abort it.
+            self.app_state = {**self.app_state, ABORT_HTTP_CONNECTION: transport.abort}
+
+    if holder is None:
+        return _DeviceHttpProtocol
+
+    tls = holder
 
     class _BoundSniffingProtocol(TlsSniffingProtocol):
-        _holder = holder
-        _inner_class = inner_class
+        _holder = tls
+        _inner_class = _DeviceHttpProtocol
 
     return _BoundSniffingProtocol
 
