@@ -355,14 +355,15 @@ def test_cancelled_history_keeps_programmatic_calls_without_parent_declaration()
 @pytest.mark.parametrize(
     "status,unfinished",
     [
+        (None, "interrupted"),
         ("completed", "interrupted"),
         ("interrupted", "interrupted"),
         ("failed", "interrupted"),
         ("cancelled", "cancelled"),
     ],
 )
-def test_durable_summary_settles_pending_calls_without_changing_completed_results(
-    status: str, unfinished: str
+def test_history_settles_pending_calls_without_changing_completed_results(
+    status: str | None, unfinished: str
 ) -> None:
     messages = [
         message(
@@ -374,11 +375,14 @@ def test_durable_summary_settles_pending_calls_without_changing_completed_result
             ],
         ),
         message("read-result", "tool", tool_call_id="read", name="read", content='{"ok":true}'),
-        message("summary", "run_summary", run_id="run", status=status, iteration_count=3),
     ]
+    if status is not None:
+        messages.append(
+            message("summary", "run_summary", run_id="run", status=status, iteration_count=3)
+        )
     block = run_block(history_timeline(messages))
-    assert block["status"] == status
-    assert block["iterationCount"] == 3
+    assert block["status"] == (status or "interrupted")
+    assert block["iterationCount"] == (3 if status else 0)
     assert [(item["toolCallId"], item["status"]) for item in block["items"]] == [
         ("read", "success"),
         ("child", unfinished),
