@@ -34,6 +34,7 @@ from core.runtime._setup import setup_agent
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     SESSION_ID_PATTERN,
+    SIDE_CHAT_LAUNCH_PREFIX,
     SessionAddress,
     SessionListCursor,
     SessionListFilters,
@@ -960,8 +961,7 @@ async def _create_side_chat(state: Any, params: JsonObject) -> JsonObject:
         child = await create_side_chat(
             state.runtime.chat_sessions,
             source,
-            # Spaces keep this reservation separate from chat.send's opaque input IDs.
-            request_id=f"side chat: {launch_id}",
+            request_id=f"{SIDE_CHAT_LAUNCH_PREFIX}{launch_id}",
             request_hash=hashlib.sha256(source_key.encode("utf-8")).hexdigest(),
             expected_source_generation_id=generation,
         )

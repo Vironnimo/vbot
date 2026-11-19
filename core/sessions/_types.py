@@ -159,6 +159,8 @@ SESSION_RUN_KINDS_META_KEY = "run_kinds"
 SESSION_EPHEMERAL_META_KEY = "ephemeral"
 # Marks a persistent same-scope fork created for a side conversation.
 SESSION_SIDE_CHAT_META_KEY = "side_chat"
+# Spaces distinguish a payload-free popup launch from every Accessor input id.
+SIDE_CHAT_LAUNCH_PREFIX = "side chat: "
 EPHEMERAL_SESSION_LIFETIME = timedelta(hours=24)
 # The Session's working Project: its address Project, or for a Session of an
 # Identity Agent the Project chosen when it was created (absent: the Workspace).

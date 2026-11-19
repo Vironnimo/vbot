@@ -27,6 +27,7 @@ from core.sessions._types import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_SIDE_CHAT_META_KEY,
     SESSION_TITLE_KEY,
+    SIDE_CHAT_LAUNCH_PREFIX,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
     JsonObject,
@@ -496,7 +497,12 @@ def fork(
             (input_id,),
         ).fetchone()
         if prior is not None:
-            if prior["request_hash"] != request_hash:
+            # A popup launch only forks a particular source generation. An inline
+            # /btw question additionally binds the content of its Accessor input.
+            same_launch = (
+                input_id.startswith(SIDE_CHAT_LAUNCH_PREFIX) and prior["source_key"] == source_key
+            )
+            if prior["request_hash"] != request_hash and not same_launch:
                 raise AccessorInputConflictError(
                     "Accessor input id conflicts with its original request"
                 )

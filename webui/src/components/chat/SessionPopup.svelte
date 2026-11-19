@@ -17,7 +17,9 @@
   let closed = false;
   let sending = false;
   let secretForm = $state(false);
-  const address = $derived(popup.address ?? popup.launch?.admitted);
+  const address = $derived(
+    popup.address ?? (popup.launch?.admitted ? popup.launch.address : null),
+  );
   const title = $derived(popup.title || t('navigation.chat'));
   const draftKey = $derived(popup.launch && `~popup:${popup.launch.id}`);
   const listDraftFiles = $derived.by(() => {

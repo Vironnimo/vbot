@@ -81,6 +81,14 @@ async def test_side_chat_launch_retries_one_fork_and_binds_it_to_its_source(
     state = make_state(tmp_path, StubAdapter())
     sessions = state.runtime.chat_sessions
     assert await launch() == first
+    # This fixture uses a stub Agent store. Apply the Session side of the rename.
+    await rpc_result(state, "agent.rename", id="coder", new_id="writer")
+    sessions.retarget_identity_agent_sessions("coder", "writer")
+    params["agent_id"] = "writer"
+    assert await launch() == {**first, "agent_id": "writer"}
+    await rpc_result(state, "agent.rename", id="writer", new_id="coder")
+    sessions.retarget_identity_agent_sessions("writer", "coder")
+    params["agent_id"] = "coder"
     conflict = await rpc_error(
         state,
         "session.create_side_chat",
