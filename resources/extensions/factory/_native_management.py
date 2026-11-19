@@ -507,11 +507,11 @@ class NativeFactoryManagement:
         self, action: str, args: Json, identity: str, previous: Json | None, actor: Json | None
     ) -> Json:
         if action == "create":
-            self._validate_permission_ceiling(args.get("config", {}))
             project_id = text(args, "project_id", maximum=200)
             host = self.service.host
             assert host is not None and host.catalog is not None
             catalog = await host.catalog()
+            await self._validate_permission_ceiling(args.get("config", {}), catalog)
             if not any(project["id"] == project_id for project in catalog["projects"]):
                 raise FactoryError("project_missing", "Choose a registered Project from catalog.")
             existing = await self.store.list_factories(project_id=project_id)
@@ -614,7 +614,7 @@ class NativeFactoryManagement:
                 if key not in clear_fields
             }
             boundary.update(patch.get("config", {}))
-            self._validate_permission_ceiling(boundary)
+            await self._validate_permission_ceiling(boundary)
             after = ""
             while True:
                 members = await self.store.list_members(previous["id"], state="active", after=after)
@@ -636,8 +636,19 @@ class NativeFactoryManagement:
             clear_config_fields=clear_fields,
         )
 
-    @staticmethod
-    def _validate_permission_ceiling(config: Json) -> None:
+    async def _validate_permission_ceiling(self, config: Json, catalog: Json | None = None) -> None:
+        if "permission_ceiling_profile" in config:
+            if catalog is None:
+                host = self.service.host
+                if host is None or host.catalog is None:
+                    raise FactoryError(
+                        "unavailable", "The permission profile catalog is unavailable."
+                    )
+                catalog = await host.catalog()
+            if config["permission_ceiling_profile"] not in catalog.get("permission_profiles", []):
+                raise FactoryError(
+                    "invalid_config", "Choose an available permission profile for the Factory."
+                )
         if "permission_ceiling" in config:
             try:
                 PermissionCeiling.from_ceiling_dict(config["permission_ceiling"])

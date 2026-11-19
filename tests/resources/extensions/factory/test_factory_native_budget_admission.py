@@ -222,7 +222,7 @@ async def test_associated_workflow_policy_edit_preserves_passive_gate_and_refres
         "factory.update",
         id=factory["id"],
         expected_revision=factory["revision"],
-        config={"permission_ceiling": ceiling},
+        config={"permission_ceiling": ceiling, "permission_ceiling_profile": "restricted"},
     )
     await drain_factory_work(harness)
     assert len(harness.model.requests) == count
@@ -243,6 +243,7 @@ async def test_associated_workflow_policy_edit_preserves_passive_gate_and_refres
         SessionAddress(run.project_id, run.agent_id, run.session_id)
     )
     assert binding is not None
+    assert binding.config["permission_ceiling_profile"] == "restricted"
     assert binding.config["allowed_skills"] == []
     resolved = harness.runtime.agent_resolver.resolve_temporary_agent(
         binding.address, generation_id=binding.generation_id

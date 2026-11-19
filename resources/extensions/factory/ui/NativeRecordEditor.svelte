@@ -1,5 +1,6 @@
 <script>
   import { untrack } from 'svelte';
+  import PermissionProfileSelect from '@vbot/extension-sdk/ui/PermissionProfileSelect.svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Checkbox from '@vbot/extension-sdk/ui/Checkbox.svelte';
   import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
@@ -130,7 +131,11 @@
           'allowed_tools',
           'denied_tools',
           ...(kind === 'factory'
-            ? ['allowed_models', 'permission_ceiling']
+            ? [
+                'allowed_models',
+                'permission_ceiling',
+                'permission_ceiling_profile',
+              ]
             : []),
         ].filter(
           (key) =>
@@ -292,6 +297,26 @@
       <summary>{t('factory.native.boundaries')}</summary>
       <p class="factory-help">{t('factory.native.boundaryHelp')}</p>
       {#if kind === 'factory'}
+        <label for="native-permission-limit"
+          >{t('permissions.profile.groupLimit')}</label
+        >
+        <PermissionProfileSelect
+          id="native-permission-limit"
+          label={t('permissions.profile.groupLimit')}
+          names={model.catalog.permission_profiles}
+          value={editor.draft.config.permission_ceiling_profile}
+          emptyLabel={t('permissions.profile.noGroupLimit')}
+          onChange={(value) => {
+            if (value) editor.draft.config.permission_ceiling_profile = value;
+            else delete editor.draft.config.permission_ceiling_profile;
+          }}
+        />
+        <p class="factory-help">{t('permissions.profile.groupLimitHelp')}</p>
+        {#if editor.draft.config.permission_ceiling}
+          <p class="factory-help">
+            {t('factory.native.existingPermissionLimit')}
+          </p>
+        {/if}
         <label for="native-allowed-models"
           >{t('factory.native.allowedModels')}</label
         ><TextField

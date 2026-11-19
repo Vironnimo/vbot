@@ -118,6 +118,9 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             project_memory_enabled=raw.get("project_memory_enabled", True),
             permission_rules=raw.get("permission_rules"),
             permission_ceiling=raw.get("permission_ceiling"),
+            permission_ceiling_profile=raw.get("permission_ceiling_profile"),
+            permission_profile=raw.get("permission_profile"),
+            inherit_permission_defaults=raw.get("inherit_permission_defaults", False),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("temporary execution configuration is invalid") from error
@@ -1174,6 +1177,7 @@ class ExtensionHostFactory:
                 if tool.catalog_visible and not tool.session_scoped
             ],
             "skills": skill_choices,
+            "permission_profiles": self.agent_resolver.permission_profile_names(),
             "tool_activations": [
                 {"name": tool.name, "sources": list(activation_sources(tool))}
                 for tool in self.tools.list_tools()

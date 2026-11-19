@@ -8,7 +8,7 @@ built-in UI. An Extension builds its assets independently and ships the resultin
 ## Install the SDK artifact
 
 Packaged vBot servers include the SDK at
-`<vbot_root>/resources/sdk/vbot-extension-sdk-1.2.0.tgz`. Install that artifact in
+`<vbot_root>/resources/sdk/vbot-extension-sdk-1.3.0.tgz`. Install that artifact in
 the Extension's own directory; no vBot checkout is needed. The standard WebUI
 build creates the tarball before application packaging copies `resources/`.
 
@@ -29,7 +29,7 @@ node scripts/extension-sdk.mjs
 npm pack ./extension-sdk --pack-destination .
 ```
 
-This produces `vbot-extension-sdk-1.2.0.tgz`. The build follows only the explicit
+This produces `vbot-extension-sdk-1.3.0.tgz`. The build follows only the explicit
 public exports and their dependencies. The tarball includes source components,
 local fonts, their license, and the page build helper. It contains no imports
 back into the vBot repository. Publishing to a registry is a separate operator
@@ -38,7 +38,7 @@ action; creating this artifact does not publish it.
 In the Extension's own directory:
 
 ```sh
-npm install --save-exact /path/to/vbot-extension-sdk-1.2.0.tgz
+npm install --save-exact /path/to/vbot-extension-sdk-1.3.0.tgz
 npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
 ```
 
@@ -107,7 +107,7 @@ renderers come from the App context and are absent from an isolated page.
 
 The SDK's semantic version describes its public JavaScript imports and component
 contracts. The Extension manifest's `api_version` describes required host
-capabilities; this SDK release targets API 39. UI-only contributions can declare
+capabilities; this SDK release targets API 40. UI-only contributions can declare
 host features without creating a Python module. Optional capabilities must be
 checked against the host's advertised feature set before use. A reload retires
 the old registration and outstanding bridge requests; recreate state from the
@@ -234,6 +234,8 @@ use a declared context field, `op` (`eq`, `ne`, `in`, `exists`, `gt`, `gte`, `lt
 and ordered comparisons require finite numbers without coercion. Missing fields
 fail comparisons; `{ "field": "project_id", "op": "exists", "value": false }`
 tests absence explicitly. Expressions are limited to depth 8 and 64 nodes.
+`ui/PermissionProfileSelect.svelte` selects an optional Permission Profile from the names in `host.catalog().permission_profiles`. Supply `id`, `label`, `emptyLabel`, `names`, `value` and `onChange`. Clearing the selection returns an empty string.
+
 Use `client.openAgent(agentId)` to open the standard Agent profile editor (API 35). Declare `"api_version": 39` to open the editor over your page with `client.openAgent(agentId, { expectedIncarnation, relatedScope })`. Pass the stored incarnation to bind edits to that identity. The optional scope identifies the team's delegation targets. Register `agent.profile_targets({scope, after?})` to return pages of `{agents: [{id, name, placement?}], next_after}` with a null cursor on the last page.
 
 Message scopes add `message_id` and `message_role`, Session rows add

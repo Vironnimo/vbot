@@ -58,6 +58,10 @@ async def test_participants_become_idle_without_closing_the_swarm(
         "swarm_state",
         "swarm_wiki",
     }
+    assert all(
+        binding.config.get("inherit_permission_defaults") is True
+        for binding in await lifecycle.groups.list(started["swarm_id"])
+    )
     for run_id in run_ids:
         assert (
             await lifecycle.groups.owned_run(started["swarm_id"], run_id)
@@ -76,16 +80,23 @@ async def test_run_directory_override_survives_resume_without_changing_profile(
         if source == "directory"
         else {"kind": "project", "project_id": "unavailable-default-project"}
     )
-    saved = await lifecycle.service.store.save_profile(
-        {
-            "schema_version": 1,
-            "name": "Directory override",
-            "participants": [{"model": "fixture/model", "count": 1}],
-            "working_directory": working,
-            "tool_access": {"mode": "selected", "allowed": []},
-        },
-        expected_revision=None,
-    )
+    profile = {
+        "schema_version": 1,
+        "name": "Directory override",
+        "permission_ceiling_profile": "restricted",
+        "participants": [
+            {"model": "fixture/model", "count": 1, "permission_profile": "full_access"}
+        ],
+        "working_directory": working,
+        "tool_access": {"mode": "selected", "allowed": []},
+    }
+    with pytest.raises(ValueError, match="permission_profile_unavailable"):
+        await lifecycle.service.management.operation(
+            "profiles.save", {"profile": {**profile, "permission_ceiling_profile": "missing"}}
+        )
+    saved = (await lifecycle.service.management.operation("profiles.save", {"profile": profile}))[
+        "profile"
+    ]
     arguments = {
         "profile_id": saved["id"],
         "expected_profile_revision": saved["revision"],
@@ -103,6 +114,9 @@ async def test_run_directory_override_survives_resume_without_changing_profile(
     agent = lifecycle.runtime.agent_resolver.temporary_agents.resolve(
         binding.address, generation_id=binding.generation_id
     )
+    assert binding.config["permission_ceiling_profile"] == "restricted"
+    assert agent.extension_rules.restricts
+    assert not agent.permission_rules.restricts
     assert agent.cwd == override
     assert binding.address.project_id is None
     replayed = await lifecycle.service.management.operation("swarms.start", arguments)

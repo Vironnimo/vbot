@@ -34,6 +34,8 @@ export default {
   'factory.native.boundaryHelp':
     'Enter comma-separated identifiers. Skills accept * for all. Existing Permission Rules remain in force.',
   'factory.native.allowedModels': 'Allowed Models',
+  'factory.native.existingPermissionLimit':
+    'An additional permission limit is configured for this Factory.',
   'factory.native.allowedSkills': 'Allowed Skills',
   'factory.native.allowedTools': 'Allowed Tools',
   'factory.native.deniedTools': 'Denied Tools',

@@ -46,6 +46,8 @@ API 33 adds `catalog().tool_activations`: `{name, sources}` for every non-Sessio
 
 API 34 adds `await host.execution_usage_changes(after=0, ledger_id=None, limit=1000)`: a bounded page of current `{group_id, usage}` snapshots for this owner's changed groups, plus `ledger_id`, `revision` and `more`. Continue with both returned identity and revision; a missing/different identity starts at zero. A short final page advances to its read watermark, including when no group changed. Group snapshots include integer `cost_nano_usd` alongside the ordinary report. Settlement, enrichment, import and restart interruption update the same projection atomically; no in-flight call is charged as settled. Registration is checked before and after the read. This supplies the invalidation contract for incremental budget projections without exposing another owner's Usage.
 
+API 40 adds `catalog().permission_profiles`, the exact names of built-in and custom Permission Profiles available to participants or as a group ceiling (`agent/temporary-agents.md`).
+
 ## Native Decisions
 
 `host.review_context(context)` returns bounded canonical human requests, separate delegated evidence and a Permission summary for a prepared-shell review. It uses Session sender provenance and stamped Sub-Agent reply targets, includes live ancestors' human requests and masks known Agent Secrets. Full bounds and truncation behavior: `extensions/shell-review.md` -> Execution integration.

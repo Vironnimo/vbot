@@ -15,12 +15,14 @@ import pytest
 from core.agents import AgentStore, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.agents.temporary_execution import TemporaryExecutionGroups, TemporaryRunInput
 from core.chat import ChatError, ChatMessage, ChatSessionError
+from core.chat._run_permissions import session_permissions
 from core.database import write_bootstrap_marker
 from core.permissions import (
     BoundaryContext,
     PermissionBoundary,
     PermissionCeiling,
     normalize_permission_rules,
+    resolve_permission_profile,
 )
 from core.runs import (
     ChatRunManager,
@@ -29,7 +31,7 @@ from core.runs import (
     RunExecutionOwner,
     RunNotFoundError,
 )
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, TemporarySessionBinding
 from core.storage import TemporaryFileManager
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_compaction_test_support import seed_tail
@@ -401,6 +403,52 @@ def test_temporary_agent_permission_rules_and_ceiling_round_trip(
     agent = registry.resolve(open_binding.address, generation_id=open_binding.generation_id)
     assert agent is not None
     assert (agent.permission_rules, agent.permission_ceiling) == (None, None)
+
+
+def test_named_participant_permissions_apply_live_and_delegate_the_group_limit(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    profiles = {"Review": {"deny": ["Edit({project}/protected)"]}}
+    default = normalize_permission_rules({"write": "scratch"})
+    registry = TemporaryAgentRegistry(
+        sessions,
+        profile_rules=lambda name: resolve_permission_profile(name, profiles),
+        default_rules=lambda: default,
+    )
+    project = tmp_path / "repo"
+
+    def boundary(binding: TemporarySessionBinding) -> PermissionBoundary:
+        agent = registry.resolve(binding.address, generation_id=binding.generation_id)
+        assert agent is not None
+        return session_permissions(
+            agent, data_dir=tmp_path / "data", project_root=project, ceiling=None
+        ).boundary(tmp_path / "data", owner=None)
+
+    for name in (None, "full_access"):
+        binding = registry.create(
+            owner_name="extension",
+            group_id="group",
+            participant_id=name or "inherited",
+            config=_config(
+                tmp_path,
+                permission_profile=name,
+                inherit_permission_defaults=name is None,
+                permission_ceiling_profile="Review",
+            ),
+        )
+
+        effective = boundary(binding)
+        assert bool(effective.check_path(project / "ordinary", "write")) == (name is None)
+        assert effective.check_path(project / "protected", "write") is not None
+        inherited = effective.ceiling(source="parent")
+        assert inherited is not None
+        assert any(layer.source == "extension" for layer in inherited.layers)
+    profiles["Review"] = {"deny": ["Read({project}/other)"]}
+    assert boundary(binding).check_path(project / "other", "read") is not None
+    assert boundary(binding).check_path(project / "protected", "write") is None
+    del profiles["Review"]
+    with pytest.raises(ValueError):
+        boundary(binding)
 
 
 @pytest.mark.parametrize(

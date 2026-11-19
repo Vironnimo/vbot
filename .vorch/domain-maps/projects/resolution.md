@@ -69,9 +69,11 @@ Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent P
 ```text
 Identity Agent:   agent.json -> global default
 Team member:      Project override -> (global default restricted by the repository profile)
-Temporary Agent:  its owner's TemporaryAgentConfig rules (+ permission_ceiling)
+Temporary Agent:  own rules, named profile, or explicitly inherited Agent defaults
 Temporary member: owner's rules -> Project override -> (global default restricted by the repository profile)
 ```
+
+An Extension can independently impose its stored ceiling and a named group ceiling on any participant (`agent/temporary-agents.md`).
 
 An Identity Agent or Team override can select a named Permission Profile at its tier. The resolver reads its complete rules from the current Settings at each resolution. An unavailable profile prevents execution and the effective configuration reports the error, so the operator can repair the reference. The Identity Agent retains all six parts of a selected profile, including an explicitly unrestricted one, for an Extension taking a snapshot. The operator may switch between inline rules and a profile at the same tier. A Session's own rules (Session Agent overrides above) apply over every chain per part.
 

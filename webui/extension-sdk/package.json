@@ -1,6 +1,6 @@
 {
   "name": "@vbot/extension-sdk",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Public browser bridge, presentation components and build configuration for vBot Extensions",
   "type": "module",
   "license": "Apache-2.0",
@@ -16,6 +16,7 @@
     "./ui/SessionEmbed.svelte": "./dist/components/SessionEmbed.svelte",
     "./styles": "./dist/styles/app.css",
     "./build": "./build.mjs",
+    "./ui/PermissionProfileSelect.svelte": "./dist/components/permissions/PermissionProfileSelect.svelte",
     "./ui/Dropdown.svelte": "./dist/components/Dropdown.svelte",
     "./ui/SearchableDropdown.svelte": "./dist/components/SearchableDropdown.svelte",
     "./ui/RequestedUrl.svelte": "./dist/components/RequestedUrl.svelte",

@@ -252,16 +252,20 @@ async def test_new_leader_creation_reuses_durable_request_after_partial_failure(
     )
     invalid_ceiling = deepcopy(ceiling)
     invalid_ceiling["layers"][0]["source"] = "factory-test"
-    with pytest.raises(FactoryError) as invalid_creation:
-        await harness.operation(
-            "factory.create",
-            project_id="project",
-            request_id="invalid-ceiling",
-            leader_name="Leader",
-            leader_model="model",
-            config={"permission_ceiling": invalid_ceiling},
-        )
-    assert invalid_creation.value.code == "invalid_config"
+    for invalid in (
+        {"permission_ceiling": invalid_ceiling},
+        {"permission_ceiling_profile": "missing"},
+    ):
+        with pytest.raises(FactoryError) as invalid_creation:
+            await harness.operation(
+                "factory.create",
+                project_id="project",
+                request_id="invalid-ceiling",
+                leader_name="Leader",
+                leader_model="model",
+                config=invalid,
+            )
+        assert invalid_creation.value.code == "invalid_config"
     assert not created
     assert not await factory_store.native.list_factories()
     monkeypatch.setattr(factory_store.native, "complete_identity_reservation", finish)

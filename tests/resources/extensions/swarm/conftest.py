@@ -124,7 +124,7 @@ async def board(
     manager = ChatRunManager()
     identity = SimpleNamespace(name="swarm", epoch="registration")
     groups = TemporaryExecutionGroups(
-        TemporaryAgentRegistry(sessions),
+        TemporaryAgentRegistry(sessions, default_rules=lambda: None),
         None,
         lambda value: value is identity,
         identity,
@@ -279,7 +279,7 @@ async def lifecycle(
     )
     extensions.apply_tools(tools)
     runtime.extensions = extensions
-    temporary = TemporaryAgentRegistry(runtime.chat_sessions)
+    temporary = TemporaryAgentRegistry(runtime.chat_sessions, default_rules=lambda: None)
     runtime.agent_resolver.temporary_agents = temporary
     identity = extensions.registration_identity("swarm")
     titled: list[tuple[str, str]] = []
@@ -302,7 +302,12 @@ async def lifecycle(
     )
 
     async def catalog() -> dict[str, Any]:
-        return {"models": [{"id": "fixture/model"}], "tools": [], "skills": []}
+        return {
+            "models": [{"id": "fixture/model"}],
+            "tools": [],
+            "skills": [],
+            "permission_profiles": ["restricted", "full_access"],
+        }
 
     databases = ExtensionDatabases(tmp_path)
     host = ExtensionHost(

@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-39.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-40.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-39.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-40.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,14 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `39.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 39` in `extension.json` for Extensions using the new
+The SDK version is `40.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 40` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 40 adds live Permission Profile references to `TemporaryAgentConfig`. Choose a name from `host.catalog()["permission_profiles"]` as `permission_ceiling_profile` to limit the participant alongside its own rules and any existing ceiling. A participant without an Agent profile or inline rules can select its own `permission_profile` or set `inherit_permission_defaults=True` to use the global Agent rules.
 
 API 39 adds `host.identity_agents.profiles(agent_ids)` for batch profile reads. A page can open the standard Agent editor in place and bind edits to the intended Agent incarnation. The host catalog identifies Extension-owned profiles.
 

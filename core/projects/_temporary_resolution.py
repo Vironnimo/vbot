@@ -302,6 +302,17 @@ class TemporaryResolution:
         config = self.prepare_config(config, project_id)
         if config.identity_agent is not None:
             return cast("OwnedIdentityAgent", self._registry().preview_identity(config))
+        rules: PermissionRules | None
+        if config.permission_profile is not None:
+            rules = self._owner.permission_rules_for_profile(config.permission_profile)
+        elif config.inherit_permission_defaults:
+            rules = self._owner.default_permission_rules()
+        else:
+            rules = (
+                config.permission_rules
+                if isinstance(config.permission_rules, PermissionRules)
+                else None
+            )
         agent = TemporaryAgent(
             id="preview",
             name=config.name,
@@ -319,11 +330,12 @@ class TemporaryResolution:
             thinking_effort=config.thinking_effort,
             project_memory_enabled=config.project_memory_enabled and project_id is not None,
             compaction_policy=config.compaction_policy,
-            permission_rules=(
-                config.permission_rules
-                if isinstance(config.permission_rules, PermissionRules)
-                else None
-            ),
+            permission_rules=rules,
+            extension_rules=self._owner.permission_rules_for_profile(
+                config.permission_ceiling_profile
+            )
+            if config.permission_ceiling_profile is not None
+            else None,
             permission_ceiling=(
                 PermissionCeiling.from_ceiling_dict(config.permission_ceiling)
                 if config.permission_ceiling is not None

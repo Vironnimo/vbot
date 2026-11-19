@@ -279,6 +279,7 @@ class PermissionBoundary:
         context: BoundaryContext,
         *,
         ceilings: Iterable[PermissionCeiling] = (),
+        extension_rules: PermissionRules | None = None,
     ) -> PermissionBoundary:
         """The boundary of one Run: the Agent's resolved rules plus inherited ceilings.
 
@@ -290,6 +291,8 @@ class PermissionBoundary:
         layers: list[PermissionLayer] = []
         if rules is not None and rules.restricts:
             layers.append(_expand(rules, context))
+        if extension_rules is not None and extension_rules.restricts:
+            layers.append(_expand(extension_rules, context).retagged("extension"))
         for ceiling in ceilings:
             layers.extend(ceiling.layers)
         if not layers:

@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 
 from core.archive.errors import ArchiveSubjectInUseError
+from core.chat._run_permissions import session_permissions
 from core.extensions.operations import ExtensionOperations
 from core.projects import AgentOverrides
 from core.runs import Run, RunCancelledError
@@ -322,7 +323,12 @@ async def test_native_assignment_runs_the_real_identity_without_a_workflow(
     leader = runtime.agents.create("leader", model=MODEL, librarian_enabled=False)
     ordinary = runtime.chat_sessions.create(leader.id)
     factory = (
-        await harness.operation("factory.create", project_id="product", leader_agent_id=leader.id)
+        await harness.operation(
+            "factory.create",
+            project_id="product",
+            leader_agent_id=leader.id,
+            config={"permission_ceiling_profile": "restricted"},
+        )
     )["factory"]
     specialist = (
         await harness.operation(
@@ -366,6 +372,12 @@ async def test_native_assignment_runs_the_real_identity_without_a_workflow(
         binding.address, generation_id=binding.generation_id
     )
     assert resolved.id == identity.id
+    assert binding.config["permission_ceiling_profile"] == "restricted"
+    boundary = session_permissions(
+        resolved, data_dir=tmp_path, project_root=repository, ceiling=None
+    ).boundary(tmp_path, owner=binding.address)
+    refusal = boundary.check_path(tmp_path.parent / "outside", "write")
+    assert refusal is not None and refusal.source == "extension"
     assert resolved.workspace == identity.workspace
     with pytest.raises(ValueError):
         runtime.agent_resolver.resolve_agent(

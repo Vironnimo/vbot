@@ -14,8 +14,10 @@ from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 from core.permissions import (
     PermissionCeiling,
     PermissionRules,
+    normalize_permission_profile_name,
     normalize_permission_rules,
     permission_rules_to_dict,
+    resolve_permission_profile,
 )
 from core.sessions import (
     ChatSessionManager,
@@ -70,6 +72,11 @@ class TemporaryAgentConfig:
     # model/effort fields retain their existing fallback semantics.
     model_override: str | None = None
     thinking_effort_override: str | None = None
+
+    # A live named upper bound, independent of this participant's own rules.
+    permission_ceiling_profile: str | None = None
+    inherit_permission_defaults: bool = False
+    permission_profile: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
@@ -163,6 +170,24 @@ class TemporaryAgentConfig:
             except StorageError as error:
                 raise ValueError(f"temporary compaction_policy is invalid: {error}") from error
             object.__setattr__(self, "compaction_policy", policy)
+        if self.permission_ceiling_profile is not None:
+            normalize_permission_profile_name(self.permission_ceiling_profile)
+        if self.permission_profile is not None:
+            normalize_permission_profile_name(self.permission_profile)
+            if self.has_profile or self.permission_rules is not None:
+                raise ValueError(
+                    "permission_profile cannot be combined with an Agent profile or inline rules"
+                )
+        if not isinstance(self.inherit_permission_defaults, bool):
+            raise ValueError("inherit_permission_defaults must be a boolean")
+        if self.inherit_permission_defaults and (
+            self.has_profile
+            or self.permission_rules is not None
+            or self.permission_profile is not None
+        ):
+            raise ValueError(
+                "inherit_permission_defaults cannot be combined with an Agent profile or own rules"
+            )
         if self.permission_rules is not None:
             object.__setattr__(
                 self, "permission_rules", normalize_permission_rules(self.permission_rules)
@@ -228,6 +253,7 @@ class TemporaryAgent:
     # The owner's rules (``TemporaryAgentConfig.permission_rules``) and ceiling.
     permission_rules: PermissionRules | None = None
     permission_ceiling: PermissionCeiling | None = None
+    extension_rules: PermissionRules | None = None
     # A temporary Agent's rules come from its owner, not from files.
     rule_files: tuple[Path, ...] = ()
 
@@ -240,6 +266,7 @@ class OwnedIdentityAgent(Agent):
     instructions: str = ""
     prompt_blocks: list[str] | None = None
     owned_ceiling: PermissionCeiling | None = None
+    extension_rules: PermissionRules | None = None
 
     @property
     @override
@@ -258,11 +285,17 @@ class TemporaryAgentRegistry:
         | None = None,
         capture_delegation_bindings: Callable[[dict[str, Any]], dict[str, str | int]] | None = None,
         resolve_identity: Callable[[str], Agent] | None = None,
+        profile_rules: Callable[[str], PermissionRules] = lambda name: resolve_permission_profile(
+            name, {}
+        ),
+        default_rules: Callable[[], PermissionRules | None] | None = None,
     ) -> None:
         self._sessions = sessions
         self._prepare_config = prepare_config
         self._capture_delegation_bindings = capture_delegation_bindings
         self._resolve_identity = resolve_identity
+        self._profile_rules = profile_rules
+        self._default_rules = default_rules
 
     def create(
         self,
@@ -382,6 +415,12 @@ class TemporaryAgentRegistry:
             result["thinking_effort_override"] = config.thinking_effort_override
         if isinstance(config.permission_rules, PermissionRules):
             result["permission_rules"] = permission_rules_to_dict(config.permission_rules)
+        if config.permission_profile is not None:
+            result["permission_profile"] = config.permission_profile
+        if config.inherit_permission_defaults:
+            result["inherit_permission_defaults"] = True
+        if config.permission_ceiling_profile is not None:
+            result["permission_ceiling_profile"] = config.permission_ceiling_profile
         if config.permission_ceiling is not None:
             result["permission_ceiling"] = deepcopy(dict(config.permission_ceiling))
         return result
@@ -504,6 +543,9 @@ class TemporaryAgentRegistry:
             project_memory_enabled=(
                 agent.project_memory_enabled and config.get("project_memory_enabled", True)
             ),
+            extension_rules=self._profile_rules(config["permission_ceiling_profile"])
+            if config.get("permission_ceiling_profile") is not None
+            else None,
             owned_ceiling=(
                 PermissionCeiling.from_ceiling_dict(config["permission_ceiling"])
                 if config.get("permission_ceiling")
@@ -537,6 +579,20 @@ class TemporaryAgentRegistry:
             raise ValueError("temporary Session binding configuration is invalid")
         if compaction_policy is not None and not isinstance(compaction_policy, dict):
             raise ValueError("temporary Session binding configuration is invalid")
+        inherit = config.get("inherit_permission_defaults", False)
+        if not isinstance(inherit, bool):
+            raise ValueError("temporary Session binding configuration is invalid")
+        rules: PermissionRules | None
+        if config.get("permission_profile") is not None:
+            rules = self._profile_rules(config["permission_profile"])
+        elif config.get("permission_rules") is not None:
+            rules = normalize_permission_rules(config["permission_rules"])
+        elif inherit:
+            if self._default_rules is None:
+                raise ValueError("Default Agent Permission Rules are unavailable")
+            rules = self._default_rules()
+        else:
+            rules = None
         try:
             return TemporaryAgent(
                 id=address.agent_id,
@@ -562,11 +618,10 @@ class TemporaryAgentRegistry:
                 current_session_id=address.session_id,
                 compaction_policy=deepcopy(compaction_policy),
                 # Unreadable stored rules refuse the Session instead of dropping them.
-                permission_rules=(
-                    normalize_permission_rules(config["permission_rules"])
-                    if config.get("permission_rules") is not None
-                    else None
-                ),
+                permission_rules=rules,
+                extension_rules=self._profile_rules(config["permission_ceiling_profile"])
+                if config.get("permission_ceiling_profile") is not None
+                else None,
                 permission_ceiling=(
                     PermissionCeiling.from_ceiling_dict(config["permission_ceiling"])
                     if config.get("permission_ceiling") is not None

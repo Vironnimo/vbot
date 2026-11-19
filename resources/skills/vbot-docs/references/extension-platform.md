@@ -76,10 +76,10 @@ Declare pages in the manifest or Python, with asset paths relative to the Extens
 
 The equivalent Python declaration is `api.register_page("panel", "My panel", "web/page.html", navigation=False, services=("agent.list",))`. `navigation` defaults to true; `services` defaults to an empty list. Assets stay under the page's build root and use relative URLs.
 
-The installed SDK artifact is `<vbot_root>/resources/sdk/vbot-extension-sdk-1.2.0.tgz`; its `example/` directory contains a complete manifest-only page and composer action. Extract the artifact into a temporary directory and copy its `package/example/` contents into the Extension's build directory; from there, install the SDK and build:
+The installed SDK artifact is `<vbot_root>/resources/sdk/vbot-extension-sdk-1.3.0.tgz`; its `example/` directory contains a complete manifest-only page and composer action. Extract the artifact into a temporary directory and copy its `package/example/` contents into the Extension's build directory; from there, install the SDK and build:
 
 ```bash
-npm install --save-exact <vbot_root>/resources/sdk/vbot-extension-sdk-1.2.0.tgz
+npm install --save-exact <vbot_root>/resources/sdk/vbot-extension-sdk-1.3.0.tgz
 npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
 npm run build
 ```
@@ -92,7 +92,7 @@ Import `createExtensionPageClient` from `@vbot/extension-sdk/client`, shared sty
 
 Import server contracts from `vbot_extension_sdk`, Provider contracts from `vbot_extension_sdk.providers`, Channel contracts from `vbot_extension_sdk.channels`, and native contracts from `vbot_extension_sdk.desktop`. These are the same host classes used by built-ins; existing `core.extensions` imports continue to work.
 
-For an external Python 3.14 authoring environment, install `<vbot_root>/resources/sdk/vbot_extension_sdk-39.0.0-py3-none-any.whl` with `python -m pip install --no-deps`, substituting and quoting the actual path. The wheel supplies dependency-free type declarations; runtime classes execute inside an installed vBot host, not in the standalone authoring environment. The package metadata contains its complete build and migration guide. The host supplies `api.operations` and command-handler contexts; use these provided objects instead of constructing `ExtensionOperations` or `ExtensionCommandContext`.
+For an external Python 3.14 authoring environment, install `<vbot_root>/resources/sdk/vbot_extension_sdk-40.0.0-py3-none-any.whl` with `python -m pip install --no-deps`, substituting and quoting the actual path. The wheel supplies dependency-free type declarations; runtime classes execute inside an installed vBot host, not in the standalone authoring environment. The package metadata contains its complete build and migration guide. The host supplies `api.operations` and command-handler contexts; use these provided objects instead of constructing `ExtensionOperations` or `ExtensionCommandContext`.
 
 Declare API 31 when using `services.exports`, `ui.conditions`, `ui.shared-preferences`, `ui.message` or `ui.editors`; native Desktop manifests use their independent API 2. API 30 manifests remain supported; upgrade the declared version when adopting these capabilities.
 

@@ -128,6 +128,7 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
     Tools it no longer has are left out, as core does for an Agent's allowlists:
     such an entry only narrows the grant.
     """
+    _validate_permission_profiles(_permission_selections(profile), catalog)
     known_models = {item.get("id") for item in catalog.get("models", [])}
     if any(item["model"] not in known_models for item in profile["participants"]):
         raise SwarmStoreError("model_unavailable", field="participants")
@@ -147,6 +148,25 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
         raise SwarmStoreError("invalid_arguments", field="repository_profile")
 
 
+def _permission_selections(profile: Json) -> list[tuple[str, Any]]:
+    selections = [("permission_ceiling_profile", profile.get("permission_ceiling_profile"))]
+    rows = profile.get("participants")
+    if isinstance(rows, list):
+        selections.extend(
+            ("permission_profile", row.get("permission_profile"))
+            for row in rows
+            if isinstance(row, dict)
+        )
+    return [(field, name) for field, name in selections if name is not None]
+
+
+def _validate_permission_profiles(selections: list[tuple[str, Any]], catalog: Json) -> None:
+    names = catalog.get("permission_profiles", [])
+    for field, name in selections:
+        if name not in names:
+            raise SwarmStoreError("permission_profile_unavailable", field=field)
+
+
 def _participant_config(profile: Json, participant: Json, cwd: Path) -> TemporaryAgentConfig:
     ordinal = participant["ordinal"]
     formation = next(
@@ -155,6 +175,10 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
     return TemporaryAgentConfig(
         model=participant["model"],
         repository_profile=formation.get("repository_profile"),
+        permission_profile=formation.get("permission_profile"),
+        inherit_permission_defaults=not formation.get("repository_profile")
+        and not formation.get("permission_profile"),
+        permission_ceiling_profile=profile.get("permission_ceiling_profile"),
         cwd=cwd,
         tool_access=normalize_tool_access(_tool_access(profile)),
         allowed_skills=profile["allowed_skills"],
