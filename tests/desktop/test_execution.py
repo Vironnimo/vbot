@@ -960,6 +960,7 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
     sinks: list[EventSink] = []
     custom_id = "extension:office:printer"
     fail_after_import = False
+    offline = asyncio.Event()
 
     class ReloadCapability(Capability):
         @override
@@ -1022,6 +1023,7 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
         capabilities=catalog.capabilities,
         connector=connections,
         reload_extensions=reload_catalog,
+        publish=lambda status: offline.set() if not status["connected"] else None,
     )
     url = "https://one.example/"
     sharing.set_server_url(url)
@@ -1188,6 +1190,11 @@ async def test_local_reload_retires_changed_work_preserves_other_handlers_and_bi
         assert len(confirmed) == 3
         update = await asyncio.wait_for(initial.outgoing.get(), timeout=2)
         assert update == {"type": "capabilities", "capabilities": ["terminal"]}
+        offline.clear()
+        catalog = DesktopExtensionCatalog({})
+        sharing.reload_extensions(expected_server=url)
+        await asyncio.wait_for(offline.wait(), timeout=2)
+        assert initial.closed and not sharing.status()["connected"]
     finally:
         sharing.close()
         await asyncio.wait_for(running, timeout=2)
