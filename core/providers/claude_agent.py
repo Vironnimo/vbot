@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._claude_agent_sdk import SDK_POOL
 from core.providers._claude_agent_sessions import ClaudeAgentSessions, Conversation
-from core.providers._claude_agent_wire import JsonObject, history, system_prompt
-from core.providers.adapter import ModelLookup, ProviderAdapter, normalize_tool_call_candidates
+from core.providers._native_agent_wire import JsonObject, NativeAgentAdapter, history, system_prompt
+from core.providers.adapter import ModelLookup
 from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning_dialects import render_reasoning
@@ -28,7 +28,7 @@ __all__ = ["ClaudeAgentAdapter", "ClaudeAgentSessions"]
 CONVERSATION_KEY = "_claude_agent_conversation"
 
 
-class ClaudeAgentAdapter(ProviderAdapter):
+class ClaudeAgentAdapter(NativeAgentAdapter):
     """Translate one canonical Model step through a parked native Claude turn."""
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("claude_agent",)
@@ -126,45 +126,6 @@ class ClaudeAgentAdapter(ProviderAdapter):
                 yield delta
 
     @override
-    async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
-        response: JsonObject = {
-            "content": "",
-            "reasoning": "",
-            "usage": {},
-            "terminal_outcome": "unknown",
-        }
-        calls: dict[str, JsonObject] = {}
-        async for delta in self.stream(messages, model_id=model_id, **kwargs):
-            delta_type = delta["type"]
-            if delta_type == "content_delta":
-                response["content"] += delta["text"]
-            elif delta_type == "reasoning_delta":
-                response["reasoning"] += delta["text"]
-            elif delta_type == "tool_call_delta":
-                call = calls.setdefault(
-                    delta["id"], {"id": delta["id"], "name": "", "arguments": ""}
-                )
-                call["name"] += delta.get("name_delta", "")
-                call["arguments"] += delta.get("arguments_delta", "")
-            elif delta_type == "usage":
-                response["usage"] = {key: value for key, value in delta.items() if key != "type"}
-            elif delta_type == "finish":
-                response["terminal_outcome"] = delta["reason"]
-        if calls:
-            response["tool_calls"] = _normalize_calls(list(calls.values()))
-        return response
-
-    @override
-    def normalize_response(
-        self, response: JsonObject, *, model_id: str | None = None
-    ) -> JsonObject:
-        del model_id
-        result = dict(response)
-        if result.get("tool_calls"):
-            result["tool_calls"] = _normalize_calls(result["tool_calls"])
-        return result
-
-    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -218,16 +179,3 @@ class ClaudeAgentAdapter(ProviderAdapter):
             if isinstance(raw.get("resolvedModel"), str)
             else {},
         )
-
-
-def _normalize_calls(calls: list[JsonObject]) -> list[JsonObject]:
-    return [
-        normalized
-        for index, call in enumerate(calls)
-        for normalized in normalize_tool_call_candidates(
-            tool_call_id=call.get("id"),
-            name=call.get("name"),
-            arguments=call.get("arguments"),
-            fallback_id=f"tool_call_{index}",
-        )
-    ]

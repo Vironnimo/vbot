@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import importlib
 import json
 import os
@@ -15,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from core.providers._claude_agent_wire import JsonObject, tool_result
+from core.providers._native_agent_wire import native_tool_names
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.utils.workers import BoundedWorkerPool
 
@@ -165,31 +165,9 @@ class PendingTools:
     """Park native callbacks until the next already-masked canonical request."""
 
     def __init__(self, tools: list[JsonObject]) -> None:
-        self.names: dict[str, str] = {}
-        self.short_names: dict[str, str] = {}
         self.tools = tools
-        reserved = {
-            definition["name"]
-            for definition in tools
-            if re.fullmatch(rf"[A-Za-z0-9_-]{{1,{MCP_NAME_LIMIT}}}", definition["name"])
-        }
-        used: set[str] = set()
-        for definition in tools:
-            name = definition["name"]
-            short = name
-            if name not in reserved:
-                stem = re.sub(r"[^A-Za-z0-9_-]", "_", name)
-                digest = hashlib.sha256(name.encode()).hexdigest()[:12]
-                collision = 0
-                while True:
-                    suffix = f"_{digest}" + (f"_{collision}" if collision else "")
-                    short = stem[: MCP_NAME_LIMIT - len(suffix)] + suffix
-                    if short not in reserved and short not in used:
-                        break
-                    collision += 1
-            used.add(short)
-            self.names[MCP_PREFIX + short] = name
-            self.short_names[name] = short
+        self.short_names = native_tool_names(tools, MCP_NAME_LIMIT)
+        self.names = {MCP_PREFIX + short: name for name, short in self.short_names.items()}
         self.waiting: dict[str, asyncio.Future[tuple[JsonObject, list[JsonObject] | None]]] = {}
         self.replacements: dict[str, list[JsonObject]] = {}
         self.call_names: dict[str, str] = {}

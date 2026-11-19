@@ -179,6 +179,7 @@ from core.utils.version import detect_build_identity
 
 if TYPE_CHECKING:
     from core.permissions.commands.commands import CommandAnalyzer
+    from core.providers._usage_types import UsageWindow
     from core.runtime.runtime import Runtime
 
 
@@ -284,11 +285,18 @@ def bootstrap(runtime: Runtime) -> None:
                 runtime._storage, runtime.logger
             ),
         )
+
         # Opens the canonical provider-usage.db in every startup mode, so an
         # update's verification start checks it; only normal startup samples.
+        async def antigravity_usage() -> tuple[UsageWindow, ...]:
+            if runtime._provider_runtime is None:
+                return ()
+            return await runtime._provider_runtime.current_antigravity_usage()
+
         runtime._provider_usage = ProviderUsageService(
             runtime,
             data_root=runtime._storage.data_dir,
+            antigravity_usage=antigravity_usage,
             claude_usage=lambda: (
                 runtime._provider_runtime.current_claude_usage()
                 if runtime._provider_runtime is not None

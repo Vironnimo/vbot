@@ -1,0 +1,138 @@
+"""Antigravity subscription enrollment, quota evidence and transport lifetime."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import subprocess
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from core.providers import _antigravity_native as agy
+from core.providers.accounts import ConnectionRef
+from core.providers.antigravity import AntigravityAdapter
+from core.providers.errors import ProviderAuthError
+from core.runtime import Runtime
+from core.utils.config import Config
+from core.utils.errors import ProviderError
+
+_CONNECTION = "antigravity:subscription"
+
+
+@pytest.mark.asyncio
+async def test_opt_in_publishes_cli_models_and_personal_quota_only(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "agy.exe"
+    executable.touch()
+    monkeypatch.setenv("VBOT_ANTIGRAVITY_PATH", str(executable))
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "synthetic-credentials")
+    monkeypatch.setenv("AGY_ADC_AUTH", "true")
+    calls = []
+    weekly = {"window": "weekly", "remaining_fraction": 0.5}
+    five_hour = {"window": "5h", "remaining_fraction": 0, "reset_time": "2026-11-20T01:00:00Z"}
+    buckets = [weekly]
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        assert command[0] == str(executable.resolve())
+        assert kwargs["stdin"] == subprocess.DEVNULL
+        assert kwargs["env"]["HOME"] == kwargs["cwd"]
+        assert kwargs["env"]["AGY_ADC_AUTH"] == "false"
+        assert "GEMINI_API_KEY" not in kwargs["env"]
+        assert "GOOGLE_APPLICATION_CREDENTIALS" not in kwargs["env"]
+        settings = json.loads(command[command.index("--settings") + 1])
+        assert settings["modelProvider"] == "" and settings["useG1Credits"] is False
+        assert command[command.index("--output-format") + 1] == "json"
+        name = command[-1].lstrip("/")
+        calls.append(name)
+        data = (
+            {
+                "models": [
+                    {"id": "example-high", "label": "Example (High)"},
+                    {"id": "gemini-pro-orchestrator-neon", "label": "Orchestrator (Neon)"},
+                ]
+            }
+            if name == "models"
+            else {"groups": [{"name": "Gemini Models", "buckets": buckets}]}
+        )
+        payload = {"status": "SUCCESS", "num_turns": 0, "command": {"name": name, "data": data}}
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(payload).encode(), stderr=b""
+        )
+
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        monkeypatch.setattr(agy.subprocess, "run", run)
+        assert (await runtime.refresh_external_connection("antigravity", _CONNECTION))[
+            "status"
+        ] == "disabled"
+        assert calls == []
+        runtime.storage.set_provider_connection_enabled(_CONNECTION, True)
+        assert (await runtime.refresh_external_connection("antigravity", _CONNECTION))[
+            "status"
+        ] == "subscription_unconfirmed"
+        assert runtime.models.list_for_provider("antigravity") == [] and calls == ["usage"]
+        buckets.append(five_hour)
+        assert (await runtime.refresh_external_connection("antigravity", _CONNECTION))["connected"]
+        assert calls == ["usage", "usage", "models"]
+        assert [row.model_id for row in runtime.models.list_for_provider("antigravity")] == [
+            "example-high"
+        ]
+        model = runtime.models.get("antigravity", "example-high")
+        assert model.name == "Example (High)" and model.connections == ("subscription",)
+        adapter = runtime.get_adapter(ConnectionRef("antigravity", _CONNECTION))
+        assert isinstance(adapter, AntigravityAdapter)
+        report = await runtime.provider_usage.report([_CONNECTION])
+        windows = report.providers[0].windows
+        assert [(window.window_seconds, window.used_percent) for window in windows] == [
+            (604800, 50),
+            (18000, 100),
+        ]
+        assert windows[1].reset_at == five_hour["reset_time"]
+        buckets.clear()
+        with pytest.raises(ProviderAuthError, match="subscription quotas"):
+            async with aclosing(
+                adapter.stream([{"role": "user", "content": "hello"}], model_id="example-high")
+            ) as stream:
+                await anext(stream)
+        assert (
+            runtime.external_connection_status("antigravity", _CONNECTION)["status"]
+            == "subscription_unconfirmed"
+        )
+        assert runtime.connection_reachability(_CONNECTION) is False
+        assert runtime.models.get("antigravity", "example-high") == model
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_retires_a_stream_between_independently_timed_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agy, "_executable", lambda: Path("agy"))
+    monkeypatch.setattr(agy, "_windows", lambda _path: ())
+    native = agy.AntigravityNative(temporary_files=None)
+    closed = asyncio.Event()
+
+    async def stream(_executable: Path) -> AsyncGenerator[int]:
+        try:
+            yield 1
+            await asyncio.Future()
+        finally:
+            closed.set()
+
+    async with aclosing(native.stream(stream)) as iterator:
+        assert await asyncio.wait_for(anext(iterator), timeout=1) == 1
+        await native.aclose()
+        assert closed.is_set()
+        with pytest.raises(ProviderError, match="closed"):
+            await anext(iterator)
+    with pytest.raises(ProviderAuthError, match="closed"):
+        async with native.turn():
+            pytest.fail("retired Connection started inference")

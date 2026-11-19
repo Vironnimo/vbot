@@ -151,7 +151,7 @@ def register_vbot_tool(
             "properties": {
                 "argv": {
                     "type": "array",
-                    "items": {"type": "string", "pattern": r"^[^\u0000]*$"},
+                    "items": {"type": "string", "pattern": r"^[^\x00]*$"},
                     "description": (
                         "Arguments after vbot, one string per argument, such as "
                         '["config", "get", "server.timezone"].'

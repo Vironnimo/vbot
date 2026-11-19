@@ -455,7 +455,9 @@ def provider_connect(
             ok=connected,
             message="\n".join([f"enabled {connection_id}", *_external_login_lines(payload.data)]),
             instance=instance,
-            attention=() if connected else ("Complete Claude Code login on the server computer",),
+            attention=()
+            if connected
+            else (f"Complete the {provider_id} login on the server computer",),
         )
 
     user_code = _string_or_default(payload.data.get("user_code"), "?")
@@ -550,7 +552,7 @@ def provider_connect_status(
             attention=()
             if payload.data.get("connected")
             or payload.data.get("status") not in {"missing", "logged_out"}
-            else ("Complete Claude Code login on the server computer",),
+            else (f"Complete the {provider_id} login on the server computer",),
         )
     return CommandResult(
         ok=True,

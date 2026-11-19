@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import os
 import re
 import stat
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -24,9 +26,11 @@ from core.storage._terminal_log_scopes import (
 )
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_lock import acquire_file_lock
 from core.utils.file_status import is_link_status
-from core.utils.ids import write_id_file
+from core.utils.ids import new_id, write_id_file
 from core.utils.logging import get_logger
+from core.utils.tree_move import remove_tree
 from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("storage.temp_files")
@@ -52,6 +56,8 @@ TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _OWNER_PATTERN = re.compile(r"^s[0-9a-f]{31}$")
+_PROVIDER_DIRECTORY = re.compile(r"^work_[0-9a-hjkmnp-tv-z]{12}$")
+_PROVIDER_LEASE = ".vbot-lease"
 # A sweep lists every retained file (more than ten thousand on a busy install),
 # so background sweeps never run on the Event Loop.
 _SWEEP_WORKERS = BoundedWorkerPool(name="temporary-files", max_workers=1)
@@ -172,6 +178,43 @@ class TemporaryFileManager:
             self._active[path] = self._active.get(path, 0) + 1
         return TemporaryFileLease(path=path, _manager=self)
 
+    @contextmanager
+    def provider_directory(self) -> Iterator[Path]:
+        """Lease an owner-only subprocess workspace and remove its tree on exit. Blocking."""
+        parent = self.root / "providers"
+        if "providers" not in self._retention:
+            raise ValueError("Temporary Provider storage is disabled")
+        # Check each parent before creating descendants. A redirected workspace
+        # must never receive request content or become the target of a later removal.
+        for directory in (self.root.parent, self.root, parent):
+            directory.mkdir(parents=True, exist_ok=True)
+            status = directory.lstat()
+            if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+                raise OSError("Temporary Provider storage requires real directories")
+
+        def claim(name: str) -> bool:
+            try:
+                (parent / name).mkdir(mode=0o700)
+            except FileExistsError:
+                return False
+            return True
+
+        with self._lock:
+            path = parent / new_id("work", claim=claim)
+            self._active[path] = 1
+        try:
+            # A second manager checking the same data directory must also spare a
+            # live, long-running turn. The OS releases this lock on process exit.
+            with (path / _PROVIDER_LEASE).open("xb") as lease:
+                acquire_file_lock(lease.fileno())
+                yield path
+        finally:
+            try:
+                remove_tree(path, within=self.root.parent)
+            finally:
+                with self._lock:
+                    del self._active[path]
+
     def create_terminal_log(
         self, *, owner: str | None, scope: frozenset[str] | None
     ) -> TemporaryFileLease:
@@ -279,6 +322,10 @@ class TemporaryFileManager:
             for entry in entries:
                 if stopping is not None and stopping.is_set():
                     return
+                if category == "providers" and _PROVIDER_DIRECTORY.fullmatch(entry.name):
+                    if os.path.normcase(entry.path) not in active:
+                        self._sweep_provider_directory(Path(entry.path), expires_before)
+                    continue
                 if not _OWNER_PATTERN.fullmatch(entry.name):
                     continue
                 self._sweep_owner(
@@ -295,6 +342,36 @@ class TemporaryFileManager:
         if "commands" in policies:
             policies.setdefault("bash", policies["commands"])
         return policies
+
+    def _sweep_provider_directory(self, path: Path, expires_before: float) -> None:
+        try:
+            status = path.lstat()
+            if (
+                is_link_status(status)
+                or not stat.S_ISDIR(status.st_mode)
+                or status.st_mtime >= expires_before
+            ):
+                return
+            marker = path / _PROVIDER_LEASE
+            try:
+                marker_status = marker.lstat()
+            except FileNotFoundError:
+                pass  # The process may have died between mkdir and creating its lease.
+            else:
+                if is_link_status(marker_status) or not stat.S_ISREG(marker_status.st_mode):
+                    return
+                with marker.open("r+b") as lease:
+                    try:
+                        acquire_file_lock(lease.fileno())
+                    except OSError as error:
+                        if error.errno in {errno.EACCES, errno.EAGAIN}:
+                            return
+                        raise
+            remove_tree(path, within=self.root.parent)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as error:
+            _LOGGER.warning("Temporary Provider directory cleanup failed: %s", error)
 
     def _sweep_owner(
         self,

@@ -74,7 +74,13 @@ from core.providers.reasoning import (
 from core.utils.errors import ProviderError
 
 Protocol = Literal[
-    "chat_completions", "messages", "responses", "gemini", "ollama_chat", "claude_agent"
+    "chat_completions",
+    "messages",
+    "responses",
+    "gemini",
+    "ollama_chat",
+    "claude_agent",
+    "antigravity",
 ]
 """Wire protocol families vBot implements.
 
@@ -84,6 +90,7 @@ Protocol = Literal[
 - ``gemini``: Google ``generateContent`` / ``streamGenerateContent``.
 - ``ollama_chat``: Ollama native ``/api/chat``.
 - ``claude_agent``: the local Claude Code binary through the Claude Agent SDK.
+- ``antigravity``: the local Antigravity CLI with its personal subscription login.
 """
 
 PROTOCOLS: tuple[Protocol, ...] = (
@@ -93,6 +100,7 @@ PROTOCOLS: tuple[Protocol, ...] = (
     "gemini",
     "ollama_chat",
     "claude_agent",
+    "antigravity",
 )
 
 type DecisionProtocol = Literal["none", "system_one", "openai_decisions", "google_decisions"]

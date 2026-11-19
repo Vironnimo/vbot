@@ -24,11 +24,11 @@ from core.providers._claude_agent_sdk import (
 from core.providers._claude_agent_wire import (
     JsonObject,
     StreamState,
-    history,
     kind,
     prompt_content,
     record,
 )
+from core.providers._native_agent_wire import history
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.storage import TemporaryFileLease, TemporaryFileManager
 from core.utils.logging import get_logger

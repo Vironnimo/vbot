@@ -36,6 +36,7 @@ from core.providers._usage_parsers import (
     clamp_percent,
 )
 from core.providers._usage_types import (
+    ANTIGRAVITY_USAGE_CONNECTION,
     CLAUDE_AGENT_USAGE_CONNECTION,
     COPILOT_USAGE_CONNECTION,
     COPILOT_USAGE_URL,
@@ -129,7 +130,10 @@ DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
 # Provider-imposed polling floors for successful snapshots. Ollama allows ten
 # usage requests per minute per user across all keys and devices and asks for
 # one per minute.
-_MIN_CACHE_TTL_SECONDS: dict[str, float] = {OLLAMA_USAGE_CONNECTION: 60.0}
+_MIN_CACHE_TTL_SECONDS: dict[str, float] = {
+    OLLAMA_USAGE_CONNECTION: 60.0,
+    ANTIGRAVITY_USAGE_CONNECTION: 60.0,
+}
 
 
 class HttpxUsageTransport:
@@ -157,6 +161,7 @@ class HttpxUsageTransport:
 
 
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
+    _SupportedConnection("antigravity", "subscription"),
     _SupportedConnection("claude-agent", "subscription"),
     _SupportedConnection("openai", "subscription"),
     _SupportedConnection("github-copilot", "oauth"),
@@ -186,6 +191,7 @@ class ProviderUsageService:
         monotonic: Callable[[], float] = time.monotonic,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         claude_usage: Callable[[], tuple[UsageWindow, ...]] | None = None,
+        antigravity_usage: Callable[[], Awaitable[tuple[UsageWindow, ...]]] | None = None,
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
@@ -202,12 +208,14 @@ class ProviderUsageService:
         self._monotonic = monotonic
         self._clock = clock
         self._claude_usage = claude_usage
+        self._antigravity_usage = antigravity_usage
         self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
         self._fetch_locks: dict[str, asyncio.Lock] = {}
         self._history_task: asyncio.Task[None] | None = None
         self._history_started = False
         # Only connections with a registered fetcher are queried.
         self._fetchers: dict[str, _Fetcher] = {
+            ANTIGRAVITY_USAGE_CONNECTION: self._fetch_antigravity,
             CLAUDE_AGENT_USAGE_CONNECTION: self._fetch_claude_agent,
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
@@ -479,6 +487,18 @@ class ProviderUsageService:
             account=connection.account_id,
             display_name=self._display_name(connection),
             windows=list(self._claude_usage()) if self._claude_usage is not None else [],
+        )
+
+    async def _fetch_antigravity(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        try:
+            windows = await self._antigravity_usage() if self._antigravity_usage else ()
+        except ProviderAuthError as exc:
+            raise UsageFetchError(str(exc)) from exc
+        return ProviderUsageSnapshot(
+            connection=connection.connection_id,
+            account=connection.account_id,
+            display_name=self._display_name(connection),
+            windows=list(windows),
         )
 
     async def _fetch_openai(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
