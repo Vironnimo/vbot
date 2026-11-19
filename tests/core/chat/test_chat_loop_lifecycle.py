@@ -615,6 +615,7 @@ async def test_run_failures_remain_visible_in_history_once(
     assert errors[0].error_kind == error_kind
     assert "private-internal-detail" not in str(errors[0].content)
     assert run.events[-1].payload["error_message_id"] == errors[0].id
+    assert run.events[-1].payload["context_usage"] is None
     # One terminal line reports the failure and its retry count; attempts log at DEBUG.
     diagnostics = [
         record

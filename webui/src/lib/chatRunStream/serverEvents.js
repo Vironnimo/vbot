@@ -26,7 +26,7 @@ export function runEventFromServerEvent(serverEvent) {
   if (payload.session_usage) {
     runPayload.session_usage = payload.session_usage;
   }
-  if (payload.context_usage) {
+  if (Object.hasOwn(payload, 'context_usage')) {
     runPayload.context_usage = payload.context_usage;
   }
   if (payload.timing) {

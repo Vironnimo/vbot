@@ -16,7 +16,7 @@ import {
   startRun,
 } from './chatState.js';
 import {
-  nextContextUsage,
+  applyRunContextUsage,
   updateSessionOutputMeasurements,
   updateSessionUsage,
 } from './chatState/sessionState.js';
@@ -180,11 +180,7 @@ export function createChatRunStream({
     current.iterationCount = state.iteration_count ?? current.iterationCount;
     session.status = current.status;
     applyRunControls(session, { run_id: data.run_id, ...state });
-    if (Object.hasOwn(state, 'context_usage'))
-      session.contextUsage = nextContextUsage(
-        session.contextUsage,
-        state.context_usage,
-      );
+    applyRunContextUsage(session, data.run_id, data.sequence, state);
     if (state.session_usage) session.sessionUsage = state.session_usage;
     if (state.usage) updateSessionUsage(session, state.usage);
     if (data.terminal)

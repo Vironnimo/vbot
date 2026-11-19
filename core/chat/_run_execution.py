@@ -587,7 +587,12 @@ class RunExecution:
                 terminal_context_usage = latest_session_context_usage(
                     context.session_snapshot.active_messages
                 )
-                if terminal_context_usage is not None:
+                # A first request can fail before it leaves a durable Context anchor.
+                # Clear its in-flight projection for reconnect and terminal events.
+                if (
+                    terminal_context_usage is not None
+                    or "context_usage" in run.terminal_payload_extras
+                ):
                     run.terminal_payload_extras["context_usage"] = terminal_context_usage
             except Exception:
                 _LOGGER.warning(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,7 +30,10 @@ from tests.core.providers.usage_test_support import (
     OPENROUTER_CREDITS_BODY,
     OPENROUTER_KEY_BODY,
     USAGE_RESPONSES,
+    FakeCredentials,
+    FakeProviders,
     FakeResponse,
+    FakeRuntime,
     FakeTransport,
     usage_runtime,
 )
@@ -759,6 +763,44 @@ async def test_report_coalesces_concurrent_fetches_per_connection() -> None:
 
     assert transport.calls == 1
     assert first_report.providers[0].windows == second_report.providers[0].windows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("older_fails", [False, True], ids=["stale-success", "stale-error"])
+async def test_antigravity_preflight_supersedes_an_older_usage_report(older_fails: bool) -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+    connection = "antigravity:subscription"
+    runtime = FakeRuntime(providers=FakeProviders({}), credentials=FakeCredentials({connection}))
+    old = (UsageWindow(label="5h", used_percent=10),)
+    new = (UsageWindow(label="5h", used_percent=30),)
+    calls = 0
+
+    async def fetch() -> tuple[UsageWindow, ...]:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        if older_fails:
+            raise TimeoutError
+        return old
+
+    service = ProviderUsageService(runtime, antigravity_usage=fetch)
+    pending = asyncio.create_task(service.report([connection]))
+    await started.wait()
+    service.observe_antigravity_usage(time.monotonic_ns(), new)
+    release.set()
+    assert (await pending).providers[0].windows == list(new)
+    assert (await service.report([connection])).providers[0].windows == list(new)
+    assert calls == 1
+    [observation] = service.observations()
+    assert observation["windows"] == [new[0].to_dict()]
+
+    earlier_step = time.monotonic_ns()
+    service.observe_antigravity_usage(time.monotonic_ns(), ())  # Disconnect.
+    service.observe_antigravity_usage(earlier_step, old)
+    assert service.observations() == []
+    await service.report([connection])
+    assert calls == 2  # The retired step left no cached windows.
 
 
 @pytest.mark.asyncio

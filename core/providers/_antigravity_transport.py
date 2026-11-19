@@ -185,8 +185,8 @@ def _confirmed_call(root: Path, step: dict[str, Any], names: dict[str, str]) -> 
     return call
 
 
-def _usage(value: object) -> dict[str, Any]:
-    usage: dict[str, Any] = {"type": "usage", "reported_cost_usd": 0.0}
+def _token_counts(value: object) -> dict[str, int]:
+    usage: dict[str, int] = {}
     if not isinstance(value, dict):
         return usage
     for native, canonical in (
@@ -200,6 +200,10 @@ def _usage(value: object) -> dict[str, Any]:
             usage[canonical] = count
     if "input_tokens" in usage:
         usage["input_tokens"] += usage.get("cache_read_tokens", 0)
+        # Native requests always carry a prompt. A zero after including cache
+        # is unavailable as a measurement, including inside last_request_usage.
+        if usage["input_tokens"] == 0:
+            del usage["input_tokens"]
     return usage
 
 
@@ -248,15 +252,16 @@ async def _read_turn(
     content: list[str] = []
     calls: dict[int, dict[str, Any]] = {}
     pending: set[int] = set()
+    agent_usage: dict[str, int] | None = None
+    had_checkpoint = False
     while True:
         tag, body = await _event(process.stdout)
         if tag == "result" and body.get("status") != "SUCCESS":
             raise _response_error(body.get("error"))
-        if tag == "step_update" and body.get("step_type") in {
-            "user_input",
-            "checkpoint",
-            "error_message",
-        }:
+        step_type = body.get("step_type") if tag == "step_update" else None
+        if step_type == "checkpoint":
+            had_checkpoint = True
+        if step_type in {"user_input", "checkpoint", "error_message"}:
             continue
         if not checked_guard:
             checked_guard = await _FILES.run(is_file_strict, root / "invocation")
@@ -278,19 +283,31 @@ async def _read_turn(
                         yield {"type": "content_delta", "text": remaining}
             if len({call["id"] for call in calls.values()}) != len(calls):
                 raise _invalid("returned duplicate Tool call IDs")
-            yield _usage(body.get("usage"))
+            # The CLI's result accounts for the entire native turn, including a
+            # separate checkpoint request. Only the agent response anchors Context.
+            total = _token_counts(body.get("usage"))
+            if total != agent_usage or had_checkpoint:
+                usage: dict[str, Any] = {"type": "usage", "reported_cost_usd": 0.0, **total}
+                if had_checkpoint or (
+                    agent_usage
+                    and any(total.get(key, value) != value for key, value in agent_usage.items())
+                ):
+                    usage["last_request_usage"] = agent_usage or {}
+                yield usage
             for call_index in sorted(calls):
                 yield calls[call_index]
             yield {"type": "finish", "reason": "tool_calls" if calls else "stop"}
             return
         if tag != "step_update":
             raise _invalid("reported an unexpected stream event")
-        step_type = body.get("step_type")
         if step_type == "agent_response":
             text = body.get("text_delta")
             if isinstance(text, str) and text:
                 content.append(text)
                 yield {"type": "content_delta", "text": text}
+            if body.get("state") == "DONE" and (counts := _token_counts(body.get("usage"))):
+                agent_usage = counts
+                yield {"type": "usage", "reported_cost_usd": 0.0, **counts}
         elif step_type == "tool":
             index = body.get("step_index")
             if type(index) is not int or index < 0:

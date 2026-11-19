@@ -110,6 +110,28 @@ describe('server conversation projection transport', () => {
     expect(h.displayedSession().outputLatency).toEqual(latency);
   });
 
+  it('keeps the newest request context across both live transports and clears it after a failed first step', () => {
+    const h = setup();
+    const session = h.displayedSession();
+    h.stream.applyConnectionSnapshot({ active_runs: [activeRun('run-one')] });
+    const waiting = { tokens: 1500, context_window: 10000, estimated: true };
+    send(h, 'provider_request_status', 12, 'run-one', {
+      output: { state: 'waiting', context_usage: waiting },
+    });
+    h.sse(
+      timelineSnapshot('run-one', 10, {
+        state: { context_usage: { tokens: 200 } },
+      }),
+    );
+    expect(session.contextUsage).toEqual(waiting);
+    send(h, 'run_failed', 14, 'run-one', {
+      status: 'failed',
+      context_usage: null,
+    });
+    h.sse(timelinePatch('run-one', 10, { state: { context_usage: waiting } }));
+    expect(session.contextUsage).toBeNull();
+  });
+
   it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
     'keeps streaming through an early WebSocket %s until the final projection arrives',
     (status) => {

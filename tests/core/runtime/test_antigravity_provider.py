@@ -7,12 +7,14 @@ import json
 import subprocess
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.providers import _antigravity_native as agy
+from core.providers import antigravity
 from core.providers.accounts import ConnectionRef
 from core.providers.antigravity import AntigravityAdapter
 from core.providers.errors import ProviderAuthError
@@ -91,12 +93,40 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         adapter = runtime.get_adapter(ConnectionRef("antigravity", _CONNECTION))
         assert isinstance(adapter, AntigravityAdapter)
         report = await runtime.provider_usage.report([_CONNECTION])
+        assert calls == ["usage", "usage", "models"]  # Enrollment already measured the quotas.
         windows = report.providers[0].windows
         assert [(window.window_seconds, window.used_percent) for window in windows] == [
             (604800, 50),
             (18000, 100),
         ]
         assert windows[1].reset_at == five_hour["reset_time"]
+
+        observed: list[dict[str, Any]] = []
+        runtime.provider_usage.subscribe_observations(observed.append)
+        measured_at = datetime(2026, 11, 19, 14, tzinfo=UTC)
+        monkeypatch.setattr(runtime.provider_usage, "_clock", lambda: measured_at)
+
+        async def stream_turn(*_args: Any, **_kwargs: Any) -> AsyncGenerator[dict]:
+            assert observed[-1]["observed_at"] == measured_at.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+            yield {"type": "finish", "reason": "stop"}
+
+        monkeypatch.setattr(antigravity, "stream_turn", stream_turn)
+        weekly["remaining_fraction"] = 0.4
+        for _ in range(2):
+            measured_at += timedelta(minutes=1)
+            async with aclosing(
+                adapter.stream([{"role": "user", "content": "hello"}], model_id=model.model_id)
+            ) as stream:
+                assert [event["type"] async for event in stream] == ["finish"]
+        assert len(observed) == 2  # An unchanged measurement also refreshes its age.
+        [latest] = runtime.provider_usage.observations()
+        assert latest == observed[-1]
+        assert (latest["connection"], latest["account"]) == (_CONNECTION, "default")
+        assert latest["windows"][0]["used_percent"] == 60
+        assert (await runtime.provider_usage.report([_CONNECTION])).providers[0].to_dict() == {
+            key: value for key, value in latest.items() if key != "observed_at"
+        }
+        assert calls == ["usage", "usage", "models", "usage", "usage"]
         buckets.clear()
         with pytest.raises(ProviderAuthError, match="subscription quotas"):
             async with aclosing(
@@ -109,6 +139,10 @@ async def test_opt_in_publishes_cli_models_and_personal_quota_only(
         )
         assert runtime.connection_reachability(_CONNECTION) is False
         assert runtime.models.get("antigravity", model.model_id) == model
+        assert runtime.provider_usage.observations() == [latest]  # Failed checks keep the age.
+        await runtime.close_connection_transports("antigravity", "subscription")
+        assert runtime.provider_usage.observations() == [] and observed[-1]["windows"] == []
+        assert (await runtime.provider_usage.report([_CONNECTION])).providers[0].error
     finally:
         await runtime.aclose()
 

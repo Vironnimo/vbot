@@ -52,6 +52,21 @@ export function nextContextUsage(previous, next) {
   return { ...next, context_window: previous.context_window };
 }
 
+// The live timeline and the app socket can deliver the same Run out of order.
+export function applyRunContextUsage(session, runId, sequence, payload) {
+  if (!Object.hasOwn(payload, 'context_usage')) return;
+  const current = session.currentRun;
+  if (current && current.runId !== runId) return;
+  if (current && Number.isInteger(sequence)) {
+    if (sequence < (current.contextUsageSequence ?? 0)) return;
+    current.contextUsageSequence = sequence;
+  }
+  session.contextUsage = nextContextUsage(
+    session.contextUsage,
+    payload.context_usage,
+  );
+}
+
 export function createChatState() {
   return {
     agents: [],

@@ -87,6 +87,7 @@ class ProviderRuntime:
         resources_path: Path,
         logger: Any,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+        on_antigravity_usage: Callable[[int, tuple[UsageWindow, ...]], None] | None = None,
     ) -> None:
         self._providers = providers
         self._models = models
@@ -114,6 +115,7 @@ class ProviderRuntime:
         self._responses_transports = ResponsesTransports()
         self._external_status: dict[str, dict[str, Any]] = {}
         self._claude_usage = ClaudeAgentUsage()
+        self._on_antigravity_usage = on_antigravity_usage
         self._claude_usage_probe: asyncio.Task[None] | None = None
         self._claude_usage_probed_at: float | None = None
         self._retired_native: set[ClaudeAgentSessions | AntigravityNative] = set()
@@ -205,7 +207,9 @@ class ProviderRuntime:
                 self._connection_reachability[key] = False
 
         owner = AntigravityNative(
-            temporary_files=self._storage.temporary_files, on_auth_error=auth_failed
+            temporary_files=self._storage.temporary_files,
+            on_auth_error=auth_failed,
+            on_usage=self._on_antigravity_usage,
         )
         return owner
 
@@ -373,6 +377,8 @@ class ProviderRuntime:
             previous_agy = self._antigravity
             self._antigravity = self._new_antigravity()
             self._forget_external_auth(adapter)
+            if self._on_antigravity_usage is not None:
+                self._on_antigravity_usage(time.monotonic_ns(), ())
             await previous_agy.aclose()
         try:
             await self._responses_transports.close_connection(provider_id, connection_id)

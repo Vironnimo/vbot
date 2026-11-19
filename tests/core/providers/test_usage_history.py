@@ -430,9 +430,11 @@ async def test_history_sampler_delays_until_one_hour_after_latest_sample(
     )
 
     empty_delay = await service._initial_history_delay()  # noqa: SLF001
+    service.observe_antigravity_usage(1, ())  # Disconnected before the startup read completed.
     for minutes_ago in (75, 15):
         await store.append(
-            (observed_at - timedelta(minutes=minutes_ago)).isoformat(), [_snapshot()]
+            (observed_at - timedelta(minutes=minutes_ago)).isoformat(),
+            [_snapshot(), _snapshot(connection="antigravity:subscription")],
         )
     delay = await service._initial_history_delay()  # noqa: SLF001
 
