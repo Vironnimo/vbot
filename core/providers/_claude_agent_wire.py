@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.providers._messages_stream import messages_terminal_outcome
+from core.providers._native_agent_wire import visible_message
 from core.providers.adapter import (
     canonical_tool_result_is_error,
     tool_result_content_blocks,
@@ -65,49 +66,6 @@ def kind(value: JsonObject) -> str:
         "RateLimitEvent": "rate_limit_event",
     }
     return str(mapping.get(raw, raw))
-
-
-def calls(message: Mapping[str, Any]) -> list[JsonObject]:
-    result = []
-    for call in message.get("tool_calls") or []:
-        function = call.get("function", call)
-        arguments = function.get("arguments", call.get("arguments", {}))
-        if isinstance(arguments, str):
-            with contextlib.suppress(ValueError):
-                arguments = json.loads(arguments)
-        result.append({"id": call.get("id"), "name": function.get("name"), "arguments": arguments})
-    return result
-
-
-def visible_message(message: Mapping[str, Any]) -> JsonObject:
-    """Keep the Model-visible state needed to detect changed canonical history."""
-    role = message.get("role")
-    result: JsonObject = {"role": role, "content": copy.deepcopy(message.get("content") or "")}
-    if role == "assistant":
-        result["tool_calls"] = calls(message)
-    if role == "tool":
-        result["tool_call_id"] = message.get("tool_call_id")
-        result["content"] = tool_result_text(message.get("content", ""))
-        result["is_error"] = canonical_tool_result_is_error(message)
-        result["media"] = copy.deepcopy(tool_result_content_blocks(message))
-    return result
-
-
-def history(messages: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
-    return [visible_message(message) for message in messages if message.get("role") != "system"]
-
-
-def system_prompt(messages: Sequence[Mapping[str, Any]]) -> str:
-    parts = []
-    for message in messages:
-        if message.get("role") != "system":
-            continue
-        content = message.get("content", "")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            parts.extend(str(block.get("text", "")) for block in content if isinstance(block, dict))
-    return "\n\n".join(parts)
 
 
 def content_blocks(content: Any) -> list[JsonObject]:

@@ -45,6 +45,7 @@ The hourly sampler isolates each automatic attempt. An unexpected collection fai
 
 ## Supported Connections
 
+- `antigravity:subscription`: the CLI's zero-inference `/usage` command reports remaining fractions and resets by model group. The Provider projects the available five-hour and weekly buckets through the standard Usage report (`providers/antigravity.md`).
 - `claude-agent:subscription`: five-hour, weekly, Model-specific weekly and extra-usage windows from SDK `RateLimitInfo`; values come from `unifiedWindows` of Run streams and of the minimal usage probe when observations are missing or older than 15 minutes, verified live against Claude Code 2.1.317.
 - `openai:subscription`: ChatGPT usage windows/credits and account-scoped Codex headers; verified endpoint details in `providers/openai.md`.
 - `github-copilot:oauth`: Copilot entitlement/usage using stored GitHub OAuth extra; details in `providers/github-copilot.md`.

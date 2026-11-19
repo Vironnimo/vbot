@@ -922,7 +922,7 @@ export default Object.freeze({
   'settings.providers.external.status.incompatible':
     'Update the program required by {provider} on the server computer, then check again.',
   'settings.providers.external.status.missing':
-    'The program required by {provider} was not found. Install it on the server computer or select its executable below.',
+    'The program required by {provider} was not found. Install it on the server computer, then check the login again.',
   'settings.providers.external.status.busy':
     '{provider} has no free process slots. Check again after an active Run finishes.',
   'settings.providers.external.status.unavailable':

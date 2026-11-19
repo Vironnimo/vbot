@@ -24,6 +24,28 @@ def _age(path: Path, *, seconds: float) -> None:
     os.utime(path, (timestamp, timestamp))
 
 
+def test_provider_directory_spares_live_turns_and_removes_crash_leftovers(tmp_path: Path) -> None:
+    manager = TemporaryFileManager(tmp_path)
+    other = TemporaryFileManager(tmp_path)
+    with manager.provider_directory() as active:
+        (active / "transcript").write_text("running", encoding="utf-8")
+        _age(active, seconds=600)
+        orphan = active.with_name("work_000000000000")
+        orphan.mkdir()
+        (orphan / "transcript").write_text("interrupted", encoding="utf-8")
+        (orphan / ".vbot-lease").touch()
+        outside = tmp_path / "keep"
+        outside.mkdir()
+        (outside / "intact").touch()
+        link_directory(orphan / "link", outside)
+        _age(orphan, seconds=600)
+        other.sweep()
+        assert (active / "transcript").is_file()
+        assert not orphan.exists()
+        assert (outside / "intact").exists()
+    assert not active.exists()
+
+
 @pytest.mark.parametrize(
     ("category", "suffix", "directory"),
     [

@@ -1,0 +1,17 @@
+{
+  "id": "antigravity",
+  "name": "Google Antigravity",
+  "adapter": "antigravity",
+  "base_url": "agy://local",
+  "catalog_scope": "instance",
+  "connections": [
+    {
+      "id": "subscription",
+      "type": "external",
+      "label": "Antigravity CLI login",
+      "auto_refresh": true,
+      "setup_command": "agy",
+      "setup_url": "https://antigravity.google/docs/cli/install/"
+    }
+  ]
+}
