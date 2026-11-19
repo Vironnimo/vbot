@@ -10,7 +10,7 @@ from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from itertools import islice
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
@@ -24,6 +24,10 @@ from core.calendar import (
     parse_occurrence_id,
     validate_calendar_events_file,
 )
+
+
+class _OccurrenceMove(TypedDict, total=False):
+    start: str
 
 
 @pytest.fixture()
@@ -315,7 +319,7 @@ class TestUpdateEvent:
         self,
         service: CalendarService,
         created: tuple[str, str],
-        change: dict[str, str],
+        change: _OccurrenceMove,
         fields: dict[str, str],
         exdates: list[str],
         overrides: dict[str, dict[str, str]],
@@ -820,6 +824,10 @@ class TestPersistence:
         service = CalendarService(tmp_path)
 
         assert service.list_events() == []
+        start, end = service.parse_window("2030-03-01", "2030-03-02")
+        for calendar in (service, service.projection()):
+            with pytest.raises(CalendarStorageError):
+                calendar.find_free_slots(start, end, 30, now_utc=start)
         with pytest.raises(CalendarStorageError, match=message):
             service.create_event(title="X", start="2026-09-14")
         monkeypatch.undo()

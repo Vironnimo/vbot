@@ -129,7 +129,7 @@ class CalendarService(CalendarProjection):
         self._timezone = _resolve_zone(tz) if isinstance(tz, str) else (tz or _default_timezone())
         self._events: dict[str, CalendarEvent] = {}
         self._invalid_event_entries: list[Any] = []
-        self._storage_load_error: CalendarStorageError | None = None
+        self._storage_load_error: str | None = None
         self._events_loaded = False
         # The file holds the events of an earlier vBot version: the next save replaces it.
         self._replace_legacy_document = False
@@ -254,7 +254,9 @@ class CalendarService(CalendarProjection):
 
     def projection(self) -> CalendarProjection:
         """Capture committed events and timezone without sharing mutable records."""
-        return CalendarProjection(self.list_events(), self._timezone)
+        return CalendarProjection(
+            self.list_events(), self._timezone, load_error=self._storage_load_error
+        )
 
     async def create_event_async(self, **fields: Any) -> CalendarEvent:
         """Create durably without blocking; publish only after persistence succeeds."""
@@ -331,13 +333,20 @@ class CalendarService(CalendarProjection):
     # -- occurrences ------------------------------------------------------------------------
 
     async def update_occurrence(
-        self, occurrence_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+        self,
+        occurrence_id: str,
+        *,
+        times_in_event_zone: bool = False,
+        actor: str = _DEFAULT_ACTOR,
+        **fields: Any,
     ) -> EventOccurrence:
         """Change one occurrence of a repeating event: title, description, location, start, end.
 
         The rest of the series stays as it is. A new start alone keeps the
         occurrence's length; the occurrence keeps the event's kind (timed or
-        all-day). A change back to the series' own value drops that change.
+        all-day). Local inputs use the application zone unless times_in_event_zone
+        selects the series zone. Explicit offsets always name instants.
+        A change back to the series' own value drops that change.
         """
         await self.load()
         unknown_fields = sorted(set(fields) - (OVERRIDE_FIELDS - {"start_utc", "end_utc"}))
@@ -346,10 +355,10 @@ class CalendarService(CalendarProjection):
                 f"Unsupported calendar occurrence fields: {', '.join(unknown_fields)}"
             )
         async with self._edits:
-            return await self._update_occurrence(occurrence_id, fields, actor)
+            return await self._update_occurrence(occurrence_id, fields, actor, times_in_event_zone)
 
     async def _update_occurrence(
-        self, occurrence_id: str, fields: dict[str, Any], actor: str
+        self, occurrence_id: str, fields: dict[str, Any], actor: str, times_in_event_zone: bool
     ) -> EventOccurrence:
         event, key = self._occurrence_target(occurrence_id)
         if key is None:
@@ -367,7 +376,9 @@ class CalendarService(CalendarProjection):
                 fields["location"], "location", MAX_LOCATION_LENGTH
             )
         if "start" in fields or "end" in fields:
-            start, end, start_utc, end_utc = self._occurrence_times(event, current, fields)
+            start, end, start_utc, end_utc = self._occurrence_times(
+                event, current, fields, times_in_event_zone=times_in_event_zone
+            )
             override.update(start=start, end=end)
             if start_utc is not None:
                 override.update(start_utc=start_utc, end_utc=end_utc)
@@ -533,19 +544,29 @@ class CalendarService(CalendarProjection):
         )
 
     def _occurrence_times(
-        self, event: CalendarEvent, current: EventOccurrence, fields: dict[str, Any]
+        self,
+        event: CalendarEvent,
+        current: EventOccurrence,
+        fields: dict[str, Any],
+        *,
+        times_in_event_zone: bool,
     ) -> tuple[str, str, str | None, str | None]:
         zone = (
             None if event.all_day else _resolve_zone(event.tz_name or self.system_timezone_name())
         )
+        input_zone = zone if times_in_event_zone else None
         if zone is None:
             start = local_time(current.start)
         else:
             start = current.start_utc.astimezone(zone).replace(tzinfo=None)
         if fields.get("start") is not None:
-            start, _ = self._input_time(fields["start"], "start", event, kind_of=event)
+            start, _ = self._input_time(
+                fields["start"], "start", event, kind_of=event, timezone=input_zone
+            )
         if fields.get("end") is not None:
-            end, _ = self._input_time(fields["end"], "end", event, kind_of=event)
+            end, _ = self._input_time(
+                fields["end"], "end", event, kind_of=event, timezone=input_zone
+            )
         elif "start" not in fields:
             end = (
                 local_time(current.end)
@@ -749,8 +770,7 @@ class CalendarService(CalendarProjection):
     @override
     def _ensure_events_loaded(self, *, allow_degraded: bool = False) -> None:
         if self._events_loaded:
-            if self._storage_load_error is not None and not allow_degraded:
-                raise CalendarStorageError(str(self._storage_load_error))
+            super()._ensure_events_loaded(allow_degraded=allow_degraded)
             return
         try:
             self._events = self._load_events()
@@ -765,7 +785,7 @@ class CalendarService(CalendarProjection):
         """Keep the runtime available while preventing writes over unreadable data."""
         self._events = {}
         self._invalid_event_entries = []
-        self._storage_load_error = error
+        self._storage_load_error = str(error)
         self._events_loaded = True
         _LOGGER.error("Calendar storage is invalid; mutations are disabled: %s", error)
 
