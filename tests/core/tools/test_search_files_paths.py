@@ -184,6 +184,10 @@ async def test_absolute_globs_check_hard_refusals_before_requesting_approval(tmp
         )
     assert refused.value.refusal.reason == "deny_rule"
 
+    for args in ([], ["--engine=auto"]):
+        invalid = await dispatch(work, {"pattern": r"foo\q", "args": args}, permissions=boundary)
+        assert not invalid["ok"] and "unrecognized escape sequence" in invalid["error"]["message"]
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path_kind", ["relative", "absolute", "below"])
@@ -213,6 +217,7 @@ async def test_wildcard_roots_keep_existing_directory_prefixes_literal(
         result["data"]["content"]
         == ("[id]/" if path_kind == "below" else "") + "a.txt\n1:intended token"
     )
+    assert f'path "{path}"' in result["data"]["note"]
 
 
 @pytest.mark.asyncio
@@ -241,3 +246,59 @@ async def test_program_names_can_be_literal_patterns_or_roots(tmp_path, argument
     result = await dispatch(tmp_path, arguments)
     assert result["ok"], result
     assert result["data"]["content"] == expected
+
+
+@pytest.mark.asyncio
+async def test_mixed_globs_keep_each_directory_and_flags_use_the_working_directory(tmp_path):
+    work, first, second = (tmp_path / name for name in ("work", "first", "second"))
+    for root in (work, first, second):
+        root.mkdir()
+        for name in ("a.txt", "b.csv"):
+            (root / name).write_text("hit")
+    (work / "patterns").write_text("hit")
+    (work / "ignores").write_text("ignored.csv\n")
+    (first / "ignored.csv").write_text("hit")
+    globs = ["*.txt", f"{first.as_posix()}/*.csv", f"{second.as_posix()}/*.csv"]
+    result = await dispatch(
+        work, {"glob": globs, "args": ["-f", "patterns", "--ignore-file", "ignores", "-l"]}
+    )
+    # As in rg, an explicit positive glob can include an ignored path.
+    assert set(result["data"]["content"].splitlines()) == {
+        "a.txt",
+        (first / "b.csv").as_posix(),
+        (first / "ignored.csv").as_posix(),
+        (second / "b.csv").as_posix(),
+    }
+    result = await dispatch(
+        work,
+        {"path": first.as_posix(), "args": ["-f", "patterns", "--ignore-file", "ignores", "-l"]},
+    )
+    assert set(result["data"]["content"].splitlines()) == {
+        (first / "a.txt").as_posix(),
+        (first / "b.csv").as_posix(),
+    }
+    excluded = f"!{tmp_path.as_posix()}/**/a.txt"
+    result = await dispatch(work, {"glob": ["*.txt", excluded]})
+    assert result["ok"] and "content" not in result["data"]
+    result = await dispatch(work, {"glob": [excluded]})
+    assert "a.txt" not in result["data"]["content"].splitlines()
+
+
+@pytest.mark.asyncio
+async def test_wildcard_directory_roots_reopen_only_the_selected_directories(tmp_path, monkeypatch):
+    (tmp_path / ".ignore").write_text("hidden/\n")
+    for name in ("hidden/a", "hidden/b", "other/c"):
+        (tmp_path / name).mkdir(parents=True)
+    (tmp_path / "hidden/a/file.py").write_text("")
+    (tmp_path / "hidden/b/file.txt").write_text("")
+    result = await dispatch(tmp_path, {"path": "hidden/*", "args": ["--dirs", "-t", "py"]})
+    assert result["data"]["content"] == "hidden/a/"
+
+    monkeypatch.setattr("core.tools.search_files.MAX_ENTRIES", 2)
+    args = {"args": ["--dirs"], "path": ["hidden/*", "other/*"]}
+    exact = await dispatch(tmp_path, {**args, "path": "hidden/*"})
+    assert len(exact["data"]["content"].splitlines()) == 2 and "warnings" not in exact["data"]
+    limited = await dispatch(tmp_path, args)
+    assert len(limited["data"]["content"].splitlines()) == 2
+    assert len(limited["data"]["warnings"]) == 1
+    assert "stopped after 2 directories" in limited["data"]["warnings"][0]

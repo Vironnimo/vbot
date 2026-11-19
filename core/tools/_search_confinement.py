@@ -89,11 +89,9 @@ def confine_flags(
     ``--file`` and ``--ignore-file`` values resolve against ``cwd`` and pass
     as absolute paths, since each ripgrep run starts in its own scope.
     """
-    if not permissions.restricted:
-        return
     kept: list[str] = []
     for argument in query.rg_args:
-        if argument == "--follow":
+        if permissions.restricted and argument == "--follow":
             if LINKS_NOTE not in query.notes:
                 query.notes.append(LINKS_NOTE)
             continue

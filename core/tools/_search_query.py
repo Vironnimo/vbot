@@ -297,6 +297,16 @@ def _is_encoding(value: str) -> bool:
     return True
 
 
+def has_program_prefix(tokens: list[str], *, named_pattern: bool) -> bool:
+    return (
+        not named_pattern
+        and len(tokens) > 1
+        and tokens[0] in ("rg", "ripgrep", "grep")
+        and isinstance(tokens[1], str)
+        and tokens[1].startswith("-")
+    )
+
+
 def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Parsed:
     """Split args into (name, value, as written) options and operands.
 
@@ -306,12 +316,7 @@ def _parse_args(tokens: list[str], fields: dict[str, str] | None = None) -> _Par
     """
     parsed = _Parsed()
     fields = fields or {}
-    if (
-        len(tokens) > 1
-        and tokens[0] in {"rg", "ripgrep", "grep"}
-        and tokens[1].startswith("-")
-        and "pattern" not in fields
-    ):
+    if has_program_prefix(tokens, named_pattern="pattern" in fields):
         parsed.notes.append(f'The leading program name "{tokens[0]}" in args was omitted.')
         tokens = tokens[1:]
 

@@ -212,7 +212,7 @@ def _excerpt(raw: bytes, spans: list[tuple[int, int]]) -> str:
         byte_start, char_start = left, start
         if windows and start >= windows[-1][0] and end <= windows[-1][1]:
             continue
-        if remaining == 0:
+        if remaining < 32:
             hidden += 1
             continue
         size = min(width, remaining)
@@ -323,7 +323,12 @@ def content_page(
         if page.returned >= page.limit or page.byte_limited:
             break
         file_events = events.get((entry.scope, entry.native), [])
-        if any(
+        before = page.returned
+        if query.only_matching and not query.inverted:
+            _only_matching(page, entry, file_events, skip)
+        else:
+            _file_lines(page, entry, file_events, skip, query, separate)
+        if page.returned > before and any(
             b"\r" in decode_event_text(event["data"]["lines"]).replace(b"\r\n", b"")
             for event in file_events
         ):
@@ -331,10 +336,6 @@ def content_page(
                 f"{entry.label} contains lone CR line endings, shown as ␍. Line numbers "
                 "count LF boundaries and can differ from read."
             )
-        if query.only_matching and not query.inverted:
-            _only_matching(page, entry, file_events, skip)
-            continue
-        _file_lines(page, entry, file_events, skip, query, separate)
     return page
 
 
@@ -422,34 +423,24 @@ def _file_lines(
             for line in lines[max(first, last_counted + 1) : last + 1]:
                 line.match = False
         groups = groups[: entry.count]
-    unit = 0
-    lower = 0  # leading context never reaches a match this page leaves out
     shown = -1  # index in lines of the last line shown
-    following = len(groups)
     for index, (first, last) in enumerate(groups):
-        if unit >= entry.count:
-            following = index
-            break
-        if unit < skip:
-            unit += 1
-            lower = last + 1
+        if index < skip:
             continue
         if page.returned >= page.limit or page.byte_limited:
-            following = index
             break
-        if shown >= 0:
-            start = shown + 1
-        else:
-            start = min(first, max(lower, _context_start(lines, first, query.before)))
+        start = shown + 1 if shown >= 0 else _context_start(lines, first, query.before)
         if not block.add(lines[start : last + 1], lines[first : last + 1], 1):
             return
         shown = max(shown, last)
-        unit += 1
     if shown < 0 or page.byte_limited:
         return
-    upper = groups[following][0] if following < len(groups) else len(lines)
-    for line in lines[shown + 1 : upper]:
-        if line.number - lines[shown].number > query.after or not block.add([line], [line], 0):
+    for line in lines[shown + 1 :]:
+        if (
+            line.match
+            or line.number - lines[shown].number > query.after
+            or not block.add([line], [line], 0)
+        ):
             return
 
 
@@ -540,8 +531,10 @@ def summary(
             found = "No directories found"
         elif query.mode == "list_files":
             found = "No files found"
+        elif query.mode == "files_without_match" and files_searched == 0:
+            found = "No files were searched"
         elif query.mode == "files_without_match":
-            found = "Every searched file contains a match"
+            found = "No files without a match were found"
         elif files_searched is not None:
             found = f"No matches in {_count(files_searched, 'searched file', 'searched files')}"
         else:

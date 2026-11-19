@@ -49,6 +49,9 @@ class _Roots:
     missing: list[tuple[str, Path]] = field(default_factory=list)
     plain: list[Path] = field(default_factory=list)
     globs: list[tuple[Path, str]] = field(default_factory=list)
+    # Complete ordered filters for each search directory when absolute globs
+    # select files outside the working directory.
+    filters: dict[Path, tuple[Path, list[str]]] = field(default_factory=dict)
 
     def add(self, path: Path, glob: str | None = None) -> None:
         """Keep each root's selection separate from filters for the whole call."""
@@ -74,8 +77,10 @@ def _resolve_roots(
     ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both. A
     missing path written as ``!vendor/**`` is the excluding glob it reads as.
     """
-    _local_globs(query, cwd, permissions, grant)
     roots = _Roots()
+    _local_globs(query, cwd, permissions, grant, roots)
+    if roots.filters:
+        return roots
     excluded = False
     for raw in query.roots or [str(cwd)]:
         text = str(_path_argument(raw, windows=os.name == "nt"))
@@ -125,9 +130,11 @@ def _resolve_roots(
             continue
         # The cwd is literal filesystem context, never part of the Agent's glob.
         glob_text = (
-            str(candidate.relative_to(cwd)) if candidate.is_relative_to(cwd) else str(candidate)
+            candidate.relative_to(cwd).as_posix()
+            if candidate.is_relative_to(cwd)
+            else candidate.as_posix()
         )
-        selected = _glob_root(glob_text, cwd, query, permissions, grant)
+        selected = _glob_root(glob_text, cwd, query, permissions, grant, written=raw)
         if selected is not None:
             roots.add(*selected)
             continue
@@ -259,7 +266,8 @@ def _local_globs(
     query: SearchQuery,
     cwd: Path,
     permissions: PermissionBoundary,
-    grant: PermissionGrant | None = None,
+    grant: PermissionGrant | None,
+    roots: _Roots,
 ) -> None:
     """Read globs written as absolute paths as the globs they select.
 
@@ -268,8 +276,9 @@ def _local_globs(
     working directory is anchored there (``/src/*.py``); one outside it, in a
     call without path, searches that directory with the rest of the glob.
     """
-    globs: list[str] = []
-    outside: Path | None = None
+    # None marks a relative exclusion that applies in every scope.
+    filters: list[tuple[Path | None, str]] = []
+    has_external_selection = False
     missing: PermissionDenied | None = None
     for glob in query.globs:
         negated = glob.startswith("!")
@@ -287,27 +296,71 @@ def _local_globs(
             missing = missing or error
             continue
         if split is None:
-            globs.append(glob)
+            filters.append((None if negated else cwd, glob))
             continue
         base, remainder = split
         if base.is_relative_to(cwd):
-            globs.append(
-                ("!" if negated else "") + "/".join(("", *base.relative_to(cwd).parts, remainder))
+            filters.append(
+                (
+                    cwd,
+                    ("!" if negated else "")
+                    + "/".join(("", *base.relative_to(cwd).parts, remainder)),
+                )
             )
-        elif not negated and not query.roots and outside in (None, base):
-            outside = base
-            globs.append(f"/{remainder}")
-            query.notes.append(
-                f'glob "{glob}" is an absolute path, so {path_label(base, cwd)} was searched '
-                f'with glob "/{remainder}".'
-            )
+        elif not query.roots:
+            filters.append((base, ("!" if negated else "") + "/" + remainder))
+            if not negated:
+                has_external_selection = True
+                query.notes.append(
+                    f'glob "{glob}" is an absolute path, so {path_label(base, cwd)} was searched '
+                    f'with glob "/{remainder}".'
+                )
+            elif cwd.is_relative_to(base):
+                has_external_selection = True
         else:
-            globs.append(glob)
+            filters.append((cwd, glob))
     if missing is not None:
         raise missing
-    query.globs = globs
-    if outside is not None:
-        query.roots = [str(outside)]
+    if not has_external_selection:
+        query.globs = [glob for base, glob in filters if base in (None, cwd)]
+        return
+    selected = dict.fromkeys(
+        base for base, glob in filters if base is not None and not glob.startswith("!")
+    )
+    if not selected:
+        selected[cwd] = None
+    for base in selected:
+        if any(parent in selected for parent in base.parents):
+            continue
+        roots.add(_checked(base, permissions, grant))
+        # ripgrep can anchor an exclusion above the search root. Keep the
+        # root as its explicit operand so the walk never expands to that anchor.
+        anchor = min(
+            (target for target, _ in filters if target is not None and base.is_relative_to(target)),
+            key=lambda path: len(path.parts),
+        )
+        roots.filters[base] = (
+            anchor,
+            [
+                _anchored_filter(value, target or base, anchor)
+                for target, value in filters
+                if target is None or target.is_relative_to(base) or base.is_relative_to(target)
+            ],
+        )
+
+
+def _anchored_filter(glob: str, base: Path, anchor: Path) -> str:
+    if base == anchor:
+        return glob
+    prefix = "/".join(
+        re.sub(r"[\[\]{}*?]", lambda m: f"[{m[0]}]", part)
+        for part in base.relative_to(anchor).parts
+    )
+    negated = glob.startswith("!")
+    body = glob_separators(glob[1:] if negated else glob)
+    if "/" not in body.rstrip("/"):
+        body = "**/" + body
+    return ("!" if negated else "") + "/" + prefix + "/" + body.removeprefix("./").lstrip("/")
 
 
 def _absolute_glob(
@@ -441,6 +494,8 @@ def _glob_root(
     query: SearchQuery,
     permissions: PermissionBoundary,
     grant: PermissionGrant | None = None,
+    *,
+    written: str,
 ) -> tuple[Path, str] | None:
     """Search a path written as a glob, such as src/**/*.py, as its directory and glob."""
     if any(not glob.startswith("!") for glob in query.globs) or not _GLOB_CHARACTERS.search(text):
@@ -480,8 +535,9 @@ def _glob_root(
         glob = "/".join(("", *prefix, remainder))
     except ValueError:
         glob = "/" + remainder
+    spelling = written.replace("\\", "/") if os.name == "nt" else written
     query.notes.append(
-        f'path "{text}" contains glob characters, so {path_label(base, cwd)} was searched with '
+        f'path "{spelling}" contains glob characters, so {path_label(base, cwd)} was searched with '
         f'glob "{glob}".'
     )
     return base, glob
@@ -559,7 +615,11 @@ def _directory_globs(
         if glob.startswith("!") or _GLOB_SYNTAX.search(glob):
             continue
         name = glob.replace("\\", "/").removeprefix("./").strip("/")
-        if Path(name).is_absolute() or {"", ".", ".."} & set(name.split("/")):
+        if (
+            Path(name).is_absolute()
+            or {"", ".", ".."} & set(name.split("/"))
+            or (os.name == "nt" and any(not part.rstrip(" .") for part in name.split("/")))
+        ):
             continue
         if not any(
             (

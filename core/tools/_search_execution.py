@@ -73,7 +73,7 @@ class Scope:
     cwd: Path
     paths: list[str]
     prefixes: list[str] = field(default_factory=list)
-    # A glob written as a root selects only this run, never the other roots.
+    # Ordered globs that apply at these roots, including any wildcard root.
     globs: list[str] = field(default_factory=list)
 
 
@@ -98,6 +98,10 @@ class ScanResult:
 class SearchRefusedError(RuntimeError):
     """ripgrep refused the query; the message says how to correct it."""
 
+    def __init__(self, message: str, patterns: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.patterns = patterns
+
 
 def skips_caches(query: SearchQuery, root_globs: Sequence[str] = ()) -> bool:
     """Whether the query skips ``__pycache__`` directories, as it does by default.
@@ -108,7 +112,7 @@ def skips_caches(query: SearchQuery, root_globs: Sequence[str] = ()) -> bool:
     """
     if any(argument in {"--unrestricted", "--no-ignore"} for argument in query.rg_args):
         return False
-    selecting = [glob for glob in [*root_globs, *query.globs] if not glob.startswith("!")]
+    selecting = [glob for glob in root_globs if not glob.startswith("!")]
     selecting += [arg for arg in query.rg_args if arg.startswith("--iglob=") and "=!" not in arg]
     return not any(name in glob.casefold() for glob in selecting for name in _CACHE_NAMES)
 
@@ -145,7 +149,7 @@ def _base_arguments(query: SearchQuery, scope: Scope, *, globs: bool = True) -> 
         *query.rg_args,
         *(
             rg_globs(
-                [*scope.globs, *query.globs],
+                scope.globs,
                 scope.prefixes,
                 skip_caches=skips_caches(query, scope.globs),
             )
@@ -241,10 +245,12 @@ def _judge(
         else:
             messages[-1] += "\n" + line
     other = []
+    path_diagnostic = False
     for message in messages:
         text = message.removeprefix("rg: ")
         match = _IO_ERROR.match(message)
         if match is not None:
+            path_diagnostic = True
             if not shown(match["path"]):
                 continue
             code = int(match["code"])
@@ -260,15 +266,23 @@ def _judge(
             continue
         # Other problems with one path, such as an invalid line in an ignore file,
         # name that path first; a refused query names none.
-        path, separator, problem = text.partition(": ")
+        if text.startswith(
+            (*_PATTERN_ERRORS, "error parsing ", "unrecognized flag ", "unrecognized file type:")
+        ):
+            other.append(text)
+            continue
+        path, separator, problem = text.partition("\n")[0].partition(": ")
         if separator and path and not shown(path):
+            path_diagnostic = True
             continue
         if separator and path and os.path.lexists(scope.cwd / path):
-            reason = problem.splitlines()[0].rstrip(".") if problem else "unknown problem"
+            reason = problem.rstrip(".") or "unknown problem"
             result.warnings.append(f"ripgrep reported for {_label(path, scope, cwd)}: {reason}.")
             continue
         other.append(text)
-    searched = outcome.printed or result.warnings or result.unreadable
+    searched = (
+        outcome.printed or result.warnings or result.unreadable or (path_diagnostic and not other)
+    )
     if outcome.returncode not in (0, 1, None) and not searched:
         raise SearchRefusedError("\n".join(other))
     result.warnings.extend(
@@ -316,7 +330,9 @@ _REGEX_ERROR = re.compile(
 )
 
 
-def _pattern_error(message: str, patterns: Sequence[str]) -> tuple[str, str] | None:
+def _pattern_error(
+    message: str, originals: Sequence[str], patterns: Sequence[str]
+) -> tuple[str, str] | None:
     """Restate a regex parse error against the pattern as sent.
 
     ripgrep reports the error in its combined form ``(?:p1)|(?:p2)`` with the
@@ -325,24 +341,37 @@ def _pattern_error(message: str, patterns: Sequence[str]) -> tuple[str, str] | N
     onto one pattern, such as a PCRE2 error or one about ripgrep's own wrapper.
     """
     match = _REGEX_ERROR.search(message)
-    if match is None or match["wrapped"] != "|".join(f"(?:{pattern})" for pattern in patterns):
+    if (
+        match is None
+        or len(originals) != len(patterns)
+        or match["wrapped"] != "|".join(f"(?:{pattern})" for pattern in patterns)
+    ):
         return None
     start = len(match["pad"])
     begin = 0
-    for pattern in patterns:
+    for pattern, original in zip(patterns, originals, strict=True):
         begin += len("(?:")
         if begin <= start < begin + len(pattern):
             local = start - begin
             width = min(len(match["caret"]), len(pattern) - local)
             kind = match["kind"]
+            token = pattern[local : local + width]
             if kind.endswith("escape sequence"):
-                kind += f' "{pattern[local : local + width]}"'
-            return kind, f"    {pattern}\n    {' ' * local}{'^' * width}"
+                kind += f' "{token}"'
+            if original.endswith(pattern[local:]):
+                local += len(original) - len(pattern)
+            elif not original.startswith(pattern[: local + width]):
+                if original.count(token) != 1:
+                    return kind, f"    {original}"
+                local = original.index(token)
+            return kind, f"    {original}\n    {' ' * local}{'^' * width}"
         begin += len(pattern) + len(")|")
     return None
 
 
-def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
+def explain_failure(
+    message: str, patterns: Sequence[str] = (), *, executed: Sequence[str] = ()
+) -> str:
     """Say what ripgrep refused and how to correct the call. Nothing was searched.
 
     *patterns* are the regular expressions the call sent, in ripgrep's order, so
@@ -358,7 +387,7 @@ def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
         advice = (
             'To search literal text, add "-F" to args; otherwise correct the regular expression.'
         )
-        mapped = _pattern_error(message, patterns)
+        mapped = _pattern_error(message, patterns, executed or patterns)
         if mapped is not None:
             kind, shown = mapped
             return (
@@ -422,7 +451,7 @@ def pattern_retry(
         )
     if not any(marker in error for marker in _PATTERN_ERRORS):
         return None
-    pcre2 = any(arg in {"--pcre2", "-P", "--engine=pcre2"} for arg in query.rg_args)
+    pcre2 = _regex_engine(query) == "pcre2"
     if "--pcre2" in error and not pcre2:
         return (
             patterns,
@@ -430,7 +459,8 @@ def pattern_retry(
             "The pattern needs PCRE2 (look-around or backreferences), so it ran with -P.",
         )
     unescaped = [_unescape_unicode_punctuation(pattern) for pattern in patterns]
-    repaired = [_escape_unbalanced(pattern) for pattern in unescaped]
+    engine = "pcre2" if "PCRE2:" in error else _regex_engine(query)
+    repaired = [_escape_unbalanced(pattern, engine) for pattern in unescaped]
     changed = [(old, new) for old, new in zip(patterns, repaired, strict=True) if old != new]
     if not changed:
         return None
@@ -456,7 +486,9 @@ _VERBOSE_FLAGS = re.compile(r"\(\?[a-zA-Z]*x")
 _CARRIAGE_RETURNS = frozenset({"\\r", "\r"})
 
 
-def crlf_line_breaks(patterns: list[str], query: SearchQuery) -> list[str]:
+def crlf_line_breaks(
+    patterns: list[str], query: SearchQuery, *, engine: str | None = None
+) -> list[str]:
     """Return the patterns with each line feed widened to ``\\r?\\n`` while --crlf applies.
 
     ``--crlf`` only moves ``^`` and ``$``; a line feed in a multi-line pattern
@@ -469,34 +501,69 @@ def crlf_line_breaks(patterns: list[str], query: SearchQuery) -> list[str]:
     for argument in [*DEFAULT_ARGUMENTS, *query.rg_args]:
         if argument in {"--crlf", "--no-crlf"}:
             crlf = argument == "--crlf"
-    widened = [_widen_line_feeds(pattern) for pattern in patterns] if crlf else patterns
+    engine = engine or _regex_engine(query)
+    widened = [_widen_line_feeds(pattern, engine) for pattern in patterns] if crlf else patterns
     return patterns if widened == patterns else widened
 
 
-def _widen_line_feeds(pattern: str) -> str:
+def _regex_engine(query: SearchQuery) -> str:
+    for flag in reversed(query.rg_args):
+        if flag.startswith("--engine="):
+            return flag.partition("=")[2]
+        if flag == "--pcre2":
+            return "pcre2"
+        if flag == "--auto-hybrid-regex":
+            return "auto"
+        if flag in {"--no-pcre2", "--no-auto-hybrid-regex"}:
+            break
+    return "default"
+
+
+def _class_end(pattern: str, start: int, engine: str) -> int:
+    """Skip a character class, including escaped brackets and POSIX classes."""
+    depth = 1
+    index = start + 1
+    for literal in ("^", "]"):
+        if pattern.startswith(literal, index):
+            index += 1
+    while index < len(pattern):
+        char = pattern[index]
+        index += 1
+        if char == "\\":
+            index += 1
+        elif char == "[":
+            if engine == "pcre2":
+                if pattern.startswith(":", index) and (end := pattern.find(":]", index + 1)) >= 0:
+                    index = end + 2
+            else:
+                depth += 1
+                for literal in ("^", "]"):
+                    if pattern.startswith(literal, index):
+                        index += 1
+        elif char == "]":
+            depth -= 1
+            if not depth:
+                return index
+    return len(pattern)
+
+
+def _widen_line_feeds(pattern: str, engine: str) -> str:
     verbose = _VERBOSE_FLAGS.search(pattern) is not None
     tokens: list[str] = []
-    class_depth = 0
     index = 0
     while index < len(pattern):
         escape = _LINE_FEED_ESCAPE.match(pattern, index)
         if escape is not None:
             token, line_feed = escape.group(), True
+        elif pattern[index] == "[":
+            token, line_feed = pattern[index : _class_end(pattern, index, engine)], False
         elif pattern[index] == "\\":
             token, line_feed = pattern[index : index + 2], False
         else:
             token = pattern[index]
             line_feed = token == "\n" and not verbose
         index += len(token)
-        if class_depth:
-            class_depth += {"[": 1, "]": -1}.get(token, 0)
-        elif token == "[":
-            class_depth = 1
-            for literal in ("^", "]"):
-                if pattern.startswith(literal, index):
-                    token += literal
-                    index += 1
-        elif line_feed and not _after_carriage_return(tokens):
+        if line_feed and not _after_carriage_return(tokens):
             # A repetition applies to the whole line break.
             repeated = pattern.startswith(("*", "+", "?", "{"), index)
             token = "(?:\\r?\\n)" if repeated else "\\r?\\n"
@@ -533,11 +600,10 @@ def _unescape_unicode_punctuation(pattern: str) -> str:
 _REPETITION = re.compile(r"\d+(?:,\d*)?\}")
 
 
-def _escape_unbalanced(pattern: str) -> str:
+def _escape_unbalanced(pattern: str, engine: str) -> str:
     out: list[str] = []
     open_groups: list[int] = []
     previous = ""  # "", "(", "|" or "atom": what a repetition operator would apply to
-    class_depth = 0
     index = 0
     while index < len(pattern):
         char = pattern[index]
@@ -546,16 +612,10 @@ def _escape_unbalanced(pattern: str) -> str:
             out.append(char + pattern[index : index + 1])
             index += 1
             previous = "atom"
-        elif class_depth:
-            class_depth += {"[": 1, "]": -1}.get(char, 0)
-            out.append(char)
         elif char == "[":
-            class_depth = 1
-            out.append(char)
-            for literal in ("^", "]"):
-                if pattern.startswith(literal, index):
-                    out.append(literal)
-                    index += 1
+            start = index - 1
+            index = _class_end(pattern, start, engine)
+            out.append(pattern[start:index])
             previous = "atom"
         elif char == "(":
             open_groups.append(len(out))
@@ -596,6 +656,44 @@ class SearchExecution:
         return self.permissions.check_path(path, "read") is None or any(
             self.context.permission_access.search_read_allowed(path, root) for root in self.roots
         )
+
+    def multiline_patterns(self, query: SearchQuery) -> list[str]:
+        """Widen line breaks in the dialect rg actually uses for these patterns."""
+        patterns = crlf_line_breaks(query.patterns, query)
+        if _regex_engine(query) != "auto":
+            return patterns
+        pcre = crlf_line_breaks(query.patterns, query, engine="pcre2")
+        if patterns == pcre:
+            return patterns
+        # auto selects one engine for the complete set, including -f files.
+        # Only an ambiguous bracket class needs a compile on empty stdin.
+        flags = [
+            arg
+            for arg in query.rg_args
+            if _MATCHING_FLAGS.fullmatch(arg) or arg.startswith("--file=")
+        ]
+        args = [
+            *DEFAULT_ARGUMENTS,
+            *flags,
+            "--engine=default",
+            "-U",
+            "--quiet",
+            *_pattern_arguments(query.patterns),
+            "--",
+            "-",
+        ]
+        outcome = NativeOutcome()
+        with contextlib.closing(
+            native_lines(
+                self.binary, args, self.context, self.budget, cwd=self.cwd, outcome=outcome
+            )
+        ) as records:
+            for _ in records:
+                pass
+        if outcome.returncode not in (0, 1) and "regex parse error" in outcome.diagnostics:
+            query.rg_args.append("--engine=pcre2")
+            return pcre
+        return patterns
 
     def _confinement(self, scope: Scope) -> Confinement:
         """The excluding globs and path filter of ``scope`` under the Run's rules."""
@@ -703,7 +801,11 @@ class SearchExecution:
             *scope.paths,
         ]
         data, outcome, stopped_by = self._collect(arguments, scope, terminator)
-        result = self._judged(outcome, scope)
+        try:
+            result = self._judged(outcome, scope)
+        except SearchRefusedError as error:
+            error.patterns = patterns
+            raise
         result.stopped_by = stopped_by
         if query.mode == "files_without_match":
             result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
@@ -721,19 +823,9 @@ class SearchExecution:
         selection needs the full ordered glob list so a later inclusion can
         reopen a directory excluded by an earlier glob.
         """
-        if directories:
-            skip_caches = skips_caches(query, scope.globs)
-            selection = [
-                *DEFAULT_ARGUMENTS,
-                *query.rg_args,
-                *rg_globs(query.globs, scope.prefixes, skip_caches=skip_caches),
-            ]
-            report = True
-        else:
-            selection = _base_arguments(query, scope)
-            # --debug reports every file a file type leaves out, which costs several times
-            # the listing; with types, ignored_scan walks once more without them instead.
-            report = _without_file_types(selection) == selection
+        selection = _base_arguments(query, scope)
+        # Directory walks need the skip reports even when type filters apply.
+        report = directories or _without_file_types(selection) == selection
         debug = ["--debug"] if report else []
         confined = self._confinement(scope).arguments(selection)
         arguments = [*confined, *debug, "--files", "--null", "--", *scope.paths]
@@ -809,7 +901,7 @@ class SearchExecution:
             with contextlib.closing(lines):
                 data = b"".join(lines)
         if outcome.returncode not in (0, 1, None):
-            raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "))
+            raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "), patterns)
         return {os.fsdecode(name) for name in data.split(b"\0") if name}
 
     def line_events(

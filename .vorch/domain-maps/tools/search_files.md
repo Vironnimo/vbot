@@ -298,6 +298,8 @@ Other rules:
   flag, and `[--dirs]` beside a pattern became the root glob `/[--dirs]` and
   answered "No matches in 0 searched files".
 - A `path` or `glob` string that is a JSON list of strings is that list.
+  Flag fields such as `-g` use the same list decoding, conflict and omission
+  rules as their named fields. Adding flag fields preserves a leading program name in `args`.
 
 Roots (`_resolve_roots`):
 
@@ -426,14 +428,20 @@ effect when every root is a file.
 
 Scopes (`_scopes`): plain roots inside the cwd share one run at the cwd, and each
 outside root gets its own run, so labels stay cwd-relative or absolute.
-Wildcard roots keep their selecting globs in separate runs.
+Wildcard roots keep their selecting globs in separate runs. Without explicit
+roots, relative positive globs select from the working directory and each
+external positive glob selects from its own fixed directory. Overlapping roots
+share a walk. Exclusions retain their order and anchor. Relative `--file` and
+`--ignore-file` arguments always resolve from the working directory.
 
 A content search runs in two phases:
 
 1. A counting pass runs over all roots:
    - normally `--count --with-filename --null --stats`;
    - `--count-matches` with `-U`, `-o` or `--count-matches`;
-   - `--files-without-match --null` for that mode.
+   - `--files-without-match --null` for that mode. An empty complete result
+     checks which files the same filters select. This distinguishes an empty
+     selection from selected files that all matched.
 2. For line output, a `--json --max-count N` pass runs over only the page's files,
    given as explicit paths in batches of at most 28,000 command-line bytes. The
    effective `--max-count` is the smaller of the requested per-file cap and the
@@ -545,7 +553,9 @@ Diagnostics (`_judge`):
     from a CRLF file matches (`crlf_line_breaks`; deep bug hunt 2026-10-22,
     `hunt-tools-fs/p07_search_crlf.py`). Line feeds inside character classes,
     after an explicit `\r`, and raw line breaks under `(?x)` stay as written.
-    The rewrite is silent: the `-U` note covers the retry;
+    Character classes follow the selected engine's bracket syntax, including
+    when ripgrep chooses the engine automatically. The rewrite is silent:
+    the `-U` note covers the retry;
   - look-around or backreferences rerun with PCRE2;
   - unbalanced parentheses, braces and dangling repetition operators are escaped;
   - unnecessary escapes before Unicode punctuation are removed;
@@ -570,7 +580,9 @@ Diagnostics (`_judge`):
 
 A successful result has these fields:
 
-- `data.summary`: totals, the shown range and how to continue.
+- `data.summary`: totals, the shown range and how to continue. Count output
+  with `--include-zero` includes files with a zero count in the file total;
+  the line or match total stays zero when nothing matched.
 - `content`: the result lines; absent when there are none (the `result_schema`
   requires no field).
 - `next_offset`: set when more results exist and the next offset is accepted
@@ -611,7 +623,7 @@ Content lines:
 - Line numbers equal `read`'s, except in files with lone-CR line endings, which
   ripgrep does not count. Those CRs are shown as `␍` within the physical
   LF line, the whole line gets one bounded excerpt, and a note explains the
-  difference from `read`.
+  difference from `read` for files shown on the page.
 - Lines longer than 1000 characters share that excerpt budget across the
   page's matches on the line. Long matches show both ends. Omission markers
   count the skipped characters and report additional matches left out.
@@ -630,7 +642,8 @@ Paging:
   The summary says when context was left out. For a trimmed result it gives the
   result's line span and the line to read on from, since paging cannot reach the
   rest of one result.
-- Context never shows a match that the page leaves out.
+- Context stops at a matching physical line outside the page. Multiline
+  matches sharing one physical line retain adjacent context on each page.
 - Continuation repeats a live query, so file edits between pages or between the
   two phases can shift page boundaries.
 - An `offset` at or past the last result shows the first page, with a `note`
@@ -653,7 +666,8 @@ Paging:
   now state only the repair.
 
 The Tool row shows the patterns, scope and supplied options from the normalized
-arguments. Its count covers the whole search, including pages beyond the offset
+arguments. A default call reads `List files in the working directory`.
+Its count covers the whole search, including pages beyond the offset
 cap, in files, directories, lines or matches. An incomplete search marks that
 count as a lower bound. The details show the summary (including continuation),
 interpretation notes, ignored paths, result text and warnings.

@@ -17,6 +17,7 @@ from core.tools._search_query import (
     SearchArgumentError,
     SearchQuery,
     flag_list,
+    has_program_prefix,
     interpret,
 )
 from core.tools.arguments import optional_int
@@ -98,11 +99,18 @@ def _repair_name_list(value: Any) -> Any:
     return value
 
 
+def _field_spelling(key: str) -> str:
+    """Keep one-letter flags case-sensitive, as in ripgrep."""
+    letter = key.lstrip("-")
+    return "-" + letter if len(letter) == 1 else _spelling(key)
+
+
 # Names other search Tools and command-line habits use for the same fields.
 _FIELD_ALIASES = _SpellingAliases(
     {
         "args": ("argv", "options", "flags", "rg_args", "extra_args"),
         "pattern": (
+            "-e",
             "query",
             "regexp",
             "search",
@@ -128,6 +136,7 @@ _FIELD_ALIASES = _SpellingAliases(
             "cwd",
         ),
         "glob": (
+            "-g",
             "include",
             "includes",
             "globs",
@@ -139,10 +148,11 @@ _FIELD_ALIASES = _SpellingAliases(
             "name_pattern",
         ),
         "output": ("output_mode", "mode"),
-        "context": ("context_lines", "surrounding_lines"),
+        "context": ("-C", "context_lines", "surrounding_lines"),
         "limit": ("head_limit", "max_results", "num_results", "max"),
         "offset": ("skip", "start"),
-    }
+    },
+    normalize=_field_spelling,
 )
 _OUTPUT_VALUES = {
     **dict.fromkeys(("content", "contents", "lines", "matches", "text", "default"), "content"),
@@ -213,7 +223,6 @@ _EXCLUDE_WORDS = {
     "excludedir",
     "excludedirs",
 }
-_FIELD_LETTERS = {"C": "context", "g": "glob", "e": "pattern"}
 _TARGET_VALUES = {
     **dict.fromkeys(("files", "file", "filenames", "names", "paths"), "files"),
     **dict.fromkeys(("content", "contents", "text", "grep"), "content"),
@@ -266,6 +275,10 @@ def _translate_flag_fields(
     tokens: list[str] = []
 
     def set_field(field: str, value: Any, source: tuple[str, Any]) -> None:
+        normalized = _normalize_fields({field: value})
+        if field not in normalized and field not in result:
+            return
+        value = normalized.get(field)
         if field in result and result[field] != value:
             raise ToolContractError.conflicting_values(
                 field, sources[field], source, tool_name=SEARCH_FILES_TOOL_NAME
@@ -329,8 +342,6 @@ def _translate_flag_fields(
             if values is None:
                 raise unclear(key, value, "a value or a list of values")
             tokens.extend(token for item in values for token in ("-g", "!" + item.lstrip("!")))
-        elif letter in _FIELD_LETTERS:
-            set_field(_FIELD_LETTERS[letter], value, (key, value))
         elif word == "target" and isinstance(value, str) and _spelling(value) in _TARGET_VALUES:
             # Some search Tools select name matching with target="files".
             if _TARGET_VALUES[_spelling(value)] == "files" and "pattern" in result:
@@ -352,7 +363,10 @@ def _translate_flag_fields(
             del result["pattern"]
     if tokens:
         existing = result.get("args", [])
-        result["args"] = [*tokens, *(existing if isinstance(existing, list) else [existing])]
+        existing = existing if isinstance(existing, list) else [existing]
+        # Keep an explicit rg/grep prefix before generated switches.
+        prefix = 1 if has_program_prefix(existing, named_pattern="pattern" in result) else 0
+        result["args"] = [*existing[:prefix], *tokens, *existing[prefix:]]
     if result.get("output") in ("output", "context"):
         # An echoed field name supplies no format. An explicit request for
         # surrounding lines selects content if no rg options ask for another format.
@@ -381,8 +395,8 @@ def _repair_contract():
     )
 
 
-def normalize_search_arguments(arguments: Any, *, preserve_pattern_list: bool = False) -> Any:
-    normalized = normalize_call_arguments(
+def _normalize_fields(arguments: Any) -> Any:
+    return normalize_call_arguments(
         _repair_contract(),
         arguments,
         field_aliases=_FIELD_ALIASES,
@@ -394,6 +408,10 @@ def normalize_search_arguments(arguments: Any, *, preserve_pattern_list: bool = 
         },
         empty_as_omitted=("pattern", "path", "glob", "output", "context"),
     )
+
+
+def normalize_search_arguments(arguments: Any, *, preserve_pattern_list: bool = False) -> Any:
+    normalized = _normalize_fields(arguments)
     if not isinstance(normalized, dict):
         return normalized
     return _translate_flag_fields(normalized, preserve_pattern_list=preserve_pattern_list)

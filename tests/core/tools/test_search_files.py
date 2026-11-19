@@ -544,6 +544,21 @@ def test_summary_states_totals_and_the_continuation(project: Path) -> None:
         unmatched = search(project, path="src", glob=["verify.py", "*.md"], **arguments)
         assert '"verify.py", "*.md"' in unmatched["summary"]
     assert '"*.py"' not in search(project, pattern="absent", glob="*.py")["summary"]
+    with_zero = search(
+        project, pattern="needle", path="src", args=["-c", "--include-zero"], offset=4
+    )
+    assert "files 5-5" in with_zero["summary"] and "in 5 files" in with_zero["summary"]
+    no_hits = search(project, pattern="absent", path="src", args=["-c", "--include-zero"])
+    assert "0 matching lines in 5 files" in no_hits["summary"] and no_hits["skipped"]
+    without = ["--files-without-match"]
+    unmatched = search(project, pattern="needle", glob="*.no_such_extension", args=without)
+    assert '"*.no_such_extension"' in unmatched["summary"]
+    no_files = search(
+        project, pattern="needle", glob="*.no_such_extension", args=[*without, "-tpy"]
+    )
+    assert "No files were searched" in no_files["summary"]
+    repaired = search(project, pattern="absent", path="src", glob="*.py, *.txt", args=without)
+    assert repaired["content"] and "separate wildcard filters" in repaired["note"]
 
 
 def test_file_lists_are_newest_first_unless_sorted(tmp_path: Path) -> None:
@@ -563,9 +578,17 @@ def test_context_never_shows_a_match_the_page_leaves_out(tmp_path: Path) -> None
     assert first["content"] == "a\n1-one\n2:hit 1\n3-mid"
     second = search(tmp_path, pattern="hit", context=2, limit=1, offset=1)
     assert second["content"] == "a\n3-mid\n4:hit 2\n5-mid"
+    _write(tmp_path, {"b": "before\nhit hit\nafter\nhit\n"})
+    for offset in (0, 1):
+        page = search(
+            tmp_path, path="b", pattern="hit", args=["-U"], context=2, limit=1, offset=offset
+        )
+        assert page["content"] == "b\n1-before\n2:hit hit\n3-after"
 
 
-def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: Path) -> None:
+def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write(tmp_path, {"a": "".join(f"needle {i} " + "x" * 900 + "\n" for i in range(150))})
     _write(tmp_path, {"b": ("context " + "y" * 900 + "\n") * 60 + "needle in b\n"})
     seen: list[str] = []
@@ -594,6 +617,16 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
         assert 1 < len(shown) < 102 and "next_offset" not in cut
         assert "spans lines 1-102" in cut["summary"]
         assert f"from line {len(shown) + 1} " in cut["summary"]
+    _write(tmp_path, {"d": "text\n", "e": b"text\r" + b"x" * 100 + b"\n"})
+    from core.tools import _search_results
+
+    monkeypatch.setattr(_search_results, "MAX_OUTPUT_BYTES", _search_results._RESERVED_BYTES + 20)
+    arguments = {"pattern": "text", "path": ["d", "e"]}
+    first = search(tmp_path, **arguments)
+    assert first["content"] == "d\n1:text" and "note" not in first
+    assert (
+        "e contains lone CR" in search(tmp_path, **arguments, offset=first["next_offset"])["note"]
+    )
 
 
 def test_multiline_matches_count_and_page_as_whole_matches(tmp_path: Path) -> None:
@@ -723,6 +756,8 @@ def test_excerpts_cover_separated_matches_and_multiline_endpoints(tmp_path: Path
     _write(tmp_path, {"c": padding.join(tokens)})
     many = search(tmp_path, path="c", pattern=r"hit\d+")
     assert all(token in many["content"] for token in tokens)
+    _write(tmp_path, {"d": padding.join(["X" * 40] * 33)})
+    assert search(tmp_path, path="d", pattern="X+")["content"].endswith("[2 matches omitted]")
 
 
 def test_binary_files_and_encodings(project: Path, tmp_path: Path) -> None:
@@ -810,6 +845,20 @@ def test_files_ripgrep_could_not_read_are_warnings_beside_the_results(
         assert str(unread) in warnings[-1]
 
 
+def test_an_empty_listing_tolerates_a_file_that_disappeared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_lines = execution.native_lines
+
+    def vanished(*args: Any, outcome: Any = None, **kwargs: Any) -> Iterator[bytes]:
+        yield from native_lines(*args, outcome=outcome, **kwargs)
+        outcome.returncode = 2
+        outcome.diagnostics = _read_errors(("gone.txt", 2))
+
+    monkeypatch.setattr(execution, "native_lines", vanished)
+    assert search(tmp_path) == {"summary": "No files found."}
+
+
 def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("Windows directory junctions")
@@ -883,6 +932,11 @@ async def test_a_failed_start_is_explained_in_english(
 
 def test_schema_display_and_registry_repairs(project: Path) -> None:
     registry = search_registry()
+    profile = registry.get("search_files").display
+    assert profile.to_payload({})["primary"]
+    assert profile.to_payload({"glob": ["", "*.py"]})["summary"] == "*.py"
+    for blank in ({"path": "   "}, {"glob": ["   "]}, {"-g": [""]}):
+        assert profile.to_payload(blank)["summary"].strip()
     definition = registry.provider_definitions(["search_files"])[0]
     assert list(definition["parameters"]["properties"]) == [
         "pattern",

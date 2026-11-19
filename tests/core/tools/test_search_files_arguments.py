@@ -39,6 +39,10 @@ def project(tmp_path: Path) -> Path:
         ),
         ({"pattern": "load", "path": "src", "glob": "*.py"}, "src/app.py\n2:def load():"),
         (
+            {"args": ["rg", "-w", "LOAD"], "ignore_case": True, "-g": '["*.py", "*.rs"]'},
+            "src/app.py\n2:def load():",
+        ),
+        (
             {"pattern": "load", "path": ["docs", "src/view.ts"]},
             "docs/guide.md\n1:Call load() first.\n\nsrc/view.ts\n1:export const load = 1;",
         ),
@@ -75,6 +79,8 @@ async def test_named_fields_search_contents(project: Path, arguments: dict, cont
         ({"pattern": "", "path": "", "glob": [""]}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
         ({"path": "src"}, "src/app.py\nsrc/view.ts"),
         ({"glob": "*.md"}, "docs/guide.md"),
+        ({"-g": [""], "target": "files"}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
+        ({"glob": [" ", "*.md"]}, "docs/guide.md"),
         ({"glob": "*.py", "output": "files"}, "src/app.py"),
         ({"args": ["--dirs"]}, "src/\ndocs/"),
     ],
@@ -721,6 +727,8 @@ async def test_a_glob_written_as_a_windows_or_absolute_path_selects_what_it_name
     "arguments",
     [
         {"pattern": "load", "query": "other"},
+        {"glob": ["*.py"], "-g": [""]},
+        {"-g": [""], "glob": ["*.py"]},
         {"pattern": "load", "-l": True, "output": "count"},
         {"pattern": "load", "ignore_case": "maybe"},
         {"pattern": "load", "output": "output>content>files"},
@@ -917,6 +925,24 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
         ),
         # Their line feeds match CRLF line ends too, as text copied from read shows them.
         (r"Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
+        (
+            r"Alph[a[b]\nBeta",
+            {"path": "windows", "args": ["-PU"]},
+            "windows\n1:Alpha\n2:Beta",
+            False,
+        ),
+        (
+            r"(?=Alpha)Alph[a[b]\n[B]eta",
+            {"path": "windows", "args": ["--engine=auto", "-U"]},
+            "windows\n1:Alpha\n2:Beta",
+            False,
+        ),
+        (
+            r"Alph[[ab]&&[a]]\nBeta",
+            {"path": "windows", "args": ["-U"]},
+            "windows\n1:Alpha\n2:Beta",
+            False,
+        ),
         ("Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
         (r"Gamma\x0A+Delta", {"path": "windows"}, "windows\n7:Gamma\n8:\n9:Delta", True),
         *[
@@ -1051,6 +1077,8 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
     [
         ({"pattern": r"tools\(\corpus|fuzz"}, r"tools\(\corpus|fuzz", 7, 2),
         ({"pattern": "ok", "args": ["-e", r"y\q"]}, r"y\q", 1, 2),
+        ({"pattern": r"foo\n\q", "args": ["-U"]}, r"foo\n\q", 5, 2),
+        ({"pattern": r"foo([z-a"}, r"foo([z-a", 5, 3),
         ({"pattern": "[z-a]x", "args": ["--dirs"]}, "[z-a]x", 1, 3),
         # A PCRE2 error has no caret to place: ripgrep's message stays.
         ({"pattern": r"x(?<=\c", "args": ["-P"]}, None, 0, 0),
