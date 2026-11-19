@@ -283,7 +283,7 @@ class TemporaryResolution:
         if owner_all and agent_all and not excluded:
             return ["*"]
         if owner_all and agent_all:
-            pool = self._owner._skill_pool_names(project_id) if project_id is not None else ()
+            pool = self._owner._skill_pool_names(project_id)
             return sorted(name for name in pool if name not in excluded)
         if owner_all:
             selected = agent.allowed_skills
