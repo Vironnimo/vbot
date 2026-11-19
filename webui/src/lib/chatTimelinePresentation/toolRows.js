@@ -405,7 +405,7 @@ function humanReadableToolLabel(toolName, argumentsValue) {
     return typeof argumentsValue === 'string' ? argumentsValue.trim() : '';
   }
 
-  if (TOOL_NO_SUMMARY_NAMES.has(toolName) || Object.keys(args).length === 0) {
+  if (TOOL_NO_SUMMARY_NAMES.has(toolName)) {
     return '';
   }
 
@@ -485,10 +485,15 @@ function searchFilesLabel(args) {
         ? JSON.stringify(term)
         : term;
   const named = (key, value) => (value == null ? '' : key + '=' + value);
+  const names = (value) =>
+    items(value)
+      .filter(Boolean)
+      .map((item) => (item.trim() === item ? item : JSON.stringify(item)))
+      .join(', ');
   const fields = [
     searchText,
-    items(path ?? paths).join(', '),
-    items(glob ?? include).join(', '),
+    names(path ?? paths),
+    names(glob ?? include),
     named('output', output ?? output_mode),
     named('context', context ?? context_lines),
     items(flags ?? argv ?? options)
@@ -502,7 +507,11 @@ function searchFilesLabel(args) {
         : named(key, typeof value === 'object' ? JSON.stringify(value) : value),
     ),
   ];
-  return fields.filter(Boolean).join(' · ') || trimmedString(action);
+  return (
+    fields.filter(Boolean).join(' · ') ||
+    trimmedString(action) ||
+    t('chat.listWorkingDirectoryFiles')
+  );
 }
 
 function searchToolLabel(args, includePath) {

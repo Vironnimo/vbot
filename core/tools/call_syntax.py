@@ -25,16 +25,19 @@ def spelling(value: str) -> str:
 
 
 class SpellingAliases(Mapping[str, str]):
-    """Field aliases that match regardless of case, spaces, and punctuation."""
+    """Compare field aliases by spelling, or by the Tool's own normalization."""
 
-    def __init__(self, fields: Mapping[str, Iterable[str]]) -> None:
+    def __init__(
+        self, fields: Mapping[str, Iterable[str]], *, normalize: Callable[[str], str] = spelling
+    ) -> None:
+        self._normalize = normalize
         self._aliases = {
-            spelling(alias): field for field, names in fields.items() for alias in names
+            normalize(alias): field for field, names in fields.items() for alias in names
         }
 
     @override
     def __getitem__(self, key: str) -> str:
-        return self._aliases[spelling(key)]
+        return self._aliases[self._normalize(key)]
 
     @override
     def __iter__(self) -> Iterator[str]:

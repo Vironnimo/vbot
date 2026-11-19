@@ -455,6 +455,7 @@ export default Object.freeze({
   'chat.toolFact.failures': '{count} failed',
   'chat.toolFact.file': '{count} file',
   'chat.toolFact.directory': '{count} directory',
+  'chat.listWorkingDirectoryFiles': 'List files in the working directory',
   'chat.toolFact.directories': '{count} directories',
   'chat.toolFact.line': '{count} line',
   'chat.toolFact.lineCount': '{count} lines',

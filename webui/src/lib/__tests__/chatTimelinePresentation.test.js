@@ -466,6 +466,18 @@ describe('Tool row presentation', () => {
     ],
     ['a lone glob', 'search_files', { glob: '*.md' }, '*.md'],
     [
+      'default file listing',
+      'search_files',
+      {},
+      'List files in the working directory',
+    ],
+    [
+      'space in a glob list',
+      'search_files',
+      { glob: ['', ' ', '*.md'] },
+      '" ", *.md',
+    ],
+    [
       'search pattern arrays',
       'search_files',
       { action: 'content', patterns: ['alpha', 'beta'] },

@@ -44,6 +44,7 @@ from core.tools._search_definition import (
 )
 from core.tools._search_execution import (
     MAX_CHILD_MEMORY,
+    MAX_COMMAND_LINE_BYTES,
     MAX_ENTRIES,
     MAX_PROTOCOL_LINE,
     MAX_SCAN_BYTES,
@@ -170,18 +171,23 @@ def _bound_failure(error: SearchBoundError, query: SearchQuery, cwd: Path) -> st
     return text
 
 
-def _scopes(roots: _Roots, cwd: Path) -> list[Scope]:
+def _scopes(roots: _Roots, cwd: Path, globs: list[str]) -> list[Scope]:
     """Group plain roots by cwd; keep each wildcard root's selection in its own run."""
-    inside = Scope(cwd=cwd, paths=[])
+    if roots.filters:
+        return [
+            Scope(cwd=anchor, paths=[base.relative_to(anchor).as_posix()], globs=filters)
+            for base, (anchor, filters) in roots.filters.items()
+        ]
+    inside = Scope(cwd=cwd, paths=[], globs=globs)
     scopes: list[Scope] = []
     for root in roots.plain:
         try:
             relative = root.relative_to(cwd).as_posix()
         except ValueError:
             if root.is_dir():
-                scopes.append(Scope(cwd=root, paths=["."]))
+                scopes.append(Scope(cwd=root, paths=["."], globs=globs))
             else:
-                scopes.append(Scope(cwd=root.parent, paths=[root.name]))
+                scopes.append(Scope(cwd=root.parent, paths=[root.name], globs=globs))
             continue
         inside.paths.append(relative)
         # Explicitly named files bypass globs, so only directories need prefixes.
@@ -191,9 +197,11 @@ def _scopes(roots: _Roots, cwd: Path) -> list[Scope]:
         scopes.insert(0, inside)
     for root, glob in roots.globs:
         if root.is_relative_to(cwd):
-            scopes.append(Scope(cwd=cwd, paths=[root.relative_to(cwd).as_posix()], globs=[glob]))
+            scopes.append(
+                Scope(cwd=cwd, paths=[root.relative_to(cwd).as_posix()], globs=[glob, *globs])
+            )
         else:
-            scopes.append(Scope(cwd=root, paths=["."], globs=[glob]))
+            scopes.append(Scope(cwd=root, paths=["."], globs=[glob, *globs]))
     return scopes
 
 
@@ -227,6 +235,9 @@ class _Found:
         self.entries.extend(
             _entry(index, scope, path, count, cwd) for path, count in result.entries
         )
+        self.take_diagnostics(result)
+
+    def take_diagnostics(self, result: ScanResult) -> None:
         self.warnings.extend(result.warnings)
         self.ignored.extend(result.ignored)
         self.unreadable.extend(result.unreadable)
@@ -302,74 +313,73 @@ def _list_directories(
         elif argument.startswith("--iglob="):
             iglobs.append((argument.removeprefix("--iglob="), False))
     # ripgrep 15 applies its case-insensitive glob group after its regular globs.
-    filters = [*((glob, case_sensitive) for glob in query.globs), *iglobs]
     typed = any(arg.startswith(("--type=", "--type-not=")) for arg in query.rg_args)
-    # Directory globs select directory names. A selected directory can hold a
-    # file of the requested type whose own name does not match those globs.
-    type_query = None
-    if typed and any(not glob.startswith("!") for glob, _ in filters):
-        type_query = replace(
-            query,
-            globs=[],
-            rg_args=[arg for arg in query.rg_args if not arg.startswith("--iglob=")],
-        )
-    holding: set[str] | None = set() if typed else None
-    skipped: set[str] = set()
-    for index, scope in enumerate(_scopes(roots, execution.cwd)):
+
+    def candidates(scope: Scope) -> Iterator[Path]:
         listing = execution.list_scan(query, scope, directories=True)
-        skipped_here = {os.path.normcase(path) for path in listing.skipped}
-        skipped.update(skipped_here)
-        found.take(index, scope, listing, execution.cwd)
-        if holding is not None:
-            if type_query is not None:
-                listing = execution.list_scan(type_query, scope, directories=True)
-                found.take(index, scope, listing, execution.cwd)
-            for native, _ in listing.entries:
-                parents = (scope.cwd / os.fsdecode(native)).parents
-                if any(os.path.normcase(parent) in skipped_here for parent in parents):
-                    continue
-                for parent in parents:
-                    key = os.path.normcase(parent)
-                    if key in holding:
-                        break
-                    holding.add(key)
-    bases = [root for root in roots.paths if root.is_dir()]
-    directories: dict[str, Path] = {}
-    for root in bases:
-        for path in _walk_directories(
-            root,
-            skipped,
-            depth,
-            follow,
-            execution.budget,
-            execution.permissions,
-            execution.context.permission_access,
-        ):
-            key = os.path.normcase(path)
-            if holding is None or key in holding:
-                directories.setdefault(key, path)
-            if len(directories) >= MAX_ENTRIES:
-                found.warnings.append(
-                    f"The search stopped after {MAX_ENTRIES} directories; narrow path or glob "
-                    "to see the rest."
-                )
-                found.complete = False
-                break
+        found.take_diagnostics(listing)
+        skipped = set(listing.skipped)
+        filters = [*((glob, case_sensitive) for glob in scope.globs), *iglobs]
+        paths = (
+            path
+            for name in scope.paths
+            if (root := scope.cwd / name).is_dir()
+            for path in _walk_directories(
+                root,
+                skipped,
+                depth,
+                follow,
+                execution.budget,
+                execution.permissions,
+                execution.context.permission_access,
+            )
+            if _directory_selected(path, [root] if scope.prefixes else [], filters, scope.cwd)
+        )
+        if not typed:
+            yield from paths
+            return
+        if not any(not glob.startswith("!") for glob, _ in filters):
+            holding = _type_holders(listing, scope, skipped)
+            yield from (path for path in paths if path in holding)
+            return
+        # A positive glob selects directories and can reopen ignored ones.
+        # Check files under the selected directories with the type filter alone:
+        # a positive rg glob on files would override their required type.
+        type_query = replace(
+            query, rg_args=[arg for arg in query.rg_args if not arg.startswith("--iglob=")]
+        )
+        unnamed = listing.unreadable_unnamed
+        for batch in _directory_batches(paths, scope.cwd):
+            type_scope = Scope(
+                scope.cwd, paths=[path.relative_to(scope.cwd).as_posix() for path in batch]
+            )
+            typed_listing = execution.list_scan(type_query, type_scope, directories=True)
+            # Both walks can encounter the same errors, even beyond rg's diagnostic cap.
+            overlap = min(unnamed, typed_listing.unreadable_unnamed)
+            unnamed -= overlap
+            typed_listing.unreadable_unnamed -= overlap
+            typed_listing.ignored = []
+            found.take_diagnostics(typed_listing)
+            holding = _type_holders(typed_listing, scope, skipped)
+            yield from (path for path in batch if path in holding)
+
+    directories: dict[Path, None] = {}
+    for path in (
+        path for scope in _scopes(roots, execution.cwd, query.globs) for path in candidates(scope)
+    ):
+        if path in directories:
+            continue
+        if len(directories) == MAX_ENTRIES:
+            found.warnings.append(
+                f"The search stopped after {MAX_ENTRIES} directories; narrow path or glob "
+                "to see the rest."
+            )
+            found.complete = False
+            break
+        directories[path] = None
     if execution.budget.stopped:
         found.complete = False
-    selected = [
-        path
-        for path in directories.values()
-        if _directory_selected(path, bases, filters, execution.cwd)
-        and (
-            any(path.is_relative_to(root) for root in roots.plain)
-            or any(
-                path.is_relative_to(root)
-                and _directory_selected(path, [root], [(glob, case_sensitive)], execution.cwd)
-                for root, glob in roots.globs
-            )
-        )
-    ]
+    selected = list(directories)
     found.selected_entries = bool(selected)
     if query.name_patterns:
         names = _matching_names(execution, query, [path.name for path in selected])
@@ -377,6 +387,33 @@ def _list_directories(
     found.entries = [
         Entry(path, display_search_path(path, cwd=execution.cwd) + "/") for path in selected
     ]
+
+
+def _type_holders(listing: ScanResult, scope: Scope, skipped: set[Path]) -> set[Path]:
+    holding: set[Path] = set()
+    for native, _ in listing.entries:
+        parents = (scope.cwd / os.fsdecode(native)).parents
+        if not any(parent in skipped for parent in parents):
+            for parent in parents:
+                if parent in holding:
+                    break
+                holding.add(parent)
+    return holding
+
+
+def _directory_batches(paths: Iterator[Path], cwd: Path) -> Iterator[list[Path]]:
+    batch: list[Path] = []
+    size = 0
+    for path in paths:
+        cost = len(os.fsencode(path.relative_to(cwd))) + 3
+        if batch and size + cost > MAX_COMMAND_LINE_BYTES:
+            yield batch
+            batch = []
+            size = 0
+        batch.append(path)
+        size += cost
+    if batch:
+        yield batch
 
 
 def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[str]) -> set[str]:
@@ -398,7 +435,7 @@ def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[
 
 def _walk_directories(
     root: Path,
-    skipped: set[str],
+    skipped: set[Path],
     depth: int | None,
     follow: bool,
     budget: SearchBudget,
@@ -439,7 +476,7 @@ def _walk_directories(
                     continue
             except OSError:
                 continue
-            if os.path.normcase(path) in skipped:
+            if path in skipped:
                 continue
             identity = _identity(path)
             if identity in ancestors:
@@ -718,7 +755,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
     found = _Found()
     if query.mode == "list_dirs":
         _list_directories(execution, query, roots, found)
-    scopes = _scopes(roots, execution.cwd)
+    scopes = _scopes(roots, execution.cwd, query.globs)
     if query.mode == "list_files":
         for index, scope in enumerate(scopes):
             found.take(index, scope, execution.list_scan(query, scope), execution.cwd)
@@ -743,7 +780,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
         return _Outcome(entry_page(found.entries, query), found, total, total)
 
     patterns = (
-        crlf_line_breaks(query.patterns, query)
+        execution.multiline_patterns(query)
         if query.multiline and not query.literal
         else query.patterns
     )
@@ -762,6 +799,8 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
             patterns, flag, note = retry
             if flag is not None:
                 query.rg_args.append(flag)
+                if flag in {"--pcre2", "--multiline"} and query.multiline:
+                    patterns = execution.multiline_patterns(query)
             results = [execution.count_scan(query, patterns, scope) for scope in scopes]
             query.notes.append(note)
             repair_note = note
@@ -774,7 +813,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
         )
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
         found.take(index, scope, result, execution.cwd)
-    if roots.globs and len(scopes) > 1:
+    if (roots.globs or roots.filters) and len(scopes) > 1 and found.files_searched:
         # Separate root selections can search the same file. Matching entries are
         # deduplicated below, but native totals do not identify the unmatched files.
         found.files_searched = None
@@ -794,6 +833,15 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
             and not named
         ):
             _note_no_match(execution, query, scopes, patterns, listed, repair_note)
+    elif query.mode == "files_without_match" and not found.entries and found.complete:
+        # Its NUL-separated list has no statistics. Reuse the ignore walk
+        # with the actual file filters to distinguish an empty selection.
+        for scope in scopes:
+            listing = execution.list_scan(query, scope, directories=True)
+            found.take_diagnostics(listing)
+            found.selected_entries |= bool(listing.entries)
+        if found.complete and not found.selected_entries:
+            found.files_searched = 0
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
@@ -851,6 +899,18 @@ def _left_out_note(roots: list[Path], cwd: Path, permissions: PermissionBoundary
     return search_note(list(parts), protected=protected)
 
 
+def _expand_directory_filters(
+    query: SearchQuery, roots: _Roots, cwd: Path, context: ToolContext
+) -> None:
+    if roots.filters:
+        for base, (anchor, filters) in roots.filters.items():
+            scoped = replace(query, globs=filters)
+            _directory_globs(scoped, [base], anchor, context.permissions, context.permission_access)
+            roots.filters[base] = anchor, scoped.globs
+    else:
+        _directory_globs(query, roots.paths, cwd, context.permissions, context.permission_access)
+
+
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
         query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
@@ -897,7 +957,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         )
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
-        _directory_globs(query, roots.paths, cwd, context.permissions, context.permission_access)
+        _expand_directory_filters(query, roots, cwd, context)
         if (
             roots.paths
             and all(path.is_file() for path in roots.paths)
@@ -931,6 +991,13 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                     f"were read as glob {json.dumps(separated, ensure_ascii=False)}."
                 )
                 query.globs = separated
+                if roots.filters:
+                    roots = _resolve_roots(
+                        query, cwd, context.permissions, context.permission_access, context=context
+                    )
+                    execution.roots = roots.paths
+                    context.record_worked_paths(*roots.paths)
+                    _expand_directory_filters(query, roots, cwd, context)
                 outcome = _search(execution, query, roots)
         if not outcome.total and outcome.found.complete and query.patterns:
             if any(re.match(r"^(?:rg|ripgrep|grep)\s+-", pattern) for pattern in query.patterns):
@@ -958,7 +1025,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         )
     except SearchRefusedError as error:
         patterns = query.patterns or query.name_patterns
-        return tool_failure("search_error", explain_failure(str(error), patterns))
+        return tool_failure(
+            "search_error", explain_failure(str(error), patterns, executed=error.patterns)
+        )
     except SearchBoundError as error:
         # Only native runs raise it, and they start after query and cwd are set.
         return tool_failure("search_error", _bound_failure(error, query, cwd))
@@ -970,7 +1039,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     if budget.cancelled_by_user or context.was_cancelled_by_user():
         return tool_failure("cancelled_by_user", "Search aborted by the user")
     page, found = outcome.page, outcome.found
-    warnings = [*missing, *found.read_failures(), *found.warnings]
+    warnings = list(dict.fromkeys([*missing, *found.read_failures(), *found.warnings]))
     if budget.timed_out:
         warnings.append(
             "The search stopped at its 30-second limit, so results are partial. Narrow path "
@@ -979,7 +1048,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     elif budget.stopped:
         warnings.append("The Run was cancelled, so results are partial.")
     complete = found.complete and not budget.stopped
-    if query.mode in {"files_without_match", *LIST_MODES}:
+    if query.mode in {"count", "files_without_match", *LIST_MODES}:
         files = len(found.entries)
     else:
         files = sum(1 for entry in found.entries if entry.count)
@@ -1003,7 +1072,11 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         data["warnings"] = warnings[:20]
     if roots.missing:
         data["searched_paths"] = [path_label(path, cwd) for path in roots.paths]
-    if found.ignored and (not outcome.total or query.mode in LIST_MODES):
+    if found.ignored and (
+        not outcome.total
+        or query.mode in LIST_MODES
+        or (query.mode == "count" and not outcome.lines_total)
+    ):
         data["skipped"] = _ignored_summary(found.ignored, cwd)
     if page.lines:
         data["content"] = "\n".join(page.lines)
@@ -1060,10 +1133,16 @@ def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
                 )
             )
         else:
-            options.append(", ".join(items))
+            names = [
+                item if item.strip() == item else json.dumps(item, ensure_ascii=False)
+                for item in items
+                if item
+            ]
+            if names:
+                options.append(", ".join(names))
     if options:
         parts.append(ToolDisplayPart(" · ".join(options)))
-    return parts
+    return parts or [ToolDisplayPart("List files in the working directory")]
 
 
 def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
