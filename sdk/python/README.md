@@ -95,11 +95,20 @@ The Shell Tool can use that directory by passing it as its own `workdir`.
 ```python
 from pathlib import Path
 
-ceiling = {"layers": [{
-    "source": "extension", "workdir": str(Path(__file__).resolve().parent),
-    "read": "work_area", "write": "scratch", "commands": "listed", "web": "listed",
-    "allow": ["Shell(git status)"], "deny": [],
-}]}
+ceiling = {
+    "layers": [
+        {
+            "source": "extension",
+            "workdir": str(Path(__file__).resolve().parent),
+            "read": "work_area",
+            "write": "scratch",
+            "commands": "listed",
+            "web": "listed",
+            "allow": ["Shell(git status)"],
+            "deny": [],
+        }
+    ]
+}
 ```
 
 The ceiling applies alongside the operator's default Permission Rules captured
@@ -146,6 +155,7 @@ and `extension:<percent-encoded-directory-name>:list`.
 ```python
 from typing import Any
 from vbot_extension_sdk import ExtensionAPI, ExtensionHost
+
 
 def register(api: ExtensionAPI) -> None:
     api.register_resource("entries", description="Current entries")
