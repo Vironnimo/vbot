@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { reactiveProps } from '../../__tests__/reactiveProps.support.svelte.js';
 import { init, t } from '../../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
@@ -28,6 +29,7 @@ describe('ContextUsageRing', () => {
       unmount(component);
       component = null;
     }
+    vi.useRealTimers();
     document.body.innerHTML = '';
   });
 
@@ -57,6 +59,52 @@ describe('ContextUsageRing', () => {
       '51,234 / 1,000,000',
     );
     expect(card.querySelector('.context-card__action')).toBeNull();
+  });
+
+  it('shows remaining windows and balance only for the matching account, and expires them on reset', () => {
+    vi.useFakeTimers();
+    const now = Date.parse('2026-11-19T12:00:00Z');
+    vi.setSystemTime(now);
+    const route = {
+      name: 'OpenRouter',
+      connection: 'openrouter:api-key',
+      account: 'work',
+    };
+    const snapshot = {
+      connection: route.connection,
+      account: route.account,
+      display_name: route.name,
+      observed_at: new Date(now - 8 * 60_000).toISOString(),
+      windows: [
+        {
+          label: '5h',
+          used_percent: 70,
+          reset_at: new Date(now + 1000).toISOString(),
+        },
+      ],
+      credits: { enabled: true, balance: 0, unit: 'USD' },
+    };
+    const props = reactiveProps({
+      providerLimits: { name: route.name, observation: snapshot },
+      contextUsage: { tokens: 12 },
+      contextWindow: 100,
+    });
+    const { trigger, card } = render(props);
+    trigger.parentElement.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(500);
+    flushSync();
+    const section = card.querySelector('.provider-usage');
+    expect(section.querySelector('h3').textContent).toMatch(
+      /OpenRouter.*\(8 min\. ago\)/,
+    );
+    expect(section.textContent).toContain('30%');
+    expect(section.textContent).toContain('$0.00');
+    vi.advanceTimersByTime(1000);
+    flushSync();
+    expect(section.textContent).not.toContain('30%');
+    props.providerLimits = { name: route.name };
+    flushSync();
+    expect(section.textContent.trim()).toBe('OpenRouter');
   });
 
   it('renders nothing until the tokens and the window are known', () => {

@@ -29,7 +29,10 @@ def _set_bus_epoch(bus: ServerEventBus, epoch: str) -> None:
 
 
 def _stub_app(tmp_path: Path) -> Any:
-    return create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+    app.state.runtime = runtime
+    return app
 
 
 def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_replay(
@@ -64,6 +67,7 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
         "replay_status": "fresh",
         "active_runs": [],
         "permissions_approvals": {"revision": 0, "requests": []},
+        "provider_usage": [],
         "queues": [],
         "session_activity": [],
     }

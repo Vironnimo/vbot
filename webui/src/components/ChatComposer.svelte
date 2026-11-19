@@ -31,6 +31,7 @@
     cancelling = false,
     availableSkills = [],
     contextUsage = null,
+    providerLimits = null,
     compactionState = 'unavailable',
     compactionSubmitting = false,
     onForceCompaction = null,
@@ -633,6 +634,7 @@
 
 {#snippet usageContribution()}
   <ContextUsageRing
+    {providerLimits}
     {contextUsage}
     {contextWindow}
     {usage}

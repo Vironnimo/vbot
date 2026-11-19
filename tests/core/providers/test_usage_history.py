@@ -375,9 +375,18 @@ async def test_collect_history_sample_reuses_live_cache_and_persists_structured_
     )
 
     try:
+        observed: list[dict[str, Any]] = []
+        unsubscribe = service.subscribe_observations(observed.append)
+        assert service.observations() == []
         live = await service.report()
         stored = await service.collect_history_sample()
         history = await service.history_report()
+        assert (
+            service.observations()
+            == observed
+            == [{**live.providers[0].to_dict(), "observed_at": "2026-07-25T12:00:00.000000Z"}]
+        )
+        unsubscribe()
     finally:
         await service.aclose()
 
@@ -429,6 +438,9 @@ async def test_history_sampler_delays_until_one_hour_after_latest_sample(
 
     assert empty_delay == 0.0
     assert delay == 45 * 60
+    [restored] = service.observations()
+    assert restored["observed_at"] == "2026-07-25T11:45:00.000000Z"
+    assert restored["credits"] == _snapshot()["credits"]
 
 
 @pytest.mark.asyncio

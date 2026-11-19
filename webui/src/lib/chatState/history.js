@@ -107,6 +107,8 @@ export function loadHistory(sessionState, messages, options = {}) {
       options.contextUsage,
     );
   }
+  if (options.sessionModel !== undefined)
+    sessionState.sessionModel = options.sessionModel;
   if (options.agentName !== undefined) {
     sessionState.agentName = options.agentName;
   }

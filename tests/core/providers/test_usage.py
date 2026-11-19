@@ -687,7 +687,7 @@ async def test_report_never_probes_an_unusable_connection(provider_id: str) -> N
     service = ProviderUsageService(
         usage_runtime(provider_id, usable=False),
         transport=transport,
-        claude_usage=lambda: (UsageWindow(label="5h", used_percent=50),),
+        claude_usage=lambda: (None, (UsageWindow(label="5h", used_percent=50),)),
     )
 
     report = await service.report()
@@ -795,7 +795,7 @@ async def test_native_claude_usage_is_passive_current_and_expires_without_invent
 
     monkeypatch.setattr(runtime, "get_connection_token_getter", forbidden_auth)
     monkeypatch.setattr(runtime, "get_connection_token_extra", forbidden_auth)
-    service = ProviderUsageService(runtime, transport=transport, claude_usage=observed.windows)
+    service = ProviderUsageService(runtime, transport=transport, claude_usage=observed.observation)
     try:
         assert (await service.report()).providers == []
         for window_type, status, utilization, reset in (
@@ -874,7 +874,7 @@ async def test_native_claude_usage_omits_unmeasured_or_invalid_consumption(
     info = {"rate_limit_type": "seven_day", "status": "allowed", "utilization": 0.2}
     observed.observe(info)
     observed.observe({**info, "utilization": utilization})
-    service = ProviderUsageService(usage_runtime("claude-agent"), claude_usage=observed.windows)
+    service = ProviderUsageService(usage_runtime("claude-agent"), claude_usage=observed.observation)
     try:
         assert (await service.report()).providers == []
     finally:

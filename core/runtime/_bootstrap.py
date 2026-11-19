@@ -300,7 +300,7 @@ def bootstrap(runtime: Runtime) -> None:
             claude_usage=lambda: (
                 runtime._provider_runtime.current_claude_usage()
                 if runtime._provider_runtime is not None
-                else ()
+                else (None, ())
             ),
         )
         runtime._models = ModelRegistry.load(

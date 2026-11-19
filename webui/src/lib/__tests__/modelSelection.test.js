@@ -8,6 +8,7 @@ import {
   modelFilterFooterLabel,
   modelSelectionValue,
   modelShortName,
+  modelProviderLimits,
   modelSupportsFastMode,
   parseModelSelectionValue,
   selectModelValue,
@@ -544,6 +545,43 @@ describe('model suitability filter', () => {
 });
 
 describe('model selection value', () => {
+  it('matches usage to the selected Model route and the Account an active Run resolved', () => {
+    const connections = [
+      usableConnection('openai:api-key', 'openai', 'API key', [
+        account('default'),
+      ]),
+      usableConnection('openai:subscription', 'openai', 'ChatGPT', [
+        account('work'),
+        account('other'),
+      ]),
+    ];
+    const observations = ['work', 'other', 'default'].map((id) => ({
+      connection: 'openai:subscription',
+      account: id,
+    }));
+    const inputs = {
+      providers: [{ id: 'openai', name: 'OpenAI', connections }],
+      observations,
+      models: [catalogModel('openai/gpt', 'openai', ['subscription'])],
+    };
+    expect(modelProviderLimits('openai/gpt', inputs).observation).toBe(
+      observations[0],
+    );
+    expect(
+      modelProviderLimits('openai/gpt::subscription:other', inputs).observation,
+    ).toBe(observations[1]);
+    expect(
+      modelProviderLimits('openai/gpt::subscription', {
+        ...inputs,
+        resolved: true,
+      }).observation,
+    ).toBe(observations[2]);
+    expect(modelProviderLimits('openai/gpt::api-key', inputs)).toEqual({
+      name: 'OpenAI',
+      observation: undefined,
+    });
+  });
+
   it('keeps the account part inside the connection suffix', () => {
     const selection = parseModelSelectionValue('openai/gpt-5.2::api-key:work');
 

@@ -96,6 +96,7 @@ export function createAppControllerState() {
     clientsRefreshToken: 0,
     commandsRefreshToken: 0,
     connectionSnapshot: null,
+    providerObservations: [],
     permissionApprovals: { revision: -1, requests: [] },
     connectionState: createConnectionState(),
     debugTracesRefreshToken: 0,
@@ -316,6 +317,21 @@ export function createAppController({
       onAppError(event.payload?.message ?? '');
       return;
     }
+    if (event.type === 'provider_usage_observed') {
+      if (event.sequence > (state.connectionSnapshot?.last_sequence ?? 0)) {
+        const snapshot = event.payload;
+        const others = state.providerObservations.filter(
+          (entry) =>
+            entry.connection !== snapshot.connection ||
+            entry.account !== snapshot.account,
+        );
+        state.providerObservations =
+          snapshot.windows.length || snapshot.credits?.enabled
+            ? [...others, snapshot]
+            : others;
+      }
+      return;
+    }
     if (event.type === 'provider_auth_completed') {
       state.providerAuthEvent = event;
       return;
@@ -332,6 +348,7 @@ export function createAppController({
       onSpeechEvent(event);
       invalidateCatalogReads();
       state.connectionSnapshot = event;
+      state.providerObservations = event.provider_usage ?? [];
       // The hello is authoritative even after a server restart resets revision.
       state.permissionApprovals = event.permissions_approvals ?? {
         revision: -1,

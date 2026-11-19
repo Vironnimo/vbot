@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
-from datetime import UTC, tzinfo
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -210,9 +210,9 @@ class ProviderRuntime:
         return owner
 
     def claude_usage_windows(self) -> tuple[UsageWindow, ...]:
-        return self._claude_usage.windows()
+        return self._claude_usage.observation()[1]
 
-    def current_claude_usage(self) -> tuple[UsageWindow, ...]:
+    def current_claude_usage(self) -> tuple[datetime | None, tuple[UsageWindow, ...]]:
         """The observed windows for a usage report.
 
         When they are missing or older than ``CLAUDE_USAGE_REFRESH_SECONDS``, a
@@ -222,7 +222,7 @@ class ProviderRuntime:
         age = self._claude_usage.age_seconds()
         if age is None or age >= CLAUDE_USAGE_REFRESH_SECONDS:
             self._start_claude_usage_probe()
-        return self._claude_usage.windows()
+        return self._claude_usage.observation()
 
     async def current_antigravity_usage(self) -> tuple[UsageWindow, ...]:
         return await self._antigravity.usage()

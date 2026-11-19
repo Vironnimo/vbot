@@ -1,4 +1,5 @@
 <script>
+  import { modelProviderLimits } from '$lib/modelSelection.js';
   import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
   import ExternalHistoryDialog from './chat/ExternalHistoryDialog.svelte';
@@ -141,6 +142,8 @@
     // Session's pending requests are read again.
     agentSecretsRefreshToken = 0,
     connectionSnapshot = null,
+    providers = [],
+    providerObservations = [],
     // Bumped by App when Session-list continuity is uncertain (replay gap or
     // server restart): activity, the drawer, and the Parent Session link
     // re-read everything. It deliberately does NOT switch the viewed
@@ -762,6 +765,22 @@
     };
     untrack(() => onDisplayedSession(selection));
   });
+  const providerLimits = $derived.by(() => {
+    const session = target.activeSessionState;
+    const reference =
+      isRunActive(session) && session.currentRun?.modelReference;
+    const view = sessionSettings.view;
+    const selection =
+      view?.modelKnown || view?.kind === 'draft'
+        ? view.model
+        : session?.sessionModel;
+    return modelProviderLimits(reference || selection, {
+      providers,
+      observations: providerObservations,
+      models: view?.catalog?.models,
+      resolved: Boolean(reference),
+    });
+  });
   const contributionContext = $derived({
     agent_id: target.activeAddressing().bareAgentId ?? '',
     session_id: target.activeSessionState?.sessionId ?? '',
@@ -1054,6 +1073,7 @@
           {#if readOnly}
             <div class="chat-view__monitor-usage">
               <ContextUsageRing
+                {providerLimits}
                 contextUsage={target.activeSessionState?.contextUsage}
                 contextWindow={target.activeSessionState?.contextUsage
                   ?.context_window}
@@ -1168,6 +1188,7 @@
                 </Banner>
               {:else if composerAvailable}
                 <ChatComposer
+                  {providerLimits}
                   bind:this={composer}
                   uiContext={contributionContext}
                   disabled={composerDisabled}

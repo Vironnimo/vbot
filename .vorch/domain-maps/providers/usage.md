@@ -6,7 +6,7 @@ Read this reference only for Provider subscription limits, usage fetchers/parser
 
 `ProviderUsageService` reports a logged-in Connection's upstream subscription state and owns its normalized automatic observation history. Most fetchers probe the Provider; Claude Agent projects native stream observations and asks Claude Code for them with a minimal request when they are missing or stale. It does not read or aggregate vBot Sessions. `core/statistics/` remains a read-only local aggregation; the WebUI correlates the two independent sources only by time.
 
-The Runtime owns one service instance for shared caching and the hourly collector. Live state is exposed by `provider.usage`; persisted observations by `provider.usage_history`; explicit deletion by `provider.usage_history.clear`. The service never participates in Chat execution. Its local `UsageProbeRuntime` Protocol avoids importing concrete Runtime; an injectable transport keeps tests offline.
+The Runtime owns one service instance for shared caching and the hourly collector. Live state is exposed by `provider.usage`; persisted observations by `provider.usage_history`; explicit deletion by `provider.usage_history.clear`. Chat can read passive observations without starting a fetcher or a native probe. Its local `UsageProbeRuntime` Protocol avoids importing concrete Runtime; an injectable transport keeps tests offline.
 
 ## Report contract
 
@@ -18,6 +18,10 @@ The frozen serializable projection is:
 - `UsageReport`: generation timestamp and Provider snapshots.
 
 `report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows, enabled credits, nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, window units, credits (USD with cents), and per-Provider errors.
+
+## Passive observations
+
+The service keeps the last successful observation per exact Connection and Account in memory. A new fetch supplies its measurement time (native Claude windows carry their own observation time); cache hits and failed probes do not advance it. Startup seeds this view from the newest stored hourly sample using its sample time. The shared socket sends the current observations on connect and pushes subsequent changes (`server/events-and-reconnect.md`). Reading or displaying them never starts the live report or its polling timer.
 
 ## Automatic history
 

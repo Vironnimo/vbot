@@ -32,6 +32,7 @@ function normalizeHoverCardOptions(value) {
   return {
     accessible: value?.accessible !== false,
     touch: value?.touch !== false,
+    onOpenChange: value?.onOpenChange,
     openOnPress: value?.openOnPress === true,
     whenTruncated: value?.whenTruncated === true,
     placement: normalizePlacement(value?.placement),
@@ -56,6 +57,7 @@ function normalizeHoverCardOptions(value) {
  *   with controls get no tooltip role (a tooltip must not be interactive).
  * - `touch: false` ignores taps, so a tap performs the anchor's own action
  *   (an attachment link) instead of opening a preview.
+ * - `onOpenChange(open)`: observe when the card opens or closes.
  * - `openOnPress: true` opens the card at once on a mouse press, for an
  *   anchor whose only purpose is revealing the card (the context ring);
  *   otherwise a press belongs to the anchor's own control.
@@ -252,6 +254,7 @@ export function floatingHoverCard(node, options = {}) {
     }
     open = true;
     node.dataset.floatingOpen = 'true';
+    currentOptions.onOpenChange?.(true);
     applySemantics();
     linkDescription(focusTarget ?? anchor);
     layer.show();
@@ -266,6 +269,7 @@ export function floatingHoverCard(node, options = {}) {
     }
     const focusWasInside = isInside(node, document.activeElement);
     open = false;
+    currentOptions.onOpenChange?.(false);
     cardHovered = false;
     cardFocusTarget = null;
     contentObserver?.disconnect();

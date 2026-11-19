@@ -175,6 +175,7 @@ export function createChatRunStream({
     const current = session.currentRun;
     if (current?.runId !== data.run_id) return;
     current.status = state.status ?? current.status;
+    if (state.model_reference) current.modelReference = state.model_reference;
     current.startedAt = state.started_at ?? current.startedAt;
     current.iterationCount = state.iteration_count ?? current.iterationCount;
     session.status = current.status;

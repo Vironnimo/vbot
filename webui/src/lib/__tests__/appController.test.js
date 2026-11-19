@@ -103,6 +103,33 @@ describe('App controller', () => {
     expect(state.permissionApprovals).toEqual({ revision: 0, requests: [] });
   });
 
+  it('updates passive Provider observations after the hello snapshot and skips its replay', async () => {
+    const { controller, state } = setup();
+    const snapshot = {
+      connection: 'openrouter:api-key',
+      account: 'work',
+      windows: [],
+      credits: { enabled: true, balance: 0 },
+    };
+    const other = { ...snapshot, account: 'default' };
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      last_sequence: 8,
+      provider_usage: [snapshot, other],
+    });
+    const empty = { ...snapshot, credits: null };
+    for (const sequence of [7, 9]) {
+      await controller.handleServerEvent({
+        type: 'provider_usage_observed',
+        sequence,
+        payload: empty,
+      });
+      expect(state.providerObservations).toEqual(
+        sequence === 7 ? [snapshot, other] : [other],
+      );
+    }
+  });
+
   it('projects server events into run state and scoped invalidations', async () => {
     const onSpeechEvent = vi.fn();
     const { actions, controller, state } = setup({ onSpeechEvent });

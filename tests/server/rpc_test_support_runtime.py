@@ -42,6 +42,7 @@ from core.providers.accounts import (
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.providers.runtime import ProviderRuntime
+from core.providers.usage import ProviderUsageService
 from core.providers.wire_observations import ObservedFacts, WireObservations
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.providers.wire_profiles import WireProfiles
@@ -590,6 +591,7 @@ class StubRuntime:
         self.skills: Any = StubSkills()
         self.models: Any = StubModels()
         self.providers = StubProviders()
+        self.provider_usage = ProviderUsageService(cast(Any, self))
         self.adapter = adapter
         # Real wire profile resolution over no files; tests add files with
         # ``wire_profiles.replace_files`` and learned facts on ``wire_observations``.

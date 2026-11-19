@@ -243,11 +243,13 @@ async def test_late_user_placement_and_controls_have_explicit_patches() -> None:
         patch = data(await anext(stream))
         assert patch["item_order"] == [f"message-{user['id']}", initial["items"][0]["id"]]
         assert patch["upsert"][0]["run_id"] == active.id
+        active.model_reference = "openai/gpt::subscription:work"
         active.emit(
             "model_step_usage", {"iteration_count": 1, "context_usage": {"input_tokens": 123}}
         )
         patch = data(await anext(stream))
         assert patch["state"]["context_usage"] == {"input_tokens": 123}
+        assert patch["state"]["model_reference"] == active.model_reference
         assert patch["run"]["iterationCount"] == 1
 
 

@@ -18,6 +18,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,6 +83,7 @@ from core.providers.usage_history import (
 )
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import cancel_and_wait
 
@@ -190,7 +192,7 @@ class ProviderUsageService:
         history_interval: float = DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        claude_usage: Callable[[], tuple[UsageWindow, ...]] | None = None,
+        claude_usage: Callable[[], tuple[datetime | None, tuple[UsageWindow, ...]]] | None = None,
         antigravity_usage: Callable[[], Awaitable[tuple[UsageWindow, ...]]] | None = None,
     ) -> None:
         self._runtime = runtime
@@ -210,6 +212,8 @@ class ProviderUsageService:
         self._claude_usage = claude_usage
         self._antigravity_usage = antigravity_usage
         self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
+        self._observations: dict[tuple[str, str], dict[str, Any]] = {}
+        self._observation_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._fetch_locks: dict[str, asyncio.Lock] = {}
         self._history_task: asyncio.Task[None] | None = None
         self._history_started = False
@@ -276,6 +280,31 @@ class ProviderUsageService:
     def _close_history(self) -> None:
         if self._owns_history and self._history is not None:
             self._history.close()
+
+    def observations(self) -> list[dict[str, Any]]:
+        """Last known limits per Connection and Account. Reading never starts a probe."""
+        return deepcopy(list(self._observations.values()))
+
+    def subscribe_observations(
+        self, listener: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Notify passive consumers of a new measurement, including an emptied window set."""
+        self._observation_listeners.append(listener)
+        return lambda: self._observation_listeners.remove(listener)
+
+    def _remember(self, snapshot: dict[str, Any], observed_at: str) -> None:
+        if snapshot["error"]:
+            return  # A failed probe supplies no new measurement.
+        key = (snapshot["connection"], snapshot["account"])
+        observation = {**snapshot, "observed_at": observed_at}
+        if snapshot["windows"] or snapshot["credits"]:
+            if observation == self._observations.get(key):
+                return
+            self._observations[key] = observation
+        elif self._observations.pop(key, None) is None:
+            return
+        for listener in tuple(self._observation_listeners):
+            listener(deepcopy(observation))
 
     async def report(self, connections: list[str] | None = None) -> UsageReport:
         """Return usage snapshots for every supported, logged-in connection.
@@ -355,6 +384,12 @@ class ProviderUsageService:
             return self._history_interval
         try:
             latest = await self._history.latest_sampled_at()
+            if latest is not None:
+                for sample in await self._history.samples(since=latest, until=latest):
+                    for snapshot in sample.providers:
+                        # A live report can finish during the database read.
+                        if (snapshot["connection"], snapshot["account"]) not in self._observations:
+                            self._remember(snapshot, sample.sampled_at)
         except DatabaseError as exc:
             _LOGGER.warning("Provider usage history freshness could not be read: %s", exc)
             return 0.0
@@ -423,6 +458,7 @@ class ProviderUsageService:
                 return cached
             snapshot = await self._run_fetcher(connection)
             self._store_cache(connection, snapshot)
+            self._remember(snapshot.to_dict(), format_canonical_timestamp(self._now()))
             return snapshot
 
     async def _run_fetcher(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
@@ -482,12 +518,15 @@ class ProviderUsageService:
     # ------------------------------------------------------------------
 
     async def _fetch_claude_agent(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
-        return ProviderUsageSnapshot(
+        observed_at, windows = self._claude_usage() if self._claude_usage else (None, ())
+        snapshot = ProviderUsageSnapshot(
             connection=connection.connection_id,
             account=connection.account_id,
             display_name=self._display_name(connection),
-            windows=list(self._claude_usage()) if self._claude_usage is not None else [],
+            windows=list(windows),
         )
+        self._remember(snapshot.to_dict(), format_canonical_timestamp(observed_at or self._now()))
+        return snapshot
 
     async def _fetch_antigravity(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         try:

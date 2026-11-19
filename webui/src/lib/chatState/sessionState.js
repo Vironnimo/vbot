@@ -239,6 +239,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       // until History reports it.
       compactionPolicy: null,
       agentName: null,
+      sessionModel: null,
       // Durable state of each background shell command, by command id
       // (`{ status, stillRunning }`), from `chat.history`'s
       // `background_command_statuses` and

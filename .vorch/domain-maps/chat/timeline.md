@@ -26,6 +26,8 @@ Programmatic Tool calls remain ordinary Tool rows, carrying `programmatic` and `
 
 History pages include whole Run segments even when the requested message count falls inside one. Active History captures overlay the complete in-memory Run, so late attachment works beyond the raw replay window. Older pages do not splice the current Run into the past. `history_generation`, reset flags and `replace_run_ids` make edits, generation changes and complete-Run replacement explicit. Clients do not infer overlap from text or neighboring roles.
 
+The live Run snapshot and patches carry the serving route's exact `model_reference` in `state` once Chat acquires it. It follows Run-local fallback and identifies the Account even when a Session's selected Model changes mid-Run.
+
 ## Transport
 
 `chat.timeline` returns `timeline_version: 1`, semantic `items`, paging and Session facts. It retains public `messages` for the existing edit and History bookkeeping callers. An active response supplies its `timeline_sequence` and `active_run.timeline_url`.

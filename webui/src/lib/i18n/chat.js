@@ -901,6 +901,7 @@ export default Object.freeze({
   'chat.voice.progress.loading': 'Loading speech model into memory…',
   'chat.voice.progress.transcribing': 'Transcribing recording…',
   'chat.composerArea': 'Message composer',
+  'chat.providerRemaining': 'Remaining',
   'chat.contextRingLabel': 'Context window usage',
   'chat.contextRingFigures': '{tokens} / {context} · {share}',
   'chat.contextRingFiguresLabel': 'Context window usage: {figures}',
