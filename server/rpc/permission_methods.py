@@ -38,6 +38,7 @@ from core.permissions import (
 from core.projects import AgentOverrides, ResolutionAgentNotFoundError, RuntimeAgent
 from core.sessions import SessionAddress, WorkingProjectChoice
 from server.access import current_principal
+from server.rpc import _permission_profiles
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -449,6 +450,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the Permission Rules RPC handlers."""
 
     return {
+        **_permission_profiles.method_handlers(),
         "permissions.pending": _pending_approvals,
         "permissions.resolve": _resolve_approval,
         "permissions.validate": _validate_permission_rules,

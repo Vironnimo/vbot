@@ -55,15 +55,22 @@ from core.permissions._paths import (
     split_lexical,
 )
 from core.permissions._presets import (
+    BUILTIN_PERMISSION_PROFILES,
     CUSTOM_PRESET,
     PERMISSION_PRESETS,
     PresetMatch,
     PresetName,
     apply_preset,
+    custom_permission_profile_name,
     editor_bases,
     matching_preset,
+    normalize_custom_permission_profile,
+    normalize_permission_profile_name,
+    normalize_permission_profiles,
+    permission_profile_catalog,
     preset_definitions,
     preset_name,
+    resolve_permission_profile,
 )
 from core.permissions._refusal import (
     HostAccess,
@@ -1125,6 +1132,7 @@ def _host_key(host: str) -> str:
 
 
 __all__ = [
+    "BUILTIN_PERMISSION_PROFILES",
     "CUSTOM_PRESET",
     "PERMISSION_PRESETS",
     "PERMISSION_RULE_PARTS",
@@ -1157,6 +1165,7 @@ __all__ = [
     "WebBase",
     "WriteBase",
     "apply_preset",
+    "custom_permission_profile_name",
     "editor_bases",
     "check_permission_rules",
     "describe_layer",
@@ -1165,6 +1174,10 @@ __all__ = [
     "is_own_host",
     "join_ceilings",
     "matching_preset",
+    "normalize_custom_permission_profile",
+    "normalize_permission_profile_name",
+    "normalize_permission_profiles",
+    "permission_profile_catalog",
     "normalize_host",
     "normalize_path",
     "normalize_permission_rule",
@@ -1173,5 +1186,6 @@ __all__ = [
     "permission_rules_to_dict",
     "preset_definitions",
     "preset_name",
+    "resolve_permission_profile",
     "resolve_rule_set",
 ]

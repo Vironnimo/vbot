@@ -24,6 +24,7 @@ from core.agents._config import (
     _validate_excluded_skills,
     _validate_fallback_models,
     _validate_memory_prompt_mode,
+    _validate_permission_profile,
     _validate_permission_rules,
     _validate_root_project_id,
     _validate_string_field,
@@ -105,6 +106,7 @@ class AgentMutations:
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
         permission_rules: PermissionRules | Mapping[str, Any] | None = None,
+        permission_profile: str | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
         placement: AgentPlacement | None = None,
@@ -158,6 +160,7 @@ class AgentMutations:
             )
             validated_tool_loading = _validate_tool_loading(tool_loading)
             validated_permission_rules = _validate_permission_rules(permission_rules)
+            validated_profile = _validate_permission_profile(permission_profile, permission_rules)
             now = _delegation.new_creation_timestamp(self._owner)
             workspace_value = workspace
             if workspace_value is None or (
@@ -189,6 +192,7 @@ class AgentMutations:
                 compaction_policy=validated_compaction_policy,
                 tool_loading=validated_tool_loading,
                 permission_rules=validated_permission_rules,
+                permission_profile=validated_profile,
                 librarian_enabled=validated_librarian_enabled,
                 created_at=now,
                 updated_at=now,
@@ -224,6 +228,7 @@ class AgentMutations:
         agent_id: str,
         *,
         copy_workspace_identity_files: bool = False,
+        require_no_permission_profile: bool = False,
         **changes: Any,
     ) -> AgentUpdateResult:
         """Update an Agent and transactionally relocate its identity files.
@@ -242,6 +247,10 @@ class AgentMutations:
             changes.pop("id", None)
             agent_path = self._owner._require_agent_path(agent_id)
             agent = self._owner._load_verified_agent(agent_path)
+            if require_no_permission_profile and agent.permission_profile is not None:
+                raise AgentError(
+                    "A permission profile is selected. Switch to inline rules before editing them."
+                )
             if "subagent_allow" in changes:
                 if "tools" in changes:
                     raise AgentError("subagent_allow cannot be combined with tools")
@@ -354,10 +363,19 @@ class AgentMutations:
                 )
             if "tool_loading" in changes:
                 changes["tool_loading"] = _validate_tool_loading(changes["tool_loading"])
+            if "permission_profile" in changes:
+                profile = _validate_permission_profile(
+                    changes["permission_profile"], changes.get("permission_rules")
+                )
+                changes["permission_profile"] = profile
+                if profile is not None:
+                    changes["permission_rules"] = None
             if "permission_rules" in changes:
                 changes["permission_rules"] = _validate_permission_rules(
                     changes["permission_rules"]
                 )
+                if changes["permission_rules"] is not None:
+                    changes["permission_profile"] = None
             if changes.get("current_session_id"):
                 self._owner._validate_current_session(agent_id, changes["current_session_id"])
 

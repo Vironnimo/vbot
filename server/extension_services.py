@@ -38,6 +38,7 @@ def _check_settings_authority(params: JsonObject) -> None:
     # same restrictions advertised by the structured update schema.
     protected = (
         ("defaults", "agent", "permission_rules"),
+        ("permission_profiles",),
         ("defaults", "agent", "tool_access"),
         ("providers", "claude_agent", "executable_path"),
     )

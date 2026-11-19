@@ -13,9 +13,10 @@ from core.chat._effort_epoch import EffortState
 from core.chat._message_history import effective_compaction_messages
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_permissions import (
+    PermissionInputs,
     RunPermissions,
+    live_run_permission_boundary,
     permitted_project_context,
-    run_permission_boundary,
 )
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
@@ -40,6 +41,7 @@ from core.chat.wire_shaping import (
 )
 from core.computers import normalize_execution
 from core.extensions._declarations import SessionCapabilityExpiredError
+from core.json_documents import documents_written
 from core.permissions import PermissionBoundary
 from core.projects import (
     AgentOverrides,
@@ -392,6 +394,7 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     # Every Tool Call of this Run checks its accesses against this boundary.
     permissions: PermissionBoundary
+    permission_sources: RunPermissions
     # Admission owner only; descendants do not inherit private Session grants.
     owner_binding: TemporarySessionBinding | None = None
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
@@ -404,8 +407,6 @@ class _RunExecutionContext:
     subagent_tool_withheld: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
-    # What ``permissions`` was built from; ``None`` keeps it for the whole Run.
-    permission_sources: RunPermissions | None = None
     request_state: _RequestState | None = None
     # Finds the folder instruction files of the Working Project's subfolders;
     # ``None`` without a Working Project or with its folder instructions off.
@@ -693,6 +694,7 @@ def _missing_arrived_notes(
 class _CompactionPromptRefresh:
     """Fresh prompt-only inputs prepared for one Compaction checkpoint commit."""
 
+    permission_sources: RunPermissions
     agent_body: str
     project_prompt_context: ProjectPromptContext | None
     working_project_context: str | None
@@ -830,6 +832,7 @@ class RequestBuildInputs:
             working_project_context=refresh.working_project_context,
             soul_context=refresh.soul_context,
             memory_files_context=refresh.memory_files_context,
+            permissions=refresh.permission_sources.boundary,
             skill_registry=refresh.skill_registry,
             skill_catalog=refresh.skill_catalog,
         )
@@ -892,16 +895,16 @@ async def refresh_run_permissions(
         await dependencies.sessions.metadata_value_async(context.session.address, "execution")
     )
     current = context.permission_sources
-    if current is None or not (force or await current.changed(dependencies)):
+    if not (force or await current.changed(dependencies)):
         return False
-    agent = await resolve_run_agent(dependencies, context.run, context.request)
-    rebuilt = await run_permission_boundary(
+    rebuilt = await live_run_permission_boundary(
         dependencies,
         context.run,
-        agent,
+        partial(resolve_run_agent, dependencies, context.run, context.request),
         address=current.address,
         project_root=current.project_root,
         skill_registry=context.skill_registry,
+        sources=current.inputs.sources,
     )
     context.permission_sources = rebuilt
     context.permissions = rebuilt.boundary
@@ -909,7 +912,11 @@ async def refresh_run_permissions(
 
 
 async def resolve_run_agent(
-    dependencies: ChatLoopDependencies, run: Run, request: _RunRequest
+    dependencies: ChatLoopDependencies,
+    run: Run,
+    request: _RunRequest,
+    *,
+    session_overrides: AgentOverrides,
 ) -> Any:
     """Resolve the Agent as the Run's Session runs it now, overrides included.
 
@@ -929,6 +936,7 @@ async def resolve_run_agent(
             temporary_binding.address,
             generation_id=temporary_binding.generation_id,
             session=temporary_binding.address,
+            session_overrides=session_overrides,
         )
     if request.temporary_parent_binding is not None:
         parent = request.temporary_parent_binding
@@ -952,9 +960,14 @@ async def resolve_run_agent(
             session=SessionAddress(
                 project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
             ),
+            session_overrides=session_overrides,
         )
     return await dependencies.agent_resolver.resolve_agent_async(
-        project_id, run.agent_id, session_id=run.session_id, run_overrides=request.run_overrides
+        project_id,
+        run.agent_id,
+        session_id=run.session_id,
+        run_overrides=request.run_overrides,
+        session_overrides=session_overrides,
     )
 
 
@@ -998,7 +1011,11 @@ async def create_run_execution_context(
         if owner_binding is None or owner_binding.generation_id != owner.generation_id:
             raise SessionCapabilityExpiredError("session capability expired")
     project_cwd: Path | None
-    agent = await resolve_run_agent(dependencies, run, request)
+    permission_revision = documents_written()
+    permission_inputs = await PermissionInputs.read(dependencies, session.address)
+    agent = await resolve_run_agent(
+        dependencies, run, request, session_overrides=permission_inputs.overrides
+    )
     target = await requests.targets.for_agent(agent)
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
@@ -1099,13 +1116,14 @@ async def create_run_execution_context(
         goal_session = await _CHAT_TRANSFORM_WORKERS.run(
             has_open_goal, dependencies.sessions, session_address
         )
-        permissions = await run_permission_boundary(
+        permissions = await live_run_permission_boundary(
             dependencies,
             run,
-            agent,
+            partial(resolve_run_agent, dependencies, run, request),
             address=session_address,
             project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
             skill_registry=skill_registry,
+            resolved=(permission_revision, permission_inputs, agent),
         )
         # The frame carries only the instruction files the Run may read.
         memory_workspace = (

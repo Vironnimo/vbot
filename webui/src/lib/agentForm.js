@@ -71,6 +71,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'librarian_enabled',
   'tool_loading',
   'permission_rules',
+  'permission_profile',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -120,6 +121,7 @@ export function createAgentFormValues(agent = {}) {
     tool_loading: normalizeToolLoading(raw.tool_loading),
     // The Agent's own Permission Rules (raw); null while it has none.
     permission_rules: normalizePermissionRules(raw.permission_rules),
+    permission_profile: raw.permission_profile ?? null,
   };
 }
 
@@ -129,7 +131,16 @@ export function createAgentFormValues(agent = {}) {
 // user's value. Taken values are `saved`'s own objects.
 export function rebaseAgentFormValues(values, baseline, saved) {
   const rebased = { ...values };
+  // A named profile and inline rules are alternative forms of one choice.
+  const permissionsEdited =
+    values.permission_profile !== baseline.permission_profile ||
+    !valuesEqual(values.permission_rules, baseline.permission_rules);
   for (const [field, value] of Object.entries(saved)) {
+    if (
+      permissionsEdited &&
+      (field === 'permission_rules' || field === 'permission_profile')
+    )
+      continue;
     if (JSON.stringify(values[field]) === JSON.stringify(baseline[field])) {
       rebased[field] = value;
     }
@@ -323,6 +334,7 @@ function normalizeValues(values = {}) {
     librarian_enabled: values.librarian_enabled !== false,
     tool_loading: normalizeToolLoading(values.tool_loading),
     permission_rules: normalizePermissionRules(values.permission_rules),
+    permission_profile: values.permission_profile ?? null,
   };
 }
 
@@ -396,6 +408,13 @@ function buildAgentPayload(normalized, sampling, options = {}) {
     options.includeEmptyPermissionRules
   ) {
     payload.permission_rules = normalized.permission_rules;
+  }
+
+  if (
+    normalized.permission_profile !== null ||
+    options.includeEmptyPermissionRules
+  ) {
+    payload.permission_profile = normalized.permission_profile;
   }
 
   if (normalized.name || options.includeEmptyName) {

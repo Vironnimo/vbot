@@ -283,6 +283,7 @@ class StubAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        session_overrides: AgentOverrides | None = None,
         run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
     ) -> StubAgent | ConfigAgent:
@@ -297,7 +298,9 @@ class StubAgentResolver:
                 )
             agent = self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
         if session_id is not None:
-            agent = self._with_overrides(agent, SessionAddress(project_id, agent_id, session_id))
+            agent = self._with_overrides(
+                agent, SessionAddress(project_id, agent_id, session_id), session_overrides
+            )
         elif new_session_overrides is not None and not new_session_overrides.is_empty:
             agent = replace(agent, **new_session_overrides.agent_changes())
         if run_overrides is not None and not run_overrides.is_empty:
@@ -310,13 +313,14 @@ class StubAgentResolver:
         *,
         generation_id: str,
         session: SessionAddress | None = None,
+        session_overrides: AgentOverrides | None = None,
     ) -> Any:
         if self.temporary_agents is None:
             raise AgentResolutionError("temporary Session is unavailable")
         agent = self.temporary_agents.resolve(address, generation_id=generation_id)
         if agent is None:
             raise AgentResolutionError("temporary Session binding is unavailable")
-        return agent if session is None else self._with_overrides(agent, session)
+        return agent if session is None else self._with_overrides(agent, session, session_overrides)
 
     async def resolve_delegated_agent_async(self, project_id, agent_id, *, caller_model):
         agent = await self.resolve_agent_async(project_id, agent_id)
@@ -380,9 +384,15 @@ class StubAgentResolver:
     ) -> AgentOverrides:
         return self.update_session_overrides(address, changes)
 
-    def _with_overrides(self, agent: Any, address: SessionAddress) -> Any:
-        overrides = self.session_overrides(address)
-        return agent if overrides.is_empty else replace(agent, **overrides.agent_changes())
+    def _with_overrides(
+        self, agent: Any, address: SessionAddress, overrides: AgentOverrides | None = None
+    ) -> Any:
+        if overrides is None:
+            overrides = self.session_overrides(address)
+        changes = overrides.agent_changes()
+        if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
+            changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
+        return replace(agent, **changes) if changes else agent
 
     def _working_projects(self) -> AgentResolver:
         """The real resolver's working-Project policy over this stub's Projects and Sessions."""

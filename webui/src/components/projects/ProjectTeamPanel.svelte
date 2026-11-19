@@ -25,7 +25,8 @@
   import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
-  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
+  import { permissionProfileLabel } from '$lib/permissionProfiles.js';
+  import PermissionProfilePicker from '../permissions/PermissionProfilePicker.svelte';
   import ProjectSourceList from './ProjectSourceList.svelte';
   import ProjectModelMappings from './ProjectModelMappings.svelte';
   import {
@@ -126,8 +127,9 @@
   // that set them.
   function permissionsRow(member) {
     const entry = member?.effective?.permission_rules ?? {};
-    const value =
-      entry.value === null || entry.value === undefined
+    const value = member.overrides?.permission_profile
+      ? permissionProfileLabel(member.overrides.permission_profile)
+      : entry.value === null || entry.value === undefined
         ? t('permissions.preset.full_access')
         : t('permissions.session.badge');
     const source = sourceLabel(entry.source);
@@ -141,6 +143,8 @@
 
   function permissionsSourceText(member) {
     const entry = member?.effective?.permission_rules ?? {};
+    if (member.overrides?.permission_profile)
+      return permissionProfileLabel(member.overrides.permission_profile);
     if (entry.value === null || entry.value === undefined) {
       return t('permissions.preset.full_access');
     }
@@ -733,10 +737,8 @@
                         </p>
                       </div>
                       <StatusChip
-                        variant={memberFieldIsOverridden(
-                          member,
-                          'permission_rules',
-                        )
+                        variant={member.overrides?.permission_profile ||
+                        memberFieldIsOverridden(member, 'permission_rules')
                           ? 'info'
                           : 'neutral'}
                       >
@@ -748,8 +750,10 @@
                         {member.effective.permission_rules.error}
                       </p>
                     {/if}
-                    <PermissionRulesEditor
-                      value={overrideDraft(member.agent_id).permission_rules}
+                    <PermissionProfilePicker
+                      profile={overrideDraft(member.agent_id)
+                        .permission_profile}
+                      rules={overrideDraft(member.agent_id).permission_rules}
                       inherited={member.permission_rules_default ?? null}
                       level="override"
                       agentId={projectsState.selectedProjectId
@@ -760,12 +764,16 @@
                         'permission_rules',
                       )}
                       idPrefix={`project-permission-rules-${member.agent_id}`}
-                      onChange={(value) =>
+                      onChange={(profile, rules) => {
+                        const linking =
+                          profile ||
+                          overrideDraft(member.agent_id).permission_profile;
                         updateOverrideDraft(
                           member.agent_id,
-                          'permission_rules',
-                          value,
-                        )}
+                          linking ? 'permission_profile' : 'permission_rules',
+                          linking ? profile : rules,
+                        );
+                      }}
                     />
                   </div>
 

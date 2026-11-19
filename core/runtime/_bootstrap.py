@@ -652,6 +652,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._providers,
             runtime._provider_credentials,
             lambda: _global_agent_defaults(runtime._storage),
+            permission_profiles=lambda: storage.load_settings().get("permission_profiles", {}),
             project_skill_names=runtime.project_skill_names,
             profile_skill_content=runtime.profile_skill_content,
             skill_pool_names=lambda project_id: frozenset(

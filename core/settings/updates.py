@@ -6,6 +6,7 @@ normalization contract distinct from strict public update parsing.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
@@ -59,6 +60,39 @@ from core.settings.paths import SUBAGENT_SETTING_DEFAULTS, build_effective_setti
 from core.utils.errors import StorageError
 
 _MISSING = object()
+
+
+def updated_permission_profiles(
+    current: object, changes: Mapping[str, Any], base: Mapping[str, Any] | None
+) -> tuple[dict[str, dict[str, object]], tuple[str, ...]]:
+    """Apply whole-profile edits to a private copy and report any stale base values."""
+    from core.permissions import (
+        custom_permission_profile_name,
+        normalize_custom_permission_profile,
+        normalize_permission_profiles,
+        permission_rules_to_dict,
+    )
+
+    def definition(name: str, value: object) -> dict[str, object] | None:
+        if value is None:
+            custom_permission_profile_name(name)
+            return None
+        return permission_rules_to_dict(normalize_custom_permission_profile(name, value))
+
+    profiles = normalize_permission_profiles(current)
+    stale = []
+    for name, value in changes.items():
+        edited = definition(name, value)
+        previous = profiles.get(name)
+        if edited == previous:
+            continue
+        if base is not None and name in base and definition(name, base[name]) != previous:
+            stale.append(f"permission_profiles[{json.dumps(name, ensure_ascii=False)}]")
+        if edited is None:
+            del profiles[name]
+        else:
+            profiles[name] = edited
+    return profiles, tuple(stale)
 
 
 def apply_appearance_settings(

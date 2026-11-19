@@ -472,7 +472,15 @@ class ProjectStore:
             self._write_project(updated)
             return updated
 
-    def set_override(self, project_id: str, agent_id: str, field: str, value: Any) -> Project:
+    def set_override(
+        self,
+        project_id: str,
+        agent_id: str,
+        field: str,
+        value: Any,
+        *,
+        require_no_permission_profile: bool = False,
+    ) -> Project:
         """Override one field (``model`` / ``temperature`` / ``top_p`` / …) for an agent.
 
         Atomic read-modify-write over ``project.json``: load the project, copy its
@@ -487,6 +495,14 @@ class ProjectStore:
             project = self.get(project_id)
             overrides = _copy_overrides(project.overrides)
             agent_override = dict(overrides.get(agent_id, {}))
+            if require_no_permission_profile and "permission_profile" in agent_override:
+                raise ProjectError(
+                    "A permission profile is selected. Switch to inline rules before editing them."
+                )
+            if field == "permission_profile":
+                agent_override.pop("permission_rules", None)
+            elif field == "permission_rules":
+                agent_override.pop("permission_profile", None)
             agent_override[field] = value
             overrides[agent_id] = agent_override
             return self._rewrite_with_overrides(project, overrides)

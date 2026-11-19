@@ -18,6 +18,7 @@ from core.config_validation import (
     validate_json_file,
 )
 from core.config_validation import add_error as _error
+from core.config_validation import child_path as _child_path
 from core.config_validation import error_diagnostic as _error_diagnostic
 from core.config_validation import validate_positive_integer as _validate_positive_integer
 from core.config_validation import warn_unknown_keys as _warn_unknown_keys
@@ -76,6 +77,7 @@ from core.settings._raw_sections import (
     _validate_model_favorites,
     _validate_model_tasks,
     _validate_notifications,
+    _validate_permission_profiles,
     _validate_port_settings,
     _validate_providers,
     _validate_recall,
@@ -151,9 +153,9 @@ def load_runtime_settings_json(
     Syntax, root-shape, and ``format_version`` failures cannot be isolated and
     therefore raise. Schema failures are isolated at their top-level Settings key:
     the invalid section or scalar is omitted, valid siblings remain live, and
-    diagnostics are returned so runtime callers can report the degradation without
-    mutating the source file. ``format_version`` and unknown fields are left out
-    of the result.
+    diagnostics are returned without mutating the source file. Usable named
+    Permission Profiles survive a malformed sibling and default Permission Rules
+    retain their fail-closed state. ``format_version`` and unknown fields are left out.
     """
 
     path = Path(settings_path)
@@ -193,6 +195,14 @@ def load_runtime_settings_json(
         defaults = _usable_defaults(data.get("defaults"), errors)
         if defaults is not None:
             usable["defaults"] = defaults
+    if "permission_profiles" in invalid_keys and isinstance(data["permission_profiles"], dict):
+        # A missing reference stops its Agent. Independent profiles remain usable.
+        invalid_paths = {item.path for item in errors}
+        usable["permission_profiles"] = {
+            name: rules
+            for name, rules in data["permission_profiles"].items()
+            if _child_path("$.permission_profiles", name) not in invalid_paths
+        }
     return _settings_fields(usable), errors
 
 
@@ -458,6 +468,8 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         _validate_positive_integer(diagnostics, f"$.{field}", data.get(field), required=False)
     _validate_compaction(diagnostics, data.get("compaction"))
     _validate_defaults(diagnostics, data.get("defaults"))
+    if "permission_profiles" in data:
+        _validate_permission_profiles(diagnostics, data["permission_profiles"])
     _validate_recall(diagnostics, data.get("recall"))
     _validate_extensions(diagnostics, data.get("extensions"))
     _validate_web_search(diagnostics, data.get("web_search"))

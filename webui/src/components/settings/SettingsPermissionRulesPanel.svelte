@@ -6,6 +6,8 @@
 
   import { onDestroy, untrack } from 'svelte';
 
+  import PermissionProfilesPanel from './PermissionProfilesPanel.svelte';
+  import { t } from '$lib/i18n.js';
   import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import {
@@ -88,16 +90,35 @@
   }
 </script>
 
-<PermissionRulesEditor
-  value={form.permission_rules}
-  level="default"
-  idPrefix="default-permission-rules"
-  onChange={change}
-/>
-<div class="s-footer">
-  <SaveStatus
-    {saving}
-    pending={autosave.participant.hasChanges()}
-    onClick={() => autosave.participant.runSave('manual')}
-  />
+<PermissionProfilesPanel />
+<div class="s-group">
+  <details class="s-disclosure">
+    <summary>{t('permissions.profiles.sharedRules')}</summary>
+    <div class="s-disclosure__body shared-permission-rules__body">
+      <p class="s-subhead__desc">
+        {t('permissions.profiles.sharedDescription')}
+      </p>
+      <PermissionRulesEditor
+        value={form.permission_rules}
+        inset
+        level="default"
+        idPrefix="default-permission-rules"
+        onChange={change}
+      />
+      <div class="s-footer">
+        <SaveStatus
+          {saving}
+          pending={autosave.participant.hasChanges()}
+          onClick={() => autosave.participant.runSave('manual')}
+        />
+      </div>
+    </div>
+  </details>
 </div>
+
+<style>
+  .shared-permission-rules__body {
+    display: grid;
+    gap: var(--space-md);
+  }
+</style>

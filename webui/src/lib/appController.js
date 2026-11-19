@@ -10,6 +10,7 @@ import {
   setModelFavorite,
 } from './api.js';
 import { mergeBoundedEntries } from './clientCaches.js';
+import { refreshPermissionProfiles } from './permissionProfiles.js';
 import { noteInvalidation } from './clientMetrics.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
@@ -348,6 +349,7 @@ export function createAppController({
         onReloadExtensionPages,
         onCheckWebuiBuild,
         onComputersChanged,
+        refreshPermissionProfiles,
       ];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
@@ -468,6 +470,7 @@ export function createAppController({
     const kind = event.payload?.kind;
     onPublicResourceChange(kind);
     noteInvalidation(kind);
+    if (kind === 'settings') void refreshPermissionProfiles();
     if (kind === 'computers') {
       await onComputersChanged();
       state.terminalsRefreshToken += 1;

@@ -15,10 +15,11 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Callable, Sequence
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.chat._run_permissions import RunPermissions, run_permission_boundary
+from core.chat._run_permissions import RunPermissions, live_run_permission_boundary
 from core.chat._run_state import _resolve_working_project
 from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -297,17 +298,18 @@ class ExternalRun:
 
     async def bind_permissions(self, project_root: Path | None) -> None:
         """Build the admitted Run's Permission Boundary as a Chat Run builds its own."""
-        self._permissions = await self._build_permissions(
-            self._require_run(), self._agent, project_root
-        )
+        self._permissions = await self._build_permissions(self._require_run(), project_root)
 
-    async def _build_permissions(
-        self, run: Run, agent: Any, project_root: Path | None
-    ) -> RunPermissions:
-        return await run_permission_boundary(
+    async def _build_permissions(self, run: Run, project_root: Path | None) -> RunPermissions:
+        return await live_run_permission_boundary(
             self._dependencies,
             run,
-            agent,
+            partial(
+                self._dependencies.agent_resolver.resolve_agent_async,
+                None,
+                self.agent_id,
+                session_id=self.session_id,
+            ),
             address=SessionAddress(
                 project_id=None, agent_id=self.agent_id, session_id=self.session_id
             ),
@@ -327,10 +329,7 @@ class ExternalRun:
             if current is None:
                 raise ChatError("the external Run has no Permission Boundary")
             if force or await current.changed(self._dependencies):
-                agent = await self._dependencies.agent_resolver.resolve_agent_async(
-                    None, self.agent_id, session_id=self.session_id
-                )
-                current = await self._build_permissions(run, agent, current.project_root)
+                current = await self._build_permissions(run, current.project_root)
                 self._permissions = current
             return current.boundary
 

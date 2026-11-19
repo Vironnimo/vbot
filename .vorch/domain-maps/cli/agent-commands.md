@@ -1,8 +1,10 @@
 # Agent, Project, Session and Automation Commands
 
-Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` and `librarian` areas. What the deleting commands print is in `cli/archive-commands.md`.
+Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill`, `librarian` and `permission-profiles` areas. What the deleting commands print is in `cli/archive-commands.md`.
 
 ## Agent area
+
+- `permission-profiles list|show|save|delete` manages the shared catalog through the operator RPCs. `agent create|update --permission-profile <name>` and `project override set <project-id> <agent-id> permission_profile <name>` select a profile by reference. A selected profile replaces the local rule set. An operator can replace a profile with complete inline rules or use `--clear-permissions` to return to inheritance. Incremental edits require an unbound Agent. An Agent Run can set inline rules on unassigned Agents but cannot modify or select shared profiles. In both cases the CLI binds the write to an atomic no-profile precondition so a concurrently assigned profile survives.
 
 - Create/update `--placement chat|helper|private` maps to the public placement input; `--owner <agent-id>` is required exactly with `private`, and contradictory combinations are refused before RPC. Show/list expose Helper and Private placement and the missing-owner state; Chat keeps its existing output. Placement and automatic delegation contracts: `agent/placement.md`.
 

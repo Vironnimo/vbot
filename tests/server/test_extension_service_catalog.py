@@ -83,6 +83,11 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
         assert {
             entry["name"]: entry["reason"] for entry in described["excluded_services"]
         } == SERVICE_EXCLUSIONS
+        assert {
+            "permissions.profiles",
+            "permissions.save_profile",
+            "permissions.delete_profile",
+        } <= (SERVICE_EXCLUSIONS.keys())
         assert all(entry["reason"] for entry in described["excluded_services"])
         assert all(
             entry["parameters"]["additionalProperties"] is False
@@ -98,6 +103,7 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
     ("name", "params"),
     [
         ("agent.create", {"id": "fixture", "permission_rules": None}),
+        ("agent.update", {"id": "fixture", "permission_profile": "full_access"}),
         ("agent.update", {"id": "fixture", "tool_access": None}),
         ("settings.update", {"defaults": {"agent": {"permission_rules": None}}}),
         ("settings.update", {"providers": {"claude_agent": {"executable_path": "other.exe"}}}),
@@ -110,6 +116,7 @@ def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion()
             ("settings.patch", {"operations": [{"op": "unset", "path": path}]})
             for path in (
                 "defaults.agent.permission_rules",
+                'permission_profiles["Shared"]',
                 'defaults["agent"]["permission_rules"]',
                 "providers.claude_agent.executable_path",
                 'providers["claude_agent"].executable_path',

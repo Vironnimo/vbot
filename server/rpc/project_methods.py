@@ -68,6 +68,11 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
+from server.rpc._permission_profiles import (
+    guard_profile_assignment,
+    inline_profile_precondition,
+    validate_profile_selection,
+)
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
@@ -425,6 +430,7 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
     field = _required_override_field(params)
+    unbound = inline_profile_precondition(params, inline_rules=field == "permission_rules")
 
     try:
         current_project = _projects(state).get(project_id)
@@ -443,7 +449,9 @@ def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bo
             )
         if field in {"model", "thinking_effort"}:
             _agent_resolver(state).preserve_agent_sessions(project_id, agent_id)
-        project = _projects(state).set_override(project_id, agent_id, field, value)
+        project = _projects(state).set_override(
+            project_id, agent_id, field, value, require_no_permission_profile=unbound
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -581,6 +589,8 @@ def _validate_override_value(
         if not isinstance(value, bool):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a boolean")
         return value
+    if field == "permission_profile":
+        return validate_profile_selection(state, value)
     if field == "permission_rules":
         try:
             return permission_rules_to_dict(normalize_permission_rules(value))
@@ -987,8 +997,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.list": _list_projects,
         "project.show": _show_project,
         "project.set": _serialized(_set_project),
-        "project.set_override": _serialized(_set_override),
-        "project.clear_override": _serialized(_clear_override),
+        "project.set_override": guard_profile_assignment(_serialized(_set_override)),
+        "project.clear_override": guard_profile_assignment(_serialized(_clear_override)),
         "project.rm": _remove_project,
         "project.reorder": _serialized(_reorder_projects),
         "project.detect": _detect_project,

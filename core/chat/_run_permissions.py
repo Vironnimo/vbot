@@ -16,14 +16,13 @@ the Run rebuilds it.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from core.agents import Agent, TemporaryAgent, default_workspace_dir
 from core.agents.temporary import OwnedIdentityAgent
@@ -123,11 +122,6 @@ class SessionPermissions:
             "workspace": str(self.workspace) if self.workspace is not None else None,
             "home": str(Path.home()),
         }
-
-    def rule_sources(self, data_dir: Path) -> tuple[Path, ...]:
-        """The files whose change can change this boundary without a vBot write."""
-        own = (self.agent_config,) if self.agent_config is not None else ()
-        return (DataDirectoryLayout(data_dir).settings_file, *own, *self.rule_files)
 
     def boundary(
         self,
@@ -253,20 +247,6 @@ async def _session_overrides(
         raise ChatError(_INVALID_CEILING) from error
 
 
-def _session_rule_state(overrides: AgentOverrides) -> str:
-    """What a Session stores that decides its boundary: its rules, grants and ceiling."""
-    return json.dumps(
-        [
-            overrides.permission_rules,
-            overrides.permission_grants,
-            overrides.permission_ceiling,
-            overrides.read_folders,
-        ],
-        sort_keys=True,
-        default=str,
-    )
-
-
 # A rule source file's state: (modification time, size), or None when missing.
 _Stamp = tuple[int, int] | None
 
@@ -285,6 +265,51 @@ def _stamps(paths: Sequence[Path]) -> tuple[_Stamp, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class PermissionInputs:
+    """The Session's stored rule state and file versions used for one resolution."""
+
+    sources: tuple[Path, ...]
+    stamps: tuple[_Stamp, ...]
+    overrides: AgentOverrides
+
+    def matches(self, other: PermissionInputs) -> bool:
+        """Only the Session overrides governing permissions affect a live boundary."""
+        return (
+            self.sources == other.sources
+            and self.stamps == other.stamps
+            and self.overrides.permission_rules == other.overrides.permission_rules
+            and self.overrides.permission_ceiling == other.overrides.permission_ceiling
+            and self.overrides.permission_grants == other.overrides.permission_grants
+            and self.overrides.read_folders == other.overrides.read_folders
+        )
+
+    @staticmethod
+    def files(
+        data_dir: Path, address: SessionAddress, rule_files: tuple[Path, ...] = ()
+    ) -> tuple[Path, ...]:
+        layout = DataDirectoryLayout(data_dir)
+        config = (
+            layout.projects / address.project_id / "project.json"
+            if address.project_id is not None
+            else layout.agents / address.agent_id / "agent.json"
+        )
+        return (layout.settings_file, config, *rule_files)
+
+    @classmethod
+    async def read(
+        cls,
+        dependencies: ChatLoopDependencies,
+        address: SessionAddress,
+        sources: tuple[Path, ...] = (),
+    ) -> PermissionInputs:
+        if not sources:
+            sources = cls.files(Path(dependencies.storage.data_dir), address)
+        overrides = await _session_overrides(dependencies, address)
+        stamps = await _CHAT_TRANSFORM_WORKERS.run(_stamps, sources)
+        return cls(sources, stamps, overrides)
+
+
+@dataclass(frozen=True, slots=True)
 class RunPermissions:
     """A Run's boundary and what it was built from, to notice a change of its rules.
 
@@ -292,7 +317,7 @@ class RunPermissions:
     (:func:`core.json_documents.documents_written`): every rule edit through
     vBot changes it, so every Run notices one without any I/O. Every Run also
     compares its rule source files, because an external edit can restrict a
-    previously unrestricted Agent. ``session_state`` is what the Session stored when the
+    previously unrestricted Agent. The overrides are what the Session stored when the
     boundary was built (the user's rules for it and its ceiling), which lives in
     the Session database, not in a document.
     """
@@ -301,20 +326,14 @@ class RunPermissions:
     documents: int
     address: SessionAddress
     project_root: Path | None
-    sources: tuple[Path, ...] = ()
-    stamps: tuple[_Stamp, ...] = ()
-    session_state: str = ""
+    inputs: PermissionInputs
 
     async def changed(self, dependencies: ChatLoopDependencies) -> bool:
         """Whether a rule source or the Session's stored rules may have changed since the build."""
         if documents_written() != self.documents:
             return True
-        overrides = await _session_overrides(dependencies, self.address)
-        if _session_rule_state(overrides) != self.session_state:
-            return True
-        if not self.sources:
-            return False
-        return await _CHAT_TRANSFORM_WORKERS.run(_stamps, self.sources) != self.stamps
+        latest = await PermissionInputs.read(dependencies, self.address, self.inputs.sources)
+        return not self.inputs.matches(latest)
 
 
 async def run_permission_boundary(
@@ -322,6 +341,7 @@ async def run_permission_boundary(
     run: Run,
     agent: RuntimeAgent,
     *,
+    overrides: AgentOverrides,
     address: SessionAddress,
     project_root: Path | None,
     skill_registry: SkillRegistry,
@@ -334,8 +354,6 @@ async def run_permission_boundary(
     else, so an edit during the build still shows at the next Tool round.
     """
     documents = documents_written()
-    overrides = await _session_overrides(dependencies, address)
-    session_state = _session_rule_state(overrides)
     data_dir = Path(dependencies.storage.data_dir)
     folders: tuple[str, ...] = ()
     if overrides.read_folders:
@@ -353,16 +371,14 @@ async def run_permission_boundary(
         read_folders=folders,
     )
     if not permissions.restricted:
-        sources = permissions.rule_sources(data_dir)
+        sources = PermissionInputs.files(data_dir, address, permissions.rule_files)
         stamps = await _CHAT_TRANSFORM_WORKERS.run(_stamps, sources)
         return RunPermissions(
             PermissionBoundary.UNRESTRICTED,
             documents,
             address,
             project_root,
-            sources,
-            stamps,
-            session_state=session_state,
+            PermissionInputs(sources, stamps, overrides),
         )
     scratch_root: Path | None = None
     scratch = dependencies.scratch_areas
@@ -386,8 +402,59 @@ async def run_permission_boundary(
         skill_registry,
         port,
         dependencies.server_hosts,
-        session_state,
+        overrides,
     )
+
+
+class _ResolvePermissionAgent(Protocol):
+    async def __call__(self, *, session_overrides: AgentOverrides) -> RuntimeAgent: ...
+
+
+async def live_run_permission_boundary(
+    dependencies: ChatLoopDependencies,
+    run: Run,
+    resolve_agent: _ResolvePermissionAgent,
+    *,
+    address: SessionAddress,
+    project_root: Path | None,
+    skill_registry: SkillRegistry,
+    sources: tuple[Path, ...] = (),
+    resolved: tuple[int, PermissionInputs, RuntimeAgent] | None = None,
+) -> RunPermissions:
+    """Build a Tool boundary from one configuration revision, including profile resolution.
+
+    A Settings or Agent edit between resolving the Agent and stamping its rule
+    sources must not attach the new revision to the previous permissions.
+    """
+    retried = False
+    while True:
+        if resolved is None:
+            revision = documents_written()
+            before = await PermissionInputs.read(dependencies, address, sources)
+            agent = await resolve_agent(session_overrides=before.overrides)
+        else:
+            revision, before, agent = resolved
+            resolved = None
+        permissions = await run_permission_boundary(
+            dependencies,
+            run,
+            agent,
+            overrides=before.overrides,
+            address=address,
+            project_root=project_root,
+            skill_registry=skill_registry,
+        )
+        sources = permissions.inputs.sources
+        # Retry when resolution discovers more rule files, an operator revokes
+        # Session access, or an external write races the build. Unrelated document
+        # writes do not starve a busy Runtime once the concrete inputs agree.
+        if (
+            before.matches(permissions.inputs)
+            and (retried or revision == documents_written())
+            and before.matches(await PermissionInputs.read(dependencies, address, sources))
+        ):
+            return permissions
+        retried = True
 
 
 def _build_run_permissions(
@@ -400,10 +467,10 @@ def _build_run_permissions(
     skill_registry: SkillRegistry,
     port: int | None,
     own_hosts: Callable[[], tuple[str, ...]] | None,
-    session_state: str,
+    overrides: AgentOverrides,
 ) -> RunPermissions:
     """Blocking: the sources' stamps are taken before the boundary is built from them."""
-    sources = permissions.rule_sources(data_dir)
+    sources = PermissionInputs.files(data_dir, address, permissions.rule_files)
     stamps = _stamps(sources)
     boundary = permissions.boundary(
         data_dir,
@@ -414,7 +481,7 @@ def _build_run_permissions(
         own_hosts=own_hosts,
     )
     return RunPermissions(
-        boundary, documents, address, project_root, sources, stamps, session_state
+        boundary, documents, address, project_root, PermissionInputs(sources, stamps, overrides)
     )
 
 

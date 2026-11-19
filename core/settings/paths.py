@@ -149,6 +149,11 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
     extensions = normalize_extensions_settings(raw_settings.get("extensions"))
     providers = normalize_providers_settings(raw_settings.get("providers"))
     speech = normalize_speech_settings(raw_settings.get("speech"))
+    profiles: JsonObject = {}
+    if "permission_profiles" in raw_settings:
+        from core.permissions import normalize_permission_profiles
+
+        profiles = normalize_permission_profiles(raw_settings["permission_profiles"])
     return {
         "server": {
             "port": port,
@@ -181,6 +186,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         },
         "compaction": normalize_compaction_settings(raw_settings.get("compaction"), stored=True),
         "defaults": normalize_defaults_settings(raw_settings.get("defaults")),
+        "permission_profiles": profiles,
         "providers": providers,
         "recall": normalize_recall_settings(raw_settings.get("recall")),
         "reflection": normalize_reflection_settings(raw_settings.get("reflection")),

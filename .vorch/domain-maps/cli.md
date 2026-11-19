@@ -61,7 +61,7 @@ Read when the task matches.
 - `vbot approvals` -> `permissions/approvals.md`
 - `vbot chat`, its Run following or its output -> `cli/chat.md`
 - `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
-- the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
+- the `agent`, `permission-profiles`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`
 - the `provider`, `model`, `task-model`, `channel`, `extensions` (including management operations), `prompt`, `log`, `config`, `doctor`, `tool`, `debug`, `performance` or `statistics` commands -> `cli/system-commands.md`
 - full-screen terminal conversations, shared setup, Textual interactions, terminal transport or TUI recovery -> `cli/tui.md`
 - optional service provisioning and lifecycle (`service`) -> `cli/application/services.md`

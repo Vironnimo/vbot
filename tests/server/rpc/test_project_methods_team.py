@@ -124,7 +124,9 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
     refused = await rpc_error(
         state, "project.set_override", **override, value={"allow": ["Copy(x)"]}
     )
-    overridden = await rpc_result(state, "project.set_override", **override, value=value)
+    overridden = await rpc_result(
+        state, "project.set_override", **override, value=value, require_no_permission_profile=True
+    )
     invalidated = [change["kind"] for change in resource_changes(state)[before:]]
     # Saving the same rules again changes nothing and invalidates nothing.
     await rpc_result(state, "project.set_override", **override, value=value)
@@ -140,6 +142,14 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
     # Neither the repository nor the shared default restricts this agent.
     assert member["permission_rules_default"] is None
     assert member["effective"]["permission_rules"]["value"] == saved
+    state.runtime.projects.set_override("vbot", "builder", "permission_profile", "restricted")
+    stale_edit = await rpc_error(
+        state, "project.set_override", **override, value=value, require_no_permission_profile=True
+    )
+    assert "permission profile is selected" in stale_edit["message"]
+    assert state.runtime.projects.get("vbot").overrides["builder"] == {
+        "permission_profile": "restricted"
+    }
 
 
 @pytest.mark.asyncio

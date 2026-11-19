@@ -7,6 +7,39 @@ import argparse
 from cli._parser_common import _add_command_parser
 
 
+def add_permission_profile_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    group = subparsers.add_parser(
+        "permission-profiles", help="Manage named Agent permission profiles"
+    )
+    actions = group.add_subparsers(dest="command", required=True)
+    for action, description in (
+        ("list", "List the built-in and custom profiles available to Agents"),
+        ("show", "Show the file, command and network rules for one profile"),
+        ("save", "Create or replace a custom profile for all Agents using its name"),
+        ("delete", "Delete a custom profile"),
+    ):
+        parser = _add_command_parser(actions, action, description)
+        if action != "list":
+            parser.add_argument("name", help="Exact profile name")
+        else:
+            parser.add_argument(
+                "--limit", type=int, default=40, help="Profiles per page, 1-200. Omit for 40."
+            )
+            parser.add_argument(
+                "--offset", type=int, default=0, help="Profiles to skip. Omit for 0."
+            )
+        if action == "save":
+            parser.add_argument(
+                "--file",
+                required=True,
+                help="Path to a JSON Permission Rules object. "
+                "Omitted fields take their values from the restricted profile.",
+            )
+        parser.add_argument("--json", action="store_true", help="Print the result as JSON")
+
+
 def _add_approval_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     group = subparsers.add_parser(
         "approvals", help="Inspect and answer waiting Tool permission requests"

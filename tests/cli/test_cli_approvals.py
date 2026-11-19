@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -62,3 +63,44 @@ def test_stale_server_decision_is_not_replayed(rpc: FakeRpc, run_cli: RunCli) ->
     code, out, _err = run_cli("approvals", "allow", "apr_stale", "--json")
     assert code == 1 and json.loads(out)["error"]["code"] == "approval_not_found"
     assert rpc.methods == ["permissions.resolve"]
+
+
+def test_permission_profiles_read_pages_and_write_an_exact_name(
+    tmp_path: Path, rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rules = {"deny": ["Read(secret)"]}
+    profiles = [
+        {"name": "restricted", "rules": {}, "builtin": True},
+        {"name": "Für Zürich", "rules": rules, "builtin": False},
+    ]
+    rpc.reply("permissions.profiles", {"profiles": profiles})
+    rpc.reply("permissions.save_profile", {"profiles": profiles})
+    rpc.reply("permissions.delete_profile", {"profiles": profiles[:1]})
+    file = tmp_path / "rules.json"
+    file.write_text(json.dumps(rules), encoding="utf-16")
+    listed = run_cli("permission-profiles", "list", "--limit", "1", "--offset", "1", "--json")
+    shown = run_cli("permission-profiles", "show", "Für Zürich", "--json")
+    missing = run_cli("permission-profiles", "show", "Zürich", "--json")
+    saved = run_cli("permission-profiles", "save", "Für Zürich", "--file", str(file), "--json")
+    deleted = run_cli("permission-profiles", "delete", "Für Zürich", "--json")
+    assert listed[0] == shown[0] == saved[0] == deleted[0] == 0
+    assert json.loads(listed[1]) == {"total": 2, "profiles": profiles[1:]}
+    assert json.loads(shown[1]) == json.loads(saved[1]) == profiles[1]
+    assert json.loads(deleted[1]) == {"name": "Für Zürich", "deleted": True}
+    assert missing[0] == 1 and json.loads(missing[1])["error"]["code"] == "profile_not_found"
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
+    assert run_cli("permission-profiles", "delete", "Für Zürich")[0] == 2
+    assert run_cli("agent", "update", "builder", "--permission-profile", "full_access")[0] == 2
+    assert (
+        run_cli(
+            "project", "override", "set", "repo", "builder", "permission_profile", "full_access"
+        )[0]
+        == 2
+    )
+    assert rpc.calls == [
+        ("permissions.profiles", {}),
+        ("permissions.profiles", {}),
+        ("permissions.profiles", {}),
+        ("permissions.save_profile", {"name": "Für Zürich", "permission_rules": rules}),
+        ("permissions.delete_profile", {"name": "Für Zürich"}),
+    ]

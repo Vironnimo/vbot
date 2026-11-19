@@ -785,6 +785,27 @@ def test_multiple_sections_update_in_one_write(
     }
 
 
+def test_profile_edits_preserve_other_profiles_and_conflict_on_the_whole_definition(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    saved = storage.update_permission_profiles({"Mine": {"read": "work_area"}}, base={"Mine": None})
+    original = saved["Mine"]
+    current = storage.update_permission_profiles({"Mine": {**original, "deny": ["Read(~/.ssh)"]}})
+
+    storage.update_permission_profiles({"Other": {"web": "listed"}})
+    with pytest.raises(SettingsConflictError):
+        storage.update_permission_profiles({"Mine": {**original, "commands": "listed"}}, base=saved)
+    with pytest.raises(SettingsConflictError):
+        storage.update_permission_profiles({"Mine": None}, base=saved)
+    values = build_effective_settings(storage.load_settings())["permission_profiles"]
+    assert values["Mine"] == current["Mine"]
+    assert values["Other"]["web"] == "listed"
+    assert storage.update_permission_profiles({"Mine": None}, base=current) == {
+        "Other": values["Other"]
+    }
+
+
 def test_task_fallbacks_round_trip_sparse_updates_paths_and_unknown_fields(tmp_path):
     from core.settings import SettingsValidationError, parse_settings_update
     from core.settings.paths import parse_patch_operations

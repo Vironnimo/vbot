@@ -611,7 +611,8 @@ def test_resolve_skill_scope(
     assert resolve_skill_scope(project_id, project, agent) == scope
 
 
-def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_default(
+@pytest.mark.asyncio
+async def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_default(
     data_dir: Path, template_dir: Path, projects: ProjectStore
 ) -> None:
     defaults: dict[str, Any] = {"permission_rules": {"read": "work_area"}}
@@ -636,8 +637,14 @@ def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_def
         "deny": [],
     }
     store.create("free", "Free", model="openai/gpt-5.2", permission_rules=full_access)
+    profiles = {"Team rules": every_part}
     resolver = AgentResolver(
-        store, projects, _openai_configured(), lambda: defaults, sessions=store._session_manager()
+        store,
+        projects,
+        _openai_configured(),
+        lambda: defaults,
+        sessions=store._session_manager(),
+        permission_profiles=lambda: profiles,
     )
 
     resolved = resolver.resolve_agent(None, "coder").permission_rules
@@ -661,3 +668,17 @@ def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_def
     # Its own rules set every part, so it runs; they restrict nothing.
     unbaked = resolver.resolve_agent(None, "free").permission_rules
     assert unbaked is not None and not unbaked.restricts
+
+    store.update("coder", permission_profile="Team rules")
+    assert resolver.resolve_agent(None, "coder").permission_rules == normalize_permission_rules(
+        every_part
+    )
+    profiles["Team rules"] = full_access
+    assert (await resolver.resolve_agent_async(None, "coder")).permission_rules == (
+        normalize_permission_rules(full_access)
+    )
+    del profiles["Team rules"]
+    with pytest.raises(AgentResolutionError):
+        await resolver.resolve_agent_async(None, "coder")
+    assert "error" in resolver.effective_config(None, "coder")["permission_rules"]
+    assert store.get_raw("coder").permission_profile == "Team rules"

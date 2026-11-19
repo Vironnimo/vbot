@@ -429,6 +429,32 @@ class StorageManager:
 
         return self.update_settings(apply_update)
 
+    def update_permission_profiles(
+        self,
+        changes: Mapping[str, Any],
+        *,
+        base: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Set or delete named profiles atomically, preserving other profiles and Settings.
+
+        A null entry deletes the profile. A base entry guards the whole edited
+        definition; a missing base entry leaves that profile unguarded.
+        """
+
+        def apply(settings: dict[str, Any]) -> dict[str, Any]:
+            profiles, stale = settings_updates.updated_permission_profiles(
+                settings.get("permission_profiles", {}), changes, base
+            )
+            if stale:
+                raise SettingsConflictError(stale)
+            if profiles:
+                settings["permission_profiles"] = profiles
+            else:
+                settings.pop("permission_profiles", None)
+            return profiles
+
+        return self.update_settings(apply)
+
     def supported_appearance_languages(self) -> list[str]:
         """Return language codes supported by the persisted Settings surface."""
 

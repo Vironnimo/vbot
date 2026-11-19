@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -576,3 +577,62 @@ async def test_the_user_remembers_an_approval_for_the_session(tmp_path: Path) ->
             state, "permissions.remove_session_grants", **params, read_folder=folder
         ) == {"session_grants": []}
     assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 4
+
+
+@pytest.mark.asyncio
+async def test_operator_manages_shared_permission_profiles(tmp_path: Path) -> None:
+    state = _state(tmp_path, {})
+    state.agent_delete_lock = asyncio.Lock()
+    state.runtime.models = _NoModels()
+    save = {"name": "Project only", "permission_rules": {"read": "work_area"}, "base": None}
+    assert (await rpc_error(state, "permissions.save_profile", **save))["code"] == "access_denied"
+    assert (await rpc_error(state, "permissions.delete_profile", name=save["name"]))[
+        "code"
+    ] == "access_denied"
+    assert (await rpc_error(state, "agent.create", id="coder", permission_profile="full_access"))[
+        "code"
+    ] == "access_denied"
+    first = await rpc_result(state, "permissions.profiles")
+    assert {row["name"] for row in first["profiles"] if row["builtin"]} == {
+        "restricted",
+        "full_access",
+    }
+    with bound_principal(HOST):
+        saved = await rpc_result(state, "permissions.save_profile", **save)
+        assert await rpc_result(state, "permissions.profiles") == saved
+        (profile,) = [row for row in saved["profiles"] if not row["builtin"]]
+        assert profile["name"] == save["name"]
+        assert profile["rules"]["read"] == "work_area"
+        assert (
+            await rpc_error(
+                state,
+                "permissions.save_profile",
+                **{**save, "permission_rules": {"write": "scratch"}},
+            )
+        )["code"] == "settings_conflict"
+        assert (await rpc_error(state, "permissions.delete_profile", name="restricted"))[
+            "code"
+        ] == "invalid_request"
+        state.runtime.agents.create("coder", permission_profile=save["name"])
+        used = await rpc_error(state, "permissions.delete_profile", name=save["name"])
+        assert used["code"] == "permission_profile_in_use"
+        assert used["data"]["agents"] == ["coder"]
+        stale_edit = await rpc_error(
+            state,
+            "agent.update",
+            id="coder",
+            permission_rules={},
+            require_no_permission_profile=True,
+        )
+        assert "permission profile is selected" in stale_edit["message"]
+        assert state.runtime.agents.get_raw("coder").permission_profile == save["name"]
+        state.runtime.agents.update("coder", permission_profile=None)
+        assert (
+            await rpc_result(
+                state, "permissions.delete_profile", name=save["name"], base=profile["rules"]
+            )
+            == first
+        )
+    # The first Agent RPC also observes the fixture-created Agent for setup.
+    catalog_events = [payload["kind"] for _, payload in state.events if payload["kind"] != "setup"]
+    assert catalog_events == ["settings", "agents", "projects"] * 2

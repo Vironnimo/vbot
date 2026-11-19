@@ -10,7 +10,7 @@ from typing import Any, cast
 from core.chat import ChatMessage
 from core.chat.model_resolution import resolve_agent_context_window
 from core.compaction import effective_compaction_policy
-from core.permissions import PermissionRules, permission_rules_to_dict, resolve_rule_set
+from core.permissions import PermissionRules, permission_rules_to_dict
 from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
@@ -215,6 +215,7 @@ def _agent_response(
     """
     if persisted is None:
         persisted = state.runtime.agents.get_raw(agent.id)
+    effective = _agent_effective(state, persisted)
     agent_policy = getattr(agent, "compaction_policy", None)
     if not isinstance(agent_policy, dict):
         agent_policy = None
@@ -265,11 +266,8 @@ def _agent_response(
         # The Permission Rules the Agent runs with, its own parts filled in from the
         # shared default (``config.permission_rules`` holds its own); ``None`` is full
         # access. Built-in Agents always have full access.
-        "permission_rules": (
-            _effective_permission_rules_payload(agent)
-            if getattr(agent, "builtin", None) is None
-            else None
-        ),
+        "permission_profile": getattr(persisted, "permission_profile", None),
+        "permission_rules": effective["permission_rules"]["value"],
         # What the Agent inherits for each part it does not set; ``None`` for nothing.
         "permission_rules_default": state.runtime.agent_resolver.inherited_permission_rules(),
         # ``None`` while the Agent has no current Session (a new conversation).
@@ -281,7 +279,7 @@ def _agent_response(
         "config": _agent_raw_config(persisted),
         # Per-field effective value + winning tier ("agent"/"global_default"/null),
         # the provenance seam shared with the resolver.
-        "effective": _agent_effective(state, persisted),
+        "effective": effective,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
@@ -295,13 +293,6 @@ def _tool_loading_payload(agent: Any) -> JsonObject | None:
 def _permission_rules_payload(agent: Any) -> JsonObject | None:
     rules = getattr(agent, "permission_rules", None)
     return permission_rules_to_dict(rules) if isinstance(rules, PermissionRules) else None
-
-
-def _effective_permission_rules_payload(agent: Any) -> JsonObject | None:
-    """The resolved rules, ``None`` for full access: also for rules that restrict nothing."""
-    rules = getattr(agent, "permission_rules", None)
-    resolved = resolve_rule_set(rules) if isinstance(rules, PermissionRules) else None
-    return permission_rules_to_dict(resolved) if resolved is not None else None
 
 
 def _agent_raw_config(raw: Any) -> JsonObject:
@@ -318,6 +309,7 @@ def _agent_raw_config(raw: Any) -> JsonObject:
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
         "tool_loading": _tool_loading_payload(raw),
         "permission_rules": _permission_rules_payload(raw),
+        "permission_profile": getattr(raw, "permission_profile", None),
     }
 
 

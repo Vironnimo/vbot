@@ -30,6 +30,10 @@ Stored form `{read, write, commands, web, allow, deny}`, every part optional:
 
 ## Presets
 
+A named Permission Profile defines all six parts. Agents refer to its exact name, and the resolver reads its current rules when evaluating the Agent. `BUILTIN_PERMISSION_PROFILES` contains `full_access` and `restricted`. Restricted reads anywhere subject to protected paths, writes within the Work Area and the Agent's Workspace, permits analyzable commands and requires approval for additional shell network hosts (`web: listed` with an empty allow list). Explicit denies and protected locations still apply. The separate Web Tools retain their Tool access policy.
+
+`permission_profile_catalog(profiles)` includes the built-ins plus custom profiles from Settings. `resolve_permission_profile(name, profiles)` returns a complete rule set or raises when the selection is missing or invalid. Custom profiles use the Restricted values for omitted parts. Names retain internal spaces and compare exactly. Settings validation reserves the built-in names and their case, space and hyphen spellings. Persistence and edit conflicts belong to `../settings/sections.md` under Permission Profiles.
+
 `_presets.py` is the one definition for the CLI and, through `permissions.validate`, the WebUI: `full_access` (every base unrestricted, `allow`/`deny` `[]`), `work_dir` (`read`/`write` `work_area`), `work_dir_read_only` (`read` `work_area`, `write` `scratch`). `preset_definitions()` gives each as the change it makes (`commands` and `web` `None`, which removes them, then every part the preset defines), and `apply_preset(name, stored)` applies that change (so `full_access` replaces everything, the others keep `allow`/`deny`); `matching_preset(rules)`: `full_access` for `None` or a set that restricts nothing, else by the bases only, or `custom`; `preset_name(text)` accepts hyphens, underscores and spaces. A preset is a shortcut, not a stored form. Full access stores the explicit full set, so it overrides a restrictive default (`../permissions.md` -> Requirements, item 7).
 
 ## Descriptions

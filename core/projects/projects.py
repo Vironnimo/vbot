@@ -112,6 +112,7 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
         "tool_access",
         "tool_loading",
         "permission_rules",
+        "permission_profile",
         "project_memory_enabled",
     }
 )
@@ -369,6 +370,11 @@ def _validate_one_override_schema(
             _normalize_tool_loading(override["tool_loading"])
         except ValueError as error:
             add_error(diagnostics, child_path(path, "tool_loading"), str(error))
+    if "permission_profile" in override:
+        try:
+            _override_profile_name(override)
+        except ValueError as error:
+            add_error(diagnostics, child_path(path, "permission_profile"), str(error))
     if "permission_rules" in override:
         from core.permissions import normalize_permission_rules
 
@@ -722,6 +728,17 @@ def _validate_string_list(field_name: str, values: list[str] | None) -> list[str
     return list(values)
 
 
+def _override_profile_name(override: Mapping[str, Any]) -> str:
+    from core.permissions import normalize_permission_profile_name
+
+    if "permission_rules" in override:
+        raise ProjectError("Choose a permission profile or inline permission rules.")
+    try:
+        return normalize_permission_profile_name(override["permission_profile"])
+    except ValueError as error:
+        raise ProjectError(str(error)) from error
+
+
 def _validate_overrides(value: dict[str, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
     """Validate the per-agent override map; ``None`` → ``{}``.
 
@@ -757,6 +774,8 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
     if unknown:
         raise ProjectError(f"overrides[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
     validated: dict[str, Any] = {}
+    if "permission_profile" in override:
+        validated["permission_profile"] = _override_profile_name(override)
     if "project_memory_enabled" in override:
         validated["project_memory_enabled"] = _validate_switch(
             "project_memory_enabled", override["project_memory_enabled"]

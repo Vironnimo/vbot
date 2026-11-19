@@ -2,6 +2,10 @@
 
 Task-gated detail for `archive.md`: the order, outcomes and checks of archiving and restoring an entry, the entry facts, Workspace handling, review members, locking helpers and the listing reads. Source: `core/archive/archive.py`, `_operations.py`, `_restore.py`, `_read_model.py`, `_types.py`. Tests: `tests/core/archive/test_archive_service.py`, `tests/core/sessions/test_archive_ledger.py`, `tests/core/agents/test_agents_archive.py`, `tests/core/projects/test_store.py`, `tests/server/rpc/test_archive_methods.py` and the delete tests of `tests/server/rpc/`, `tests/cli/test_cli_archive.py`.
 
+## Permission Profile references
+
+Before deleting a named Permission Profile, `core.archive.permission_profile_references` checks the live Agent and Project documents and the recorded Agent, Private Agent and Project payloads. Live discovery reports inaccessible paths. Each document is read with its owner's validator. Project Team assignments include the member's address, and archived assignments also name the Archive Entry. The operator holds the reference lock across the check and deletion, serializing archive and restore with the check. Pending moves or unreadable documents leave the profile in place. Purging entries have relinquished their assignments. A concurrent purge that removes a payload is recognized by rereading its ledger state.
+
 ## Entry facts
 
 `ephemeral_expiry: true` marks a Session entry created by expiry; it commits with the archived Session states, and the sweep retries its permanent deletion regardless of ordinary retention (`archive/purge-and-retention.md`).

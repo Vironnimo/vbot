@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -14,7 +15,12 @@ from core.chat._request_builder import (
 from core.chat._request_epoch import _finalize_compaction_checkpoint
 from core.chat._request_images import PINNED_IMAGE_DELIVERY_SLOT, retain_delivery_pin
 from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
-from core.chat._run_permissions import permitted_project_context, run_permission_boundary
+from core.chat._run_permissions import (
+    PermissionInputs,
+    RunPermissions,
+    live_run_permission_boundary,
+    permitted_project_context,
+)
 from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -22,6 +28,7 @@ from core.chat._run_state import (
     _CompactionPromptRefresh,
     has_open_goal,
     is_subagent_session,
+    resolve_run_agent,
     withholds_subagent_tool,
 )
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
@@ -56,10 +63,10 @@ from core.sessions import ChatSession, PromptEpoch
 from core.tools.file_state import FileRead
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
+    from core.chat._run_state import _RunExecutionContext
     from core.compaction.compaction import CompactionService, CompactionSettings
-    from core.permissions import PermissionBoundary
     from core.runs import Run
     from core.sessions import SessionReadCursor, TemporarySessionBinding
 
@@ -72,6 +79,7 @@ class ManualCompactionRequest:
     activation_skill_project_id: str | None
     request_state: RequestState
     request_inputs: RequestBuildInputs
+    refresh_permissions: Callable[[], Awaitable[RunPermissions]]
     active_adapter: Any
     active_provider_id: str
     active_model_id: str
@@ -80,13 +88,6 @@ class ManualCompactionRequest:
     summary_adapter: Any
     summary_provider_id: str
     summary_model_id: str
-
-    @property
-    def permissions(self) -> PermissionBoundary:
-        """The Permission Boundary of the Run the Compaction serves."""
-        permissions = self.request_inputs.permissions
-        assert permissions is not None, "a manual Compaction request carries its Run's boundary"
-        return permissions
 
 
 class ChatCompactionHost:
@@ -233,7 +234,12 @@ class ChatCompactionHost:
             )
             from core.chat._run_state import owned_skill_registry
 
-            skill_registry = owned_skill_registry(skill_registry, temporary_binding)
+            own_binding = (
+                temporary_binding
+                if temporary_binding is not None and temporary_binding.address == session.address
+                else None
+            )
+            skill_registry = owned_skill_registry(skill_registry, own_binding)
             skill_catalog = await self.run_transform(
                 pinned_skill_catalog,
                 self._dependencies,
@@ -257,14 +263,32 @@ class ChatCompactionHost:
                 withholds_subagent_tool, self._dependencies, session.address
             )
             # The next epoch's pin shows the boundary this Session's Runs have.
-            permissions = await run_permission_boundary(
+            resolver = self._dependencies.agent_resolver
+            resolve_permissions_agent = (
+                partial(
+                    resolver.resolve_temporary_agent_async,
+                    temporary_binding.address,
+                    generation_id=temporary_binding.generation_id,
+                    session=session.address,
+                )
+                if temporary_binding is not None
+                else partial(
+                    resolver.resolve_agent_async,
+                    run.project_id,
+                    run.agent_id,
+                    session_id=run.session_id,
+                )
+            )
+            refresh_permissions = partial(
+                live_run_permission_boundary,
                 self._dependencies,
                 run,
-                agent,
+                resolve_permissions_agent,
                 address=session.address,
                 project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
                 skill_registry=skill_registry,
             )
+            permissions = await refresh_permissions()
             prompt_context = (
                 await self.run_transform(
                     permitted_project_context,
@@ -323,7 +347,7 @@ class ChatCompactionHost:
                 ),
                 permissions=permissions.boundary,
                 tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
-                temporary_binding=temporary_binding,
+                temporary_binding=own_binding,
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(
@@ -331,6 +355,7 @@ class ChatCompactionHost:
                 activation_skill_project_id=skill_project_id,
                 request_state=state,
                 request_inputs=inputs,
+                refresh_permissions=refresh_permissions,
                 active_adapter=adapter,
                 active_provider_id=provider_id,
                 active_model_id=model_id,
@@ -376,34 +401,71 @@ class ChatCompactionHost:
             ),
         )
 
-    async def prepare_prompt_refresh(
+    async def prepare_manual_prompt_refresh(
         self,
-        *,
-        agent_id: str,
-        session_id: str,
+        run: Run,
         agent: Any,
-        project_id: str | None,
-        working_project_id: str | None,
+        request: ManualCompactionRequest,
+    ) -> _CompactionPromptRefresh:
+        return await self._prepare_prompt_refresh(
+            run,
+            agent,
+            request.project_cwd,
+            request.activation_skill_project_id,
+            getattr(request.request_inputs.skill_registry, "selection_ceiling", None),
+            request.refresh_permissions,
+        )
+
+    async def prepare_automatic_prompt_refresh(
+        self, context: _RunExecutionContext
+    ) -> _CompactionPromptRefresh:
+        refresh_permissions = partial(
+            live_run_permission_boundary,
+            self._dependencies,
+            context.run,
+            partial(resolve_run_agent, self._dependencies, context.run, context.request),
+            address=context.session.address,
+            project_root=context.permission_sources.project_root,
+            sources=context.permission_sources.inputs.sources,
+            skill_registry=context.skill_registry,
+        )
+        return await self._prepare_prompt_refresh(
+            context.run,
+            context.agent,
+            context.project_cwd,
+            context.skill_project_id,
+            getattr(context.skill_registry, "selection_ceiling", None),
+            refresh_permissions,
+        )
+
+    async def _prepare_prompt_refresh(
+        self,
+        run: Run,
+        agent: Any,
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
-        permissions: PermissionBoundary,
-        skill_ceiling: frozenset[str] | None = None,
+        skill_ceiling: frozenset[str] | None,
+        refresh_permissions: Callable[[], Awaitable[RunPermissions]],
     ) -> _CompactionPromptRefresh:
-        return cast(
-            _CompactionPromptRefresh,
-            await self.run_transform(
+        while True:
+            permissions = await refresh_permissions()
+            refresh = await self.run_transform(
                 self._prepare_prompt_refresh_sync,
-                agent_id=agent_id,
-                session_id=session_id,
+                agent_id=run.agent_id,
+                session_id=run.session_id,
                 agent=agent,
-                project_id=project_id,
-                working_project_id=working_project_id,
+                project_id=run.project_id,
+                working_project_id=run.working_project_id,
                 project_cwd=project_cwd,
                 activation_skill_project_id=activation_skill_project_id,
                 permissions=permissions,
                 skill_ceiling=skill_ceiling,
-            ),
-        )
+            )
+            latest = await PermissionInputs.read(
+                self._dependencies, permissions.address, permissions.inputs.sources
+            )
+            if permissions.inputs.matches(latest):
+                return cast(_CompactionPromptRefresh, refresh)
 
     def _prepare_prompt_refresh_sync(
         self,
@@ -415,7 +477,7 @@ class ChatCompactionHost:
         working_project_id: str | None,
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
-        permissions: PermissionBoundary,
+        permissions: RunPermissions,
         skill_ceiling: frozenset[str] | None = None,
     ) -> _CompactionPromptRefresh:
         from core.agents.temporary import TemporaryAgent
@@ -425,7 +487,7 @@ class ChatCompactionHost:
         project_prompt_context = (
             permitted_project_context(
                 prompt_project,
-                permissions,
+                permissions.boundary,
                 project_cwd,
                 memory_workspace=self._dependencies.projects.memory_workspace(
                     prompt_project.project_id
@@ -502,6 +564,7 @@ class ChatCompactionHost:
 
         available_skill_names = self._requests.available_skill_names(agent, prompt_skill_registry)
         return _CompactionPromptRefresh(
+            permission_sources=permissions,
             agent_body=runtime_agent_body(refreshed_agent),
             project_prompt_context=project_prompt_context,
             working_project_context=working_project_context,
@@ -738,6 +801,8 @@ class ChatCompactionHost:
     @staticmethod
     def apply_prompt_refresh(context: Any, refresh: object) -> None:
         typed_refresh = cast(_CompactionPromptRefresh, refresh)
+        context.permissions = typed_refresh.permission_sources.boundary
+        context.permission_sources = typed_refresh.permission_sources
         context.agent_body = typed_refresh.agent_body
         context.project_prompt_context = typed_refresh.project_prompt_context
         context.working_project_context = typed_refresh.working_project_context

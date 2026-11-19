@@ -184,6 +184,8 @@ class Agent:
     # Permission Rules (``core.permissions``); ``None`` sets no part, so the
     # Agent inherits ``defaults.agent.permission_rules`` or has full access.
     permission_rules: PermissionRules | None = None
+    # Operator-selected name. The resolver reads its current rules for each Run.
+    permission_profile: str | None = None
     # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
     # still switches scheduled passes off for every Agent.
     librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED

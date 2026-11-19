@@ -280,6 +280,13 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "permission-profiles":
+        from cli.approval_management import dispatch_permission_profiles
+
+        result = dispatch_permission_profiles(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
     if args.area == "agent-secrets":
         from cli._dispatch_agents import dispatch_agent_secrets_command
 

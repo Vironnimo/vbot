@@ -8,6 +8,12 @@ Live side effects come either from read-at-use accessors or from the shared Runt
 
 `models.favorites` publishes `model_favorites` (`models/model-list.md` -> Favorites).
 
+## Permission Profiles
+
+`permission_profiles` maps custom profile names to rule sets. Full Access and Restricted come from `core/permissions/`. The permission RPCs use `StorageManager.update_permission_profiles` to replace or delete whole named definitions in one Settings transaction. A supplied base guards the entire named definition against concurrent edits. Other profiles and Settings keep their values. Generic Settings mutations expose no writable path for profiles.
+
+`settings.values` returns complete custom definitions. The strict Settings loader and doctor reject invalid rules, including unknown parts that might restrict access. Tolerant reads omit an invalid named definition, so Agents selecting it cannot run while other profiles remain usable. The source file stays intact.
+
 ## Task Model paths
 
 The `model_tasks["<task>"].fallbacks` path replaces the ordered list of complete target/options entries; entries retain their own options across primary changes and reordering. Changing a Task Model target leaf resets prior options before explicit option edits; unsetting that target removes the complete binding and overlaps every option edit for that task. An option named `target`, at any depth inside `options`, is an ordinary option: unsetting it preserves its siblings. Task Model preparation validates and normalizes the changed entries, including fallback-only edits. An unchanged entry skips live catalog validation.

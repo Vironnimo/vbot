@@ -13,7 +13,10 @@ import pytest
 
 from core.agents import AgentPlacement
 from core.sessions import SessionAddress
+from core.storage import StorageManager
 from core.utils.timestamps import format_canonical_timestamp
+from server.access import bound_principal
+from server.access._principal import HOST
 from server.events import ServerEventBus
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
@@ -53,6 +56,50 @@ def _purge_at(state: SimpleNamespace, entry_id: str) -> str:
     entry = state.runtime.sessions.archive_ledger.entry(entry_id)
     start = datetime.fromisoformat(entry.retention_start)
     return format_canonical_timestamp(start + timedelta(days=30))
+
+
+@pytest.mark.asyncio
+async def test_profile_deletion_preserves_live_private_and_archived_assignments(
+    tmp_path: Path,
+) -> None:
+    state = _make_state(tmp_path)
+    runtime = state.runtime
+    runtime.storage = StorageManager(runtime.agents.data_dir)
+    name = "Local only"
+    runtime.storage.update_permission_profiles({name: {"read": "work_area"}})
+    runtime.agents.create("owner", permission_profile=name)
+    runtime.agents.create(
+        "helper", placement=AgentPlacement("private", "owner"), permission_profile=name
+    )
+    runtime.projects.create("project", "Project", _make_repo(tmp_path, "project", "builder.md"))
+    runtime.projects.set_override("project", "builder", "permission_profile", name)
+    group = (await runtime.archive.archive_agent("owner")).entry_id
+    project = (await runtime.archive.archive_project("project")).entry_id
+
+    with bound_principal(HOST):
+        refused = await rpc_error(state, "permissions.delete_profile", name=name)
+        assert refused["code"] == "permission_profile_in_use"
+        assert set(refused["data"]["agents"]) == {
+            f"owner ({group})",
+            f"helper ({group})",
+            f"builder@project ({project})",
+        }
+
+        await runtime.archive.restore(group, target_id="renamed")
+        await runtime.archive.purge(entry_ids=[project])
+        refused = await rpc_error(state, "permissions.delete_profile", name=name)
+        assert set(refused["data"]["agents"]) == {"renamed", "helper"}
+        runtime.agents.update("helper", permission_profile=None)
+        runtime.agents.update("renamed", permission_profile=None)
+
+        path = runtime.agents.data_dir / "agents" / "renamed" / "agent.json"
+        saved = path.read_bytes()
+        path.write_bytes(b"{")
+        refused = await rpc_error(state, "permissions.delete_profile", name=name)
+        assert refused["code"] == "permission_profile_references_unavailable"
+        assert refused["data"]["locations"] == [str(path)]
+        path.write_bytes(saved)
+        await rpc_result(state, "permissions.delete_profile", name=name)
 
 
 @pytest.mark.asyncio

@@ -14,9 +14,10 @@ from cli.archive_management import (
     sessions_text,
     unfinished_permanent_delete,
 )
+from cli.device_management import run_refusal
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
-from cli.formatting import record_fields
+from cli.formatting import inline_text, record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
 from cli.permission_notes import permission_notes, with_notes
@@ -55,6 +56,7 @@ AGENT_UPDATE_FLAGS = (
     "--excluded-skills",
     "--context-commands",
     "--subagent-allow",
+    "--permission-profile",
     "--permissions",
     "--allow-rule",
     "--deny-rule",
@@ -114,16 +116,41 @@ def _with_permission_rules(
     An edit that keeps the current rules of an existing agent reads them first.
     """
     edit = changes.get("permission_rules")
+    profile_refusal = run_refusal(
+        "Changing an Agent's permission profile",
+        "the user can select a profile in their terminal or the WebUI",
+    )
+    if profile_refusal and (
+        changes.get("permission_profile") is not None
+        or ("permission_profile" in changes and not isinstance(edit, PermissionEdit))
+    ):
+        return CommandResult(ok=False, message=profile_refusal, instance=instance, refused=True)
     if not isinstance(edit, PermissionEdit):
         return dict(changes)
     current: Mapping[str, Any] | None = None
+    prepared = dict(changes)
+    if agent_id is not None and (edit.keeps_current or profile_refusal):
+        prepared["require_no_permission_profile"] = True
+    if profile_refusal and edit.clear:
+        # Clearing old inline rules in a Run cannot unbind a concurrently selected profile.
+        prepared.pop("permission_profile", None)
     if agent_id is not None and edit.keeps_current:
         payload = _rpc_call(instance, "agent.get", {"id": agent_id})
         if not payload.ok:
             return payload.to_command_result()
-        own = _own_config(payload.data).get("permission_rules")
+        config = _own_config(payload.data)
+        if (profile := config.get("permission_profile")) is not None:
+            return CommandResult(
+                ok=False,
+                message=f"Agent {inline_text(agent_id)} uses the shared profile "
+                f"{inline_text(profile)}. To change every assigned Agent, edit the profile. "
+                "To replace it on this Agent, pass the complete rules as JSON with --permissions.",
+                refused=True,
+                instance=instance,
+            )
+        own = config.get("permission_rules")
         current = own if isinstance(own, dict) else None
-    return {**changes, "permission_rules": edit.apply(current)}
+    return {**prepared, "permission_rules": edit.apply(current)}
 
 
 def agent_list(instance: ServerInstance) -> CommandResult:
@@ -524,8 +551,11 @@ def _permission_lines(agent: Mapping[str, Any]) -> list[str]:
         return []
     effective = agent.get("permission_rules")
     own = _own_config(agent).get("permission_rules")
+    profile = _own_config(agent).get("permission_profile")
     default = agent.get("permission_rules_default")
-    if effective is None:
+    if isinstance(profile, str):
+        summary = f"profile {inline_text(profile)}"
+    elif effective is None:
         # Own rules that restrict nothing (the full-access preset) override the default.
         summary = "full-access (own rules)" if own is not None else "full-access"
     else:

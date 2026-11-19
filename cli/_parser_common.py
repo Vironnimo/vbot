@@ -144,6 +144,7 @@ AREA_HELP = {
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
     "devices": "List, approve, rename and revoke the devices that may sign in to the server",
     "approvals": "Inspect pending Tool calls and answer their permission requests as the user",
+    "permission-profiles": "Manage the reusable permissions Agents can select",
     "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",

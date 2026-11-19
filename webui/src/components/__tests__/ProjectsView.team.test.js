@@ -425,6 +425,42 @@ describe('ProjectsView Team', () => {
     },
   );
 
+  it('replaces local Team rules with a linked profile in one write', async () => {
+    const localMember = member({
+      agent_id: 'builder',
+      overrides: { permission_rules: { deny: ['Read(.env)'] } },
+    });
+    serveProject({}, { team: [localMember] });
+    setOverrideMock.mockResolvedValue({
+      scan: cleanScan({
+        team: [
+          {
+            ...localMember,
+            overrides: { permission_profile: 'Reference desk' },
+          },
+        ],
+      }),
+    });
+    view.mount();
+    await selectDemo();
+    await expandMember('builder');
+    inputById('project-permission-rules-builder-profile').click();
+    flushSync();
+    optionByText('Reference desk').click();
+    flushSync();
+    await waitForCondition(() => setOverrideMock.mock.calls.length > 0);
+    expect(setOverrideMock).toHaveBeenCalledExactlyOnceWith(
+      'demo',
+      'builder',
+      'permission_profile',
+      'Reference desk',
+    );
+    expect(clearOverrideMock).not.toHaveBeenCalled();
+    expect(
+      memberDetail('builder').querySelector('[data-permission-list]'),
+    ).toBeNull();
+  });
+
   it('keeps incomplete Permission Rules pending until completed or discarded', async () => {
     const rules = { deny: ['Read(.env)'] };
     const demo = serveProject(

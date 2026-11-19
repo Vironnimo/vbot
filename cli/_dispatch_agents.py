@@ -114,6 +114,13 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
         return "--always-loaded requires --tools-on-demand"
     permissions = getattr(args, "permissions", None)
     adds_rules = bool(getattr(args, "allow_rule", None) or getattr(args, "deny_rule", None))
+    if getattr(args, "permission_profile", None) is not None and (
+        permissions is not None or adds_rules or getattr(args, "clear_permissions", False)
+    ):
+        return (
+            "Choose --permission-profile on its own, or use the individual permission flags "
+            "(--permissions, --allow-rule, --deny-rule, --clear-permissions)."
+        )
     if getattr(args, "clear_permissions", False) and (permissions is not None or adds_rules):
         return (
             "--clear-permissions removes the agent's own rules; leave out --permissions, "
@@ -194,6 +201,10 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     permission_edit = _permission_edit_from_args(args)
     if permission_edit is not None:
         changes["permission_rules"] = permission_edit
+        if permission_edit.clear:
+            changes["permission_profile"] = None
+    if args.permission_profile is not None:
+        changes["permission_profile"] = args.permission_profile
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.excluded_skills is not None:

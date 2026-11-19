@@ -542,6 +542,67 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change", ["settings_write", "external_edit", "session_rules", "transient_grant"]
+)
+async def test_permission_change_during_resolution_applies_before_the_tool_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    settings = tmp_path / "data" / "settings.json"
+
+    def edit() -> None:
+        # Force resolution for the next Tool round, while another edit races it.
+        with document_change(settings):
+            pass
+
+    narrowed = {"write": "scratch"}
+    runtime, seen = _runtime(
+        tmp_path,
+        narrowed if change == "transient_grant" else None,
+        turns=[tool_turn(("one", "probe")), tool_turn(("two", "probe")), final("Done")],
+        on_call=edit,
+    )
+    resolver = runtime.agent_resolver
+    resolve = resolver.resolve_agent_async
+    address = SessionAddress(None, "coder", "s1")
+    outside = tmp_path / "outside.md"
+
+    async def edit_after_read(*args: Any, **kwargs: Any) -> Any:
+        if change == "transient_grant" and len(seen) == 1:
+            # A grant is issued after the boundary's first read, then revoked before
+            # its last one. The Agent must use the same snapshot as its boundary.
+            old = resolver._session_overrides.get(address, {})
+            resolver._session_overrides[address] = {
+                **old,
+                "permission_grants": [f"Edit({outside.as_posix()})"],
+            }
+            try:
+                return await resolve(*args, **kwargs)
+            finally:
+                resolver._session_overrides[address] = old
+        previous = await resolve(*args, **kwargs)
+        if len(seen) == 1 and previous.permission_rules is None:
+            if change == "session_rules":
+                resolver._session_overrides[address] = {"permission_rules": narrowed}
+            else:
+                runtime.agents._agent = replace(
+                    previous, permission_rules=normalize_permission_rules(narrowed)
+                )
+                if change == "external_edit":
+                    settings.parent.mkdir(parents=True, exist_ok=True)
+                    settings.write_text('{"permission_profiles":{}}', encoding="utf-8")
+                else:
+                    edit()
+        return previous
+
+    monkeypatch.setattr(resolver, "resolve_agent_async", edit_after_read)
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+    first, second = seen
+    assert first.permissions.restricted == (change == "transient_grant")
+    assert second.permissions.check_path(outside, "write") is not None
+
+
+@pytest.mark.asyncio
 async def test_computer_authority_is_refreshed_before_each_tool_round(tmp_path: Path) -> None:
     address = SessionAddress(None, "coder", "s1")
     initial = {"computer_id": "laptop", "allowed_computer_ids": ["laptop", "server"]}

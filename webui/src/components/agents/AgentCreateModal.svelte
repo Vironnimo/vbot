@@ -9,7 +9,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
-  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
+  import PermissionProfilePicker from '../permissions/PermissionProfilePicker.svelte';
   import { createAgent } from '$lib/api.js';
   import {
     AGENT_DESCRIPTION_MAX_LENGTH,
@@ -388,23 +388,24 @@
         </FormField>
 
         <FormField
-          controlId="agent-create-permissions-preset"
+          controlId="agent-create-permissions-profile"
           help={t('permissions.createHelp')}
         >
           {#snippet labelContent()}
             {t('permissions.title')}
             <InfoHint text={t('permissions.agentDescription')} />
           {/snippet}
-          <!-- The new Agent's own rules start from a preset; the bases and
-               rules are refined in the Agent editor. -->
-          <PermissionRulesEditor
-            value={formValues.permission_rules}
+          <PermissionProfilePicker
+            profile={formValues.permission_profile}
+            rules={formValues.permission_rules}
             inherited={agentDefaults?.permission_rules ?? null}
-            newAgent
             compact
             disabled={isSaving}
             idPrefix="agent-create-permissions"
-            onChange={(next) => (formValues.permission_rules = next)}
+            onChange={(profile, rules) => {
+              formValues.permission_profile = profile;
+              formValues.permission_rules = rules;
+            }}
           />
         </FormField>
 

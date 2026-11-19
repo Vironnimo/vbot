@@ -41,6 +41,7 @@ describe('createAgentFormValues', () => {
       librarian_enabled: true,
       tool_loading: null,
       permission_rules: null,
+      permission_profile: null,
     });
   });
 

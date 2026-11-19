@@ -214,7 +214,12 @@ export function createProjectsController({
       const draft = state.overrideDrafts[member.agent_id];
       if (!previous || !draft) continue;
       const next = seedTeamOverrideDraft(member);
+      const permissionChoiceEdited =
+        draft.permission_profile !== previous.permission_profile ||
+        JSON.stringify(draft.permission_rules) !==
+          JSON.stringify(previous.permission_rules);
       for (const field of Object.keys(next)) {
+        if (permissionChoiceEdited && isPermissionChoice(field)) continue;
         if (JSON.stringify(draft[field]) === JSON.stringify(previous[field]))
           draft[field] = next[field];
       }
@@ -726,18 +731,29 @@ export function createProjectsController({
         tool_access: { mode: 'all' },
         tool_loading: null,
         permission_rules: null,
+        permission_profile: null,
         project_memory_enabled: true,
       }
     );
   }
 
   function updateOverrideDraft(agentId, field, value) {
-    const key = overrideKey(agentId, field);
-    overrideEditVersions.set(key, overrideEditVersion(agentId, field) + 1);
+    const editedFields = isPermissionChoice(field)
+      ? ['permission_rules', 'permission_profile']
+      : [field];
+    for (const name of editedFields) {
+      overrideEditVersions.set(
+        overrideKey(agentId, name),
+        overrideEditVersion(agentId, name) + 1,
+      );
+    }
     state.overrideDrafts = {
       ...state.overrideDrafts,
       [agentId]: {
         ...overrideDraft(agentId),
+        ...(isPermissionChoice(field)
+          ? { permission_rules: null, permission_profile: null }
+          : {}),
         [field]:
           field === 'tool_loading'
             ? normalizeToolLoading(value)
@@ -748,6 +764,10 @@ export function createProjectsController({
     };
     state.editError = '';
     flushPendingProjects();
+  }
+
+  function isPermissionChoice(field) {
+    return field === 'permission_rules' || field === 'permission_profile';
   }
 
   function overrideKey(agentId, field) {
@@ -792,6 +812,7 @@ export function createProjectsController({
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading);
     }
+    if (field === 'permission_profile') return draft.permission_profile;
     if (field === 'permission_rules') {
       return normalizePermissionRules(draft.permission_rules);
     }
@@ -820,6 +841,8 @@ export function createProjectsController({
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading) !== null;
     }
+    if (field === 'permission_profile')
+      return Boolean(draft.permission_profile);
     if (field === 'permission_rules') {
       return (
         normalizePermissionRules(draft.permission_rules) !== null &&
@@ -837,6 +860,10 @@ export function createProjectsController({
       if (!draft) return [];
       const saved = seedTeamOverrideDraft(member);
       return Object.keys(saved).flatMap((field) => {
+        // Setting either representation clears the other on the server in
+        // the same write. Clearing the old one first would briefly widen access.
+        if (field === 'permission_rules' && draft.permission_profile) return [];
+        if (field === 'permission_profile' && draft.permission_rules) return [];
         if (JSON.stringify(draft[field]) === JSON.stringify(saved[field]))
           return [];
         // Incomplete rules stay dirty for refreshes and navigation, while
@@ -905,6 +932,7 @@ export function createProjectsController({
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading) === null;
     }
+    if (field === 'permission_profile') return !draft.permission_profile;
     // No own rules: the member inherits every part again.
     if (field === 'permission_rules') {
       return normalizePermissionRules(draft.permission_rules) === null;
@@ -919,18 +947,28 @@ export function createProjectsController({
   // already hold a newer value. Capture it before applyScan: a newer value
   // equal to the old baseline would otherwise look untouched there.
   function applyOverrideScan(scan, agentId, field, editVersion) {
-    const latestValue = state.overrideDrafts[agentId]?.[field];
+    const before = state.overrideDrafts[agentId] ?? {};
+    const fields = isPermissionChoice(field)
+      ? ['permission_rules', 'permission_profile']
+      : [field];
+    const latest = Object.fromEntries(
+      fields.map((name) => [name, before[name]]),
+    );
     const hasNewerEdit = overrideEditVersion(agentId, field) !== editVersion;
     applyScan(scan);
     const member = state.activeTeam.find((entry) => entry.agent_id === agentId);
     if (!member || !state.overrideDrafts[agentId]) return;
+    const saved = seedTeamOverrideDraft(member);
     state.overrideDrafts = {
       ...state.overrideDrafts,
       [agentId]: {
         ...state.overrideDrafts[agentId],
-        [field]: hasNewerEdit
-          ? latestValue
-          : seedTeamOverrideDraft(member)[field],
+        ...Object.fromEntries(
+          fields.map((name) => [
+            name,
+            hasNewerEdit ? latest[name] : saved[name],
+          ]),
+        ),
       },
     };
   }

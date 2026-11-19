@@ -90,7 +90,10 @@ A named function vBot offers an Agent during a Run, with a description, JSON Sch
 A named product-integration query or action of vBot or an Extension (`extensions/host.md`). Not a Managed Service, Provider, or Home Assistant service.
 
 ## Permission Rules
-An Agent's optional rule set that limits which paths its Tools may read or change, which shell commands they may run and which hosts those commands may reach; an Agent without one has full access, and the user can give one Session its own rules (`permissions.md`). Not the Tool Access Policy (which Tools an Agent has), the server's Access Mode, or an OS sandbox.
+Rules governing the paths, commands and hosts an Agent's Tools can access (`permissions.md`). Tool selection and server Access Mode have separate controls.
+
+## Permission Profile
+A named set of Permission Rules shared by the Agents that select it. Editing a custom profile changes the rules for every such Agent (`permissions.md`).
 
 ## Agent Secret
 A value such as a password, API key or login that the user gives an Agent to use by reference without the Agent seeing it; vBot inserts the value only where a Tool accepts it (`secrets.md`). Not the Secret Store's credentials or OAuth tokens, such as Provider keys, which vBot itself uses and no Agent can reference.
