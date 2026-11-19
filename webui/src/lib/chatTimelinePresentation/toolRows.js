@@ -36,15 +36,6 @@ const TOOL_DISPLAY_ARGS = {
   write: ['path'],
   edit: ['path'],
   bash: ['command'],
-  search_files: [
-    'pattern',
-    'path',
-    'glob',
-    'args',
-    'patterns',
-    'paths',
-    'action',
-  ],
   glob: ['pattern'],
   grep: ['pattern', 'path'],
   subagent: ['action', 'id', 'agent_id', 'content'],
@@ -282,6 +273,10 @@ function toolPrimaryReveal(part, kind, text, fullText) {
 
 // Singular and plural label of each counted tool-fact unit.
 const COUNT_FACT_LABELS = {
+  directories: [
+    (count) => t('chat.toolFact.directory', { count }),
+    (count) => t('chat.toolFact.directories', { count }),
+  ],
   edits: [
     (count) => t('chat.toolFact.edit', { count }),
     (count) => t('chat.toolFact.edits', { count }),
@@ -293,6 +288,10 @@ const COUNT_FACT_LABELS = {
   files: [
     (count) => t('chat.toolFact.file', { count }),
     (count) => t('chat.toolFact.files', { count }),
+  ],
+  lines: [
+    (count) => t('chat.toolFact.line', { count }),
+    (count) => t('chat.toolFact.lineCount', { count }),
   ],
   matches: [
     (count) => t('chat.toolFact.match', { count }),
@@ -411,31 +410,7 @@ function humanReadableToolLabel(toolName, argumentsValue) {
   }
 
   if (toolName === 'search_files') {
-    const fields = ['pattern', 'path', 'glob']
-      .map((key) =>
-        Array.isArray(args[key])
-          ? args[key].filter((value) => trimmedString(value)).join(', ')
-          : trimmedString(args[key]),
-      )
-      .filter(Boolean);
-    if (Array.isArray(args.args)) {
-      fields.push(
-        args.args.filter((value) => typeof value === 'string').join(' '),
-      );
-    }
-    if (fields.some(Boolean)) {
-      return fields.filter(Boolean).join(' · ');
-    }
-    return (
-      ['patterns', 'paths']
-        .map((key) =>
-          Array.isArray(args[key]) ? args[key].filter(Boolean).join(', ') : '',
-        )
-        .filter(Boolean)
-        .join(' · ') ||
-      args.action ||
-      ''
-    );
+    return searchFilesLabel(args);
   }
 
   if (toolName === 'glob') {
@@ -471,6 +446,63 @@ function humanReadableToolLabel(toolName, argumentsValue) {
   }
 
   return '';
+}
+
+// Streaming previews and older calls can lack the Tool's display payload.
+// Show the supplied spellings, including flag fields, without running a
+// second implementation of the server's search argument interpreter.
+function searchFilesLabel(args) {
+  const {
+    pattern,
+    query,
+    patterns,
+    path,
+    paths,
+    glob,
+    include,
+    output,
+    output_mode,
+    context,
+    context_lines,
+    args: flags,
+    argv,
+    options,
+    limit,
+    offset,
+    action,
+    ...extra
+  } = args;
+  const items = (value) =>
+    (Array.isArray(value) ? value : [value]).filter(
+      (item) => typeof item === 'string',
+    );
+  const terms = items(pattern ?? query ?? patterns);
+  const term = terms[0] ?? '';
+  const searchText =
+    terms.length > 1
+      ? '[' + terms.map((item) => JSON.stringify(item)).join(', ') + ']'
+      : terms.length && (!term || term.trim() !== term)
+        ? JSON.stringify(term)
+        : term;
+  const named = (key, value) => (value == null ? '' : key + '=' + value);
+  const fields = [
+    searchText,
+    items(path ?? paths).join(', '),
+    items(glob ?? include).join(', '),
+    named('output', output ?? output_mode),
+    named('context', context ?? context_lines),
+    items(flags ?? argv ?? options)
+      .map((flag) => (!flag || /\s/.test(flag) ? JSON.stringify(flag) : flag))
+      .join(' '),
+    named('limit', limit),
+    named('offset', offset),
+    ...Object.entries(extra).map(([key, value]) =>
+      value === true && key.startsWith('-')
+        ? key
+        : named(key, typeof value === 'object' ? JSON.stringify(value) : value),
+    ),
+  ];
+  return fields.filter(Boolean).join(' · ') || trimmedString(action);
 }
 
 function searchToolLabel(args, includePath) {

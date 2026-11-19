@@ -98,7 +98,7 @@ from core.tools._search_roots import (
 from core.tools.contracts import ToolContractError
 from core.tools.edit import offered_edit_tool
 from core.tools.file_state import os_error_reason
-from core.tools.search import SearchBudget, _expand_brace_alternations
+from core.tools.search import SearchBudget, _expand_brace_alternations, display_search_path
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -119,7 +119,7 @@ def _ignored_summary(paths: list[Path], cwd: Path) -> str:
     mistaken for everything there is."""
     unique = {os.path.normcase(path): path for path in paths}
     ordered = sorted(unique.values(), key=lambda path: (len(path.parts), str(path).lower()))
-    shown = [path_label(path, cwd) + ("/" if path.is_dir() else "") for path in ordered[:5]]
+    shown = [path_label(path, cwd, directory=path.is_dir()) for path in ordered[:5]]
     listed = ", ".join(shown)
     if len(ordered) > len(shown):
         listed += f" and {len(ordered) - len(shown)} more"
@@ -199,7 +199,7 @@ def _scopes(roots: _Roots, cwd: Path) -> list[Scope]:
 
 def _entry(scope_index: int, scope: Scope, native: bytes, count: int, cwd: Path) -> Entry:
     path = Path(os.path.normpath(os.path.join(scope.cwd, os.fsdecode(native))))
-    return Entry(path, path_label(path, cwd), scope_index, native, count)
+    return Entry(path, display_search_path(path, cwd=cwd), scope_index, native, count)
 
 
 # Paths named in the warnings about files ripgrep could not read, before "N more".
@@ -375,7 +375,7 @@ def _list_directories(
         names = _matching_names(execution, query, [path.name for path in selected])
         selected = [path for path in selected if path.name in names]
     found.entries = [
-        Entry(path, path_label(path, execution.cwd), directory=True) for path in selected
+        Entry(path, display_search_path(path, cwd=execution.cwd) + "/") for path in selected
     ]
 
 
@@ -511,7 +511,7 @@ def _names_matching(
     for index, scope in enumerate(scopes):
         listed.take(index, scope, execution.list_scan(query, scope), execution.cwd)
     listed.finish(query)
-    names = [entry.label for entry in listed.entries]
+    names = [entry.shown_path for entry in listed.entries]
     names += [entry.path.name for entry in listed.entries]
     try:
         matched = execution.match_names(query, patterns, names)
@@ -520,7 +520,9 @@ def _names_matching(
         listed.complete = False
         return [], listed
     named = [
-        entry for entry in listed.entries if entry.label in matched or entry.path.name in matched
+        entry
+        for entry in listed.entries
+        if entry.shown_path in matched or entry.path.name in matched
     ]
     return named, listed
 
@@ -682,7 +684,7 @@ def _note_no_match(
     note = unnamed_files_note(
         patterns[0],
         file_list=query.mode == "files_with_matches",
-        files=[(entry.label, entry.path.name) for entry in listed.entries],
+        files=[(entry.shown_path, entry.path.name) for entry in listed.entries],
     )
     if note is not None:
         query.notes.append(note)
@@ -723,7 +725,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
         found.selected_entries = bool(found.entries)
         if query.name_patterns:
             # A listing's pattern matches a name or a shown path.
-            names = [entry.label for entry in found.entries]
+            names = [entry.shown_path for entry in found.entries]
             names += [entry.path.name for entry in found.entries]
             matched = _matching_names(execution, query, names)
             # In an inverted search rg returns the non-matching names. Both
@@ -732,7 +734,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
             found.entries = [
                 entry
                 for entry in found.entries
-                if accepts((entry.label in matched, entry.path.name in matched))
+                if accepts((entry.shown_path in matched, entry.path.name in matched))
             ]
     if query.mode in LIST_MODES:
         found.finish(query)
@@ -816,7 +818,7 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: _Roots) -> _O
             query,
             patterns,
             scope,
-            [entry.native for entry, _ in selected],
+            {entry.native: entry.count for entry, _ in selected},
             max(skip for _, skip in selected) + query.limit,
         )
         found.take(index, scope, problems, execution.cwd)
@@ -1005,39 +1007,77 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         data["skipped"] = _ignored_summary(found.ignored, cwd)
     if page.lines:
         data["content"] = "\n".join(page.lines)
-    context.add_display_count(
-        page.returned, "results", at_least="next_offset" in data or not complete
-    )
+    if query.mode in {"content", "count"}:
+        unit = (
+            "matches"
+            if (query.count_matches or query.multiline) and not query.inverted
+            else "lines"
+        )
+        context.add_display_count(outcome.lines_total, unit, at_least=not complete)
+    else:
+        unit = "directories" if query.mode == "list_dirs" else "files"
+        context.add_display_count(outcome.total, unit, at_least=not complete)
     return tool_success(data)
 
 
 def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
+    # The row has two slots: the search text, then its scope and options.
+    try:
+        fields = normalize_search_arguments(arguments, preserve_pattern_list=True)
+    except ValueError:
+        # A refused call still has a row. Show the arguments that led to it.
+        return [ToolDisplayPart(json.dumps(arguments, ensure_ascii=False))]
+    if not isinstance(fields, dict):
+        return []
     parts = []
-    for name in ("pattern", "path", "glob", "args"):
-        value = arguments.get(name)
+    options = []
+    for name in ("pattern", "path", "glob", "output", "context", "args", "limit", "offset"):
+        value = fields.get(name)
         values = value if isinstance(value, list) else [value]
-        text = " ".join(item for item in values if isinstance(item, str) and item)
-        if text:
+        if name in {"output", "context", "limit", "offset"}:
+            if value is not None:
+                options.append(f"{name}={value}")
+            continue
+        items = [item for item in values if isinstance(item, str)]
+        if not items:
+            continue
+        if name == "pattern":
+            if len(items) == 1:
+                term = items[0]
+                text = (
+                    term if term and term.strip() == term else json.dumps(term, ensure_ascii=False)
+                )
+            else:
+                text = json.dumps(items, ensure_ascii=False)
             parts.append(ToolDisplayPart(text))
+        elif name == "args":
+            options.append(
+                " ".join(
+                    json.dumps(item, ensure_ascii=False)
+                    if not item or re.search(r"\s", item)
+                    else item
+                    for item in items
+                )
+            )
+        else:
+            options.append(", ".join(items))
+    if options:
+        parts.append(ToolDisplayPart(" · ".join(options)))
     return parts
 
 
 def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
-    """Show the user what was found, whether more follows, and the warnings.
-
-    Page controls and searched roots are for the Agent and stay in the raw result.
-    """
+    """Show the result, including its scope, interpretations and omissions."""
     data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
     if not isinstance(data, dict):
         return []
-    blocks = [display_text("results", source="result", path=("data", "content"))]
-    next_offset = data.get("next_offset")
-    if isinstance(next_offset, int) and not isinstance(next_offset, bool):
-        blocks.append(
-            display_notice(
-                "info", f"More results follow; the next page starts at result {next_offset + 1}."
-            )
-        )
+    blocks = [
+        display_notice("info", text)
+        for field in ("summary", "note", "skipped")
+        if isinstance(text := data.get(field), str) and text.strip()
+    ]
+    if data.get("content"):
+        blocks.append(display_text("results", source="result", path=("data", "content")))
     warnings = data.get("warnings")
     for warning in warnings if isinstance(warnings, list) else []:
         if isinstance(warning, str) and warning.strip():

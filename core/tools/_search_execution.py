@@ -817,7 +817,7 @@ class SearchExecution:
         query: SearchQuery,
         patterns: list[str],
         scope: Scope,
-        paths: list[bytes],
+        paths: dict[bytes, int],
         max_count: int,
     ) -> tuple[dict[bytes, list[dict[str, Any]]], ScanResult]:
         """Return ripgrep's match and context events for explicit files of one scope.
@@ -832,32 +832,31 @@ class SearchExecution:
             ),
             None,
         )
-        if user_max is not None:
-            max_count = min(max_count, int(user_max))
+        native_max = min(max_count, int(user_max)) if user_max is not None else max_count
         base = [
             *DEFAULT_ARGUMENTS,
-            *query.rg_args,
+            *(arg for arg in query.rg_args if not arg.startswith("--max-count=")),
             "--json",
-            "--max-count",
-            str(max_count),
             *(["--before-context", str(query.before)] if query.before else []),
             *(["--after-context", str(query.after)] if query.after else []),
             *_pattern_arguments(patterns),
-            "--",
         ]
-        length = sum(len(argument) + 3 for argument in base) + len(str(self.binary))
+        length = sum(len(argument) + 3 for argument in base) + len(str(self.binary)) + 32
         events: dict[bytes, list[dict[str, Any]]] = {}
         problems = ScanResult()
         batch: list[str] = []
         size = length
 
-        def execute() -> None:
+        def execute(*, multiline_limit: int | None = None) -> None:
             outcome = NativeOutcome()
             current: list[dict[str, Any]] | None = None
             current_path: bytes | None = None
+            options = (
+                ["--max-count", str(native_max)] if multiline_limit is None else ["--line-buffered"]
+            )
             lines = native_lines(
                 self.binary,
-                [*base, *batch],
+                [*base, *options, "--", *batch],
                 self.context,
                 self.budget,
                 cwd=scope.cwd,
@@ -865,6 +864,8 @@ class SearchExecution:
             )
             try:
                 with contextlib.closing(lines):
+                    matches = 0
+                    last_needed = None
                     for line in lines:
                         event = json.loads(line)
                         kind = event["type"]
@@ -872,7 +873,20 @@ class SearchExecution:
                             current_path = _event_path(event["data"]["path"])
                             current = events.setdefault(current_path, [])
                         elif kind in {"match", "context"} and current is not None:
+                            data = event["data"]
+                            first = data.get("line_number") or 1
+                            if last_needed is not None and first > last_needed:
+                                break
                             current.append(event)
+                            if multiline_limit is not None:
+                                matches += len(data.get("submatches") or [])
+                                if matches >= multiline_limit:
+                                    raw = decode_event_text(data["lines"])
+                                    last = first + raw.count(b"\n") - int(raw.endswith(b"\n"))
+                                    if last_needed is None:
+                                        last_needed = last + query.after
+                                    if last >= last_needed:
+                                        break
                         elif kind == "end":
                             current, current_path = None, None
             except SearchBoundError as error:
@@ -886,15 +900,23 @@ class SearchExecution:
             problems.unreadable.extend(judged.unreadable)
             problems.unreadable_unnamed += judged.unreadable_unnamed
 
-        for path in paths:
+        for path, count in paths.items():
             argument = os.fsdecode(path)
             argument_size = len(argument.encode("utf-8", errors="surrogateescape")) + 3
-            if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
+            # rg's JSON printer can panic when -m splits a multiline event
+            # whose next match shares the last line. Read that file's whole
+            # events and close the child at the page boundary instead.
+            partial_multiline = query.multiline and not query.inverted and count > native_max
+            if batch and (partial_multiline or size + argument_size > MAX_COMMAND_LINE_BYTES):
                 execute()
                 batch.clear()
                 size = length
             batch.append(argument)
             size += argument_size
+            if partial_multiline:
+                execute(multiline_limit=min(max_count, count))
+                batch.clear()
+                size = length
         if batch:
             execute()
         return events, problems

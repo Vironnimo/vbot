@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,22 +35,31 @@ class Entry:
     """One file or directory a search found."""
 
     path: Path
-    label: str
+    shown_path: str
     scope: int = 0
     native: bytes = b""
     count: int = 0
-    directory: bool = False
     times: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+    @property
+    def label(self) -> str:
+        return _quote_path(self.shown_path)
 
-def path_label(path: Path, cwd: Path) -> str:
+
+def _quote_path(value: str) -> str:
+    if re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]", value):
+        return json.dumps(value)
+    return value
+
+
+def path_label(path: Path, cwd: Path, *, directory: bool = False) -> str:
     """Render a path as the Agent passes it back: relative to cwd, absolute outside."""
-    value = display_search_path(path, cwd=cwd)
-    return json.dumps(value, ensure_ascii=False) if any(c in value for c in "\n\r\t") else value
+    value = display_search_path(path, cwd=cwd) + ("/" if directory else "")
+    return _quote_path(value)
 
 
 def _path_key(entry: Entry) -> tuple[tuple[str, str], ...]:
-    return tuple((part.casefold(), part) for part in entry.label.split("/"))
+    return tuple((part.casefold(), part) for part in entry.shown_path.split("/"))
 
 
 def order(entries: list[Entry], query: SearchQuery) -> None:
@@ -115,6 +126,8 @@ class Page:
         """The lines that name a file before its first line on this page."""
         if self.lines and self.heading_label == label:
             return []
+        if label == "--" or re.match(r"^\d+[:-]", label):
+            label = "./" + label
         return ["", label] if self.lines else [label]
 
     def add(self, lines: list[str], units: int = 1, *, label: str | None = None) -> None:
@@ -131,12 +144,7 @@ def entry_page(entries: list[Entry], query: SearchQuery) -> Page:
     for entry in entries[query.offset :]:
         if page.returned >= page.limit:
             break
-        if query.mode == "count":
-            line = f"{entry.label}:{entry.count}"
-        elif entry.directory:
-            line = entry.label + "/"
-        else:
-            line = entry.label
+        line = f"{entry.label}:{entry.count}" if query.mode == "count" else entry.label
         if not page.fits([line]):
             page.byte_limited = True
             break
@@ -165,44 +173,137 @@ class _Line:
     text: str
 
 
-def _excerpt(raw: bytes, position: int | None) -> str:
-    text = raw.decode("utf-8", errors="backslashreplace").rstrip("\r\n")
+def _utf8_boundary(raw: bytes, offset: int, *, end: bool) -> int:
+    """Include the whole character if a byte-mode regex cuts through it."""
+    if offset == len(raw) or raw[offset] & 0xC0 != 0x80:
+        return offset
+    start = offset - 1
+    while start >= 0 and offset - start < 4 and raw[start] & 0xC0 == 0x80:
+        start -= 1
+    if start < 0 or offset - start >= 4:
+        return offset
+    char = raw[start : start + 4].decode("utf-8", errors="surrogateescape")[0]
+    width = len(char.encode("utf-8", errors="surrogateescape"))
+    if start + width <= offset:
+        return offset
+    return start + width if end else start
+
+
+def _excerpt(raw: bytes, spans: list[tuple[int, int]]) -> str:
+    """Share one line's character budget among its matches, in source order."""
+    text = raw.decode("utf-8", errors="backslashreplace").replace("\r", "␍")
     if len(text) <= MAX_LINE_CHARS:
-        return text.replace("\r", r"\r")
-    center = len(raw[:position].decode("utf-8", errors="backslashreplace")) if position else 0
-    start = max(min(center - 200, len(text) - MAX_LINE_CHARS), 0)
-    end = start + MAX_LINE_CHARS
-    prefix = f"[{start} characters omitted] " if start else ""
-    suffix = f" [{len(text) - end} characters omitted]" if end < len(text) else ""
-    return prefix + text[start:end].replace("\r", r"\r") + suffix
+        return text
+    if not spans:
+        return f"{text[:MAX_LINE_CHARS]} [{len(text) - MAX_LINE_CHARS} characters omitted]"
+
+    # Omission markers can be as long as a short window. Keep enough text
+    # per window for context, even on lines with thousands of matches.
+    width = max(32, MAX_LINE_CHARS // len(spans))
+    windows: list[tuple[int, int]] = []
+    remaining = MAX_LINE_CHARS
+    hidden = 0
+    byte_start = char_start = 0
+    for left, right in spans:
+        left = _utf8_boundary(raw, left, end=False)
+        right = _utf8_boundary(raw, right, end=True)
+        start = char_start + len(raw[byte_start:left].decode("utf-8", errors="backslashreplace"))
+        end = start + len(raw[left:right].decode("utf-8", errors="backslashreplace"))
+        byte_start, char_start = left, start
+        if windows and start >= windows[-1][0] and end <= windows[-1][1]:
+            continue
+        if remaining == 0:
+            hidden += 1
+            continue
+        size = min(width, remaining)
+        if end - start > size:
+            # Keep both ends of a long match, including where a multiline
+            # match ends on a long line.
+            half = size // 2
+            pieces = [(start, start + half), (end - (size - half), end)]
+        else:
+            begin = max(0, min(start - min(size // 5, size - (end - start)), len(text) - size))
+            pieces = [(begin, begin + size)]
+        for begin, finish in pieces:
+            if windows and begin <= windows[-1][1]:
+                old_start, old_end = windows[-1]
+                windows[-1] = (old_start, max(old_end, finish))
+                remaining -= max(0, finish - old_end)
+            else:
+                windows.append((begin, finish))
+                remaining -= finish - begin
+    parts = []
+    previous = 0
+    for begin, finish in windows:
+        if begin > previous:
+            parts.append(f"[{begin - previous} characters omitted]")
+        parts.append(text[begin:finish])
+        previous = finish
+    if previous < len(text):
+        parts.append(f"[{len(text) - previous} characters omitted]")
+    if hidden:
+        parts.append(f"[{_count(hidden, 'match', 'matches')} omitted]")
+    return " ".join(parts)
 
 
-def _event_lines(event: dict[str, Any], *, only_matching: bool) -> list[_Line]:
+def _physical_lines(raw: bytes) -> Iterator[tuple[int, bytes]]:
+    """Yield the byte start and text of each LF line, preserving lone CRs."""
+    start = 0
+    while True:
+        lf = raw.find(b"\n", start)
+        if lf < 0:
+            if start < len(raw) or not raw:
+                yield start, raw[start:]
+            return
+        yield start, raw[start:lf].removesuffix(b"\r")
+        start = lf + 1
+
+
+def _fragments(data: dict[str, Any], raw: bytes) -> Iterator[tuple[int, int, int]]:
+    """Locate each fragment by source line and byte range."""
+    number = data.get("line_number") or 1
+    previous = 0
+    for sub in data["submatches"]:
+        start, end = sub["start"], sub["end"]
+        number += raw.count(b"\n", previous, start)
+        previous = start
+        yield number, start, end
+
+
+def _event_lines(
+    event: dict[str, Any], *, only_matching: bool, focus: slice = slice(None)
+) -> list[_Line]:
     data = event["data"]
     raw = decode_event_text(data["lines"])
     first = data.get("line_number") or 1
     match = event["type"] == "match"
-    submatches = data.get("submatches") or []
+    submatches = (data.get("submatches") or [])[focus]
     if only_matching and not match and submatches:
         # With -vo the result is a non-matching line. A context event can
         # contain several matched fragments on that same line.
         return [
-            _Line(first, False, _excerpt(decode_event_text(sub["match"]), None))
-            for sub in submatches
+            _Line(number + index, False, _excerpt(line, [(0, len(line))]))
+            for number, left, right in _fragments(data, raw)
+            for index, (_, line) in enumerate(_physical_lines(raw[left:right]))
         ]
-    position = submatches[0]["start"] if submatches else None
-    # ripgrep counts LF boundaries; bytes.splitlines also splits lone CRs.
-    pieces = raw.split(b"\n")
-    pieces = [piece + b"\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
-    pieces = pieces or [b""]
     lines = []
-    consumed = 0
-    for index, piece in enumerate(pieces):
-        within = position - consumed if position is not None and consumed <= position else None
-        if within is not None and within >= len(piece):
-            within = None
-        lines.append(_Line(first + index, match, _excerpt(piece, within)))
-        consumed += len(piece)
+    cursor = 0
+    for index, (start, piece) in enumerate(_physical_lines(raw)):
+        end = start + len(piece)
+        spans = []
+        while (
+            cursor < len(submatches)
+            and submatches[cursor]["end"] <= start
+            and submatches[cursor]["start"] < start
+        ):
+            cursor += 1
+        while cursor < len(submatches) and submatches[cursor]["start"] <= end:
+            sub = submatches[cursor]
+            spans.append((max(sub["start"] - start, 0), min(sub["end"], end) - start))
+            if sub["end"] > end:
+                break
+            cursor += 1
+        lines.append(_Line(first + index, match, _excerpt(piece, spans)))
     return lines
 
 
@@ -227,7 +328,7 @@ def content_page(
             for event in file_events
         ):
             query.notes.append(
-                f"{entry.label} contains lone CR line endings, shown as \\r; line numbers "
+                f"{entry.label} contains lone CR line endings, shown as ␍. Line numbers "
                 "count LF boundaries and can differ from read."
             )
         if query.only_matching and not query.inverted:
@@ -244,19 +345,33 @@ def _only_matching(page: Page, entry: Entry, file_events: list[dict[str, Any]], 
             continue
         data = event["data"]
         raw = decode_event_text(data["lines"])
-        for submatch in data.get("submatches") or []:
+        for number, start, end in _fragments(data, raw):
             if unit >= entry.count or page.returned >= page.limit:
                 return
             unit += 1
             if unit <= skip:
                 continue
-            number = (data.get("line_number") or 1) + raw[: submatch["start"]].count(b"\n")
-            text = _excerpt(decode_event_text(submatch["match"]), None)
-            lines = [*page.heading(entry.label), f"{number}:{text}"]
-            if not page.fits(lines):
-                page.byte_limited = True
+            if not _add_fragment(page, entry.label, number, raw[start:end]):
                 return
-            page.add(lines, label=entry.label)
+
+
+def _add_fragment(page: Page, label: str, first: int, fragment: bytes) -> bool:
+    """Buffer at most a page, even for a match spanning millions of lines."""
+    lines = page.heading(label)
+    room = page.room - sum(len(line.encode("utf-8")) + 1 for line in lines)
+    for index, (_, piece) in enumerate(_physical_lines(fragment)):
+        line = f"{first + index}:{_excerpt(piece, [(0, len(piece))])}"
+        room -= len(line.encode("utf-8")) + 1
+        if room < 0:
+            page.byte_limited = True
+            if page.returned or not index:
+                return False
+            last = first + fragment.count(b"\n") - int(fragment.endswith(b"\n"))
+            page.cut = Cut(label, first, first + index - 1, last)
+            break
+        lines.append(line)
+    page.add(lines, label=label)
+    return not page.byte_limited
 
 
 def _file_lines(
@@ -274,18 +389,30 @@ def _file_lines(
     by_line = not query.multiline or query.inverted
     for event in file_events:
         start = len(lines)
-        lines.extend(_event_lines(event, only_matching=query.only_matching))
+        focus = slice(None)
+        if not by_line and event["type"] == "match":
+            # Several paged matches can share a long source line. Center this
+            # page's excerpts on the matches this page actually counts.
+            focus = slice(
+                max(0, skip - len(groups)),
+                max(0, min(entry.count, skip + page.limit - page.returned) - len(groups)),
+            )
+        lines.extend(_event_lines(event, only_matching=query.only_matching, focus=focus))
         if event["type"] != "match":
             continue
         if by_line:
             groups.append((start, len(lines) - 1))
             continue
         raw = decode_event_text(event["data"]["lines"])
+        last_line = start
+        previous = 0
         for submatch in event["data"].get("submatches") or []:
-            end = max(submatch["end"] - 1, submatch["start"])
-            groups.append(
-                (start + raw[: submatch["start"]].count(b"\n"), start + raw[:end].count(b"\n"))
-            )
+            begin = submatch["start"]
+            end = max(submatch["end"] - 1, begin)
+            first_line = last_line + raw.count(b"\n", previous, begin)
+            last_line = first_line + raw.count(b"\n", begin, end)
+            groups.append((first_line, last_line))
+            previous = end
     block = _Block(page, entry, separate)
     # rg can emit matching lines as match events inside trailing context even
     # after --max-count. They are context here, not further counted results.
@@ -361,8 +488,12 @@ class _Block:
             # A page's first result always appears, without its context if need be.
             lines = result
             body = self._body(lines)
-            while len(body) > 1 and not self.page.fits(heading + body):
-                body.pop()
+            room = self.page.room - sum(len(line.encode("utf-8")) + 1 for line in heading)
+            for index, line in enumerate(body):
+                room -= len(line.encode("utf-8")) + 1
+                if room < 0 and index:
+                    del body[index:]
+                    break
             shown = sum(1 for line in body if line != "--")
             if shown < len(lines):
                 self.page.cut = Cut(
@@ -454,13 +585,13 @@ def summary(
         # Paging cannot show the rest of one result, so name where it continues.
         text += (
             f" The {matched[0]} at {cut.label}:{cut.first} spans lines {cut.first}-{cut.last};"
-            f" the 50 KB output limit cut it after line {cut.shown}."
+            f" the 50 KiB output limit cut it after line {cut.shown}."
             f" Read {cut.label} from line {cut.shown + 1} to see the rest."
         )
     elif page.byte_limited and whole_page:
-        text += " Some context lines were left out at the 50 KB output limit."
+        text += " Some context lines were left out at the 50 KiB output limit."
     elif page.byte_limited and page.returned:
-        text += " This page stopped at the 50 KB output limit."
+        text += " This page stopped at the 50 KiB output limit."
     if page.returned and end < total:
         if end <= MAX_OFFSET:
             text += f" Continue with offset {end}."

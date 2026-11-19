@@ -71,10 +71,14 @@ async def test_paging_never_offers_an_offset_the_tool_rejects(tmp_path, monkeypa
     monkeypatch.setattr("core.tools._search_results.MAX_OFFSET", 2)
     monkeypatch.setattr("core.tools._search_arguments.MAX_OFFSET", 2)
     (tmp_path / "a.txt").write_text("token\n" * 6)
-    result = await dispatch(tmp_path, {"pattern": "token", "offset": 2, "limit": 2})
+    ctx = context(tmp_path)
+    result = await search_registry().dispatch(ctx, {"pattern": "token", "offset": 2, "limit": 2})
     assert result["ok"], result
     assert result["data"]["content"] == "a.txt\n3:token\n4:token"
     assert "next_offset" not in result["data"]
+    assert ctx.presentation_facts == [
+        {"kind": "count", "unit": "lines", "value": 6, "at_least": False}
+    ]
     refused = await dispatch(tmp_path, {"pattern": "token", "offset": 4})
     assert refused["error"]["code"] == "invalid_arguments"
 
