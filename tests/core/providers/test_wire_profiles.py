@@ -564,8 +564,6 @@ def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("provider_id", "connection_id", "model_id", "native_on_demand"),
     [
-        ("antigravity", "subscription", "gemini-4-hydrogen-high", False),
-        ("antigravity", "subscription", "claude-sonnet-5-5-high", False),
         ("google", "api-key", "gemini-3.1-pro-preview", True),
         ("opencode-go", "api-key", "glm-5.3", False),
         ("ollama-cloud", "api-key", "glm-5.3", True),

@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.antigravity import AntigravityAdapter
 from core.providers.claude_agent import ClaudeAgentAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.google import GoogleAdapter
@@ -34,7 +33,6 @@ from core.providers.stepfun import StepFunAdapter
 from core.providers.xai import XAIAdapter
 
 ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
-    "antigravity": AntigravityAdapter,
     "openai_compatible": OpenAICompatibleAdapter,
     "openai": OpenAIAdapter,
     "openrouter": OpenRouterAdapter,

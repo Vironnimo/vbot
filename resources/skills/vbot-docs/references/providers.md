@@ -79,10 +79,6 @@ vbot model list --provider claude-agent --task chat
 
 `connect` enables the Connection and checks the program's login; its output gives server setup instructions when the program or login is missing. The enabled Connection stays enrolled after a failed check. After the user completes setup, repeat `connect` to check again and discover Models. Copy the selected Model id from `model list` into the Agent's Model setting. This Connection has one default Account; named Accounts and API-key mutation are unavailable. `vbot provider disconnect claude-agent` disables this Connection in vBot and leaves Claude Code's login unchanged.
 
-## Google AI subscription through Antigravity
-
-For a user's Google AI Pro or Ultra quota, run `vbot provider connect antigravity`. If login is missing, the user signs in with `agy` on the vBot server and you repeat the command. Use `vbot model list --provider antigravity --task chat` to select a Model and `vbot provider usage --connection antigravity:subscription` to read the five-hour and weekly limits. The `google` Provider uses the Gemini API key and its separate project quota.
-
 ## Accounts: several credentials per Connection
 
 - A connection holds named credential slots; the default slot is `default`. Account ids are 1-32 lowercase letters, digits or underscores and start with a letter or digit.

@@ -17,8 +17,6 @@ from core.providers.token_getter import (
 
 OPENAI_USAGE_CONNECTION = "openai:subscription"
 
-ANTIGRAVITY_USAGE_CONNECTION = "antigravity:subscription"
-
 CLAUDE_AGENT_USAGE_CONNECTION = "claude-agent:subscription"
 
 COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
