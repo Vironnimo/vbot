@@ -220,7 +220,7 @@ def test_argv_arrays_become_one_host_command_line(monkeypatch, platform, argv, c
         (12345, None, 12345, None),
         (None, 5000, 5, None),
         (5, 5000, 5, None),
-        (5000, 5000, 5, None),
+        (0.005, 5, 0.005, None),
         (
             120000,
             None,
@@ -235,12 +235,10 @@ def test_timeout_is_read_in_seconds_unless_it_is_clearly_milliseconds(
     assert resolve_timeout(timeout, timeout_ms) == (seconds, note)
 
 
-def test_disagreeing_timeouts_fail_before_running() -> None:
-    with pytest.raises(ValueError) as raised:
-        resolve_timeout(120, 5000)
-    assert str(raised.value) == (
-        NOT_RUN + "timeout (120 s) and timeout_ms (5000 ms) disagree; send one of them."
-    )
+@pytest.mark.parametrize(("timeout", "timeout_ms"), [(120, 5000), (5, 5), (5000, 5000)])
+def test_disagreeing_timeouts_fail_before_running(timeout: int, timeout_ms: int) -> None:
+    with pytest.raises(ValueError):
+        resolve_timeout(timeout, timeout_ms)
 
 
 # --- env and env_keys ------------------------------------------------------

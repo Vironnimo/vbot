@@ -1318,6 +1318,8 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert "not granted to this Agent" in secret["error"]["message"]
     assert nul["error"]["code"] == "invalid_arguments"
     assert inspect["error"]["code"] == "invalid_arguments"
+    conflict = await shell.call({"command": "ls", "timeout": 5, "timeout_ms": 5})
+    assert conflict["error"]["code"] == "invalid_arguments"
     assert shell.launcher.argv == []
 
 
