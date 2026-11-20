@@ -50,6 +50,7 @@
     toolRowFromEvent,
     toolRowPresentation,
     toolStatusDetails,
+    toolStatusLabel,
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
 
@@ -67,6 +68,7 @@
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import ToolRowStatus from './ToolRowStatus.svelte';
   import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import UserMessageText from './UserMessageText.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
@@ -599,17 +601,6 @@
             viewState.setOpen(disclosureKey('tool'), event.currentTarget.open)}
         >
           <summary class="tool-event-line">
-            <span
-              class:error={status === 'failed'}
-              class:partial={status === 'partial'}
-              class:refused={status === 'refused'}
-              class:cancelled={status === 'cancelled'}
-              class:interrupted={status === 'interrupted'}
-              class:running={status === 'running'}
-              class:done={status === 'success'}
-              class="te-dot"
-              use:tooltip={() => toolStatusDetails(eventToolRow)}>●</span
-            >
             <span class="te-fn">{toolNameForEvent(item.event)}</span>
             {#if eventPresentation.primary.length > 0}
               <ToolPrimaryLine primary={eventPresentation.primary} />
@@ -623,6 +614,11 @@
               >
             {/each}
             <ToolSecretsUsed uses={eventPresentation.secretsUsed} />
+            <ToolRowStatus
+              {status}
+              label={toolStatusLabel(eventToolRow)}
+              details={() => toolStatusDetails(eventToolRow)}
+            />
           </summary>
           <ToolDetails
             tool={eventToolRow}

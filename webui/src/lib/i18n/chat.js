@@ -400,6 +400,7 @@ export default Object.freeze({
   'chat.toolArgs': 'Args',
   'chat.toolPendingName': 'tool',
   'chat.toolCancelled': 'cancelled',
+  'chat.toolFailed': 'failed',
   'chat.toolStillRunning': 'processes still running',
   'chat.toolStillRunningOne': '1 process still running',
   'chat.toolStillRunningCount': '{count} processes still running',

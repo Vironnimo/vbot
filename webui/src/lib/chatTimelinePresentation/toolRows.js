@@ -90,6 +90,9 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   if (toolStatus(tool) === 'partial') {
     return [t('chat.toolPartial'), duration].filter(Boolean).join(' · ');
   }
+  if (toolStatus(tool) === 'failed') {
+    return [t('chat.toolFailed'), duration].filter(Boolean).join(' · ');
+  }
   return duration;
 };
 

@@ -517,7 +517,7 @@ describe('ChatTimeline Runs', () => {
     timeline.render(sessionState);
 
     const toolLine = document.querySelector('.tool-event-line');
-    expect(toolLine.querySelector('.te-dot.preparing')).not.toBeNull();
+    // A call the Model is still writing shows neither a time nor a spinner.
     expect(toolLine.querySelector('.te-time')).toBeNull();
   });
 
@@ -542,8 +542,8 @@ describe('ChatTimeline Runs', () => {
     const toolLine = document.querySelector('.tool-event-line');
     expect(toolLine.querySelector('.te-fn').textContent).toBe('bash');
     expect(toolLine.textContent).toContain(t('chat.toolCancelled'));
-    expect(toolLine.querySelector('.te-dot.running')).toBeNull();
-    expect(toolLine.querySelector('.te-dot.cancelled')).not.toBeNull();
+    expect(toolLine.querySelector('.te-spinner')).toBeNull();
+    expect(toolLine.querySelector('.te-time.cancelled')).not.toBeNull();
   });
 
   it.each(['live', 'history'])(
@@ -820,9 +820,7 @@ describe('ChatTimeline Runs', () => {
     );
     openDisclosures('.tool-event');
     const lastTool = document.querySelectorAll('.tool-event')[1];
-    expect(
-      lastTool.querySelector('.te-dot').classList.contains('running'),
-    ).toBe(true);
+    expect(lastTool.querySelector('.te-spinner')).not.toBeNull();
     const finished = toolItem({
       id: 'bash',
       name: 'bash',
@@ -839,9 +837,7 @@ describe('ChatTimeline Runs', () => {
     flushSync();
     // Rows stay raw inside the reactive Chat state: identity is the change signal.
     expect(sessionState.timelineItems[0].items.at(-1)).toBe(finished);
-    expect(lastTool.querySelector('.te-dot').classList.contains('done')).toBe(
-      true,
-    );
+    expect(lastTool.querySelector('.te-spinner')).toBeNull();
     expect(lastTool.textContent).toContain('finished output');
     expect(document.querySelector('.tool-event')).toBe(firstTool);
     expect(firstTool.querySelector('.tool-event-body')).toBe(firstBody);

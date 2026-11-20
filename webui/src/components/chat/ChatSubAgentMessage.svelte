@@ -52,7 +52,6 @@
     ontoggle={(event) => viewState.setOpen(key, event.currentTarget.open)}
   >
     <summary class="tool-event-line subagent-line">
-      <span class="te-dot subagent-message-mark" aria-hidden="true">●</span>
       <span class="te-fn">{t('chat.subagent.messageFromLabel')}</span>
       {#if entry.title}
         <span class="subagent-agent">{entry.title}</span>
@@ -84,9 +83,3 @@
     </div>
   </details>
 {/each}
-
-<style>
-  .subagent-message-mark {
-    color: var(--text-lo);
-  }
-</style>

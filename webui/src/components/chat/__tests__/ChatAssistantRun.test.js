@@ -19,8 +19,14 @@ function rowCancel(kind) {
   return document.querySelector(`.row-cancel[data-cancel="${kind}"]`);
 }
 
-function toolDot() {
-  return document.querySelector('.tool-event-line .te-dot');
+// A Tool row's state as its status label shows it: whether its spinner runs,
+// and the outcome the label carries (null without a label).
+function rowState() {
+  const line = document.querySelector('.tool-event-line');
+  return [
+    Boolean(line.querySelector('.te-spinner')),
+    line.querySelector('.te-time')?.dataset.status ?? null,
+  ];
 }
 
 function setDisclosureOpen(selector, open = true) {
@@ -163,7 +169,7 @@ describe('ChatAssistantRun', () => {
         const disclosure = button.closest('details');
         const wasOpen = disclosure.open;
         if (state.stillRunning) {
-          expect(toolDot().classList.contains('error')).toBe(true);
+          expect(document.querySelector('.te-time.failed')).not.toBeNull();
           expect(document.querySelector('.te-time').textContent).toContain(
             '101',
           );
@@ -273,24 +279,18 @@ describe('ChatAssistantRun', () => {
     }
 
     it.each([
-      [
-        'a streamed (preparing) call as a hollow dot',
-        'preparing',
-        'running',
-        null,
-      ],
-      ['a dispatched call as the running dot', 'running', 'preparing', null],
+      ['a streamed (preparing) call without status', 'preparing', false, null],
+      ['a dispatched call with a spinner', 'running', true, null],
       [
         'a partial multi-edit as a steady partial state',
         'partial',
-        'running',
+        false,
         'chat.toolPartial',
       ],
-    ])('renders %s', (_case, status, otherState, partialLabelKey) => {
+    ])('renders %s', (_case, status, spinning, partialLabelKey) => {
       run.mount({ item: assistantRun({ items: [writeChild(status)] }) });
 
-      expect(toolDot().classList.contains(status)).toBe(true);
-      expect(toolDot().classList.contains(otherState)).toBe(false);
+      expect(rowState()[0]).toBe(spinning);
       expect(
         document.querySelector('.te-time.partial')?.textContent ?? null,
       ).toBe(partialLabelKey && t(partialLabelKey));
@@ -974,7 +974,7 @@ describe('ChatAssistantRun', () => {
         'keeps the row running and ticking while the command runs',
         handedOff,
         { backgroundCommandStatuses: { cmd_one: state('running') } },
-        ['running', 'done'],
+        [true, 'running'],
         () => '30m 0s',
       ],
       [
@@ -984,7 +984,7 @@ describe('ChatAssistantRun', () => {
           backgroundCommandStatuses: { cmd_one: state('running') },
           commandStatuses: { cmd_one: state('stopped') },
         },
-        ['cancelled', 'running'],
+        [false, 'cancelled'],
         () => t('chat.toolCancelled'),
       ],
       [
@@ -994,28 +994,28 @@ describe('ChatAssistantRun', () => {
           backgroundCommandStatuses: { cmd_one: state('completed') },
           commandStatuses: { cmd_one: state('running') },
         },
-        ['done', 'running'],
+        [false, null],
         () => '',
       ],
       [
         'shows a command the server no longer reports as ended',
         handedOff,
         { backgroundCommandStatuses: {}, commandStatuses: {} },
-        ['ended', 'running'],
+        [false, null],
         () => '',
       ],
       [
         'keeps a plain Tool row in a view that follows no commands',
         handedOff,
         {},
-        ['done', 'running'],
+        [false, 'success'],
         () => '1.0s',
       ],
       [
         'shows the outcome of a call whose processes still run',
         lingering,
         { commandStatuses: { cmd_one: state('completed', true) } },
-        ['done', 'running'],
+        [true, 'success'],
         () =>
           t('chat.commandWithProcesses', {
             outcome: t('chat.commandOutcomeWithCode', {
@@ -1032,25 +1032,24 @@ describe('ChatAssistantRun', () => {
           backgroundCommandStatuses: { cmd_one: state('completed', true) },
           commandStatuses: { cmd_one: state('completed') },
         },
-        ['done', 'running'],
+        [false, 'success'],
         () => '1.0s',
       ],
       [
         'settles a call by its own exit when nothing reports its command',
         { ...lingering, exit_code: 1 },
         { backgroundCommandStatuses: {}, commandStatuses: {} },
-        ['error', 'running'],
-        () => '1.0s',
+        [false, 'failed'],
+        () => `${t('chat.toolFailed')} · 1.0s`,
       ],
-    ])('%s', (_case, data, props, [dot, otherDot], time) => {
+    ])('%s', (_case, data, props, expectedState, time) => {
       run.mount({
         item: assistantRun({ items: [commandBash(data)] }),
         nowMs: Date.parse('2026-09-04T12:30:00Z'),
         ...props,
       });
 
-      expect(toolDot().classList.contains(dot)).toBe(true);
-      expect(toolDot().classList.contains(otherDot)).toBe(false);
+      expect(rowState()).toEqual(expectedState);
       expect(
         document.querySelector('.tool-event-line .te-time')?.textContent ?? '',
       ).toBe(time());

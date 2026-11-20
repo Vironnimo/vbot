@@ -257,6 +257,10 @@ function subAgentRuntimeLabel(dotStatus, startedAt, durationMs, nowMs) {
     const duration = formatDurationMs(durationMs);
     return [t('chat.toolInterrupted'), duration].filter(Boolean).join(' · ');
   }
+  if (dotStatus === 'failed') {
+    const duration = formatDurationMs(durationMs);
+    return [t('chat.toolFailed'), duration].filter(Boolean).join(' · ');
+  }
   if (dotStatus === 'running') {
     return formatDurationMs(elapsedSinceTimestamp(startedAt, nowMs));
   }
