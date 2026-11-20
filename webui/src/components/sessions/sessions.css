@@ -391,6 +391,11 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
+  padding-inline: 26px;
+}
+
+.session-group__less {
+  margin-inline-start: auto;
 }
 
 .session-group__more,
