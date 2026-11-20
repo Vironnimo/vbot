@@ -17,6 +17,12 @@ from pathlib import Path
 # bootstrap past the 32,767 characters Windows allows a command line.
 HOST_SOURCE_PATH = Path(__file__).with_name("_powershell_host.cs")
 
+
+def cache_directory(home: Path) -> Path:
+    """Executable host code shared by the Windows shells of this user."""
+    return home / ".cache" / "vbot-powershell-host"
+
+
 # One bounded, checksummed entry is published atomically, never a DLL/receipt pair.
 # Loading bytes leaves no file locked and uses the actual shell's dependencies.
 # The runtime key includes module ids: a patch-level assembly replacement must
@@ -32,7 +38,8 @@ _LOAD_HOST = r"""& {
             ).ImplementingType.Assembly.Location
         [psobject].Assembly.Location
         'netstandard', 'System.Runtime', 'System.Collections', 'System.Linq', 'System.Console',
-        'System.Runtime.Extensions', 'System.ObjectModel', 'System.Text.RegularExpressions'
+        'System.Runtime.Extensions', 'System.Runtime.InteropServices', 'System.ObjectModel',
+        'System.Text.RegularExpressions'
     )
     $hash = [System.Security.Cryptography.SHA256]::Create()
     $loaded = $false

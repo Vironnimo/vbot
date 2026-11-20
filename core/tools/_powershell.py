@@ -283,7 +283,8 @@ RUNNER_STATEMENTS = r"""& {
         $usesInput = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
-                $node.VariablePath.UserPath.Split(':')[-1] -eq 'input'
+                $node.VariablePath.IsVariable -and
+                ($node.VariablePath.UserPath -split ':', 2)[-1] -eq 'input'
         }, $false)
         if ($usesInput) {
             $null = $state.Pipeline.AddScript(
@@ -650,7 +651,7 @@ def powershell_bootstrap(cache_dir: Path | None = None) -> str:
     them. An explicit directory isolates probes and tests.
     """
     if cache_dir is None:
-        cache_dir = Path.home() / ".cache" / "vbot-powershell-host"
+        cache_dir = _powershell_host.cache_directory(Path.home())
     return (
         LANGUAGE_MODE_STATEMENT.replace("{unreadable}", str(REQUEST_UNREADABLE_EXIT_CODE))
         + f"{SETUP_STATEMENT}\n"

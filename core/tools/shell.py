@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
 import sys
 from collections.abc import Awaitable, Callable, Container, Coroutine, Iterable, Mapping
@@ -159,12 +160,19 @@ class HostShellMissingError(Exception):
 
 
 def powershell_executable(search_path: str | None) -> Path | None:
-    """The PowerShell 7 (``pwsh``) on *search_path* the Shell Tool runs on Windows; None if none.
+    """The native PowerShell 7 executable in an absolute directory on *search_path*.
 
-    Command analysis for Permission Rules parses with the same executable.
+    The Shell Tool and Permission Rules use the same lookup. A bare-name
+    lookup on Windows can select a file in the server's working directory.
     """
-    found = shutil.which("pwsh", path=search_path)
-    return None if found is None else Path(found)
+    name = "pwsh.exe" if sys.platform == "win32" else "pwsh"
+    for entry in os.get_exec_path(None if search_path is None else {"PATH": search_path}):
+        directory = Path(entry)
+        if directory.is_absolute():
+            candidate = directory / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    return None
 
 
 def host_shell_start(

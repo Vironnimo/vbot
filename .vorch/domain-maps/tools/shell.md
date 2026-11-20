@@ -52,7 +52,7 @@ On Windows, a `pwsh` started before a call needs it, so the call need not wait f
 - `timeout` is how long the call waits for the command, in seconds: omitted 120 (`SHELL_DEFAULT_WAIT_SECONDS`), at most 600 (`SHELL_MAX_WAIT_SECONDS`; a larger value is read as 600 with a note), `0` read as omitted with a note. A lone `timeout` of at least 10,000 that is a whole thousand is read as milliseconds with a note. When both fields are present, seconds and milliseconds must describe the same duration; a negative one fails. With `run_in_background` it is ignored. No timer ever stops a command (user decision 2).
 - `env` (unadvertised) sets plain variables; vBot never passes a credential value written in the call. Credentials come only through granted `env_keys` names resolved server-side. An ungranted `env_keys` name the command inherits (`inherited_value`: the login base) passes with a note; an unknown one fails, naming the granted keys, and so does, in a restricted Session, a credential vBot knows, since the confined environment withholds it (Environment layers; `test_shell_permissions.py`).
 - Agent Secrets reach a command only through its environment: `env_keys` also takes the caller's Secret names and field variables (a whole Secret skips source-confirmed absent optional fields; an explicit field never does), an `env` value may be exactly one reference, and a reference in `command` or inside other `env` text refuses the call (`secrets/agent-secrets.md` -> References and sinks).
-- Host shell (`host_shell_start`, resolved against the call's fresh environment's PATH off the Event Loop; Cron watch checks start their shell with it too, `automation/cron-watch.md`): Windows `pwsh -NoProfile -NonInteractive -Command <powershell_bootstrap()>` (`pwsh` found by `powershell_executable(search_path)`, which Permission Rules command analysis uses to pick its parser, `permissions/commands.md`), the same text for every call, started with the environment's base; the command, the `workdir` and the call's own environment layer travel as the request on the shell's stdin (`powershell_request`; PowerShell bootstrap below), so no command-line limit applies to the command. POSIX `bash -c <command>` with the complete environment. A missing `pwsh`/`bash` raises `HostShellMissingError`, which the Tool's `_shell_start` turns into a failure with "Ask the user to install it". These failures are `command_not_started` (not `invalid_arguments`), because the command is right and the host cannot run it.
+- Host shell (`host_shell_start`, resolved against the call's fresh environment's PATH off the Event Loop; Cron watch checks start their shell with it too, `automation/cron-watch.md`): Windows `pwsh -NoProfile -NonInteractive -Command <powershell_bootstrap()>` (the native executable in the first matching absolute PATH directory, found by `powershell_executable(search_path)`, which Permission Rules command analysis uses to pick its parser, `permissions/commands.md`), the same text for every call, started with the environment's base; the command, the `workdir` and the call's own environment layer travel as the request on the shell's stdin (`powershell_request`; PowerShell bootstrap below), so no command-line limit applies to the command. POSIX `bash -c <command>` with the complete environment. A missing `pwsh`/`bash` raises `HostShellMissingError`, which the Tool's `_shell_start` turns into a failure with "Ask the user to install it". These failures are `command_not_started` (not `invalid_arguments`), because the command is right and the host cannot run it.
 - Start failures (`tool_failure`; nothing ran, the update token is released): `command_limit` (retryable) when vBot already runs 64 commands, naming `background_tasks` list and stop when the Agent can call it, otherwise to run again once one of its background commands exited; `command_not_started` when the turn was cancelled or vBot shuts down, when the `workdir` was removed after the call was checked (the missing-directory text), or when the shell could not start. The last case is logged at WARNING (`Starting a shell command failed`) and named by the state the operating system error reports (`_launch_problem`), never by the error's own message, which is in the host's language and names no next step: no operating system error, out of memory or process resources (`ENOMEM`, `EAGAIN`, `EMFILE`, `ENFILE`; Windows errors 4, 8, 14, 1450, 1455; naming `background_tasks` list and stop when callable), and any other error with its number are retryable and say to tell the user if it fails the same way; a full disk (`ENOSPC`, `EDQUOT`; Windows 39, 112) and denied access (to the `workdir` when the shell starts, to vBot's data directory when the output file is created) are not retryable and say to tell the user (`test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_error`). On Windows a call also fails `command_not_started` after the start when the bootstrap ran nothing of the command (PowerShell bootstrap -> Nothing ran).
 - Results (`tool_success` data; `ok: true` for every started command, also for a non-zero exit), fields in this order and omitted when empty:
   - ended: `status` (`exited` | `stopped`), `exit_code` (exited, when known; a stopped command has none, because its code is vBot's kill, not the program's), `exit_code_hex` (the hexadecimal form of a high-bit 32-bit Windows exit value, when present), `stopped_because` (stopped), `output`, `failed_programs` (direct child programs of the shell that exited non-zero before any stop, Windows only, such as `git.exe exited with code 128`, `python.exe exited with code 2 (-m pytest)` or `node.exe exited with code 1 (tests/check.js)`; omitted when exactly one failed with the `exit_code` of a command that exited by itself, which it would only repeat; never exit 141 of a program directly before a `Select-Object -First` stage without `-Wait`, whose reader stopped on purpose (`counted_failures`); never a PowerShell job host, see Limits), `hint` (non-zero exit with a known failure shape, or a command that did not run as written whatever its exit code; at exit code 0 with `failed_programs` and no other hint, the observed shell and program outcomes plus a check before retrying (`failure_hint`), unless the command explicitly reads `$LASTEXITCODE` or `$?` after every named failed program (including expandable strings, excluding literal text, comments and status assignments); after any of these, whatever the exit code, that jobs started with `&` ended with the command, when PowerShell ended job hosts (`CommandReport.jobs_ended`) and the command has a background `&`, one that is not doubled, escaped, part of a redirection such as `2>&1`, or the call operator at a pipeline's start (`ended_jobs_hint`; a command that started its jobs with `Start-Job` and waited for them gets none); after a stop by vBot only the held-output hint, Output shaping -> Holding pipe stages), and for processes the command left running `command_id`, `still_running` (`name (pid N)`) and `next` (the call that stops them). Such a command is listed as a background command without delivery, so the user and the Agent can see and stop what remains; its result also names the log file.
@@ -235,7 +235,15 @@ than waiting for an answer.
   Guarded cmdlets retain their normal parameters and aliases. Remove and Move
   refuse a drive root, a protected root, an ancestor containing one, or its
   complete direct contents (`folder/*`, also `*.*`, without `-Include`/`-Filter`).
-  Named child files and folders and `-WhatIf` pass. Roots include the profile,
+  Named children and an enabled `-WhatIf` pass. The guard checks the supplied
+  path and the identity of the addressed directory, including short names,
+  extended paths and intermediate junctions. A link outside the protected roots
+  can itself be removed or moved. A wildcard over its contents checks the target.
+  The host compares registered root names lexically, so a local operation never
+  opens other registered folders or contacts their network shares. To protect a
+  link by both names, the caller supplies its path and its target. Runtime supplies
+  both for a linked data directory; Project and Workspace roots are stored resolved.
+  Roots include the profile,
   Documents, Desktop, Downloads, both AppData folders, ProgramData, Program Files,
   Windows, and the request's roots. Runtime reads the data directory, every
   Project cwd and every Workspace anew for each shell Tool or Cron-watch/context
@@ -248,7 +256,8 @@ than waiting for an answer.
   ends the script under the default error preference. A typed catch receives the
   original exception. For pipeline input and the actual location change, the
   cmdlets promote their implicit `Continue` to `Stop` in `BeginProcessing`;
-  explicit `-ErrorAction` and other preferences retain their meaning.
+  explicit `-ErrorAction` and other preferences retain their meaning. If the runtime
+  does not expose a writable error action, the cmdlet retains its native behavior.
   Guard refusals behave like `throw`: `try/catch` can
   catch them; `-ErrorAction` cannot silence a protected-root refusal.
   These guards prevent mistakes, not deliberate bypass: child-by-child pipelines
@@ -268,7 +277,8 @@ than waiting for an answer.
 - **Input semantics:** ConsoleHost treats a lexical root reference to `$input`
   as an input stream. With stdin closed, its `process` block must not run. Only
   in that case an empty upstream pipeline stage reproduces the same behavior;
-  `$input` in an uncalled nested function does not count. A standalone `process`
+  provider paths such as `$env:input`, distinct variable names and `$input` in an
+  uncalled nested function do not count. A standalone `process`
   block without root `$input` still runs once. The original text is not rewritten.
 - **Nested prompt at EOF:** `$Host.EnterNestedPrompt()` evaluates the command's
   own `prompt` function once in that runspace, writes its first result through
@@ -339,7 +349,8 @@ than waiting for an answer.
   Each `v1-<hash>.bin` is one bounded entry (at most 1 MiB), a SHA-256 checksum
   followed by assembly bytes. Only the verified bytes are loaded, without a file
   lock. Entries are disposable executable code in the user's own cache; checksums
-  detect damage, not malicious replacement by that same user.
+  detect damage. Permission Rules protect this cache from Tool writes in restricted
+  Sessions (`permissions.md`). The OS account that owns it remains trusted.
   A per-entry exclusive file handle serializes builders, rechecking the entry
   after acquisition; the OS releases the handle if a builder dies. Completed
   bytes publish with one same-directory atomic rename. Each builder removes its

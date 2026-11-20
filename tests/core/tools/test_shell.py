@@ -600,6 +600,9 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
 
     monkeypatch.setattr(shell_module, "command_environment", environment)
     monkeypatch.setattr(shell_module.shutil, "which", executable)
+    monkeypatch.setattr(
+        shell_module, "powershell_executable", lambda path: Path(executable("pwsh", path=path))
+    )
     for count, path in enumerate(("first-path", "changed-path"), start=1):
         current_path = path
         result = data(await shell.call({"command": "build", "run_in_background": True}))
@@ -611,6 +614,26 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     assert [path for _thread, path in resolved] == ["first-path", "changed-path"]
     assert {path for _thread, path in prepared} == {"first-path", "changed-path"}
     assert all(thread != loop_thread for thread, _path in [*prepared, *resolved])
+
+
+def test_powershell_lookup_uses_only_absolute_path_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    name = "pwsh.exe" if sys.platform == "win32" else "pwsh"
+    (tmp_path / name).touch(mode=0o755)
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "pwsh.cmd").touch()
+    assert shell_module.powershell_executable(str(install)) is None
+    binary = install / name
+    binary.touch(mode=0o755)
+    relative_entries = os.pathsep.join(("", ".", "install"))
+    assert shell_module.powershell_executable(relative_entries) is None
+    assert (
+        shell_module.powershell_executable(os.pathsep.join((relative_entries, str(install))))
+        == binary
+    )
 
 
 def _numbered(count: int) -> list[str]:

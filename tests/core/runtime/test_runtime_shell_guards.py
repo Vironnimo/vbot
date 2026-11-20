@@ -13,12 +13,14 @@ from core.runtime.runtime import Runtime
 from core.tools.shell import HostShellMissingError, HostShellStart
 from core.tools.shell_environment import CommandEnvironment
 from core.tools.watch_checks import WatchCheckError
+from core.utils.config import Config
 from tests.core.extensions.extension_test_support import tool_context
+from tests.directory_links import link_directory
 
 
 @pytest.mark.asyncio
 async def test_shell_and_watch_checks_receive_current_protected_roots(
-    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     received: list[set[Path]] = []
 
@@ -34,7 +36,11 @@ async def test_shell_and_watch_checks_receive_current_protected_roots(
     monkeypatch.setattr("core.tools.shell.host_shell_start", capture)
     monkeypatch.setattr("core.tools.watch_checks.host_shell_start", capture)
     context = replace(tool_context("bash", tmp_path), agent_id="main")
-    expected = {Path(runtime.storage.data_dir)}
+    data_link = tmp_path / "linked-data"
+    link_directory(data_link, tmp_path / "data")
+    runtime = Runtime(Config(data_dir=data_link))
+    expected = {data_link, data_link.resolve()}
+    runtime.start()
     try:
         for index in range(2):
             project = runtime.projects.create(
