@@ -208,16 +208,11 @@ def stop_call(command_id: str) -> str:
     return f"{BACKGROUND_TASKS_TOOL_NAME} {json.dumps(arguments)}"
 
 
-def stop_with(report: CommandReport, names: ToolNames) -> str:
-    """``with <the call that stops the command>``, as the end of a sentence.
-
-    Without ``background_tasks``, the host shell's own command stops the
-    command's processes by its root process.
-    """
+def stop_action(report: CommandReport, names: ToolNames, target: str = "it") -> str:
+    """An action that stops this command through vBot's tracked process tree."""
     if names(BACKGROUND_TASKS_TOOL_NAME):
-        return f"with {stop_call(report.command_id)}"
-    command = f"taskkill /PID {report.pid} /T /F" if _WINDOWS else f"kill -- -{report.pid}"
-    return f"with the shell command {command}"
+        return f"stop {target} with {stop_call(report.command_id)}"
+    return f"ask the user to stop {report.command_id} in the chat's activity panel"
 
 
 def process_text(process: RunningProcess) -> str:
@@ -229,21 +224,8 @@ def processes_text(processes: Sequence[RunningProcess]) -> str:
 
 
 def leftovers_stop(report: CommandReport, names: ToolNames) -> str:
-    """The sentence that stops the processes an ended command left running.
-
-    Without ``background_tasks``, the host shell stops them by their ids:
-    the shell that started them has exited.
-    """
-    if names(BACKGROUND_TASKS_TOOL_NAME):
-        call = stop_call(report.command_id)
-    else:
-        pids = [str(process.pid) for process in report.still_running]
-        call = (
-            f"the shell command Stop-Process -Id {','.join(pids)}"
-            if _WINDOWS
-            else f"the shell command kill {' '.join(pids)}"
-        )
-    return f"Stop them with {call} when they are no longer needed."
+    action = stop_action(report, names, "them")
+    return f"{action[0].upper()}{action[1:]} when they are no longer needed."
 
 
 _RESTART_OUTCOME = "The command's outcome is unknown; inspect its effects before repeating it."
@@ -792,6 +774,28 @@ def format_command_delivery(
     return "\n".join(lines)
 
 
+def delivery_lists_processes(body: str, command_id: str) -> bool:
+    """Does this saved shell delivery describe processes from before the restart?"""
+    if not body.startswith(f"{COMMAND_STATUS_NOTE_MARKER}{command_id} (") or (
+        "\nProcesses it started still run: " not in body
+    ):
+        return False
+    lines = iter(body.splitlines())
+    for line in lines:
+        if line == "Command:":
+            fence = next(lines, "")
+            if not re.fullmatch(r"`{3,}", fence):
+                return True  # An unframed source cannot be separated reliably.
+            next((end for end in lines if end == fence), None)
+        elif line.startswith("Command: "):
+            return True  # Legacy unframed source. Rebuild from the report.
+        elif line.startswith(("Command output:", "Output:")):
+            return False
+        elif line.startswith("Processes it started still run: "):
+            return True
+    return False
+
+
 def _fenced_delivery_text(text: str) -> tuple[str, str, str]:
     # Source and output remain exact. A longer fence than any backtick run
     # means neither can introduce a section marker or a completion header.
@@ -942,7 +946,7 @@ __all__ = [
     "running_output_note",
     "running_output_text",
     "silence_note",
-    "stop_with",
+    "stop_action",
     "stopped_because",
 ]
 

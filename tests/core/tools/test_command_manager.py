@@ -971,6 +971,8 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "owned_delivered",
         "secret",
         "secret_delivered",
+        "old_pid_hint",
+        "old_pid_hint_delivered",
         "owned_secret",
         "not_run_once",
     ],
@@ -1033,6 +1035,16 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 # The harness formatter contains only status; retain an output
                 # body like the shell's real formatter supplies to checkpoints.
                 checkpoint["body"] = harness.sink.bodies[0] + "\n" + key
+            if outcome.startswith("old_pid_hint"):
+                checkpoint["body"] = (
+                    f"The background command {command_id} (work) exited with code 0 "
+                    "after 1 second.\n"
+                    "Processes it started still run: server.exe (pid 42). Stop them with the shell "
+                    "command Stop-Process -Id 42 when they are no longer needed.\n"
+                    "Command output: (none)"
+                )
+                if outcome == "old_pid_hint_delivered":
+                    await sessions.get(OWNER).add_note_async(checkpoint["body"])
             if outcome == "not_run_once":
                 assert checkpoint["consumed_once_secrets"] == ["ONE_TIME"]
                 # Rebuild the delivery from durable metadata after restart.
@@ -1074,7 +1086,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert sessions.background_command_read() == []
                 return
             expected_delivery = (
-                outcome not in {"delivered", "withdrawn", "secret_delivered"}
+                outcome
+                not in {"delivered", "withdrawn", "secret_delivered", "old_pid_hint_delivered"}
                 and execution_owner is None
             )
             submission_count = int(expected_delivery)
@@ -1085,6 +1098,9 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     body = restored.sink.bodies[0]
                     assert "was stopped after at least 2 minutes 5 seconds: " in body
                     assert "compiled 3 files" in body
+                if outcome == "old_pid_hint":
+                    assert "Stop-Process" not in restored.sink.bodies[0]
+                    assert command_id in restored.sink.bodies[0]
                 if outcome == "not_run_once":
                     body = restored.sink.bodies[0]
                     assert "ONE_TIME" in body and "provide them again before retrying" in body

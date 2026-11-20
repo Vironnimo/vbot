@@ -434,8 +434,13 @@ class CommandCheckpoints:
         )
 
     async def _deliver(self, entry: _Recovered, sink: CompletionSink) -> None:
+        from ._shell_results import delivery_lists_processes, format_command_delivery
+
         assert entry.body is not None
         command_id = entry.report.command_id
+        # A saved shell delivery can still recommend stopping an old PID.
+        # Check the original Note for deduplication before refreshing the body.
+        refresh_processes = delivery_lists_processes(entry.body, command_id)
         while entry.pending:
             try:
                 await self.flush(command_id)
@@ -467,6 +472,18 @@ class CommandCheckpoints:
                 return
             if not entry.pending:
                 return
+            if refresh_processes:
+                refresh_processes = False
+                # Rebuild from the restored report (which owns no live processes).
+                # Source and output remain content even if they resemble stop advice.
+                entry.body = format_command_delivery(
+                    entry.report,
+                    permissions=_delivery_boundary(
+                        entry.report, self._ceilings[command_id], self.store.data_dir
+                    ),
+                )
+                self._save(entry)
+                continue
             if entry.execution_owner is not None:
                 # A restored execution epoch can never be admitted again. Keep
                 # its result in the same canonical Session without starting a

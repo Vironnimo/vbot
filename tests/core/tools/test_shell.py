@@ -807,10 +807,8 @@ async def test_run_in_background_returns_at_once_and_delivers(
     if tools == COMPANIONS:
         assert stop_calls(running["next"]) == [{"action": "stop", "id": command_id}]
     else:
-        # Without background_tasks, the host shell stops it by its root process.
-        pid = shell.manager.report(command_id).pid
-        stop = f"taskkill /PID {pid} /T /F" if sys.platform == "win32" else f"kill -- -{pid}"
-        assert f"stop it with the shell command {stop} once" in running["next"]
+        assert command_id in running["next"]
+        assert not any(word in running["next"] for word in ("taskkill", "kill --", "Stop-Process"))
         assert BACKGROUND_TASKS_TOOL_NAME not in running["next"]
     path = log_file(running["next"])
     assert [row.command_id for row in shell.manager.commands([OWNER])] == [command_id]
@@ -1048,9 +1046,8 @@ async def test_processes_left_running_are_named_with_the_call_that_stops_them(
             for line in shell.sink.bodies[0].splitlines()
             if line.startswith("Processes it started still run: server.exe (pid 42).")
         ]
-        # Without background_tasks, the host shell stops them by their ids.
-        stop = "Stop-Process -Id 42" if sys.platform == "win32" else "kill 42"
-        assert f"Stop them with the shell command {stop} when" in line
+        assert command_id in line
+        assert not any(word in line for word in ("taskkill", "kill 42", "Stop-Process"))
     else:
         result = data(await shell.returned(call))
         command_id = result["command_id"]

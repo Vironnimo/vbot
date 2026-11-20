@@ -55,7 +55,7 @@ from core.tools._shell_results import (
     running_output_note,
     running_output_text,
     silence_note,
-    stop_with,
+    stop_action,
 )
 from core.tools._tool_context import ToolApprovalCancelledError
 from core.tools._tool_display import display_notice, display_text
@@ -835,7 +835,7 @@ def _result(
         if not report.ended:
             data["next"] = (
                 f"The command continues as {report.command_id}.{running_output_note(report)} "
-                f"{stop_with(report, names)}"
+                f"If you no longer need it, {stop_action(report, names)}."
             ).rstrip()
     return tool_success(data)
 
@@ -853,7 +853,7 @@ def _running_next(
     command_id = report.command_id
     log = running_output_note(report)
     silence = silence_note(report)
-    stop = stop_with(report, names)
+    stop = stop_action(report, names)
     if reason == "background":
         # Often a server: its result arrives only once it is stopped, and the
         # Agent checks that it is ready itself.
@@ -861,15 +861,13 @@ def _running_next(
             f"The command runs in the background as {command_id}.{log} Its result arrives as a "
             "new message when it exits; do not start it again, and do not sleep or poll for "
             "that result. If it runs until stopped, such as a server, check that it is ready "
-            "before you use it, for example with a request to its port, and stop it "
+            "before you use it, for example with a request to its port, and "
             f"{stop} once it is no longer needed. Otherwise continue with other work your task "
             "still needs. When no such work is left, end your turn: reply with a short status "
             "and no tool call. Your next turn starts when the result arrives."
         )
     # "or it runs until stopped" keeps an Agent from waiting for a server's exit.
-    stopping = (
-        f"If you no longer need it, or it runs until stopped, such as a server, stop it {stop}."
-    )
+    stopping = f"If you no longer need it, or it runs until stopped, such as a server, {stop}."
     if (
         _CONSOLE_READS_WAIT
         and idle
@@ -884,7 +882,7 @@ def _running_next(
         silence = ""
         stopping = (
             "It has printed nothing and its processes are idle. If it waits for console input, "
-            f"which commands never get, stop it {stop} and pass the answer as an option or "
+            f"which commands never get, {stop} and pass the answer as an option or "
             "argument. If you no longer need it, or it runs until stopped, such as a server, "
             "stop it the same way."
         )
