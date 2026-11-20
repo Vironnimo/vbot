@@ -1,9 +1,12 @@
 <script>
-  // One labelled section of expanded Tool details (Args, Stdout, Stderr,
-  // Result): a Copy action and the value in a scroll box
-  // of bounded height, so long output never floods the timeline. A section
-  // with `clampLines` (a Bash command) shows only that many lines until the
-  // reader asks for the rest; Copy always takes the complete value.
+  // One labelled section of expanded Tool details (Args, Output, Result): a
+  // Copy action and the value in a scroll box of bounded height, so long
+  // output never floods the timeline. A section with `clampLines` (a Bash
+  // command) shows only that many lines until the reader asks for the rest;
+  // Copy always takes the complete value. `variant` `command` draws a shell
+  // command as a `$` line with its actions inside the box instead of a
+  // labelled header, and `joined` attaches a section to the box above it
+  // (the command's output), so command and output read as one block.
   import { toolDetailPresentation } from '$lib/chatToolDetails.js';
   import { boundedScroll } from '$lib/boundedScroll.js';
   import { t } from '$lib/i18n.js';
@@ -28,7 +31,10 @@
     clampLines = 0,
     expanded = false,
     onExpandedChange = () => {},
+    variant = 'default',
   } = $props();
+
+  let boxed = $derived(variant !== 'default');
 
   let presentation = $derived(
     toolDetailPresentation(value, {
@@ -64,32 +70,30 @@
   });
 </script>
 
-<div
-  class="teb-row teb-section"
-  class:teb-section--error={isError}
-  class:teb-section--success={(mode === 'result' || mode === 'raw-result') &&
-    !isError}
->
-  <div class="teb-section-header">
-    <span class="teb-label">{label}</span>
-    {#if clampable}
-      <Button
-        variant="tertiary"
-        class="teb-clamp-toggle"
-        aria-expanded={expanded}
-        onClick={() => onExpandedChange(!expanded)}
-      >
-        {expanded ? t('chat.showLess') : t('chat.showMore')}
-      </Button>
-    {/if}
-    {#if presentation.kind !== 'empty'}
-      <CopyButton
-        text={presentation.copyText}
-        class="chat-copy-action tool-detail-copy"
-        label={t('chat.copyToolField', { label })}
-      />
-    {/if}
-  </div>
+{#snippet clampToggle()}
+  {#if clampable}
+    <Button
+      variant="tertiary"
+      class="teb-clamp-toggle"
+      aria-expanded={expanded}
+      onClick={() => onExpandedChange(!expanded)}
+    >
+      {expanded ? t('chat.showLess') : t('chat.showMore')}
+    </Button>
+  {/if}
+{/snippet}
+
+{#snippet copyAction()}
+  {#if presentation.kind !== 'empty'}
+    <CopyButton
+      text={presentation.copyText}
+      class="chat-copy-action tool-detail-copy"
+      label={t('chat.copyToolField', { label })}
+    />
+  {/if}
+{/snippet}
+
+{#snippet valueBody()}
   {#if presentation.kind === 'empty'}
     <span class="teb-code teb-text teb-text--empty">{presentation.text}</span>
   {:else}
@@ -123,5 +127,33 @@
         >
       {/if}
     </div>
+  {/if}
+{/snippet}
+
+<div
+  class="teb-row teb-section"
+  class:teb-section--error={isError}
+  class:teb-section--command={variant === 'command'}
+  class:teb-section--joined={variant === 'joined'}
+>
+  {#if boxed}
+    <span class="teb-label teb-label--hidden">{label}</span>
+    <div class="teb-box">
+      {#if variant === 'command'}
+        <span class="teb-prompt" aria-hidden="true">$</span>
+      {/if}
+      {@render valueBody()}
+      <div class="teb-box-actions">
+        {@render clampToggle()}
+        {@render copyAction()}
+      </div>
+    </div>
+  {:else}
+    <div class="teb-section-header">
+      <span class="teb-label">{label}</span>
+      {@render clampToggle()}
+      {@render copyAction()}
+    </div>
+    {@render valueBody()}
   {/if}
 </div>

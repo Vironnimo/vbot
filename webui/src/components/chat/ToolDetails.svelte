@@ -84,6 +84,17 @@
         ),
       ),
   );
+  // A shell command and the output right after it read as one block: the
+  // output attaches to the command's box, unless a shortening notice stands
+  // between them. Live output that streams in after the blocks attaches to
+  // a command that ends them.
+  const isCommandBlock = (block) =>
+    block?.type === 'text' && block.label === 'command' && !block.truncated;
+  const joinsCommand = (index) =>
+    blocks?.[index]?.label === 'output' && isCommandBlock(blocks[index - 1]);
+  let liveOutputJoinsCommand = $derived(
+    !streamsReplaceOutput && isCommandBlock(blocks?.at(-1)),
+  );
   let rawKey = $derived(`${viewKey}:raw-call`);
   // Blocks or media take the place of the call, which waits behind the
   // raw-call disclosure; otherwise the details show it directly.
@@ -162,13 +173,14 @@
   />
 {/snippet}
 
-{#snippet outputSections()}
+{#snippet outputSections(joined = false)}
   {#if output}
     <ToolDetailSection
       label={t('chat.toolDetailLabel.output')}
       value={output}
       mode="literal"
       follow={live}
+      variant={joined ? 'joined' : 'default'}
     />
   {/if}
 {/snippet}
@@ -192,7 +204,7 @@
     {#each blocks as block, index (index)}
       {#if block.type === 'text'}
         {#if block.label === 'output' && output}
-          {@render outputSections()}
+          {@render outputSections(joinsCommand(index))}
         {:else}
           {@const clampKey = `${viewKey}:${block.label}:${index}`}
           <ToolDetailSection
@@ -202,6 +214,11 @@
             clampLines={CLAMPED_TEXT_LINES[block.label] ?? 0}
             expanded={viewState.isOpen(clampKey)}
             onExpandedChange={(next) => viewState.setOpen(clampKey, next)}
+            variant={block.label === 'command'
+              ? 'command'
+              : joinsCommand(index)
+                ? 'joined'
+                : 'default'}
           />
           {#if block.truncated}
             <p class="teb-row tool-detail-truncated">
@@ -220,7 +237,7 @@
       {/if}
     {/each}
     {#if !streamsReplaceOutput}
-      {@render outputSections()}
+      {@render outputSections(liveOutputJoinsCommand)}
     {/if}
     {#if rawDisclosure}
       <details

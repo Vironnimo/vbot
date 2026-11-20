@@ -358,61 +358,50 @@ button.msg-timestamp {
   padding: 2px 0;
 }
 
-.te-dot {
-  flex-shrink: 0;
-  font-size: 10px;
+/* The status at the end of a Tool row (chat/ToolRowStatus.svelte): a call
+   that went well keeps the quiet time color; words in color mark only what
+   needs attention. Amber is partly done, cut off when its Run was interrupted,
+   or refused by the Agent's Permission Rules; grey is cancelled. An outcome
+   color wins over the running one when a command's processes outlive it. */
+.te-time.running {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-med);
 }
 
-.te-dot.done {
-  color: var(--green);
-}
-
-.te-dot.running {
-  animation: blink 1.2s ease-in-out infinite;
-  color: var(--amber);
-}
-
-/* Streamed but not yet dispatched: a hollow amber ring, no blink — the call is
-   being written, not executing, so it must not read like a long-running one. */
-.te-dot.preparing {
-  color: transparent;
-  -webkit-text-stroke: 1.5px var(--amber);
-}
-
-.te-dot.error {
+.te-time.failed {
   color: var(--red);
 }
 
-/* Partly done, cut off when its Run was interrupted or failed, or refused by
-   the Agent's Permission Rules: amber like the Run's own interruption notice,
-   without the running blink. */
-.te-dot.partial,
 .te-time.partial,
-.te-dot.interrupted,
 .te-time.interrupted,
-.te-dot.refused,
 .te-time.refused {
   color: var(--amber);
-}
-
-/* A background command that ended without a known outcome: neutral. */
-.te-dot.cancelled,
-.te-dot.ended {
-  color: var(--text-lo);
 }
 
 .te-time.cancelled {
   color: var(--text-lo);
 }
 
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
+.te-spinner {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  animation: te-spin 0.9s linear infinite;
+}
 
-  50% {
-    opacity: 0.3;
+@keyframes te-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .te-spinner {
+    animation-duration: 2.4s;
   }
 }
 
@@ -517,7 +506,6 @@ button.msg-timestamp {
   font-variant-numeric: tabular-nums;
 }
 
-.te-time.error,
 .teb-code.error {
   color: var(--red);
 }

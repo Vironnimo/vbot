@@ -23,19 +23,22 @@
   white-space: pre-wrap;
 }
 
-/* Expanded Tool details continue the inline timeline as a quiet rail. The
-   collapsed Tool row deliberately remains owned by the existing `.te-*`
-   rules above; this structure begins only inside the open disclosure body. */
+/* Expanded Tool details hang off their row on a quiet side line, which
+   closes them (chat/CollapseRail.svelte). Sections are told apart by their
+   labels and boxes alone, with no markers on the line (user decision
+   2026-11-20). The collapsed Tool row remains owned by the `.te-*` rules. */
 .tool-event-body.tool-event-details {
+  --teb-gap: 10px;
+
   position: relative;
   width: 100%;
-  margin: 6px 0 0 4px;
-  padding: 4px 0 3px 20px;
+  margin: 4px 0 0 3px;
+  padding: 2px 0 2px 14px;
   border-left: 1px solid var(--border-2);
 }
 
 .tool-event[open] .tool-event-body.tool-event-details {
-  gap: 18px;
+  gap: var(--teb-gap);
 }
 
 .tool-event-body .teb-row.teb-section {
@@ -44,32 +47,12 @@
   min-width: 0;
 }
 
-.teb-section::before {
-  position: absolute;
-  top: 8px;
-  left: -24px;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--border-2);
-  border-radius: 50%;
-  background: var(--bg);
-  content: '';
-}
-
-.teb-section--success::before {
-  border-color: var(--green);
-}
-
-.teb-section--error::before {
-  border-color: var(--red);
-}
-
 .teb-section-header {
   display: flex;
-  min-height: 24px;
+  min-height: 22px;
   align-items: center;
   gap: 8px;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
 }
 
 .teb-section-header .tool-detail-copy {
@@ -153,6 +136,86 @@
   min-height: 0;
   padding: 0 6px;
   font-size: var(--fs-label-sm);
+}
+
+/* A shell command and its output as one block (ToolDetailSection's
+   `command` and `joined` variants): the command is a `$` line with its
+   actions inside the box, and the output continues the same box below a
+   hairline. */
+.teb-box {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+/* The value keeps the scroll box's own padding, which its edge shades
+   rely on; only the frame moves to the block. */
+.teb-box .teb-scroll {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.teb-section--command .teb-scroll {
+  padding-left: 0;
+}
+
+.teb-box > .teb-text--empty {
+  flex: 1;
+  padding: 6px 10px;
+}
+
+/* The block names its sections for screen readers only; the `$` and the
+   joined box say it visually. */
+.teb-label.teb-label--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.teb-prompt {
+  flex-shrink: 0;
+  padding: 6px 8px 6px 10px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  line-height: 1.55;
+  user-select: none;
+}
+
+.teb-box-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 0 0;
+}
+
+.teb-section--command:has(+ .teb-section--joined) > .teb-box {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.teb-section--joined {
+  margin-top: calc(-1 * var(--teb-gap));
+}
+
+.teb-section--joined > .teb-box {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  margin-top: -1px;
+}
+
+.teb-section--joined .teb-code {
+  color: var(--text-med);
 }
 
 /* Long Tool values scroll inside a box of bounded height instead of flooding
@@ -344,19 +407,7 @@
 }
 
 .tool-notice + .tool-notice {
-  margin-top: -12px;
-}
-
-.tool-notice::before {
-  position: absolute;
-  top: 6px;
-  left: -24px;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--border-2);
-  border-radius: 50%;
-  background: var(--bg);
-  content: '';
+  margin-top: calc(4px - var(--teb-gap));
 }
 
 .tool-notice__level {
@@ -365,16 +416,8 @@
   font-weight: 500;
 }
 
-.tool-notice--warning::before {
-  border-color: var(--amber);
-}
-
 .tool-notice--warning .tool-notice__level {
   color: var(--amber);
-}
-
-.tool-notice--error::before {
-  border-color: var(--red);
 }
 
 .tool-notice--error .tool-notice__level {
@@ -549,5 +592,5 @@
 }
 
 .tool-event-body .teb-row.tool-detail-truncated {
-  margin-top: -12px;
+  margin-top: calc(4px - var(--teb-gap));
 }

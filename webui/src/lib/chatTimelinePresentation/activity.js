@@ -672,7 +672,7 @@ function callEndState(data) {
 // still ran. The row state resolves the command id and the command's state
 // from the live statuses (`command_status_changed` and the replies of stop
 // and output reads) and the durable ones from History, whichever got further,
-// so the dot and the time label follow the command. Processes still running
+// so the row's status label follows the command. Processes still running
 // keep `dotStatus` `running` for Activity and stop availability, while
 // `outcomeDotStatus` preserves the timeline outcome; a handed-off command
 // with no status has ended (`dotStatus` `ended`). Returns null for every
@@ -793,9 +793,10 @@ export const backgroundCommandStatusDetails = (
 // ticks from the Tool call's own start timestamp (the command starts with the
 // call, and this internal timing never reaches the Model); after the shell
 // exited it combines the outcome with the count of remaining processes.
-// A call that ran to its end shows its own label once nothing of it runs. A handed-off command that was
-// stopped reads as cancelled; otherwise the label stays empty, since the
-// command's runtime is unknown and the call's own duration would mislead.
+// A call that ran to its end shows its own label once nothing of it runs. A
+// handed-off command that was stopped reads as cancelled and one that failed
+// as failed; otherwise the label stays empty, since the command's runtime is
+// unknown and the call's own duration would mislead.
 export const backgroundCommandToolStatusLabel = (
   tool,
   rowState,
@@ -826,10 +827,17 @@ export const backgroundCommandToolStatusLabel = (
     );
   }
   if (rowState.callEnded) {
-    return toolStatusLabel(tool, nowMs);
+    // A shell that exited non-zero failed even though its call succeeded.
+    const label = toolStatusLabel(tool, nowMs);
+    return rowState.dotStatus === 'failed' && toolStatus(tool) !== 'failed'
+      ? [t('chat.toolFailed'), label].filter(Boolean).join(' · ')
+      : label;
   }
   if (rowState.dotStatus === 'cancelled') {
     return t('chat.toolCancelled');
+  }
+  if (rowState.dotStatus === 'failed') {
+    return t('chat.toolFailed');
   }
   return '';
 };

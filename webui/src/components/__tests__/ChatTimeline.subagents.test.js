@@ -113,7 +113,7 @@ describe('ChatTimeline sub-agent rows', () => {
         '.subagent-tool-event .subagent-line',
       );
       expect(subagentRows).toHaveLength(1);
-      expect(subagentRows[0].querySelector('.te-dot.running')).not.toBeNull();
+      expect(subagentRows[0].querySelector('.te-spinner')).not.toBeNull();
       const callRow = Array.from(
         document.querySelectorAll(
           '.run-tool-event:not(.subagent-tool-event) .tool-event-line',
@@ -174,7 +174,7 @@ describe('ChatTimeline sub-agent rows', () => {
     expect(
       subAgentLine().querySelector('.subagent-preview').textContent,
     ).toContain('Also check the tests');
-    expect(subAgentLine().querySelector('.te-dot.done')).not.toBeNull();
+    expect(subAgentLine().querySelector('.te-spinner')).toBeNull();
     expect(subAgentLine().querySelector('[data-cancel="subagent"]')).toBeNull();
 
     subAgentLine().querySelector('.subagent-link').click();
@@ -193,8 +193,7 @@ describe('ChatTimeline sub-agent rows', () => {
         .querySelector('.subagent-session-action')
         .getAttribute('aria-label'),
     ).toBe(t('chat.subagent.openSession'));
-    expect(subAgentLine().querySelector('.te-dot.running')).not.toBeNull();
-    expect(subAgentLine().querySelector('.te-dot.done')).toBeNull();
+    expect(subAgentLine().querySelector('.te-spinner')).not.toBeNull();
   });
 
   it.each([
@@ -207,8 +206,7 @@ describe('ChatTimeline sub-agent rows', () => {
         subAgentStatuses: { 'run:sub-run': 'completed', ...timing },
       });
 
-      expect(subAgentLine().querySelector('.te-dot.done')).not.toBeNull();
-      expect(subAgentLine().querySelector('.te-dot.running')).toBeNull();
+      expect(subAgentLine().querySelector('.te-spinner')).toBeNull();
       expect(
         subAgentLine().querySelector('.te-time')?.textContent.trim() ?? null,
       ).toBe(time);
@@ -332,7 +330,7 @@ describe('ChatTimeline sub-agent rows', () => {
 
     const subAgentRow = document.querySelector('.subagent-tool-event');
     expect(subAgentRow.textContent).toContain(t('chat.toolCancelled'));
-    expect(subAgentRow.querySelector('.te-dot.cancelled')).not.toBeNull();
+    expect(subAgentRow.querySelector('.te-time.cancelled')).not.toBeNull();
     expect(subAgentRow.querySelector('.subagent-link')).toBeNull();
     expect(subAgentRow.querySelector('[data-cancel="subagent"]')).toBeNull();
   });

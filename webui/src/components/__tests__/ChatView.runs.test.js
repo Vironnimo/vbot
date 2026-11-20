@@ -42,8 +42,14 @@ const alphaProps = () => ({
 });
 
 const subAgentRow = () => document.querySelector('.subagent-tool-event');
-const subAgentDot = (status) =>
-  subAgentRow()?.querySelector(`.te-dot.${status}`) ?? null;
+// A Sub-Agent row's state as its status label shows it: a spinner while it
+// runs, otherwise the outcome the label names (none for a plain success).
+const subAgentState = () => {
+  const row = subAgentRow();
+  if (!row) return null;
+  if (row.querySelector('.te-spinner')) return 'running';
+  return row.querySelector('.te-time')?.dataset.status ?? 'success';
+};
 
 async function reopenCurrentSessionFromDrawer() {
   sessionListButton().click();
@@ -129,7 +135,7 @@ describe('ChatView Runs', () => {
   const chat = setupChatViewTestSuite();
 
   // A background sub-agent row whose child Run `child-run` is running. The
-  // dot is running as soon as the child Session starts, before the spawn
+  // row is running as soon as the child Session starts, before the spawn
   // result arrives.
   async function mountRunningSubAgent() {
     await chat.mountChat(alphaProps(), { ready: null });
@@ -145,13 +151,11 @@ describe('ChatView Runs', () => {
       },
       {
         afterStart: () => {
-          expect(subAgentDot('running')).not.toBeNull();
-          expect(subAgentDot('done')).toBeNull();
+          expect(subAgentState()).toBe('running');
         },
       },
     );
-    expect(subAgentDot('running')).not.toBeNull();
-    expect(subAgentDot('done')).toBeNull();
+    expect(subAgentState()).toBe('running');
     return source;
   }
 
@@ -377,7 +381,7 @@ describe('ChatView Runs', () => {
         Boolean(document.querySelector('[data-cancel="command"]')),
       );
       expect(
-        document.querySelector('.tool-event-line .te-dot.error'),
+        document.querySelector('.tool-event-line .te-time.failed'),
       ).not.toBeNull();
       document.querySelector('[data-cancel="command"]').click();
       await waitForCondition(
@@ -389,7 +393,7 @@ describe('ChatView Runs', () => {
       expect(rpcCalls('chat.cancel_tool_call')).toEqual([]);
       expect(cancelRunMock).not.toHaveBeenCalled();
       expect(
-        document.querySelector('.tool-event-line .te-dot.error'),
+        document.querySelector('.tool-event-line .te-time.failed'),
       ).not.toBeNull();
       expect(
         document.querySelector('.tool-event-line .te-time')?.textContent ?? '',
@@ -685,7 +689,7 @@ describe('ChatView Runs', () => {
   describe('sub-agent rows', () => {
     it.each([
       [
-        'settles a stuck running dot from the child Run summary',
+        'settles a stuck running row from the child Run summary',
         subSessionHistory({
           messages: [
             message('sub-assistant-original', 'Sub-agent response'),
@@ -698,34 +702,33 @@ describe('ChatView Runs', () => {
             },
           ],
         }),
-        'done',
+        'success',
         '4.2s',
       ],
       [
-        'settles a running dot as done when the child History has no trace of the Run',
+        'settles a running row as done when the child History has no trace of the Run',
         subSessionHistory({
           messages: [message('sub-assistant-original', 'Sub-agent response')],
         }),
-        'done',
+        'success',
         null,
       ],
       [
-        'keeps the dot running while the child Run is active',
+        'keeps the row running while the child Run is active',
         subSessionHistory({ active_run: runningRun('child-run') }),
         'running',
         null,
       ],
     ])(
       '%s and checks each child Run once',
-      async (_case, history, dot, time) => {
+      async (_case, history, state, time) => {
         serveSubAgentHistory(history);
         const source = await mountRunningSubAgent();
 
         await settle(3);
-        expect(subAgentDot(dot)).not.toBeNull();
-        expect(subAgentRow().querySelectorAll('.te-dot')).toHaveLength(1);
+        expect(subAgentState()).toBe(state);
         expect(
-          subAgentRow().querySelector('.te-time')?.textContent.trim() ?? null,
+          subAgentRow().querySelector('.te-time')?.textContent.trim() || null,
         ).toBe(time);
         const checks = statusChecks();
         expect(checks).toBeGreaterThanOrEqual(1);
@@ -736,7 +739,7 @@ describe('ChatView Runs', () => {
       },
     );
 
-    it('keeps the dot running after a failed status check and checks again', async () => {
+    it('keeps the row running after a failed status check and checks again', async () => {
       serveSubAgentHistory(new Error('History unavailable'));
       const source = await mountRunningSubAgent();
       // The row's own automatic check fails first.
@@ -748,7 +751,7 @@ describe('ChatView Runs', () => {
         rerenderTimeline(source, `call-read-${attempt}`);
         await settle();
         expect(statusChecks()).toBe(checks + 1);
-        expect(subAgentDot('running')).not.toBeNull();
+        expect(subAgentState()).toBe('running');
       }
     });
 
@@ -902,7 +905,7 @@ describe('ChatView Runs', () => {
       // A command the finished Sub-Agent started still runs.
       [
         'offers',
-        'done',
+        'success',
         finishedChild,
         [
           {
@@ -913,10 +916,10 @@ describe('ChatView Runs', () => {
           },
         ],
       ],
-      ['does not offer', 'done', finishedChild, []],
+      ['does not offer', 'success', finishedChild, []],
     ])(
-      '%s Stop all without a Run by whether work of a Sub-Agent of the Session runs (Run dot %s)',
-      async (offers, dot, childHistory, subAgentCommands) => {
+      '%s Stop all without a Run by whether work of a Sub-Agent of the Session runs (Run %s)',
+      async (offers, state, childHistory, subAgentCommands) => {
         const fallback = createChatRpcMock({
           sessionItems: {
             'session-1': [
@@ -1003,7 +1006,7 @@ describe('ChatView Runs', () => {
         await settle();
 
         expect(findCancelRunButton()).toBeUndefined();
-        expect(subAgentDot(dot)).not.toBeNull();
+        expect(subAgentState()).toBe(state);
         if (offers === 'offers') {
           labelledButton(t('chat.stopAll')).click();
           await waitForCondition(() => rpcCalls('chat.stop_all').length === 1);

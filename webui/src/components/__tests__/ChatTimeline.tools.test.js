@@ -346,7 +346,8 @@ describe('ChatTimeline Tools', () => {
         ]),
       );
 
-      expect(summaryLine().querySelector('.te-dot.error')).toBeTruthy();
+      const status = summaryLine().querySelector('.te-time.failed');
+      expect(status.textContent).toContain(t('chat.toolFailed'));
       openDisclosures('.tool-event');
       const resultCode = document.querySelector('.teb-code.error');
       expect(resultCode.textContent).toContain('invalid_regex');
@@ -356,12 +357,12 @@ describe('ChatTimeline Tools', () => {
     it.each([
       ['bash', 'stopped', 'cancelled'],
       ['execute_code', 'stopped', 'cancelled'],
-      ['execute_code', 'failed', 'error'],
-      ['execute_code', 'timed_out', 'error'],
-      ['terminal', 'stopped', 'done'],
+      ['execute_code', 'failed', 'failed'],
+      ['execute_code', 'timed_out', 'failed'],
+      ['terminal', 'stopped', null],
     ])(
       'shows the outcome of a standalone %s event with status %s',
-      (name, status, dotClass) => {
+      (name, status, outcome) => {
         const sessionState = timelineSession();
         sessionState.timelineItems = [
           {
@@ -377,7 +378,9 @@ describe('ChatTimeline Tools', () => {
           },
         ];
         timeline.render(sessionState);
-        expect(summaryLine().querySelector(`.te-dot.${dotClass}`)).toBeTruthy();
+        expect(
+          summaryLine().querySelector('.te-time')?.dataset.status ?? null,
+        ).toBe(outcome);
       },
     );
 
@@ -734,6 +737,13 @@ describe('ChatTimeline Tools', () => {
             '.teb-clamp-toggle',
           ),
         ).toBeNull();
+        // The command and its output read as one block.
+        expect(command.classList.contains('teb-section--command')).toBe(true);
+        expect(
+          detailRow('chat.toolDetailLabel.output').classList.contains(
+            'teb-section--joined',
+          ),
+        ).toBe(true);
 
         toggle.click();
         flushSync();

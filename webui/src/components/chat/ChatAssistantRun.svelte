@@ -16,6 +16,7 @@
   import CollapseRail from './CollapseRail.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import ToolRowStatus from './ToolRowStatus.svelte';
   import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import {
     backgroundCommandRowState,
@@ -415,15 +416,6 @@
               )}
           >
             <summary class="tool-event-line subagent-line">
-              <span
-                class:done={dotStatus === 'success'}
-                class:error={dotStatus === 'failed'}
-                class:cancelled={dotStatus === 'cancelled'}
-                class:interrupted={dotStatus === 'interrupted'}
-                class:running={dotStatus === 'running'}
-                class="te-dot"
-                use:tooltip={statusDetails}>●</span
-              >
               <span class="te-fn">
                 {t('chat.subagent.label')}
               </span>
@@ -486,16 +478,11 @@
                   </svg>
                 </Button>
               {/if}
-              {#if subAgentTimeLabel}
-                <span
-                  class="te-time"
-                  class:cancelled={dotStatus === 'cancelled'}
-                  class:interrupted={dotStatus === 'interrupted'}
-                  use:tooltip={statusDetails}
-                >
-                  {subAgentTimeLabel}
-                </span>
-              {/if}
+              <ToolRowStatus
+                status={dotStatus}
+                label={subAgentTimeLabel}
+                details={statusDetails}
+              />
               {#if !viewState.readOnly && isRowCancellable( { kind: 'sub_agent', dotStatus } )}
                 <Button
                   variant="danger"
@@ -550,15 +537,6 @@
               )}
           >
             <summary class="tool-event-line subagent-line">
-              <span
-                class:done={sendStatus === 'success'}
-                class:error={sendStatus === 'failed'}
-                class:cancelled={sendStatus === 'cancelled'}
-                class:interrupted={sendStatus === 'interrupted'}
-                class:running={sendStatus === 'running'}
-                class="te-dot"
-                use:tooltip={sendStatusDetails}>●</span
-              >
               <span class="te-fn">
                 {t('chat.subagent.sendLabel')}
               </span>
@@ -607,16 +585,11 @@
                   </svg>
                 </Button>
               {/if}
-              {#if sendTimeLabel}
-                <span
-                  class="te-time"
-                  class:cancelled={sendStatus === 'cancelled'}
-                  class:interrupted={sendStatus === 'interrupted'}
-                  use:tooltip={sendStatusDetails}
-                >
-                  {sendTimeLabel}
-                </span>
-              {/if}
+              <ToolRowStatus
+                status={sendStatus}
+                label={sendTimeLabel}
+                details={sendStatusDetails}
+              />
             </summary>
             <ToolDetails
               tool={child}
@@ -667,19 +640,6 @@
               )}
           >
             <summary class="tool-event-line">
-              <span
-                class:done={rowDotStatus === 'success'}
-                class:error={rowDotStatus === 'failed'}
-                class:partial={rowDotStatus === 'partial'}
-                class:refused={rowDotStatus === 'refused'}
-                class:cancelled={rowDotStatus === 'cancelled'}
-                class:interrupted={rowDotStatus === 'interrupted'}
-                class:ended={rowDotStatus === 'ended'}
-                class:preparing
-                class:running={rowDotStatus === 'running' && !preparing}
-                class="te-dot"
-                use:tooltip={rowStatusDetails}>●</span
-              >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
               {#if rowPresentation.primary.length > 0}
                 <ToolPrimaryLine
@@ -694,18 +654,14 @@
               {/if}
               {@render toolFacts(rowPresentation.facts)}
               <ToolSecretsUsed uses={rowPresentation.secretsUsed} />
-              {#if rowTimeLabel}
-                <span
-                  class="te-time"
-                  class:cancelled={rowDotStatus === 'cancelled'}
-                  class:interrupted={rowDotStatus === 'interrupted'}
-                  class:partial={rowDotStatus === 'partial'}
-                  class:refused={rowDotStatus === 'refused'}
-                  use:tooltip={rowStatusDetails}
-                >
-                  {rowTimeLabel}
-                </span>
-              {/if}
+              <ToolRowStatus
+                status={rowDotStatus}
+                label={rowTimeLabel}
+                details={rowStatusDetails}
+                running={commandRowState
+                  ? commandRowState.dotStatus === 'running'
+                  : rowDotStatus === 'running' && !preparing}
+              />
               {#if !viewState.readOnly && commandRowState?.dotStatus === 'running' && onStopBackgroundCommand}
                 <Button
                   variant="danger"
