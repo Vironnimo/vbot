@@ -352,6 +352,18 @@ _PRINTED_ERROR_TEXT = "; ".join(
             1,
             ("NativeCommandExitException",),
         ),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; $ErrorActionPreference = 'Stop'; "
+            "cmd /c exit 7; 'after-native-exit'",
+            7,
+            ("NativeCommandExitException",),
+        ),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; $ErrorActionPreference = 'Stop'; "
+            "try { cmd /c exit 7 } catch {}; Get-Item missing-sentinel",
+            1,
+            ("missing-sentinel",),
+        ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
@@ -552,6 +564,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "ignored-error-after-native",
         "native-error-preference",
         "native-error-then-ignored-error",
+        "terminating-native-exit",
+        "caught-native-exit-then-powershell-error",
         "requires",
         "english-messages-own-culture",
         "parse-error",

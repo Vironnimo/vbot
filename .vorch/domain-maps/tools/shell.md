@@ -284,7 +284,8 @@ than waiting for an answer.
   The frame walk rejects later executed statements, later named blocks and
   `finally` work. Merely assigning `$LASTEXITCODE`, or code that never ran, is not
   a program exit. A matching `NativeCommandExitException` from
-  `$PSNativeCommandUseErrorActionPreference` does not hide the actual native code;
+  `$PSNativeCommandUseErrorActionPreference` preserves the native code, including when
+  `$ErrorActionPreference = 'Stop'` terminates the command at that error;
   a later unrelated error leaves the decision to PowerShell's own status.
 - **Control flow:** `exit N` and `$Host.SetShouldExit(N)` retain their actual
   precedence; a later explicit exit replaces a pending host exit. Top-level

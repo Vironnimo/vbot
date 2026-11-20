@@ -414,6 +414,14 @@ RUNNER_STATEMENTS = r"""& {
             $exception = $caught.Exception
             if ($exception -is [System.Management.Automation.MethodInvocationException] -and
                 $exception.InnerException) { $exception = $exception.InnerException }
+            if ($exception -is [System.Management.Automation.ActionPreferenceStopException]) {
+                $cause = $exception.ErrorRecord.Exception
+                # Older PowerShell 7 releases lack this exception type.
+                if ($cause -and $cause.GetType().FullName -eq
+                    'System.Management.Automation.NativeCommandExitException') {
+                    return $cause.ExitCode
+                }
+            }
             if ($exception -isnot [System.Management.Automation.LoopFlowException]) {
                 return 1
             }
