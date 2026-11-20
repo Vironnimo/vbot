@@ -202,6 +202,12 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
         # What is named singly goes, and so does a folder nobody protects.
         "\nRemove-Item project\\file.txt; Remove-Item -Recurse project\\src\n"
         "Remove-Item -Recurse plain; Remove-Item -Recurse project -WhatIf | Out-Null\n"
+        "try { cd -lp '' } catch [System.Management.Automation.ParameterBindingException] "
+        "{ 'caught-' + $_.Exception.ParameterName }\n"
+        # Binding errors from other cmdlets retain their ordinary statement scope.
+        "Get-Item -LiteralPath ''\n"
+        "[pscustomobject]@{ LiteralPath = 'project' } | Push-Location -PassThru | "
+        "ForEach-Object { 'entered-' + (Split-Path -Leaf $_.Path) }; Pop-Location\n"
         "Set-Location missing -ErrorAction SilentlyContinue; Set-Location project; Set-Location -\n"
         "\"left: $((Get-ChildItem -Name) -join ',') in $(Split-Path -Leaf $PWD)\""
     )
@@ -211,6 +217,7 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
     assert code == 0, output
     for index in range(len(refused)):
         assert f"refused-{index}: " in output and f"ran-{index}" not in output, output
+    assert "caught-LiteralPath" in output and "entered-project" in output
     assert "vBot protects this folder." in output
     assert "left: project in box" in output
     assert list((box / "project").iterdir()) == []
@@ -218,6 +225,25 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
     # Unhandled, each ends the whole command: nothing goes on in the old directory.
     code, output = await _run_protected(box, "cd missing\n'not-run'", [])
     assert code == 1 and "Cannot find path" in output and "not-run" not in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        "Set-Location -LiteralPath ''",
+        "$dest = @{ LiteralPath = @('one', 'two') }; function enter { pushd @dest }; enter",
+        "[pscustomobject]@{ LiteralPath = '' } | Set-Location",
+        "Push-Location -LiteralPath ''",
+    ],
+    ids=["empty", "array-via-splat-and-alias", "pipeline-property", "empty-push"],
+)
+async def test_invalid_location_argument_ends_before_relative_work(
+    tmp_path: Path, change: str
+) -> None:
+    code, output = await _run(tmp_path, change + "\nSet-Content wrong-folder.txt ran")
+    assert code == 1 and "LiteralPath" in output, output
+    assert not (tmp_path / "wrong-folder.txt").exists()
 
 
 async def _run_protected(cwd: Path, command: str, protected: list[str]) -> tuple[int | None, str]:
