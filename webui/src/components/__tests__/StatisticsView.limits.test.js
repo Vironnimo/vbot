@@ -21,7 +21,29 @@ describe('StatisticsView', () => {
   const suite = setupStatisticsViewSuite();
 
   it('shows live usage as a strip on the Overview and in full on Limits', async () => {
-    rpcMock.mockImplementation(routedRpc(makeUsageReport()));
+    const usage = makeUsageReport();
+    const [openai] = usage.providers;
+    const weekly = openai.windows[1];
+    openai.windows[1] = { ...weekly, label: '168h' };
+    usage.providers.push(
+      {
+        connection: 'claude-agent:subscription',
+        account: 'default',
+        display_name: 'Claude Agent',
+        windows: [
+          { ...weekly, label: 'Week (Opus)', used_percent: 95 },
+          { ...weekly, used_percent: 0 },
+        ],
+      },
+      {
+        connection: 'openrouter:api-key',
+        account: 'default',
+        display_name: 'OpenRouter',
+        credits: { enabled: true, balance: 3.52, unit: 'USD' },
+        windows: [],
+      },
+    );
+    rpcMock.mockImplementation(routedRpc(usage));
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
@@ -32,17 +54,36 @@ describe('StatisticsView', () => {
     const strip = document.querySelector('.stats-limits-strip');
     expect(strip.textContent).toContain('OpenAI');
     expect(strip.textContent).toContain('Plus');
+    const table = strip.querySelector('table');
     expect(
-      [...strip.querySelectorAll('.stats-limits-strip__used')].map((used) =>
-        used.textContent.trim(),
-      ),
-    ).toEqual(['43%', '88%']);
-    expect(
-      strip.querySelector('.stats-limits-strip__fill--warn'),
-    ).not.toBeNull();
-    expect(
-      strip.querySelector('.stats-limits-strip__reset').textContent,
-    ).toMatch(/^Resets in /);
+      [...table.tHead.rows[0].cells].map((cell) => cell.textContent.trim()),
+    ).toEqual([
+      t('statistics.dimension.provider'),
+      t('statistics.overview.limitsFiveHours'),
+      t('statistics.granularity.week'),
+      'Week (Opus)',
+    ]);
+    const [openaiRow, claudeRow] = table.tBodies[0].rows;
+    const percentIn = (row, index) =>
+      row.cells[index]
+        .querySelector('[role="meter"]')
+        ?.getAttribute('aria-valuenow');
+    expect([1, 2, 3].map((i) => percentIn(openaiRow, i))).toEqual([
+      '43',
+      '88',
+      undefined,
+    ]);
+    expect([1, 2, 3].map((i) => percentIn(claudeRow, i))).toEqual([
+      undefined,
+      '0',
+      '95',
+    ]);
+    expect(openaiRow.cells[2].querySelector('.fill--warn')).not.toBeNull();
+    expect(openaiRow.cells[2].textContent).toMatch(/Resets in /);
+    const balance = strip.querySelector('.balances li');
+    expect(balance.textContent).toContain('OpenRouter');
+    expect(balance.textContent).toContain('$3.52');
+    expect(balance.querySelector('[role="meter"]')).toBeNull();
     expect(strip.textContent).not.toContain('GitHub Copilot');
 
     buttonNamed('statistics.overview.limitsAll').click();

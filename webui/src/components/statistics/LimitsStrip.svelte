@@ -1,9 +1,6 @@
 <script>
-  // The Overview's limits strip: how much of each Subscription usage window
-  // is used right now and when it resets, from the shared live provider
-  // usage. It shows only Providers that report a window or credits; errors
-  // and the full detail stay on the Limits sub-view.
   import Button from '../ui/Button.svelte';
+  import DataTable from '../ui/DataTable.svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import { formatMoment } from '$lib/timeText.js';
@@ -14,39 +11,117 @@
   import {
     clampUsagePercent,
     formatResetAt,
-    usageCreditsText,
+    usageComparison,
     usageSeverity,
   } from '$lib/statisticsLimits.js';
 
   let { onOpenLimits = () => {} } = $props();
-
   const locale = $derived(activeLocaleTag());
-  const snapshots = $derived(
-    (providerUsage.report?.providers ?? [])
-      .map((snapshot) => ({
-        snapshot,
-        windows: Array.isArray(snapshot?.windows) ? snapshot.windows : [],
-        credits: usageCreditsText(snapshot?.credits, locale),
-      }))
-      .filter((entry) => entry.windows.length > 0 || entry.credits),
+  const comparison = $derived(
+    usageComparison(providerUsage.report?.providers ?? [], locale),
   );
 
-  $effect(() => watchProviderUsage());
-
-  function accountTooltip(snapshot) {
-    return snapshot.account && snapshot.account !== 'default'
-      ? snapshot.account
-      : '';
+  function periodLabel(id) {
+    if (id === '5h') return t('statistics.overview.limitsFiveHours');
+    if (id === 'Week') return t('statistics.granularity.week');
+    if (id === 'Month') return t('statistics.granularity.month');
+    if (id === 'Day') return t('statistics.granularity.day');
+    return id;
   }
+
+  const columns = $derived([
+    {
+      id: 'provider',
+      label: t('statistics.dimension.provider'),
+      sortable: false,
+      cell: providerCell,
+      width: 'var(--provider-width)',
+    },
+    ...comparison.periods.map(({ id }) => ({
+      id: `period:${id}`,
+      period: id,
+      label: periodLabel(id),
+      sortable: false,
+      cell: periodCell,
+    })),
+  ]);
+
+  $effect(() => watchProviderUsage());
 </script>
 
-{#if snapshots.length > 0}
+{#snippet providerCell({ snapshot, credits, byPeriod })}
+  <div class="provider-name">{snapshot.display_name}</div>
+  {@const account = snapshot.account !== 'default' && snapshot.account}
+  {#if account || snapshot.plan || (credits && byPeriod.size > 0)}
+    <div class="provider-meta">
+      {[account, snapshot.plan, byPeriod.size > 0 && credits]
+        .filter(Boolean)
+        .join(' · ')}
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet periodCell(row, column)}
+  {@const windows = row.byPeriod.get(column.period)}
+  {#if windows}
+    <div class="cell-period">{column.label}</div>
+    {#each windows as window, index (index)}
+      {@const percent = clampUsagePercent(window.used_percent)}
+      {@const reset = formatResetAt(window.reset_at, locale)}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Focus reveals the exact reset time.) -->
+      <div
+        class="usage-window"
+        role="meter"
+        aria-label={`${row.snapshot.display_name} · ${window.label}`}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(percent)}
+        tabindex={reset ? 0 : undefined}
+        use:tooltip={() =>
+          reset
+            ? {
+                title: t('statistics.limits.resets'),
+                text: formatMoment(window.reset_at),
+              }
+            : ''}
+      >
+        {#if windows.length > 1}
+          <span class="window-label">{window.label}</span>
+        {/if}
+        <div class="reading">
+          <span class="track">
+            <span
+              class={`fill fill--${usageSeverity(percent)}`}
+              style:width={`${percent}%`}
+            ></span>
+          </span>
+          <span class="used"
+            >{t('statistics.overview.limitsPercent', {
+              percent: Math.round(percent),
+            })}</span
+          >
+        </div>
+        {#if reset}
+          <span class="reset">
+            {reset.relative
+              ? t('statistics.limits.resetsIn', { duration: reset.relative })
+              : reset.absolute}
+          </span>
+        {/if}
+      </div>
+    {/each}
+  {:else}
+    <span class="missing">—</span>
+  {/if}
+{/snippet}
+
+{#if comparison.rows.length || comparison.balances.length}
   <section
     class="stats-limits-strip"
     aria-labelledby="stats-limits-strip-title"
   >
-    <div class="stats-limits-strip__head">
-      <h3 id="stats-limits-strip-title" class="stats-limits-strip__title">
+    <div class="strip-head">
+      <h3 id="stats-limits-strip-title">
         {t('statistics.overview.limitsTitle')}
       </h3>
       <Button
@@ -60,185 +135,195 @@
         >
       </Button>
     </div>
-    <ul class="stats-limits-strip__providers">
-      {#each snapshots as { snapshot, windows, credits } (`${snapshot.connection}:${snapshot.account}`)}
-        <li class="stats-limits-strip__provider">
-          <div class="stats-limits-strip__name">
-            <span use:tooltip={accountTooltip(snapshot)}
-              >{snapshot.display_name}</span
-            >
-            {#if snapshot.plan}
-              <span class="stats-limits-strip__plan">{snapshot.plan}</span>
-            {/if}
-            {#if credits}
-              <span class="stats-limits-strip__credits">{credits}</span>
-            {/if}
-          </div>
-          {#if windows.length > 0}
-            <ul class="stats-limits-strip__windows">
-              {#each windows as window (window.label)}
-                {@const percent = clampUsagePercent(window.used_percent)}
-                {@const reset = formatResetAt(window.reset_at, locale)}
-                <li class="stats-limits-strip__window">
-                  <span class="stats-limits-strip__label">{window.label}</span>
-                  <span
-                    class="stats-limits-strip__track"
-                    role="meter"
-                    aria-label={window.label}
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow={Math.round(percent)}
-                  >
-                    <span
-                      class={[
-                        'stats-limits-strip__fill',
-                        `stats-limits-strip__fill--${usageSeverity(window.used_percent)}`,
-                      ]}
-                      style={`width: ${percent}%`}
-                    ></span>
-                  </span>
-                  <span class="stats-limits-strip__used">
-                    {t('statistics.overview.limitsPercent', {
-                      percent: Math.round(percent),
-                    })}
-                  </span>
-                  <span
-                    class="stats-limits-strip__reset"
-                    use:tooltip={() =>
-                      reset
-                        ? {
-                            title: t('statistics.limits.resets'),
-                            text: formatMoment(window.reset_at),
-                          }
-                        : ''}
-                  >
-                    {#if reset}
-                      {reset.relative
-                        ? t('statistics.limits.resetsIn', {
-                            duration: reset.relative,
-                          })
-                        : reset.absolute}
-                    {/if}
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </li>
-      {/each}
-    </ul>
+    {#if comparison.rows.length}
+      <div class="matrix" style:--periods={comparison.periods.length}>
+        <DataTable
+          {columns}
+          rows={comparison.rows}
+          rowKey={(row) => row.key}
+          ariaLabel={t('statistics.overview.limitsTitle')}
+          dense
+        />
+      </div>
+    {/if}
+    {#if comparison.balances.length}
+      <ul class="balances">
+        {#each comparison.balances as row (row.key)}
+          <li>
+            <div>{@render providerCell(row)}</div>
+            <span>{row.credits}</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 {/if}
 
 <style>
   .stats-limits-strip {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
+    --provider-width: 23%;
+    min-width: 0;
     padding: var(--space-md) var(--space-lg);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     background: var(--surface);
   }
-  .stats-limits-strip__head {
+  .strip-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-md);
+    margin-bottom: var(--space-xs);
   }
-  .stats-limits-strip__title {
+  .strip-head h3 {
     margin: 0;
     color: var(--text-hi);
     font-size: var(--fs-label-md);
     font-weight: 600;
   }
-  .stats-limits-strip__providers {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-    gap: var(--space-sm) var(--space-xl, 32px);
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  .matrix :global(.data-table__table) {
+    table-layout: fixed;
+    min-width: calc(8rem + var(--periods) * 7rem);
   }
-  .stats-limits-strip__provider {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
+  .matrix :global(.data-table__cell:first-child) {
+    padding-inline-start: 0;
   }
-  .stats-limits-strip__name {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px var(--space-sm);
-    color: var(--text-hi);
-    font-size: var(--fs-body-sm);
+  .matrix :global(td.data-table__cell) {
+    vertical-align: middle;
+  }
+  .matrix :global(th.data-table__cell) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .provider-name {
     font-weight: 600;
+    font-size: var(--fs-body-sm);
+    color: var(--text-hi);
+    overflow-wrap: anywhere;
   }
-  .stats-limits-strip__plan {
-    padding: 0 7px;
-    border: 1px solid var(--border-2);
-    border-radius: 999px;
-    color: var(--text-med);
+  .provider-meta,
+  .reset,
+  .window-label,
+  .cell-period,
+  .missing {
+    color: var(--text-lo);
     font-size: var(--fs-label-sm);
-    font-weight: 500;
+    overflow-wrap: anywhere;
   }
-  .stats-limits-strip__credits {
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
+  .provider-meta,
+  .reset {
+    display: block;
+    margin-top: 2px;
   }
-  .stats-limits-strip__windows {
+  .cell-period {
+    display: none;
+  }
+  .usage-window + .usage-window {
+    margin-top: var(--space-xs);
+  }
+  .reading {
     display: grid;
-    grid-template-columns: auto minmax(48px, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) 4ch;
     align-items: center;
-    gap: 6px var(--space-sm);
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    gap: var(--space-sm);
+    border-radius: var(--r-sm);
   }
-  .stats-limits-strip__window {
-    display: contents;
+  .usage-window:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
-  .stats-limits-strip__label {
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-  }
-  .stats-limits-strip__track {
-    height: 6px;
+  .track {
+    height: 5px;
     overflow: hidden;
     border-radius: var(--r-sm);
     background: var(--surface-3);
   }
-  .stats-limits-strip__fill {
+  .fill {
     display: block;
     height: 100%;
     background: var(--blue);
   }
-  .stats-limits-strip__fill--warn {
+  .fill--warn {
     background: var(--amber);
   }
-  .stats-limits-strip__fill--critical {
+  .fill--critical {
     background: var(--red);
   }
-  .stats-limits-strip__used {
+  .used {
     color: var(--text-hi);
     font-size: var(--fs-label-sm);
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     text-align: end;
   }
-  .stats-limits-strip__reset {
-    color: var(--text-lo);
+  .balances {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .balances li {
+    display: grid;
+    grid-template-columns: var(--provider-width) minmax(0, 1fr);
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding: var(--space-sm) 0;
+    color: var(--text-med);
     font-size: var(--fs-label-sm);
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   }
-
-  @container stats-view (max-width: 700px) {
+  .balances li > span {
+    padding-inline-start: 10px;
+  }
+  .balances li:last-child {
+    padding-bottom: 0;
+  }
+  @container stats-view (max-width: 600px) {
     .stats-limits-strip {
-      padding: var(--space-md);
+      padding: var(--space-sm) var(--space-md);
+    }
+    .matrix :global(.data-table__table) {
+      display: block;
+      min-width: 0;
+    }
+    .matrix :global(thead) {
+      position: absolute;
+      clip-path: inset(50%);
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    .matrix :global(tbody) {
+      display: block;
+    }
+    .matrix :global(.data-table__row) {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.75rem), 1fr));
+      gap: var(--space-xs) var(--space-md);
+      border-top: 1px solid var(--border);
+      padding: var(--space-sm) 0;
+    }
+    .matrix :global(td.data-table__cell) {
+      padding: 0;
+      border: 0;
+      min-width: 0;
+    }
+    .matrix :global(td:first-child) {
+      grid-column: 1/-1;
+    }
+    .matrix :global(td):has(> .missing) {
+      display: none;
+    }
+    .cell-period {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--text-med);
+    }
+    .balances li {
+      grid-template-columns: auto 1fr;
+      gap: var(--space-md);
+    }
+    .balances li > span {
+      padding: 0;
     }
   }
 </style>

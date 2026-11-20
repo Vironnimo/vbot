@@ -53,6 +53,58 @@ function providerUsageTargetKey(snapshot) {
   return `${connection}::${account}`;
 }
 
+// Generic time windows can have different upstream labels for the same
+// duration. Named quotas such as "Week (Opus)" keep their own column.
+function comparisonPeriod({ label, window_seconds: seconds }) {
+  if (label === 'Month') return { id: label, order: 31 * DAY_MS };
+  const duration = /^(\d+(?:\.\d+)?)([hm])$/.exec(label);
+  let fromLabel;
+  if (label === 'Week') fromLabel = 7 * DAY_MS;
+  else if (label === 'Day') fromLabel = DAY_MS;
+  else if (duration)
+    fromLabel =
+      Number(duration[1]) * (duration[2] === 'h' ? HOUR_MS : MINUTE_MS);
+  else return { id: label, order: Infinity };
+
+  const order = seconds > 0 ? seconds * 1000 : fromLabel;
+  if (order === 7 * DAY_MS) return { id: 'Week', order };
+  if (order === DAY_MS) return { id: 'Day', order };
+  const id =
+    order % HOUR_MS === 0 ? `${order / HOUR_MS}h` : `${order / MINUTE_MS}m`;
+  return { id, order };
+}
+
+export function usageComparison(providers, locale) {
+  const periods = new Map();
+  const rows = [];
+  const balances = [];
+  for (const snapshot of providers) {
+    const credits = usageCreditsText(snapshot.credits, locale);
+    const byPeriod = new Map();
+    for (const window of snapshot.windows ?? []) {
+      const period = comparisonPeriod(window);
+      periods.set(period.id, period);
+      if (!byPeriod.has(period.id)) byPeriod.set(period.id, []);
+      byPeriod.get(period.id).push(window);
+    }
+    const row = {
+      key: providerUsageTargetKey(snapshot),
+      snapshot,
+      byPeriod,
+      credits,
+    };
+    if (byPeriod.size) rows.push(row);
+    else if (credits) balances.push(row);
+  }
+  return {
+    periods: [...periods.values()].sort(
+      (a, b) => a.order - b.order || a.id.localeCompare(b.id, locale),
+    ),
+    rows,
+    balances,
+  };
+}
+
 export function usageHistorySince(range, now = Date.now()) {
   if (range === 'all') {
     return null;

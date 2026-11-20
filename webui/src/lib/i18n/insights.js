@@ -731,6 +731,7 @@ export default Object.freeze({
   'statistics.overview.insightLink': 'Open {tab}',
   'statistics.overview.insights': 'Worth a look',
   'statistics.overview.limitsAll': 'All limits',
+  'statistics.overview.limitsFiveHours': '5 hours',
   'statistics.overview.limitsPercent': '{percent}%',
   'statistics.overview.limitsTitle': 'Subscription limits now',
   'statistics.overview.p90Duration': '90% within {duration}',
