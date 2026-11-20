@@ -185,6 +185,7 @@ class CommandCheckpoints:
             "log_path": str(report.log_path) if report.log_path is not None else None,
             "failed_programs": list(report.failed_programs),
             "jobs_ended": report.jobs_ended,
+            "output_incomplete": report.output_incomplete,
             "log_loss": (
                 {"kept_bytes": report.log_loss.kept_bytes, "kept_lines": report.log_loss.kept_lines}
                 if report.log_loss is not None
@@ -640,4 +641,5 @@ def _report(row: dict[str, Any]) -> CommandReport:
             else None
         ),
         jobs_ended=bool(state.get("jobs_ended", False)),
+        output_incomplete=bool(state.get("output_incomplete", False)),
     )

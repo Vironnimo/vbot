@@ -134,15 +134,17 @@ class PipeCommandProcess:
             return False
         return True
 
-    def close_output(self) -> None:
+    def close_output(self) -> bool:
         transport = cast(Any, self._process)._transport
         pipe = transport.get_pipe_transport(1) if transport is not None else None
-        if pipe is not None:
+        if pipe is not None and not pipe.is_closing():
             # Windows may hold one already-read chunk in the paused transport,
             # outside the StreamReader; resuming schedules its delivery before
             # the close schedules EOF.
             pipe.resume_reading()
             pipe.close()
+            return True
+        return False
 
     def close(self) -> None:
         self._close_writer()

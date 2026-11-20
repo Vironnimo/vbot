@@ -37,7 +37,7 @@ from core.tools import _command_decoding as command_decoding_module
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._interpreter_host import InterpreterHost
-from core.tools._shell_results import not_run_problem
+from core.tools._shell_results import format_command_delivery, not_run_problem
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
     COMMAND_RETENTION_SECONDS,
@@ -598,6 +598,79 @@ async def test_working_leftovers_hold_the_end(harness: Harness, activity: str) -
 
     await harness.advance(3.25)
     assert harness.manager.report(command_id).ended
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("leftover", [False, True], ids=["tree-exited", "quiet-server"])
+async def test_completion_includes_output_still_being_processed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, leftover: bool
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    feed = command_output_module.CommandOutput.feed
+
+    async def slow_feed(output: command_output_module.CommandOutput, data: bytes) -> None:
+        entered.set()
+        await release.wait()
+        await feed(output, data)
+
+    monkeypatch.setattr(command_output_module.CommandOutput, "feed", slow_feed)
+    command_id, process = await harness.launch(
+        formatter=lambda report: "\n".join(report.transcript.head)
+    )
+    harness.manager.to_background(command_id, deliver=True)
+    process.write("first\n")
+    await entered.wait()
+    process.write("final diagnosis")
+    process.exit(7, leftovers=[SERVER] if leftover else [])
+    try:
+        await harness.advance(5)
+        assert not harness.manager.report(command_id).ended
+        assert not harness.sink.bodies
+    finally:
+        release.set()
+    await harness.advance(4)
+    assert harness.sink.bodies == ["first\nfinal diagnosis"]
+    if leftover:
+        assert harness.manager.report(command_id).still_running == (SERVER,)
+        process.end_leftovers()
+    report = await harness.finish(command_id)
+    assert not report.output_incomplete
+    assert report.log_path is not None and report.log_path.read_bytes() == b"first\nfinal diagnosis"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disk_full", [False, True])
+async def test_untracked_pipe_writer_cannot_delay_completion_or_stop(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, disk_full: bool
+) -> None:
+    if disk_full:
+        monkeypatch.setattr(
+            command_output_module, "_write_all", lambda *_: (0, OSError(errno.ENOSPC, "full"))
+        )
+    command_id, process = await harness.launch(
+        formatter=lambda report: format_command_delivery(
+            report, permissions=PermissionBoundary.UNRESTRICTED
+        )
+    )
+    harness.manager.to_background(command_id, deliver=True)
+    # The shell exited. Only a writer outside its tracked tree holds the pipe.
+    process.exit(0, leftovers=[SERVER])
+    process.tree.running.clear()
+    for _ in range(6):
+        process.write("late output\n")
+        await harness.advance(0.25)
+    stop = asyncio.create_task(harness.manager.stop(command_id, "user"))
+    for _ in range(8):
+        process.write("late output\n")
+        await harness.advance(0.25)
+    assert stop.done()
+    report = await stop
+    assert report.finished and report.output_incomplete and report.stop_reason is None
+    assert process.tree.terminations == 0
+    (body,) = harness.sink.bodies
+    assert "late output" in body and "may be incomplete" in body
+    assert ("disk is full" in body) is disk_full
+    assert "complete raw output" not in body
 
 
 @pytest.mark.asyncio

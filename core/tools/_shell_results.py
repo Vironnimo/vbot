@@ -411,6 +411,8 @@ def ended_result(
         location = output_location(report, output)
         if location is not None:
             data["next"] += f" {location}"
+    elif report.output_incomplete and (location := output_location(report, output)):
+        data.setdefault("notes", []).append(location)
     return data
 
 
@@ -692,22 +694,31 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
     the failure. Its end is not the command's, and the command's effects remain.
     """
     loss = report.log_loss
-    if loss is None or report.not_run is not None:
+    if report.not_run is not None:
         return None
+    path = report.log_path
+    capture = "Output capture ended before EOF. The final output may be incomplete"
+    if loss is None:
+        if not report.output_incomplete:
+            return None
+        if name_file and path is not None:
+            return f"{capture}. vBot kept the captured raw output in {model_path(path)}"
+        return capture
+    prefix = f"{capture}. " if report.output_incomplete else ""
     if isinstance(loss.error, OSError):
         reason = os_error_reason(loss.error)
     else:
         reason = "an unexpected error occurred"
-    path = report.log_path
     if path is None:
-        return f"vBot could not keep this command's raw output; writing it failed: {reason}"
+        return f"{prefix}vBot could not keep this command's raw output; writing it failed: {reason}"
     # Raw output has no single line grammar or encoding: CR-only progress and
     # UTF-16 both make a count of LF bytes misleading. The written extent is exact.
     count = loss.kept_bytes
     kept = f"the first {count:,} {'byte' if count == 1 else 'bytes'}"
     where = f", in {model_path(path)}" if name_file else ""
     return (
-        f"vBot kept only {kept} of this command's raw output{where}; writing more failed: {reason}"
+        f"{prefix}vBot kept only {kept} of this command's raw output{where}; "
+        f"writing more failed: {reason}"
     )
 
 

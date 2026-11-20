@@ -8,8 +8,7 @@ decision runs on the Event Loop; process queries and kills run through the
 blocking runner, log file writes through the blocking runner as well, and
 output cleaning on the output host's worker.
 
-End of a command: the shell exited, output after the exit was read for at most
-``COMMAND_DRAIN_SECONDS``, and either no process of the command runs, or the
+End of a command: the shell exited, and either its processes and output ended, or the
 processes still running were quiet for ``COMMAND_LEFTOVER_QUIET_SECONDS`` (no
 output, no new process, at most ``IDLE_CPU_SECONDS`` of CPU time). An end that
 something outside vBot caused, such as ``taskkill /T`` on the shell, is an
@@ -165,6 +164,9 @@ class CommandRecord:
         self._ended_at: float | None = None
         self._finished_at: float | None = None
         self._activity = 0
+        self._reading_pipe = False
+        self._output_incomplete = False
+        self._draining = False  # All tracked processes have ended.
         self._eof = asyncio.Event()
         self._ended = asyncio.Event()
         self._finished = asyncio.Event()
@@ -298,6 +300,7 @@ class CommandRecord:
                 else None
             ),
             log_loss=log_loss,
+            output_incomplete=self._output_incomplete,
             jobs_ended=facts is not None and facts.jobs_ended > 0,
             consumed_once_secrets=self._consumed_once_secrets,
         )
@@ -413,13 +416,13 @@ class CommandRecord:
             async with self._stop_lock:
                 # A stop before this one that sent no kill gave its reason back.
                 claimed = self._request_stop(reason) or claimed
-                if not self.finished and not self._killed.is_set():
+                if not self.finished and not self._draining and not self._killed.is_set():
                     froze = self._freeze_exits()
                     if not self._interrupted:
                         self._interrupted = True
                         if self._process.interrupt():
                             await self._wait_or_sleep(self._finished, COMMAND_STOP_GRACE_SECONDS)
-                    if not self.finished:
+                    if not self.finished and not self._draining and not self._killed.is_set():
                         kill_sent = True
                         failure = await self._kill()
                         if failure is not None:
@@ -479,7 +482,7 @@ class CommandRecord:
         self._request_stop("shutdown")
         self.withdraw_delivery()
         try:
-            if self.finished:
+            if self.finished or self._draining:
                 return True
             self._freeze_exits()
             if await self._kill() is not None:
@@ -495,7 +498,7 @@ class CommandRecord:
         self._request_stop("shutdown")
         self.withdraw_delivery()
         try:
-            if self.finished:
+            if self.finished or self._draining:
                 return True
             self._freeze_exits()
             try:
@@ -564,11 +567,19 @@ class CommandRecord:
             try:
                 # The next chunk is read once the previous one is written and
                 # cleaned: a command that prints faster waits for its pipe.
-                while data := await self._process.read():
+                while True:
+                    self._reading_pipe = True
+                    try:
+                        data = await self._process.read()
+                    finally:
+                        self._reading_pipe = False
+                    if not data:
+                        break
                     self._activity += 1
                     self._output_at = self._services.monotonic()
                     await self._feed(data)
             except Exception:
+                self._output_incomplete = True
                 _LOGGER.error(
                     "Reading the output of command %s failed; it keeps running until it "
                     "ends or is stopped",
@@ -656,18 +667,19 @@ class CommandRecord:
                             self.command_id,
                             exc_info=failure,
                         )
-                        self._record_end(facts)
                     if self.ended:
                         self._follow_leftovers(facts)
-                    elif self._quiet_for(quiet, facts) >= COMMAND_LEFTOVER_QUIET_SECONDS:
+                    elif (self._reading_pipe or self._eof.is_set()) and (
+                        helper_cleanup_failed
+                        or self._quiet_for(quiet, facts) >= COMMAND_LEFTOVER_QUIET_SECONDS
+                    ):
                         self._record_end(facts)
                 await self._wait_or_sleep(self._killed, TREE_POLL_SECONDS)
                 if self._killed.is_set():
                     break
                 facts = await self._tree_facts()
-            await self._drain()
-            self._process.close_output()
-            await self._eof.wait()
+            self._draining = True
+            await self._finish_output()
             if facts is not None:
                 facts = replace(facts, running=())
             self._finish(facts)
@@ -684,7 +696,7 @@ class CommandRecord:
             self._finish(None)
 
     def _record_exit(self, exit_code: int, facts: ProcessTreeFacts | None) -> None:
-        """The shell exited: fix its exit code; the command ends unless processes run.
+        """The shell exited: keep its exit code while the tree and output settle.
 
         Processes that cannot be inspected (*facts* None) may still run: the
         command keeps running, so its call moves it to the background as any
@@ -699,11 +711,8 @@ class CommandRecord:
                 self.command_id,
                 reason.replace("_", " "),
             )
-        if facts is None:
-            return
-        self._facts = facts
-        if not facts.running:
-            self._record_end(facts)
+        if facts is not None:
+            self._facts = facts
 
     def _quiet_for(self, quiet: _QuietWatch, facts: ProcessTreeFacts) -> float:
         """How long the command's processes have been quiet as of *facts*.
@@ -801,11 +810,19 @@ class CommandRecord:
     async def _drain(self) -> None:
         await self._wait_or_sleep(self._eof, COMMAND_DRAIN_SECONDS)
 
+    async def _finish_output(self) -> None:
+        # A writer outside the tracked tree can keep writing indefinitely.
+        # Bound new input, then finish logging and cleaning every buffered byte.
+        await self._drain()
+        if not self._eof.is_set() and self._process.close_output():
+            self._output_incomplete = True
+        await self._eof.wait()
+
     # Stopping
 
     def _request_stop(self, reason: StopReason) -> bool:
         """Claim *reason* for a command that runs and has none yet; whether it did."""
-        if self._stop_reason is not None or self.ended:
+        if self._stop_reason is not None or self.ended or self._draining:
             return False
         self._stop_reason = reason
         return True
