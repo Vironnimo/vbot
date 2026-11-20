@@ -80,8 +80,8 @@ export function createChatController({
     chatState,
     operations,
     errorMessage,
-    retainsTerminalRunEvent: (runId) =>
-      runEvents?.retainsTerminal(runId) === true,
+    retainsTerminalRunEvent: (runId, session) =>
+      runEvents?.retainsTerminal(runId, session) === true,
     applyDeferredRunEvents: () => applyRunEvents(),
   });
   const reflections = createChatReflections({

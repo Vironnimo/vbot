@@ -138,6 +138,7 @@ class SessionRunCompletion:
     completion_reason: str | None = None
     contributes_to_activity: bool = True
     notification_policy: str | None = None
+    cancelled_by_user: bool = False
 
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")

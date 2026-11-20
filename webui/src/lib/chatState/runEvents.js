@@ -267,8 +267,6 @@ function finishRun(sessionState, event) {
   ) {
     return sessionState;
   }
-  const contributesToAgentActivity =
-    event?.contributes_to_agent_activity !== false;
   if (sessionState.currentRun) {
     sessionState.currentRun.status = status ?? terminalStatus(type);
     if (
@@ -290,31 +288,10 @@ function finishRun(sessionState, event) {
   if (event?.payload?.session_usage) {
     sessionState.sessionUsage = event.payload.session_usage;
   }
-  const completionAlreadyRead =
-    completedRunId &&
-    sessionState.latestCompletionRunId === completedRunId &&
-    !sessionState.hasUnreadCompletion;
-  if (contributesToAgentActivity && event?.payload?.completion_read === true) {
-    // The Session recorded it read: a Sub-Agent answering its Parent.
-    sessionState.hasUnreadCompletion = false;
-    sessionState.latestCompletionRunId = completedRunId;
-    sessionState.unreadRunId = '';
-    sessionState.unreadRunStatus = '';
-    sessionState.unreadRunAt = '';
-  } else if (contributesToAgentActivity && !completionAlreadyRead) {
-    sessionState.hasUnreadCompletion = true;
-    sessionState.latestCompletionRunId = completedRunId;
-    sessionState.unreadRunId = completedRunId;
-    sessionState.unreadRunStatus = status ?? terminalStatus(type);
-    sessionState.unreadRunAt = event?.timestamp ?? '';
-  }
-  sessionState.lastActiveAt = event?.timestamp ?? sessionState.lastActiveAt;
-  if (event?.payload?.notification_activity) {
-    applySessionCompletionActivity(
-      sessionState,
-      event.payload.notification_activity,
-    );
-  }
+  applySessionCompletionActivity(
+    sessionState,
+    event?.payload?.notification_activity,
+  );
   return sessionState;
 }
 

@@ -33,7 +33,12 @@ async def test_notification_policy_filters_attention_without_marking_results_rea
     session = manager.create("coder")
     manager.notifications.set_policy(session.address, policy)
     for index, status in enumerate(("completed", "failed")):
-        run = Run(run_id=f"result_{index}", agent_id="coder", session_id=session.id)
+        run = Run(
+            run_id=f"result_{index}",
+            agent_id="coder",
+            session_id=session.id,
+            run_kind=RunKind.SYSTEM,
+        )
         await manager.start_run(run)
         result = await manager.finish_run(
             run, status, {"timing": _summary(run.id).timing}, completion_reason=None
@@ -53,6 +58,84 @@ async def test_notification_policy_filters_attention_without_marking_results_rea
     assert manager.summary(session.address)["has_unread_completion"] is True
     manager.notifications.mark_read(session.address, ["result_0"])
     assert manager.summary(session.address)["local_unread_count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reason", "initiator", "unread"),
+    [
+        ("cancelled", None, "rpc", False),
+        ("cancelled", "user", "webui_command", False),
+        ("cancelled", "user", "user_stop_all", False),
+        ("cancelled", "user", "goal_stop", False),
+        ("cancelled", "shutdown", "shutdown", True),
+        ("cancelled", "update", "rpc", True),
+        ("interrupted", "process_restart", None, True),
+        ("cancelled", "parent_agent", "parent_run:parent", True),
+        ("cancelled", "extension_cancelled", "extension_stop_all", True),
+        ("cancelled", "user", "extension:example", True),
+        ("cancelled", None, None, True),
+        ("failed", "user", "rpc", True),
+    ],
+)
+async def test_settlement_only_notifies_about_unseen_outcomes(
+    manager, status, reason, initiator, unread
+):
+    session = manager.create("coder")
+    run = Run(run_id="result", agent_id="coder", session_id=session.id)
+    await manager.start_run(run)
+    if initiator is not None:
+        run.request_cancel(reason=reason, initiator=initiator)
+    result = await manager.finish_run(
+        run, status, {"timing": _summary(run.id).timing}, completion_reason=reason
+    )
+
+    assert result["notification_allowed"] is unread
+    assert result.get("completion_read", False) is not unread
+    assert result["notification_activity"]["notification_count"] == int(unread)
+    assert manager.notifications.run_status(session.address, run.id)["is_read"] == int(not unread)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_kind", [RunKind.USER, RunKind.CHANNEL])
+async def test_input_admission_reads_earlier_results_and_publishes_each_read(manager, input_kind):
+    session = manager.create("coder")
+    seen = []
+    manager.add_completion_read_callback(lambda address, run_id: seen.append((address, run_id)))
+    # A Schedule result can share the user's Session. Admission reads it too.
+    for run_id, kind, schedule_id in (
+        ("scheduled", RunKind.CRON, "schedule_a"),
+        ("older", RunKind.SYSTEM, None),
+    ):
+        run = Run(
+            run_id=run_id,
+            agent_id="coder",
+            session_id=session.id,
+            run_kind=kind,
+            schedule_id=schedule_id,
+        )
+        await manager.start_run(run)
+        await manager.finish_run(
+            run, "completed", {"timing": _summary(run.id).timing}, completion_reason=None
+        )
+    running = Run(
+        run_id="still-running", agent_id="coder", session_id=session.id, run_kind=RunKind.SYSTEM
+    )
+    await manager.start_run(running)
+    assert manager.summary(session.address)["local_unread_count"] == 2
+
+    user = Run(run_id="new-input", agent_id="coder", session_id=session.id, run_kind=input_kind)
+    await manager.start_run(user)
+    assert manager.summary(session.address)["local_unread_count"] == 0
+    assert manager.notifications.schedule_activity()["schedule_a"]["unread_count"] == 0
+    assert set(seen) == {(session.address, "scheduled"), (session.address, "older")}
+
+    await manager.finish_run(
+        running, "completed", {"timing": _summary(running.id).timing}, completion_reason=None
+    )
+    await manager.start_run(user)  # An admission retry must leave newer results unread.
+    assert manager.summary(session.address)["notification_count"] == 1
+    assert len(seen) == 2
 
 
 @pytest.mark.asyncio
@@ -301,6 +384,7 @@ async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(
     assert (partial.interrupted, partial.interruption_cause) == (True, "process_restart")
     summary = session.find_run_summary(run_id="abandoned")
     assert (summary.status, summary.completion_reason) == ("interrupted", "process_restart")
+    assert manager.summary(session.address)["unread_run_id"] == "abandoned"
     assert first[-1] == summary
     with sqlite3.connect(manager._store.path) as connection:
         assert connection.execute("SELECT status, result_entry_key FROM tool_calls").fetchall() == [
@@ -647,7 +731,7 @@ async def test_schedule_results_replaced_by_history_edit_leave_attention_and_his
 async def test_adopting_known_legacy_schedule_run_preserves_read_state_and_other_results(manager):
     session = manager.create("coder")
     for run_id in ("older", "known_schedule", "newer"):
-        run = Run(run_id=run_id, agent_id="coder", session_id=session.id)
+        run = Run(run_id=run_id, agent_id="coder", session_id=session.id, run_kind=RunKind.SYSTEM)
         await manager.start_run(run)
         await manager.finish_run(
             run, "completed", {"timing": _summary(run.id).timing}, completion_reason=None

@@ -229,17 +229,20 @@ export function overlayLiveSessionActivity(
     }
     const key = sessionActivityKey(agentAddress, sessionId);
     const activity = activityBySession.get(key);
-    const unread = activity
-      ? {
-          has_unread_completion: activity.has_unread_completion === true,
-          latest_completion_run_id: asOptionalText(
-            activity.latest_completion_run_id,
-          ),
-          unread_run_id: asOptionalText(activity.unread_run_id),
-          unread_run_status: asOptionalText(activity.unread_run_status),
-          unread_run_at: asOptionalText(activity.unread_run_at),
-        }
-      : null;
+    const unread =
+      activity &&
+      (activity.notification_generation_id ?? '') ===
+        session.notification_generation_id &&
+      activity.notification_revision >= session.notification_revision
+        ? {
+            local_unread_count: activity.local_unread_count,
+            latest_completion_run_id: asOptionalText(
+              activity.latest_completion_run_id,
+            ),
+            unread_run_status: asOptionalText(activity.unread_run_status),
+            unread_run_at: asOptionalText(activity.unread_run_at),
+          }
+        : null;
     const entry = sessionActivity?.[key];
     const work = sessionActivity
       ? rowActivity(entry?.state, entry?.workStartedAt, entry?.waitingFor)
@@ -505,7 +508,9 @@ function normalizeSession(session) {
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
     pinned_at: asOptionalText(session?.pinned_at),
-    has_unread_completion: session?.has_unread_completion === true,
+    local_unread_count: session?.local_unread_count ?? 0,
+    notification_generation_id: session?.notification_generation_id ?? '',
+    notification_revision: session?.notification_revision ?? -1,
     ...rowActivity(
       session?.activity_state,
       session?.work_started_at,
@@ -514,7 +519,6 @@ function normalizeSession(session) {
     has_chat_results: session?.has_chat_results,
     has_schedule_runs: session?.has_schedule_runs,
     latest_completion_run_id: asOptionalText(session?.latest_completion_run_id),
-    unread_run_id: asOptionalText(session?.unread_run_id),
     unread_run_status: asOptionalText(session?.unread_run_status),
     unread_run_at: asOptionalText(session?.unread_run_at),
     source_channel_id: asOptionalText(session?.source_channel_id),

@@ -858,8 +858,8 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
                 return {
                     "session": {
                         "title": "Current",
-                        "latest_completion_run_id": "latest",
-                        "has_unread_completion": True,
+                        "latest_completion_run_id": "older-unread",
+                        "local_unread_count": 2,
                     }
                 }
             if method == "chat.timeline":
@@ -932,7 +932,7 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
         ] == [
             (
                 "session.mark_read",
-                {"agent_id": "main", "session_id": "session-one", "run_id": "latest"},
+                {"agent_id": "main", "session_id": "session-one", "through": "latest"},
             )
         ]
 

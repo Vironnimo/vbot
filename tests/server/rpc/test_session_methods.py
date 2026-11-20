@@ -852,6 +852,36 @@ async def test_session_work_on_a_closed_session_database_is_a_domain_error(
 
 
 @pytest.mark.asyncio
+async def test_session_mark_read_through_leaves_later_and_other_results_unread(tmp_path: Path):
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    address = sessions.create("coder", session_id="s1").address
+    other = sessions.create("coder", session_id="s2").address
+    for run_id in ("older", "displayed", "later"):
+        settle_run(sessions, address, run_id, run_kind="system")
+    settle_run(sessions, other, "elsewhere", run_kind="system")
+    target = {"agent_id": "coder", "session_id": "s1"}
+
+    foreign = await rpc_result(state, "session.mark_read", **target, through="elsewhere")
+    assert foreign["marked_read"] is False
+    assert foreign["local_unread_count"] == 3
+    result = await rpc_result(state, "session.mark_read", **target, through="displayed")
+    assert result["marked_read"] is True
+    assert result["notification_generation_id"] == sessions.get(address).generation_id
+    assert result["notification_revision"] > foreign["notification_revision"]
+    assert result["local_unread_count"] == 1
+    assert result["unread_run_id"] == "later"
+    assert sessions.summary(other)["local_unread_count"] == 1
+    retry = await rpc_result(state, "session.mark_read", **target, through="displayed")
+    assert retry["marked_read"] is False
+    assert retry["notification_revision"] == result["notification_revision"]
+    for run_id, allowed in (("older", False), ("displayed", False), ("later", True)):
+        assert await rpc_result(state, "session.notification_status", **target, run_id=run_id) == {
+            "allowed": allowed
+        }
+
+
+@pytest.mark.asyncio
 async def test_session_mark_read_acknowledges_the_exact_run_without_a_list_refresh() -> None:
     state, resolver, sessions = stub_session_state()
 

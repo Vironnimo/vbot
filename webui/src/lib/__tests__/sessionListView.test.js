@@ -137,8 +137,7 @@ describe('sessionListView helpers', () => {
         id: 'plain-session',
         last_active_at: '2026-05-15T11:00:00+00:00',
         latest_completion_run_id: 'run-one',
-        has_unread_completion: true,
-        unread_run_id: 'run-one',
+        local_unread_count: 1,
         unread_run_status: 'completed',
         unread_run_at: '2026-05-15T11:00:00+00:00',
       },
@@ -155,10 +154,9 @@ describe('sessionListView helpers', () => {
       display_name: t('sessions.newSession'),
       is_channel_session: false,
       latest_completion_run_id: 'run-one',
-      has_unread_completion: true,
+      local_unread_count: 1,
       activity_state: 'idle',
       work_started_at: null,
-      unread_run_id: 'run-one',
       unread_run_status: 'completed',
     });
     expect(next.sessions[1]).toMatchObject({
@@ -177,7 +175,7 @@ describe('sessionListView helpers', () => {
       {
         id: 'shared-id',
         agent_address: 'reviewer@project',
-        has_unread_completion: false,
+        local_unread_count: 0,
       },
       {
         id: 'server-only',
@@ -189,9 +187,9 @@ describe('sessionListView helpers', () => {
       {
         agent_address: 'reviewer@project',
         session_id: 'shared-id',
-        has_unread_completion: true,
+        notification_revision: 1,
+        local_unread_count: 1,
         latest_completion_run_id: 'run-two',
-        unread_run_id: 'run-two',
         unread_run_status: 'completed',
         unread_run_at: '2026-08-31T12:00:00+00:00',
       },
@@ -206,8 +204,7 @@ describe('sessionListView helpers', () => {
     const beforeHello = overlayLiveSessionActivity(sessions, unread, 'alpha');
     expect(rowOf(beforeHello, null)).toBe(rowOf(sessions, null));
     expect(rowOf(beforeHello, 'reviewer@project')).toMatchObject({
-      has_unread_completion: true,
-      unread_run_id: 'run-two',
+      local_unread_count: 1,
       activity_state: 'idle',
     });
     expect(
@@ -239,7 +236,7 @@ describe('sessionListView helpers', () => {
     });
     expect(rowOf(projected, 'reviewer@project')).toMatchObject({
       activity_state: 'idle',
-      has_unread_completion: true,
+      local_unread_count: 1,
     });
     expect(
       projected.find((session) => session.id === 'server-only'),

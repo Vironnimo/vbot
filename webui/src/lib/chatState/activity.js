@@ -5,8 +5,7 @@ import {
 } from '../sessionInvalidation.js';
 import {
   applySessionCompletionActivity,
-  clearSessionCompletionActivity,
-  sessionCompletionRunId,
+  resetSessionCompletionActivity,
   sessionKey,
   syncAgentSessionActivity,
 } from './sessionState.js';
@@ -17,9 +16,9 @@ import {
 // Session invalidations are applied from what the client already knows
 // whenever possible.
 //
-// The owner supplies `retainsTerminalRunEvent(runId)`: whether the App's Run
-// event feed still holds that Run's terminal event, which carries its
-// completion. A hidden owner defers Run events; `applyDeferredRunEvents()`
+// The owner supplies `retainsTerminalRunEvent(runId, session)` to check if the
+// App's feed holds the terminal event and the Session has its counter snapshot
+// or a later one. A hidden owner defers Run events; `applyDeferredRunEvents()`
 // applies them, so a completion fact (an activity read, a read
 // acknowledgement, a deletion) always lands after the Run events before it.
 export function createChatActivity({
@@ -75,19 +74,19 @@ export function createChatActivity({
     // omits Sessions without a completion, so an omitted Session is cleared
     // only when its local completion is still the one seen at request time.
     const requestedSet = new Set(requested);
-    const seenCompletions = new Map();
+    const seenRevisions = new Map();
     for (const sessionState of Object.values(chatState.sessions)) {
       if (requestedSet.has(sessionState.agentId)) {
-        seenCompletions.set(
-          sessionState.key,
-          sessionCompletionRunId(sessionState),
-        );
+        seenRevisions.set(sessionState.key, {
+          revision: sessionState.notificationRevision,
+          epoch: sessionState.notificationEpoch,
+        });
       }
     }
     chatState.loadingAgentActivity = true;
     try {
       const response = await operations.listSessionActivity(requested);
-      if (disposed) {
+      if (disposed || refreshKey !== fullRefreshKey) {
         return false;
       }
       for (const agentActivity of Array.isArray(response?.agents)
@@ -104,7 +103,7 @@ export function createChatActivity({
           chatState,
           agentAddress,
           agentActivity?.sessions ?? [],
-          seenCompletions,
+          seenRevisions,
         );
       }
       if (refreshKey === fullRefreshKey) {
@@ -177,9 +176,8 @@ export function createChatActivity({
   }
 
   // Apply App's Session invalidation window. The terminal Run event already
-  // carries its completion, a read acknowledgement clears the matching unread
-  // marker, and a deletion drops the Session's marker; only an unknown or
-  // unmatched fact reads that Agent's activity again.
+  // carries its counters, a read acknowledgement refreshes them, and a
+  // deletion drops the Session's marker.
   function applySessionInvalidations(entries) {
     const { targets, lastId, overflowed } = takeSessionInvalidations(
       entries,
@@ -214,16 +212,17 @@ export function createChatActivity({
         const sessionState =
           chatState.sessions[sessionKey(target.agentAddress, target.sessionId)];
         if (sessionState) {
-          clearSessionCompletionActivity(sessionState);
-          sessionState.notificationRevision = -1;
-          sessionState.readRunIds = [];
-          sessionState.localUnreadCount = 0;
-          sessionState.notificationPolicy = 'all';
+          resetSessionCompletionActivity(sessionState);
         }
-      } else if (target.readRunId) {
-        applyReadAcknowledgement(target);
         stale.add(target.agentAddress);
-      } else if (!target.runId || !retainsTerminalRunEvent(target.runId)) {
+      } else if (
+        target.readRunId ||
+        !target.runId ||
+        !retainsTerminalRunEvent(
+          target.runId,
+          chatState.sessions[sessionKey(target.agentAddress, target.sessionId)],
+        )
+      ) {
         stale.add(target.agentAddress);
       }
     }
@@ -233,47 +232,26 @@ export function createChatActivity({
     }
   }
 
-  function applyReadAcknowledgement({ agentAddress, sessionId, readRunId }) {
-    const sessionState =
-      chatState.sessions[sessionKey(agentAddress, sessionId)];
-    if (!sessionState) {
-      return true;
-    }
-    const localRunId = sessionCompletionRunId(sessionState);
-    if (localRunId && localRunId !== readRunId) {
-      return false;
-    }
-    applySessionCompletionActivity(sessionState, {
-      latest_completion_run_id: readRunId,
-      has_unread_completion: false,
-    });
-    return true;
-  }
-
-  async function markSessionCompletionRead(sessionState, visibleRunIds = null) {
-    const ids = visibleRunIds ?? [sessionState?.unreadRunId].filter(Boolean);
-    const runId = ids.join(',');
+  async function markSessionCompletionRead(sessionState, runId) {
     if (
       !sessionState?.agentId ||
       !sessionState?.sessionId ||
       !runId ||
-      sessionState.markReadPendingRunId === runId
+      sessionState.markReadPendingRunId ||
+      sessionState.readThroughRunId === runId
     ) {
       return false;
     }
+    const epoch = sessionState.notificationEpoch;
     sessionState.markReadPendingRunId = runId;
     try {
       const result = await operations.markSessionRead(
         sessionState.agentId,
         sessionState.sessionId,
-        ids.length === 1 ? ids[0] : ids,
+        runId,
       );
-      sessionState.readRunIds = [
-        ...new Set([...(sessionState.readRunIds ?? []), ...ids]),
-      ];
-      // An activity read that started before this acknowledgement may still
-      // report the Run unread; the same-Run guard in
-      // applySessionCompletionActivity keeps the acknowledged state.
+      if (sessionState.notificationEpoch !== epoch) return false;
+      sessionState.readThroughRunId = runId;
       applySessionCompletionActivity(sessionState, result);
       sessionState.markReadFailedRunId = '';
       return result?.marked_read === true;
@@ -281,10 +259,15 @@ export function createChatActivity({
       // Read acknowledgement is best-effort from the current view. Keeping the
       // local unread marker visible makes the failure recoverable on a later
       // selection/reconnect instead of surfacing a disruptive Chat error.
-      sessionState.markReadFailedRunId = runId;
+      if (sessionState.notificationEpoch === epoch) {
+        sessionState.markReadFailedRunId = runId;
+      }
       return false;
     } finally {
-      if (sessionState.markReadPendingRunId === runId) {
+      if (
+        sessionState.notificationEpoch === epoch &&
+        sessionState.markReadPendingRunId === runId
+      ) {
         sessionState.markReadPendingRunId = '';
       }
     }

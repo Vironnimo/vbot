@@ -615,7 +615,7 @@ class Run:
         """Request best-effort cancellation of this run.
 
         ``reason`` is the semantic cause Run owners act on; ``initiator`` names
-        who asked and only reaches the terminal log line.
+        who asked for settlement's read-state decision and the terminal log line.
         """
         if self.status != RunStatus.RUNNING or self.cancel_requested or self._completion_started:
             return

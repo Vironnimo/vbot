@@ -156,18 +156,14 @@ describe('SessionListDrawer list', () => {
   });
 
   it('identifies an unread Session unless it is already displayed', async () => {
-    const unread = (id, runId) =>
+    const unread = (id) =>
       session(id, {
-        has_unread_completion: true,
-        unread_run_id: runId,
+        local_unread_count: 1,
         unread_run_status: 'completed',
         unread_run_at: '2026-07-20T10:00:00+00:00',
       });
     api.listSessions.mockResolvedValue({
-      sessions: [
-        unread('session-1', 'run-one'),
-        unread('session-2', 'run-two'),
-      ],
+      sessions: [unread('session-1'), unread('session-2')],
     });
     const props = drawer.mount();
 
@@ -226,9 +222,9 @@ describe('SessionListDrawer list', () => {
       {
         agent_address: 'alpha',
         session_id: 'session-1',
-        has_unread_completion: true,
+        notification_revision: 1,
+        local_unread_count: 1,
         latest_completion_run_id: 'run-one',
-        unread_run_id: 'run-one',
         unread_run_status: 'completed',
         unread_run_at: '2026-08-31T12:03:00+00:00',
       },

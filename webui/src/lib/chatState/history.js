@@ -4,6 +4,7 @@ import {
   isRecord,
   isRunActive,
   nextContextUsage,
+  resetSessionCompletionActivity,
   TERMINAL_RUN_STATUSES,
 } from './sessionState.js';
 
@@ -16,6 +17,12 @@ export function loadHistory(sessionState, messages, options = {}) {
     options.generation &&
     options.generation !== sessionState.historyGeneration,
   );
+  if (
+    changedGeneration &&
+    sessionState.notificationGeneration === sessionState.historyGeneration
+  ) {
+    resetSessionCompletionActivity(sessionState, options.generation);
+  }
   const incremental = options.incremental === true && !changedGeneration;
   const visibleMessages = incremental
     ? mergeHistoryRecords(sessionState.messages, incomingMessages)

@@ -76,9 +76,9 @@ async def test_session_picker_marks_working_waiting_and_unread_only_when_idle() 
         async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
             if method == "session.list":
                 rows: list[tuple[str, JsonObject]] = [
-                    ("working", {"activity_state": "working", "has_unread_completion": True}),
+                    ("working", {"activity_state": "working", "local_unread_count": 1}),
                     ("waiting", {"activity_state": "waiting", "has_active_run": False}),
-                    ("idle-unread", {"activity_state": "idle", "has_unread_completion": True}),
+                    ("idle-unread", {"activity_state": "idle", "local_unread_count": 1}),
                     ("idle", {"activity_state": "idle"}),
                     # A server that does not report Session activity.
                     ("older-server", {"has_active_run": True}),

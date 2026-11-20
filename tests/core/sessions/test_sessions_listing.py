@@ -174,6 +174,7 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
             "run_kinds",
             "working_project_id",
             "notification_policy",
+            "notification_generation_id",
             "notification_revision",
             "notification_count",
             "notification_run_id",
@@ -407,6 +408,7 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
             assert row.pop("notification_policy") == "all"
             assert row.pop("has_chat_results") is True
             assert row.pop("has_schedule_runs") is False
+            assert isinstance(row.pop("notification_generation_id"), str)
             assert isinstance(row.pop("notification_revision"), int)
             assert (
                 row.pop("notification_count")

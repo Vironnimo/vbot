@@ -57,12 +57,22 @@ describe('retained Run lifecycle events', () => {
   it('releases background replay without allowing a late start to revive the finished Run', () => {
     const session = state();
     appendRunEvent(session, event('finished', 'run_started'));
-    appendRunEvent(session, event('finished', 'run_completed', 2));
+    appendRunEvent(session, {
+      ...event('finished', 'run_completed', 2),
+      payload: {
+        notification_activity: {
+          notification_revision: 1,
+          notification_count: 1,
+          local_unread_count: 1,
+          latest_completion_run_id: 'finished',
+        },
+      },
+    });
     releaseFinishedRunEvents(session, 'finished');
     appendRunEvent(session, event('finished', 'run_started'));
     expect(session.status).toBe('completed');
     expect(session.currentRun.status).toBe('completed');
-    expect(session.hasUnreadCompletion).toBe(true);
+    expect(session.notificationCount).toBe(1);
     expect(session.latestCompletionRunId).toBe('finished');
   });
 

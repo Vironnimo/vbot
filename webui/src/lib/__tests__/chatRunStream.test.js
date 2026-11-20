@@ -213,43 +213,61 @@ describe('server conversation projection transport', () => {
     expect(h.displayedSession().timelineItems).toHaveLength(1);
     expect(agentActivityStatus(h.chatState, DISPLAYED_AGENT_ID)).toBe('idle');
     h.sse(timelinePatch('quiet', 10, { status: 'completed' }));
-    expect(h.displayedSession().hasUnreadCompletion).toBe(false);
+    expect(h.displayedSession().notificationCount).toBe(0);
     send(h, 'run_completed', 20, 'quiet', {
       status: 'completed',
       contributes_to_agent_activity: false,
     });
-    expect(h.displayedSession().hasUnreadCompletion).toBe(false);
+    expect(h.displayedSession().notificationCount).toBe(0);
   });
 
   it('settles and releases non-displayed Runs without subscribing, and ignores late redelivery', () => {
     const h = setup({ isDisplayedSession: () => false });
     send(h, 'run_started', 1, 'background', { status: 'running' });
-    send(h, 'run_completed', 40, 'background', { status: 'completed' });
+    send(h, 'run_completed', 40, 'background', {
+      status: 'completed',
+      notification_activity: {
+        notification_revision: 1,
+        notification_count: 1,
+        local_unread_count: 1,
+      },
+    });
     send(h, 'run_started', 1, 'background', { status: 'running' });
     expect(h.subscriptions).toHaveLength(0);
     expect(h.displayedSession()).toMatchObject({
       status: 'completed',
-      hasUnreadCompletion: true,
+      notificationCount: 1,
       runEvents: [],
     });
     expect(h.reconcileRunSession).not.toHaveBeenCalled();
   });
 
-  it('leaves no unread result for a completion the Session recorded read', () => {
+  it('uses the persisted counter when a completion is already read', () => {
     const h = setup({ isDisplayedSession: () => false });
     send(h, 'run_started', 1, 'to-user', { status: 'running' });
-    send(h, 'run_completed', 2, 'to-user', { status: 'completed' });
-    expect(h.displayedSession().hasUnreadCompletion).toBe(true);
+    send(h, 'run_completed', 2, 'to-user', {
+      status: 'completed',
+      notification_activity: {
+        notification_revision: 1,
+        notification_count: 1,
+        local_unread_count: 1,
+      },
+    });
     send(h, 'run_started', 1, 'to-parent', { status: 'running' });
     send(h, 'run_cancelled', 2, 'to-parent', {
       status: 'cancelled',
       completion_read: true,
+      notification_activity: {
+        notification_revision: 2,
+        notification_count: 1,
+        local_unread_count: 1,
+        latest_completion_run_id: 'to-parent',
+      },
     });
     expect(h.displayedSession()).toMatchObject({
       status: 'cancelled',
-      hasUnreadCompletion: false,
+      notificationCount: 1,
       latestCompletionRunId: 'to-parent',
-      unreadRunId: '',
     });
   });
 

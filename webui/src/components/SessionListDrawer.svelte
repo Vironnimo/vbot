@@ -1114,7 +1114,7 @@
                   aria-hidden="true"
                 ></span>
               </span>
-            {:else if session.has_unread_completion && session.id !== currentSessionId}
+            {:else if session.local_unread_count > 0 && session.id !== currentSessionId}
               <span
                 class="session-row__status session-row__unread"
                 aria-label={t('sessions.unreadCompletion')}

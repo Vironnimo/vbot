@@ -160,6 +160,10 @@ def test_metadata_activity_and_stream_drafts_change_state_not_history(manager) -
     session = manager.create("coder", session_id=address.session_id)
     session.append(ChatMessage.user("hello"))
     settle_run(manager, address, "run-1")
+    settled_revision = history_revision(manager, address)
+    assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
+    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+    assert history_revision(manager, address) == settled_revision
     streaming = session.start_run("run-one")
     revision = history_revision(manager, address)
 
@@ -171,8 +175,6 @@ def test_metadata_activity_and_stream_drafts_change_state_not_history(manager) -
     assert history_revision(manager, address) == revision
     assert manager.get_metadata(address)["project"] == "vbot"
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
-    assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
-    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     assert history_revision(manager, address) == revision
 
 

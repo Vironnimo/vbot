@@ -46,9 +46,8 @@ if TYPE_CHECKING:
     )
     from core.sessions.store import SessionStore
 
-# Transcripts may wait for another writer; read acknowledgements are advisory.
+# Transcripts may wait for another writer.
 TRANSCRIPT_WRITE_PATIENCE_S = 60.0
-ACTIVITY_WRITE_PATIENCE_S = 0.5
 
 
 class SessionExecutionStore:
@@ -134,9 +133,9 @@ class SessionExecutionStore:
             lambda connection: _store_accessor_inputs.remove(connection, address, input_id)
         )
 
-    def admit_run(self, address: SessionAddress, admission: SessionRunAdmission) -> None:
-        """Admit one Run with its Run kind and execution owner in one transaction."""
-        self._store._execute_write(
+    def admit_run(self, address: SessionAddress, admission: SessionRunAdmission) -> list[str]:
+        """Admit one Run and return the earlier Run ids its input marked read."""
+        return self._store._execute_write(
             lambda connection: _store_runs.admit_run(connection, address, admission)
         )
 
@@ -209,15 +208,6 @@ class SessionExecutionStore:
 
     def recover_interrupted_runs(self) -> tuple[RecoveredRun, ...]:
         return self._store._execute_write(_store_runs.recover_interrupted_runs)
-
-    def mark_terminal_run_read(
-        self, address: SessionAddress, run_id: str
-    ) -> tuple[JsonObject, bool]:
-        """Mark the latest completion read; return the activity and whether it changed."""
-        return self._store._execute_write(
-            lambda connection: _store_runs.mark_terminal_run_read(connection, address, run_id),
-            patience_s=ACTIVITY_WRITE_PATIENCE_S,
-        )
 
     def create_bound_temporary_session(
         self,

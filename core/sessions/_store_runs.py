@@ -85,7 +85,7 @@ def _validate_admission(admission: SessionRunAdmission) -> None:
 
 def admit_run(
     connection: sqlite3.Connection, address: SessionAddress, admission: SessionRunAdmission
-) -> None:
+) -> list[str]:
     """Admit one Run: its row, its Run kind and its execution owner together.
 
     Without an expected generation, a missing live Session is created.
@@ -133,7 +133,7 @@ def admit_run(
             _store_accessor_inputs.claim(
                 connection, address, admission.accessor_input_id, int(existing["run_key"])
             )
-        return
+        return []
     if owner is not None:
         # The owner's participant binding must still name the generation the
         # owner holds. The Run may execute in that Session or in a descendant
@@ -186,7 +186,15 @@ def admit_run(
         except sqlite3.IntegrityError as exc:
             raise ChatSessionError(_OWNER_MISMATCH_ERROR) from exc
     _store_mutations.record_run_kind_by_key(connection, session_key, admission.run_kind)
+    read = (
+        _store_notifications.mark_through_sequence(
+            connection, session_key, int(state["next_seq"]) - 1
+        )
+        if owner is None and admission.run_kind in {"user", "channel"}
+        else []
+    )
     _store_values._touch_state(connection, session_key)
+    return read
 
 
 def finish_run(
@@ -300,11 +308,10 @@ def finish_run(
             state["latest_completion_at"],
         )
     )
-    # A Sub-Agent Run that ends answering its Parent reports to the Parent, not
-    # to the user: its completion is read from the start, whether or not an
-    # answer reaches the Parent (a stopped tree forwards none).
-    read_on_completion = (
-        completion.contributes_to_activity and summary.subagent_reply_target == "parent"
+    # A result addressed to the Parent or a stop requested by the user
+    # requires no new attention, even when the user has left this Session.
+    read_on_completion = completion.contributes_to_activity and (
+        summary.subagent_reply_target == "parent" or completion.cancelled_by_user
     )
     read = run_key if read_on_completion else state["read_completion_run_key"]
     source = connection.execute(
@@ -347,6 +354,7 @@ def finish_run(
         "schedule_id": source["schedule_id"] if source is not None else None,
         "history_generation_id": generation_id,
         "history_cursor": _encode_chat_history_cursor(generation_id, seq + 1),
+        "terminal_sequence": seq,
     }
     result["notification_activity"] = _completion_activity_from_state(
         _completion_activity(connection, session_key)
@@ -567,24 +575,3 @@ def _completion_activity(connection: sqlite3.Connection, session_key: int) -> sq
         (session_key,),
     ).fetchone()
     return row
-
-
-def mark_terminal_run_read(
-    connection: sqlite3.Connection, address: SessionAddress, run_id: str
-) -> tuple[JsonObject, bool]:
-    """Mark the latest completion read when it is *run_id*; return the activity."""
-    session_key = int(_store_values._require_live(connection, address)["session_key"])
-    activity = _completion_activity(connection, session_key)
-    marked = (
-        activity["latest_completion_run_id"] == run_id and not activity["latest_completion_read"]
-    )
-    if marked:
-        connection.execute(
-            "UPDATE sessions SET read_completion_run_key = latest_completion_run_key, "
-            "state_revision = state_revision + 1 WHERE session_key = ?",
-            (session_key,),
-        )
-        activity = _completion_activity(connection, session_key)
-    newly_read = _store_notifications.mark_runs_read(connection, address, [run_id])
-    result = _completion_activity_from_state(_completion_activity(connection, session_key))
-    return result, marked or bool(newly_read)

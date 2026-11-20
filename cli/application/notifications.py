@@ -104,7 +104,7 @@ def run_toast_kind(event_type: object, payload: dict[str, Any]) -> str | None:
     Every Cron failure notifies; a Cron Run that completes notifies only when it
     counts as Agent activity (its job delivers to vBot and it had something to
     report). Other background work (Subagents, Channels, reflections, internal
-    continuations) never notifies; cancellation is always the user's own action.
+    continuations) and cancelled Runs do not produce tray toasts.
     """
 
     if payload.get("notification_allowed") is False:

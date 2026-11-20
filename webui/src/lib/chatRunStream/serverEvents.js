@@ -38,8 +38,8 @@ export function runEventFromServerEvent(serverEvent) {
   if (typeof payload.error === 'string') {
     runPayload.error = payload.error;
   }
-  if (payload.completion_read === true) {
-    runPayload.completion_read = true;
+  for (const key of ['notification_activity', 'terminal_sequence']) {
+    if (Object.hasOwn(payload, key)) runPayload[key] = payload[key];
   }
 
   return {

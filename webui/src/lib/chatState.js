@@ -13,7 +13,7 @@ export {
   agentActivityStatus,
   agentUnreadResults,
   newestUnreadSessionForAgent,
-  sessionHasTerminalRun,
+  newestDisplayedCompletion,
   currentSessionState,
   removeQueuedMessage,
   isSessionEmpty,
