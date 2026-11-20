@@ -59,6 +59,7 @@ it('creates a fixed call, preserves newer edits during autosave and removes the 
       return () => {};
     },
     onSearch: unsub,
+    setContentHeight: vi.fn(),
     registerLayer: unsub,
     setSearchIndex: vi.fn().mockResolvedValue({}),
     notifyAutosave: vi.fn(),

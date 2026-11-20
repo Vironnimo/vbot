@@ -8,7 +8,7 @@ built-in UI. An Extension builds its assets independently and ships the resultin
 ## Install the SDK artifact
 
 Packaged vBot servers include the SDK at
-`<vbot_root>/resources/sdk/vbot-extension-sdk-1.3.0.tgz`. Install that artifact in
+`<vbot_root>/resources/sdk/vbot-extension-sdk-1.4.0.tgz`. Install that artifact in
 the Extension's own directory; no vBot checkout is needed. The standard WebUI
 build creates the tarball before application packaging copies `resources/`.
 
@@ -29,7 +29,7 @@ node scripts/extension-sdk.mjs
 npm pack ./extension-sdk --pack-destination .
 ```
 
-This produces `vbot-extension-sdk-1.3.0.tgz`. The build follows only the explicit
+This produces `vbot-extension-sdk-1.4.0.tgz`. The build follows only the explicit
 public exports and their dependencies. The tarball includes source components,
 local fonts, their license, and the page build helper. It contains no imports
 back into the vBot repository. Publishing to a registry is a separate operator
@@ -38,7 +38,7 @@ action; creating this artifact does not publish it.
 In the Extension's own directory:
 
 ```sh
-npm install --save-exact /path/to/vbot-extension-sdk-1.3.0.tgz
+npm install --save-exact /path/to/vbot-extension-sdk-1.4.0.tgz
 npm install --save-dev vite@^8 @sveltejs/vite-plugin-svelte@^7 svelte@^5 terser@^5
 ```
 
@@ -90,6 +90,11 @@ and application timezone from the host context. A Svelte root supplies
 `provideNavigation({ registerLayer: client.registerLayer })` so shared dialogs
 participate in the application's Back behavior. Register the Extension's own
 translation catalog before mounting; use a key namespace owned by the Extension.
+
+For a list embedded in `settings.sections`, wrap its content in
+`<EmbeddedSettingsPage {client}>…</EmbeddedSettingsPage>` from
+`@vbot/extension-sdk/ui/EmbeddedSettingsPage.svelte`. The host fits the frame
+to the list as it changes. Long lists can scroll and dialogs use the full window.
 
 Use the client's owner operation method for Extension state, and the declared
 host capabilities for application actions. Shared controls that access host

@@ -81,10 +81,10 @@ export default Object.freeze({
   // AgentSecretEditor.svelte, AgentSecretSources.svelte)
   'settings.agentSecrets.title': 'Secrets',
   'settings.pages.secretsDescription':
-    'Keys, logins and other values Agents use without seeing them, and the password managers they come from.',
+    'Manage Agent Secrets, connected password managers, and the credentials vBot uses for services.',
   'settings.agentSecrets.count': '{count} stored',
   'settings.agentSecrets.help':
-    'An Agent writes a reference such as {{secret:GITHUB_TOKEN}} where the value belongs; vBot inserts the value only where the Secret allows it and masks it in output. vBot’s own keys are under Integrations -> Credentials.',
+    'An Agent writes a reference such as {{secret:GITHUB_TOKEN}} where the value belongs; vBot inserts the value only where the Secret allows it and masks it in output.',
   'settings.agentSecrets.add': 'Add secret',
   'settings.agentSecrets.empty':
     'No Secrets yet. Add one here or type /secret in a chat.',

@@ -77,6 +77,7 @@ const pageClient = {
     execute: (name, params) => rpc(name, params),
   },
   listDirectory: (params) => rpc('filesystem.list', params),
+  setContentHeight: vi.fn(),
   openExternalUrl: vi.fn().mockResolvedValue({}),
   setSearchIndex: vi.fn().mockResolvedValue({}),
   onSearch: (listener) => {

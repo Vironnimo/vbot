@@ -1,5 +1,5 @@
 <script>
-  // Settings -> Integrations -> Credentials: the named credentials of the
+  // Settings -> Secrets -> Credentials: the named credentials of the
   // server's Secret Store (`secrets.list`), every saved name with its state
   // and never a value. A value is typed into the add or replace dialog, sent
   // once with `secrets.set` and dropped when the dialog closes. A name set in

@@ -285,6 +285,9 @@ export function createSettingsPageNavigation(context) {
   // anything unknown shows the start page.
   function resolvePlace(place) {
     const [first = '', second = ''] = place;
+    // Bookmarks and history entries from before Credentials moved to Secrets.
+    if (first === 'integrations' && second === 'credentials')
+      return resolvePlace([second]);
     const page = pageForDestination(first);
     if (!page) return { page: context.pages[0], sectionId: '', subPlace: [] };
     if (

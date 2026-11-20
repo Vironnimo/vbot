@@ -42,6 +42,25 @@ afterEach(() => {
 });
 
 describe('extension page client', () => {
+  it('reports the latest content height after each handshake and when the list shrinks', () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    client.setContentHeight(124);
+    expect(target.postMessage).not.toHaveBeenCalled();
+    initialize(target);
+    client.setContentHeight(55);
+    client.setContentHeight(55);
+    initialize(target, 'next');
+    const reports = target.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((data) => data.type === 'vbot.extension.content.height');
+    expect(reports.map(({ nonce, height }) => [nonce, height])).toEqual([
+      ['nonce-a', 124],
+      ['nonce-a', 55],
+      ['next', 55],
+    ]);
+  });
+
   it('exposes catalog services, local commands, external links and searchable page entries through the bound bridge', async () => {
     const target = parent();
     client = createExtensionPageClient({ target });

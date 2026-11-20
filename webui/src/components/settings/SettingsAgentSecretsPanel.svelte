@@ -3,7 +3,7 @@
   // Settings -> Secrets: the Agent Secrets Agents use through
   // `{{secret:NAME}}` references without seeing their values
   // (`agent_secrets.*`), apart from vBot's own credentials under
-  // Integrations -> Credentials. A row shows a Secret's name, kind, lifetime,
+  // Secrets -> Credentials. A row shows a Secret's name, kind, lifetime,
   // description and Source state; its details the fields (visible values, a
   // concealed one only after Reveal and until Hide, never kept), the granted
   // Agents, the sinks and the recent uses. Add, Edit and Delete change

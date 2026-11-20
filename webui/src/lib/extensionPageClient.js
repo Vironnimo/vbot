@@ -20,6 +20,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const sessionReferenceListeners = new Map();
   let autosaveParticipant = null;
   let chatContext = null;
+  let contentHeight = 0;
   // The dialogs and menus the page shows over its content, the topmost last.
   const layers = [];
   let forwardsHistoryInput = false;
@@ -226,6 +227,8 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       if (chatContext)
         hostMessage('vbot.extension.chat.context', { value: chatContext });
       if (layers.length > 0) notifyLayers();
+      if (contentHeight)
+        hostMessage('vbot.extension.content.height', { height: contentHeight });
       return;
     }
     if (!matchesContext(data)) return;
@@ -434,6 +437,16 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   return {
     get context() {
       return context;
+    },
+    setContentHeight(height) {
+      if (
+        !Number.isSafeInteger(height) ||
+        height <= 0 ||
+        height === contentHeight
+      )
+        return;
+      contentHeight = height;
+      hostMessage('vbot.extension.content.height', { height });
     },
     operation: (operation, arguments_ = {}) =>
       call('operation', { operation, arguments: arguments_ }),

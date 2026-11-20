@@ -1,6 +1,6 @@
 import { t } from '../i18n.js';
 
-// Settings -> Integrations -> Credentials: the named credentials of the
+// Settings -> Secrets -> Credentials: the named credentials of the
 // server's Secret Store as `secrets.list` reports them (names, states and
 // sources, never values), and the server's rules for a new one.
 

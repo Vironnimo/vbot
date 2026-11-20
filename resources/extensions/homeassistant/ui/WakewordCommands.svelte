@@ -9,6 +9,7 @@
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
+  import EmbeddedSettingsPage from '@vbot/extension-sdk/ui/EmbeddedSettingsPage.svelte';
   import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
   import SaveStatus from '@vbot/extension-sdk/ui/SaveStatus.svelte';
   import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
@@ -177,58 +178,61 @@
   }
 </script>
 
-<main>
-  <header class="s-group-toolbar">
-    <h3>{t('haWakeword.title')}</h3>
-    <Button
-      id="add-command"
-      variant="secondary"
-      disabled={!commands}
-      onClick={() => edit(null)}>{t('haWakeword.add')}</Button
-    >
-  </header>
-  {#if readError}
-    <Banner variant="error" role="alert">
-      {readError}
-      <Button variant="secondary" onClick={refresh}>{t('common.retry')}</Button>
-    </Banner>
-  {:else if !commands}
-    <p>{t('common.loading')}</p>
-  {:else if commands.length === 0}
-    <p>{t('haWakeword.empty')}</p>
-  {/if}
-  {#if decisionLimit != null && commands?.length > decisionLimit}
-    <Banner variant="warn"
-      >{t('haWakeword.decisionLimit', { limit: decisionLimit })}</Banner
-    >
-  {/if}
-  {#if commands?.length}
-    <div class="s-group">
-      {#each commands as command (command.phrase)}
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">{command.phrase}</div>
-            <code class="s-row-desc">{command.tool}</code>
-          </div>
-          <div class="s-row-control">
-            <Button
-              variant="tertiary"
-              ariaLabel={t('haWakeword.edit', { phrase: command.phrase })}
-              onClick={() => edit(command)}>{t('common.edit')}</Button
-            >
-            <Button
-              variant="tertiary"
-              onClick={() => {
-                removal = command;
-                editError = '';
-              }}>{t('common.remove')}</Button
-            >
-          </div>
+<EmbeddedSettingsPage {client}>
+  <div class="s-group">
+    <header class="s-entity__head">
+      <div class="s-row-info">
+        <h4 class="s-subhead__title">{t('haWakeword.title')}</h4>
+        {#if commands?.length === 0 && !readError}
+          <p class="s-row-desc">{t('haWakeword.empty')}</p>
+        {/if}
+      </div>
+      <Button
+        id="add-command"
+        variant="secondary"
+        disabled={!commands}
+        onClick={() => edit(null)}>{t('haWakeword.add')}</Button
+      >
+    </header>
+    {#if readError}
+      <Banner variant="error" role="alert">
+        {readError}
+        <Button variant="secondary" onClick={refresh}
+          >{t('common.retry')}</Button
+        >
+      </Banner>
+    {:else if !commands}
+      <p class="s-group__block">{t('common.loading')}</p>
+    {/if}
+    {#if decisionLimit != null && commands?.length > decisionLimit}
+      <Banner variant="warn"
+        >{t('haWakeword.decisionLimit', { limit: decisionLimit })}</Banner
+      >
+    {/if}
+    {#each commands ?? [] as command (command.phrase)}
+      <div class="s-row s-row--compact">
+        <div class="s-row-info">
+          <div class="s-row-label">{command.phrase}</div>
+          <code class="s-row-desc">{command.tool}</code>
         </div>
-      {/each}
-    </div>
-  {/if}
-</main>
+        <div class="s-row-control">
+          <Button
+            variant="tertiary"
+            ariaLabel={t('haWakeword.edit', { phrase: command.phrase })}
+            onClick={() => edit(command)}>{t('common.edit')}</Button
+          >
+          <Button
+            variant="tertiary"
+            onClick={() => {
+              removal = command;
+              editError = '';
+            }}>{t('common.remove')}</Button
+          >
+        </div>
+      </div>
+    {/each}
+  </div>
+</EmbeddedSettingsPage>
 
 {#if draft}
   <Modal
@@ -342,20 +346,8 @@
 {/if}
 
 <style>
-  main {
-    height: 100%;
-    overflow: auto;
-    padding: 12px;
-  }
-  h3,
   p {
     margin: 0;
-  }
-  h3 {
-    font-size: 1rem;
-  }
-  p {
-    color: var(--text-med);
   }
   .fields {
     display: grid;

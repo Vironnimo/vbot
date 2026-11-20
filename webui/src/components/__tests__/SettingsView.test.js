@@ -353,8 +353,8 @@ describe('SettingsView', () => {
           'decision_model',
           'subagents',
         ],
-        integrations: ['channels', 'extensions', 'credentials'],
-        secrets: ['agent_secrets'],
+        integrations: ['channels', 'extensions'],
+        secrets: ['agent_secrets', 'credentials'],
         archive: ['archive_retention', 'archive_entries'],
         system: ['server', 'access', 'computers'],
         debug: ['debug_capture', 'debug_speech', 'debug_traces'],
@@ -526,6 +526,11 @@ describe('SettingsView', () => {
       // The found setting takes focus; revealing it is no further step.
       expect(document.activeElement.id).toBe('settings-general-timezone');
       expect(navigate).toHaveBeenCalledTimes(1);
+      navigation.navigate(['integrations', 'credentials']);
+      await waitForCondition(
+        () => document.activeElement?.id === 'settings-section-credentials',
+      );
+      expect(navigation.place).toEqual(['secrets', 'credentials']);
     });
 
     it.each([

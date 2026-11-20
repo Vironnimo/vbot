@@ -142,6 +142,30 @@ async function flushReplies() {
 }
 
 describe('ExtensionPage frame bridge', () => {
+  it('fits a Settings frame to its current content and restores the declared height on reload', () => {
+    const page = openPage({
+      embedded: true,
+      initialContext: { ui: { surface: 'settings.sections' } },
+    });
+    const element = document.querySelector('iframe').parentElement;
+    const resize = (height) => {
+      page.message({
+        ...page.init,
+        type: 'vbot.extension.content.height',
+        height,
+      });
+      flushSync();
+    };
+    resize(1780);
+    expect(element.style.height).toBe('1600px');
+    resize(63);
+    resize(0);
+    expect(element.style.height).toBe('63px');
+    loadFrame();
+    resize(450);
+    expect(element.style.height).toBe('');
+  });
+
   it('opens an owner-bound specialist on user activation and samples this frame at send time', async () => {
     const close = vi.fn();
     const appChats = { openSpecialist: vi.fn(() => ({ close })) };
