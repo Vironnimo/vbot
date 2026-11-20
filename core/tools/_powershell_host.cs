@@ -9,6 +9,7 @@ using System.Management.Automation.Host;
 using System.Management.Automation.Language;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Microsoft.PowerShell.Commands;
 public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
     readonly PSHost inner;
@@ -65,6 +66,22 @@ public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession
                 Variables.GetValue("global:LASTEXITCODE"), Errors.Count == 0 ? null : Errors[0] };
         }
         catch { Record = null; NativeExit = null; }
+    }
+    // Direct arguments bind before BeginProcessing. Keep PowerShell's own
+    // exception and position, but let it escape the statement like a throw.
+    // A script can still catch it. Observe only the command pipeline's invoke.
+    public void WatchLocationBinding(bool enabled) {
+        if (enabled) AppDomain.CurrentDomain.FirstChanceException += GuardLocationBinding;
+        else AppDomain.CurrentDomain.FirstChanceException -= GuardLocationBinding;
+    }
+    void GuardLocationBinding(object sender, FirstChanceExceptionEventArgs args) {
+        if (args.Exception is ParameterBindingException error &&
+            error.CommandInvocation?.MyCommand is CmdletInfo cmd &&
+            (cmd.ImplementingType == typeof(VBotSetLocation) ||
+             cmd.ImplementingType == typeof(VBotPushLocation)) &&
+            System.Management.Automation.Runspaces.Runspace.DefaultRunspace == CommandRunspace) {
+            error.WasThrownFromThrowStatement = true;
+        }
     }
     public EventHandler<CommandLookupEventArgs> LookupHook => OnCommandLookup;
     void OnCommandLookup(object sender, CommandLookupEventArgs lookup) {
@@ -316,16 +333,16 @@ public static class VBotGuard {
         Refuse(cmdlet, message, "VBotProtectedFolder", ErrorCategory.PermissionDenied, path);
     }
     // An explicitly passed empty path, which the cmdlet would read as another folder.
-    public static void Named(PSCmdlet cmdlet, string[] paths) {
-        if (!Bound(cmdlet, "Path")) return;
+    public static void Named(PSCmdlet cmdlet, string[] paths, string parameter = "Path") {
+        if (!Bound(cmdlet, parameter)) return;
         var missing = paths == null || paths.Length == 0 || paths.Contains(null);
         if (!missing && !paths.Contains("")) return;
-        Refuse(cmdlet, "Cannot bind argument to parameter 'Path' because it is " +
+        Refuse(cmdlet, "Cannot bind argument to parameter '" + parameter + "' because it is " +
             (missing ? "null." : "an empty string."), "ParameterArgumentValidationError",
             ErrorCategory.InvalidData, null);
     }
-    // Promote errors from the actual location change. A path precheck cannot tell
-    // whether the provider will enter it, and the target can change after a check.
+    // Set the cmdlet's error action before pipeline input binds, so errors
+    // written by that binder or by the provider end the command.
     // PowerShell exposes ErrorAction on its command runtime only internally.
     public static void GuardLocation(PSCmdlet cmdlet) {
         if (Bound(cmdlet, "ErrorAction")) return;
@@ -359,18 +376,29 @@ public class VBotMoveItem : MoveItemCommand {
     HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097049")]
 [OutputType(typeof(PathInfo), typeof(PathInfoStack))]
 public class VBotSetLocation : SetLocationCommand {
+    protected override void BeginProcessing() {
+        VBotGuard.GuardLocation(this);
+        base.BeginProcessing();
+    }
     protected override void ProcessRecord() {
         if (ParameterSetName == "Path") VBotGuard.Named(this, new[] { Path });
-        VBotGuard.GuardLocation(this);
         base.ProcessRecord();
     }
 }
 [Cmdlet(VerbsCommon.Push, "Location", DefaultParameterSetName = "Path", SupportsTransactions = true,
     HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097105")]
 public class VBotPushLocation : PushLocationCommand {
+    protected override void BeginProcessing() {
+        VBotGuard.GuardLocation(this);
+        base.BeginProcessing();
+    }
     protected override void ProcessRecord() {
         if (ParameterSetName == "Path") VBotGuard.Named(this, new[] { Path });
-        VBotGuard.GuardLocation(this);
+        // Unlike Set-Location, Push-Location accepts an empty LiteralPath
+        // and pushes the current directory.
+        if (ParameterSetName == "LiteralPath") {
+            VBotGuard.Named(this, new[] { LiteralPath }, "LiteralPath");
+        }
         base.ProcessRecord();
     }
 }

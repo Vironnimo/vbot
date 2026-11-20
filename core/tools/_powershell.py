@@ -99,7 +99,9 @@ Projects and Workspaces. ``Set-Location``, ``Push-Location`` and
 binding message, and the first two end the command with PowerShell's own error
 when the location change fails, unless the command passed ``-ErrorAction``
 or changed ``$ErrorActionPreference``. A refusal ends the command as ``throw``
-does: ``try``/``catch`` catches it, ``-ErrorAction`` does not silence it. The
+does: ``try``/``catch`` catches it. A direct binding error in either guarded location
+cmdlet keeps its original exception and stops the script under the default
+error preference. Pipeline binding uses the cmdlet's error action. The
 guards are against mistakes, not intent: native programs, .NET calls and a
 module-qualified cmdlet name pass them. A guard that fails itself refuses
 nothing.
@@ -499,13 +501,15 @@ RUNNER_STATEMENTS = r"""& {
     }.GetNewClosure()
     $state.Run = {
         [System.Diagnostics.DebuggerHidden()] param()
+        $runner = [AppDomain]::CurrentDomain.GetData('{key}')
         try {
-            $null = [AppDomain]::CurrentDomain.GetData('{key}').Pipeline.Invoke(
-                $null, [AppDomain]::CurrentDomain.GetData('{key}').Settings)
+            $runner.Host.WatchLocationBinding($true)
+            try { $null = $runner.Pipeline.Invoke($null, $runner.Settings) }
+            finally { $runner.Host.WatchLocationBinding($false) }
         } catch {
-            & ([AppDomain]::CurrentDomain.GetData('{key}').Finish) $_
+            & $runner.Finish $_
         }
-        & ([AppDomain]::CurrentDomain.GetData('{key}').Finish) $null
+        & $runner.Finish $null
     }
     [AppDomain]::CurrentDomain.SetData('{key}', $state)
 }
