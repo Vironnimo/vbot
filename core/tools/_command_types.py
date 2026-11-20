@@ -107,6 +107,17 @@ class CommandTranscript:
         """The lines neither ``head`` nor ``tail`` holds, in whole or in part."""
         return max(0, self.total_lines - len(self.head) - len(self.tail))
 
+    def whole_lines(self) -> tuple[str, ...] | None:
+        """All lines in order if the transcript holds every one in full."""
+        if self.tail_cut:
+            return None
+        # A cut head holds only the start of a line the tail can hold whole.
+        if self.head_cut:
+            return self.tail if len(self.tail) == self.total_lines else None
+        if len(self.head) + len(self.tail) != self.total_lines:
+            return None
+        return self.head + self.tail
+
 
 @dataclass(frozen=True, slots=True)
 class LogLoss:

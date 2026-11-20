@@ -586,6 +586,9 @@ class CommandRecord:
                     self.command_id,
                     exc_info=True,
                 )
+                # A failed StreamReader keeps raising. Release its end of the
+                # pipe so a writer cannot hang waiting for us to read again.
+                self._process.close_output()
             await self._output.end()
         except Exception:
             _LOGGER.error(
