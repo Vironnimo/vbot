@@ -66,7 +66,7 @@ Returning a Model's earlier reasoning state in later requests of the same conver
 
 ## Agent-facing text
 
-Native history framing: `providers/claude-agent.md` and `providers/antigravity.md` -> Agent-facing text.
+Native history framing: `providers/claude-agent.md` -> Agent-facing text.
 
 ## References
 
@@ -78,7 +78,7 @@ Native history framing: `providers/claude-agent.md` and `providers/antigravity.m
 - Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, usage history in `provider-usage.db`, or the `provider.usage*` RPCs -> `providers/usage.md`
 - Adding a Provider, Connection variant, Adapter selector or composed inner Adapter, discovery normalizer, or Provider-specific map -> `providers/add-a-provider.md`
 - Changing Claude Agent SDK auth, sessions, Tool bridging or history framing -> `providers/claude-agent.md`
-- Antigravity CLI login, quotas, Tools or history -> `providers/antigravity.md`
+- Restoring the archived Antigravity subscription Provider or interpreting old Session routes -> `providers/antigravity.md`
 - Native Anthropic Messages -> `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`
 - Changing Google AI Studio discovery, errors, wire profile or Task Model wires -> `providers/google.md`

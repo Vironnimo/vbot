@@ -295,7 +295,7 @@ async def refresh_external_connection(
             and _external_now() - previous_check < EXTERNAL_CATALOG_REFRESH_TTL_SECONDS
         ):
             return runtime.external_connection_status(provider_id, connection_id)
-        sessions = runtime._external_owner(provider.adapter)
+        sessions = runtime._claude_sessions
         try:
             # Starting native code and querying every Model can take tens of
             # seconds. Ollama/LM Studio publication remains available meanwhile.
@@ -317,7 +317,7 @@ async def refresh_external_connection(
                 return status
             async with runtime.model_database_refresh():
                 if (
-                    sessions is not runtime._external_owner(provider.adapter)
+                    sessions is not runtime._claude_sessions
                     or runtime._providers.get(provider_id) is not provider
                 ):
                     raise ConfigError(
@@ -351,7 +351,7 @@ async def refresh_external_connection(
                 )
             return status
         finally:
-            if sessions is runtime._external_owner(provider.adapter):
+            if sessions is runtime._claude_sessions:
                 runtime._external_refresh_at[key] = _external_now()
 
 
@@ -385,7 +385,7 @@ async def _publish_model_db_refresh(
     staged: list[ModelDatabaseRefresh] = []
     providers = runtime._providers
     storage = runtime._storage
-    native_sessions = (runtime._claude_sessions, runtime._antigravity)
+    native_sessions = runtime._claude_sessions
     configurations = {
         provider_id: providers.get(provider_id) for provider_id in providers.list_ids()
     }
@@ -403,7 +403,7 @@ async def _publish_model_db_refresh(
         if (
             runtime._providers is not providers
             or runtime._storage is not storage
-            or (runtime._claude_sessions, runtime._antigravity) != native_sessions
+            or runtime._claude_sessions is not native_sessions
             or set(providers.list_ids()) != configurations.keys()
             or any(providers.get(key) is not config for key, config in configurations.items())
         ):
@@ -852,11 +852,11 @@ async def _refresh_connection_catalog(
     if connection.type == "external":
         probe = native_probe
         if probe is None:
-            sessions = runtime._external_owner(provider.adapter)
+            sessions = runtime._claude_sessions
             try:
                 probe = await runtime._probe_external_connection(provider.id, connection)
             finally:
-                if sessions is runtime._external_owner(provider.adapter):
+                if sessions is runtime._claude_sessions:
                     runtime._external_refresh_at[f"{provider.id}:{connection.id}"] = _external_now()
         if probe.get("status") == "busy":
             raise _NativeCatalogBusyError(str(probe.get("message") or "Native Provider is busy"))

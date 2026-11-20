@@ -157,7 +157,7 @@ async def test_native_completed_response_keeps_provider_rejection_on_every_recov
 @pytest.mark.parametrize(
     "adapter_kind",
     [
-        *[name for name in ADAPTER_TYPES if name not in {"antigravity", "claude_agent"}],
+        *[name for name in ADAPTER_TYPES if name != "claude_agent"],
         "anthropic_compatible",
     ],
 )

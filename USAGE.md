@@ -909,12 +909,6 @@ vbot model list --task chat --query claude --query opus   # every word in id, na
 
 The result contains only Models with at least one usable Connection (including enabled keyless Connections) and prints the exact id accepted by `agent create --model` or `agent update --model`. It also includes the effective context window, capabilities/task types, and `reachable: no` for a local Model whose service is currently down. Additional repeatable filters are `--capability`, `--task`, `--input-modality`, and `--output-modality`; `--min-context-window` applies a token floor.
 
-### Google Antigravity subscription
-
-Install Google's Antigravity CLI on the **vBot server** and launch `agy` as the user who runs that server. Sign in to your personal Google AI Pro or Ultra account. In vBot, open **Settings → Providers → Add Provider → Google Antigravity** and connect the CLI login. Choose a Model from that Provider for your Agent. The CLI checks the five-hour and weekly allowances and lists the Models available to your account. Text chat and vBot Tools use the subscription. Google AI Studio remains the separate API-key Provider.
-
-Google describes using its CLI as the backend of a third-party Agent as unsupported under personal plans and warns that third-party use can lead to account suspension. [Google's Antigravity FAQ](https://antigravity.google/docs/faq)
-
 ### Recall
 
 Recall searches canonical persisted Session history; it does not replace curated `MEMORY.md`. Available first-party backends are `canonical_scan` for direct chronological scanning, `sqlite_fts` for indexed substring and relevance search, `vector` for semantic Passage search through the configured `text_embedding` Model, and `hybrid` for fused lexical and semantic results. SQLite indexes under `<data-dir>/recall/` are derived and disposable; incompatible schemas or embedding spaces rebuild rather than migrate.

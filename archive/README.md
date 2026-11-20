@@ -39,3 +39,10 @@ integration, tests, Provider probes, and domain map at the recorded Git commit.
 The manifest gives the SHA-256 of every archived source file. See
 [Archived File Search Tool](../.vorch/domain-maps/tools/search_files.md) for
 the shell replacement, the active Chat file picker and restoration.
+
+`antigravity-provider.zip` preserves the retired Google Antigravity subscription
+Provider that ran the headless CLI, exposed the vBot Tool inventory through MCP
+and handed denied native calls back to Chat. The archive includes its Model
+catalog, tests, documentation and shared integration files at their original
+paths. `MANIFEST.json` records the source commit and each file's SHA-256.
+Restore in a worktree and reconcile shared files with the current checkout.

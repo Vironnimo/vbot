@@ -430,11 +430,10 @@ async def test_history_sampler_delays_until_one_hour_after_latest_sample(
     )
 
     empty_delay = await service._initial_history_delay()  # noqa: SLF001
-    service.observe_antigravity_usage(1, ())  # Disconnected before the startup read completed.
     for minutes_ago in (75, 15):
         await store.append(
             (observed_at - timedelta(minutes=minutes_ago)).isoformat(),
-            [_snapshot(), _snapshot(connection="antigravity:subscription")],
+            [_snapshot(), _snapshot(connection="retired:subscription")],
         )
     delay = await service._initial_history_delay()  # noqa: SLF001
 
@@ -443,6 +442,8 @@ async def test_history_sampler_delays_until_one_hour_after_latest_sample(
     [restored] = service.observations()
     assert restored["observed_at"] == "2026-07-25T11:45:00.000000Z"
     assert restored["credits"] == _snapshot()["credits"]
+    history = await service.history_report()
+    assert history.samples[-1].providers[1]["connection"] == "retired:subscription"
 
 
 @pytest.mark.asyncio

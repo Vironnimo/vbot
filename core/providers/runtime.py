@@ -15,7 +15,6 @@ from zoneinfo import ZoneInfo
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.models import Model, ModelRegistry
 from core.providers import _catalog_refresh
-from core.providers._antigravity_native import AntigravityNative
 from core.providers._claude_agent_sdk import SUBSCRIPTION_REQUIRED_MESSAGE
 from core.providers._claude_agent_usage import ClaudeAgentUsage
 from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
@@ -25,7 +24,6 @@ from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, 
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
 from core.providers.adapter_types import ADAPTER_TYPES as ADAPTER_TYPES
 from core.providers.adapter_types import adapter_type_for_config
-from core.providers.antigravity import AntigravityAdapter
 from core.providers.claude_agent import ClaudeAgentAdapter, ClaudeAgentSessions
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -87,7 +85,6 @@ class ProviderRuntime:
         resources_path: Path,
         logger: Any,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
-        on_antigravity_usage: Callable[[int, tuple[UsageWindow, ...]], None] | None = None,
     ) -> None:
         self._providers = providers
         self._models = models
@@ -115,13 +112,11 @@ class ProviderRuntime:
         self._responses_transports = ResponsesTransports()
         self._external_status: dict[str, dict[str, Any]] = {}
         self._claude_usage = ClaudeAgentUsage()
-        self._on_antigravity_usage = on_antigravity_usage
         self._claude_usage_probe: asyncio.Task[None] | None = None
         self._claude_usage_probed_at: float | None = None
-        self._retired_native: set[ClaudeAgentSessions | AntigravityNative] = set()
+        self._retired_claude_sessions: set[ClaudeAgentSessions] = set()
         self._claude_configured_path = self._claude_executable_path()
         self._claude_sessions = self._new_claude_sessions()
-        self._antigravity = self._new_antigravity()
         self._http_transports = ProviderHTTPTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
@@ -151,9 +146,7 @@ class ProviderRuntime:
         self._storage = storage
         if data_changed:
             self._claude_sessions.abort()
-            self._antigravity.abort()
-            self._retired_native.update((self._claude_sessions, self._antigravity))
-            self._antigravity = self._new_antigravity()
+            self._retired_claude_sessions.add(self._claude_sessions)
             self._claude_configured_path = self._claude_executable_path()
             self._claude_sessions = self._new_claude_sessions()
             self._external_status.clear()
@@ -190,29 +183,6 @@ class ProviderRuntime:
         )
         return sessions
 
-    def _new_antigravity(self) -> AntigravityNative:
-        def auth_failed(status: str, message: str) -> None:
-            if owner is not self._antigravity:
-                return
-            for provider_id, provider, connection in self._auto_refresh_targets():
-                if provider.adapter != "antigravity" or connection.type != "external":
-                    continue
-                key = f"{provider_id}:{connection.id}"
-                self._external_status[key] = {
-                    "connected": False,
-                    "status": status,
-                    "message": message,
-                }
-                self._external_refresh_at.pop(key, None)
-                self._connection_reachability[key] = False
-
-        owner = AntigravityNative(
-            temporary_files=self._storage.temporary_files,
-            on_auth_error=auth_failed,
-            on_usage=self._on_antigravity_usage,
-        )
-        return owner
-
     def claude_usage_windows(self) -> tuple[UsageWindow, ...]:
         return self._claude_usage.observation()[1]
 
@@ -227,9 +197,6 @@ class ProviderRuntime:
         if age is None or age >= CLAUDE_USAGE_REFRESH_SECONDS:
             self._start_claude_usage_probe()
         return self._claude_usage.observation()
-
-    async def current_antigravity_usage(self) -> tuple[UsageWindow, ...]:
-        return await self._antigravity.usage()
 
     def _start_claude_usage_probe(self) -> None:
         if self._catalog_refresh_closed:
@@ -256,17 +223,10 @@ class ProviderRuntime:
             return
         self._claude_configured_path = configured_path
         previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
-        self._forget_external_auth("claude_agent")
+        self._external_status.clear()
+        self._external_refresh_at.clear()
         self._forget_claude_usage()
         await previous.aclose()
-
-    def _forget_external_auth(self, adapter: str) -> None:
-        known = self._providers.list_ids()
-        for key in self._external_status.keys() | self._external_refresh_at.keys():
-            provider_id = key.partition(":")[0]
-            if provider_id not in known or self._providers.get(provider_id).adapter == adapter:
-                self._external_status.pop(key, None)
-                self._external_refresh_at.pop(key, None)
 
     def _native_auth_failed(self) -> None:
         self._claude_usage.clear()
@@ -357,10 +317,7 @@ class ProviderRuntime:
         await self._responses_transports.close_conversations(
             {responses_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
         )
-        await asyncio.gather(
-            self._claude_sessions.close_sessions(set(sessions)),
-            self._antigravity.conversations.close_sessions(set(sessions)),
-        )
+        await self._claude_sessions.close_sessions(set(sessions))
 
     async def close_connection_transports(
         self, provider_id: str, connection_id: str | None = None
@@ -370,19 +327,12 @@ class ProviderRuntime:
         ``connection_id`` is local (``subscription``); without it, every
         Connection of the Provider closes.
         """
-        adapter = self._providers.get(provider_id).adapter
-        if adapter == "claude_agent":
+        if self._providers.get(provider_id).adapter == "claude_agent":
             previous, self._claude_sessions = self._claude_sessions, self._new_claude_sessions()
-            self._forget_external_auth(adapter)
+            self._external_status.clear()
+            self._external_refresh_at.clear()
             self._forget_claude_usage()
             await previous.aclose()
-        elif adapter == "antigravity":
-            previous_agy = self._antigravity
-            self._antigravity = self._new_antigravity()
-            self._forget_external_auth(adapter)
-            if self._on_antigravity_usage is not None:
-                self._on_antigravity_usage(time.monotonic_ns(), ())
-            await previous_agy.aclose()
         try:
             await self._responses_transports.close_connection(provider_id, connection_id)
         finally:
@@ -396,12 +346,11 @@ class ProviderRuntime:
             results = await settle_before_cancelling(
                 asyncio.gather(
                     self._claude_sessions.aclose(),
-                    self._antigravity.aclose(),
-                    *(native.aclose() for native in self._retired_native),
+                    *(sessions.aclose() for sessions in self._retired_claude_sessions),
                     return_exceptions=True,
                 )
             )
-            self._retired_native.clear()
+            self._retired_claude_sessions.clear()
             failures = [result for result in results if isinstance(result, BaseException)]
             if failures:
                 raise BaseExceptionGroup("Native Provider cleanup failed.", failures)
@@ -420,9 +369,8 @@ class ProviderRuntime:
         if self._claude_usage_probe is not None:
             self._claude_usage_probe.cancel()
         self._claude_sessions.abort()
-        self._antigravity.abort()
         self._claude_usage.clear()
-        for sessions in self._retired_native:
+        for sessions in self._retired_claude_sessions:
             sessions.abort()
         try:
             self._responses_transports.abort()
@@ -483,9 +431,6 @@ class ProviderRuntime:
         extra_kwargs: dict[str, Any] = {"http_transport": http_transport}
         if adapter_class is ClaudeAgentAdapter:
             extra_kwargs["sessions"] = self._claude_sessions
-            extra_kwargs["connection_id"] = connection_config.id
-        if adapter_class is AntigravityAdapter:
-            extra_kwargs["native"] = self._antigravity
             extra_kwargs["connection_id"] = connection_config.id
         if adapter_class in (OllamaAdapter, LMStudioAdapter):
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
@@ -649,13 +594,13 @@ class ProviderRuntime:
         self, provider_id: str, connection: ConnectionConfig
     ) -> dict[str, Any]:
         provider = self._providers.get(provider_id)
-        if connection.type != "external":
+        if provider.adapter != "claude_agent" or connection.type != "external":
             raise ConfigError("Provider does not support an external login")
-        sessions = self._external_owner(provider.adapter)
+        sessions = self._claude_sessions
         result = await sessions.probe()
-        if sessions is not self._external_owner(
-            provider.adapter
-        ) or not self._credentials.is_usable(provider_id, f"{provider_id}:{connection.id}"):
+        if sessions is not self._claude_sessions or not self._credentials.is_usable(
+            provider_id, f"{provider_id}:{connection.id}"
+        ):
             raise ConfigError("External Connection changed during login check; retry the check")
         if result.get("status") == "busy":
             previous = self._external_status.get(f"{provider_id}:{connection.id}", {})
@@ -677,13 +622,6 @@ class ProviderRuntime:
             if key in result
         }
         return result
-
-    def _external_owner(self, adapter: str) -> ClaudeAgentSessions | AntigravityNative:
-        if adapter == "claude_agent":
-            return self._claude_sessions
-        if adapter == "antigravity":
-            return self._antigravity
-        raise ConfigError("Provider does not support an external login")
 
     async def refresh_external_connection(
         self, provider_id: str, connection_id: str

@@ -15,20 +15,6 @@ from core.providers.wire_profile import PROTOCOLS
 _IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 _RAW_DEFAULTS: dict[str, dict[str, Any]] = {
-    "antigravity": {
-        "request": {
-            "output_limit_field": None,
-            "on_demand_tools": False,
-            "parameters": {
-                "temperature": {"mode": "drop"},
-                "top_p": {"mode": "drop"},
-                "top_k": {"mode": "drop"},
-            },
-        },
-        "reasoning": {"dialect": "none"},
-        "replay": {"scope": "none", "fidelity": "meta_only"},
-        "media": {"types": []},
-    },
     "claude_agent": {
         "request": {
             "output_limit_field": "max_output_tokens",

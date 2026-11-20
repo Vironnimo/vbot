@@ -37,7 +37,6 @@ from core.providers._usage_parsers import (
     clamp_percent,
 )
 from core.providers._usage_types import (
-    ANTIGRAVITY_USAGE_CONNECTION,
     CLAUDE_AGENT_USAGE_CONNECTION,
     COPILOT_USAGE_CONNECTION,
     COPILOT_USAGE_URL,
@@ -132,10 +131,7 @@ DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
 # Provider-imposed polling floors for successful snapshots. Ollama allows ten
 # usage requests per minute per user across all keys and devices and asks for
 # one per minute.
-_MIN_CACHE_TTL_SECONDS: dict[str, float] = {
-    OLLAMA_USAGE_CONNECTION: 60.0,
-    ANTIGRAVITY_USAGE_CONNECTION: 60.0,
-}
+_MIN_CACHE_TTL_SECONDS: dict[str, float] = {OLLAMA_USAGE_CONNECTION: 60.0}
 
 
 class HttpxUsageTransport:
@@ -162,9 +158,7 @@ class HttpxUsageTransport:
                 raise UsageFetchError("Network error") from exc
 
 
-_ANTIGRAVITY = _SupportedConnection("antigravity", "subscription")
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
-    _ANTIGRAVITY,
     _SupportedConnection("claude-agent", "subscription"),
     _SupportedConnection("openai", "subscription"),
     _SupportedConnection("github-copilot", "oauth"),
@@ -194,7 +188,6 @@ class ProviderUsageService:
         monotonic: Callable[[], float] = time.monotonic,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         claude_usage: Callable[[], tuple[datetime | None, tuple[UsageWindow, ...]]] | None = None,
-        antigravity_usage: Callable[[], Awaitable[tuple[UsageWindow, ...]]] | None = None,
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
@@ -211,8 +204,6 @@ class ProviderUsageService:
         self._monotonic = monotonic
         self._clock = clock
         self._claude_usage = claude_usage
-        self._antigravity_usage = antigravity_usage
-        self._last_antigravity_check: int | None = None
         self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
         self._observations: dict[tuple[str, str], dict[str, Any]] = {}
         self._observation_listeners: list[Callable[[dict[str, Any]], None]] = []
@@ -221,7 +212,6 @@ class ProviderUsageService:
         self._history_started = False
         # Only connections with a registered fetcher are queried.
         self._fetchers: dict[str, _Fetcher] = {
-            ANTIGRAVITY_USAGE_CONNECTION: self._fetch_antigravity,
             CLAUDE_AGENT_USAGE_CONNECTION: self._fetch_claude_agent,
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
@@ -293,33 +283,6 @@ class ProviderUsageService:
         """Notify passive consumers of a new measurement, including an emptied window set."""
         self._observation_listeners.append(listener)
         return lambda: self._observation_listeners.remove(listener)
-
-    def observe_antigravity_usage(
-        self, started_at_ns: int, windows: tuple[UsageWindow, ...]
-    ) -> None:
-        """Reuse a native check ordered by monotonic start time; disconnect clears its Account."""
-        self._apply_antigravity_snapshot(
-            started_at_ns, self._window_snapshot(_ANTIGRAVITY, windows)
-        )
-
-    def _apply_antigravity_snapshot(
-        self, started_at_ns: int, snapshot: ProviderUsageSnapshot
-    ) -> ProviderUsageSnapshot:
-        # A report and several Model steps may check the same native login concurrently.
-        if (
-            self._last_antigravity_check is not None
-            and started_at_ns < self._last_antigravity_check
-        ):
-            current = self._cache.get(_ANTIGRAVITY.target_id)
-            return current[2] if current is not None else self._window_snapshot(_ANTIGRAVITY, ())
-        if not snapshot.error:
-            self._last_antigravity_check = started_at_ns
-        if snapshot.windows or snapshot.error:
-            self._store_cache(_ANTIGRAVITY, snapshot)
-        else:
-            self._cache.pop(_ANTIGRAVITY.target_id, None)
-        self._remember(snapshot.to_dict(), format_canonical_timestamp(self._now()))
-        return snapshot
 
     def _remember(self, snapshot: dict[str, Any], observed_at: str) -> None:
         if snapshot["error"]:
@@ -416,12 +379,10 @@ class ProviderUsageService:
             if latest is not None:
                 for sample in await self._history.samples(since=latest, until=latest):
                     for snapshot in sample.providers:
-                        # A live check or disconnect can finish during the database read.
-                        if (
-                            snapshot["connection"] == ANTIGRAVITY_USAGE_CONNECTION
-                            and self._last_antigravity_check is not None
-                        ):
+                        # Retired Connections still belong to durable History.
+                        if snapshot["connection"] not in self._fetchers:
                             continue
+                        # A live report can finish during the database read.
                         if (snapshot["connection"], snapshot["account"]) not in self._observations:
                             self._remember(snapshot, sample.sampled_at)
         except DatabaseError as exc:
@@ -490,10 +451,6 @@ class ProviderUsageService:
             cached = self._cached_snapshot(connection.target_id)
             if cached is not None:
                 return cached
-            if connection.connection_id == ANTIGRAVITY_USAGE_CONNECTION:
-                started_at_ns = time.monotonic_ns()
-                snapshot = await self._run_fetcher(connection)
-                return self._apply_antigravity_snapshot(started_at_ns, snapshot)
             snapshot = await self._run_fetcher(connection)
             self._store_cache(connection, snapshot)
             self._remember(snapshot.to_dict(), format_canonical_timestamp(self._now()))
@@ -557,26 +514,14 @@ class ProviderUsageService:
 
     async def _fetch_claude_agent(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         observed_at, windows = self._claude_usage() if self._claude_usage else (None, ())
-        snapshot = self._window_snapshot(connection, windows)
-        self._remember(snapshot.to_dict(), format_canonical_timestamp(observed_at or self._now()))
-        return snapshot
-
-    async def _fetch_antigravity(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
-        try:
-            windows = await self._antigravity_usage() if self._antigravity_usage else ()
-        except ProviderAuthError as exc:
-            raise UsageFetchError(str(exc)) from exc
-        return self._window_snapshot(connection, windows)
-
-    def _window_snapshot(
-        self, connection: _SupportedConnection, windows: tuple[UsageWindow, ...]
-    ) -> ProviderUsageSnapshot:
-        return ProviderUsageSnapshot(
+        snapshot = ProviderUsageSnapshot(
             connection=connection.connection_id,
             account=connection.account_id,
             display_name=self._display_name(connection),
             windows=list(windows),
         )
+        self._remember(snapshot.to_dict(), format_canonical_timestamp(observed_at or self._now()))
+        return snapshot
 
     async def _fetch_openai(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         provider = self._runtime.providers.get(connection.provider_id)
