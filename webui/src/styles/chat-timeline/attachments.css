@@ -204,97 +204,91 @@ a.inline-attachment:focus-visible {
   }
 }
 
-/* Tool media (ToolMedia.svelte): image thumbnails and video and audio
-   players, compact within the detail rail. */
-.tool-media__player {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  margin: 4px 0 8px;
+/* The row sets the height. Its preview stretches across the summary padding
+   without participating in the row's intrinsic height. */
+.tool-event:has(> summary > .tool-media-previews),
+.working-block[open]:has(.tool-media-previews) {
+  align-self: stretch;
+  width: 100%;
 }
 
-.tool-media__video {
-  display: block;
-  max-width: 100%;
-  max-height: 320px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-
-.tool-media__player figcaption {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-}
-
-.tool-media__player figcaption a {
-  color: var(--text-lo);
-  text-decoration: none;
-}
-
-.tool-media__player figcaption a:hover,
-.tool-media__player figcaption a:focus-visible {
-  color: var(--text-hi);
-  text-decoration: underline;
-}
-
-.tool-image-previews {
+.tool-media-previews {
+  flex: none;
+  align-self: stretch;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-  margin: 4px 0 8px;
+  gap: 3px;
+  margin-block: -2px;
+  margin-inline-start: auto;
 }
-
-.tool-image-preview {
+.tool-media-preview,
+.tool-media-more {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 128px;
-  max-width: 100%;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  align-items: center;
+  border-radius: var(--r-sm);
   color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
   text-decoration: none;
-  cursor: zoom-in;
 }
-
-.tool-image-preview:hover {
-  border-color: var(--border-2);
+.tool-media-more {
+  align-self: center;
+  gap: 1px;
+  height: min(19px, var(--tool-media-height, 1em));
+  padding-inline: 4px 2px;
+  border: 1px solid var(--border-2);
+  background: var(--surface);
+}
+.tool-media-more svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+.tool-media-previews a:is(:hover, :focus-visible) {
   color: var(--text-hi);
   background: var(--surface-2);
 }
-
-.tool-image-preview img {
-  width: 100%;
-  height: 88px;
+/* Width follows the decoded frame, so portrait and square thumbnails sit
+   right next to one another. Only the summary text determines row height. */
+.tool-media-preview__frame {
+  position: relative;
+  display: flex;
+  height: 0;
+  align-items: center;
+  pointer-events: none;
+}
+.tool-media-preview__frame :is(img, video) {
+  width: auto;
+  height: var(--tool-media-height, 1em);
+  max-width: min(48px, 10vw);
+  min-width: 1px;
+  border-radius: var(--r-sm);
   object-fit: contain;
 }
-
-.tool-image-preview > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+.tool-media-preview__frame svg {
+  width: 20px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
-
-.tool-image-preview .image-unavailable {
+.tool-media-preview__frame .tool-media-preview__play {
+  position: absolute;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 70%);
+  fill: white;
+  stroke: none;
+}
+.tool-media-preview__frame img:not([hidden]) + .tool-media-preview__missing {
   display: none;
-  height: 88px;
-  width: 100%;
-  padding: 4px;
-  font-size: var(--fs-label-sm);
-}
-
-.tool-image-preview img[hidden] + .image-unavailable {
-  display: flex;
 }
 
 /* A voice message in a user turn: its player and file name; what it said

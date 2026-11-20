@@ -10,7 +10,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: Modal } = await import('../Modal.svelte');
-const { default: ImageLightbox } = await import('../../ImageLightbox.svelte');
+const { default: MediaLightbox } = await import('../../MediaLightbox.svelte');
 const { default: Dropdown } = await import('../../Dropdown.svelte');
 const { default: SearchableDropdown } =
   await import('../../SearchableDropdown.svelte');
@@ -239,9 +239,12 @@ describe('Modal', () => {
     render({ onClose: outerClose });
     const outer = document.querySelector('.modal');
     const previous = document.activeElement;
-    const inner = mount(ImageLightbox, {
+    const inner = mount(MediaLightbox, {
       target: document.body,
-      props: { src: '/image.png', onClose: innerClose },
+      props: {
+        items: [{ kind: 'image', src: '/image.png' }],
+        onClose: innerClose,
+      },
     });
     flushSync();
     try {

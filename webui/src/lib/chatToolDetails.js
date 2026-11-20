@@ -32,12 +32,12 @@ function mediaFilename(value) {
     : t('chat.attachment.preview');
 }
 
-// The images, videos and audio of a Tool call's details, in order: the
+// The images, videos and audio of a Tool call: the
 // server-signed files of its display (those it read, looked at or produced,
 // and the `source` files it started from), then the stored media of its
 // result. Only signed file URLs and opaque Attachment identities are used,
 // never raw Tool paths or external addresses.
-export function toolDetailMedia(tool, result) {
+export function toolRowMedia(tool, result = tool?.result) {
   const displayed = toolDisplay(tool)?.media;
   const parsed = parseJsonValue(result);
   const stored = Array.isArray(parsed?.artifacts)
@@ -68,6 +68,8 @@ export function toolDetailMedia(tool, result) {
     })),
   ];
   const seen = new Set();
+  // Results lead the gallery, even when a generation recorded its inputs first.
+  candidates.sort((a, b) => Number(a.source) - Number(b.source));
   return candidates.flatMap((item) => {
     if (
       !item.src ||

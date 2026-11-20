@@ -29,7 +29,7 @@ _TAIL_TEXT_LABELS = frozenset({"output", "screen", "scrollback"})
 _TRUNCATED = "…"
 
 
-def bounded_preview(value: Any) -> tuple[Any, bool]:
+def bounded_preview(value: Any, *, tool_result: bool = False) -> tuple[Any, bool]:
     """Return a bounded copy of *value* and whether anything was left out.
 
     A JSON string is previewed as the value it holds, so a persisted result
@@ -42,7 +42,20 @@ def bounded_preview(value: Any) -> tuple[Any, bool]:
             decoded = None
         if isinstance(decoded, (dict, list)):
             value = decoded
-    return _bounded(value, PREVIEW_DEPTH)
+    preview, cut = _bounded(value, PREVIEW_DEPTH)
+    if tool_result and isinstance(value, dict) and isinstance(value.get("artifacts"), list):
+        # Keep only compact media references beyond the normal list limit,
+        # so a large MCP result can still expose every item in its gallery.
+        for artifact in value["artifacts"][PREVIEW_LIST_LENGTH:]:
+            if isinstance(artifact, dict) and artifact.get("kind") == "read_media":
+                preview["artifacts"].append(
+                    {
+                        key: field[:PREVIEW_STRING_LENGTH]
+                        for key in ("kind", "attachment_id", "filename", "media_type")
+                        if isinstance(field := artifact.get(key), str)
+                    }
+                )
+    return preview, cut
 
 
 def _bounded(value: Any, depth: int) -> tuple[Any, bool]:

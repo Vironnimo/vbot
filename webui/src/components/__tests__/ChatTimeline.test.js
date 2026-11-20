@@ -499,8 +499,10 @@ describe('ChatTimeline messages', () => {
           value: naturalHeight,
           configurable: true,
         });
-        window.innerWidth = width;
-        window.innerHeight = height;
+        Object.defineProperties(lightboxImage, {
+          clientWidth: { value: Math.min(width, naturalWidth) },
+          clientHeight: { value: Math.min(height, naturalHeight) },
+        });
         window.dispatchEvent(new Event('resize'));
         flushSync();
         expect(lightboxImage.classList.contains('zoomable')).toBe(zoomable);

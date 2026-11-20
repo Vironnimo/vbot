@@ -14,6 +14,7 @@
   import CopyableValueCard from './CopyableValueCard.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import CollapseRail from './CollapseRail.svelte';
+  import ToolMedia from './ToolMedia.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import ToolRowStatus from './ToolRowStatus.svelte';
@@ -509,6 +510,7 @@
                   </svg>
                 </Button>
               {/if}
+              <ToolMedia tool={child} />
             </summary>
             <ToolDetails
               tool={child}
@@ -594,6 +596,7 @@
                 label={sendTimeLabel}
                 details={sendStatusDetails}
               />
+              <ToolMedia tool={child} />
             </summary>
             <ToolDetails
               tool={child}
@@ -740,6 +743,7 @@
                   </svg>
                 </Button>
               {/if}
+              <ToolMedia tool={child} />
             </summary>
             <ToolDetails
               tool={child}

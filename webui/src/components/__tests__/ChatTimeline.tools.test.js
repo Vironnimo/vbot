@@ -14,7 +14,7 @@ import {
 // After the support module, which points `svelte/store` at its client build.
 import { fromStore, writable } from 'svelte/store';
 import { assistantRun, toolItem } from './timelineItems.support.js';
-import { toolDetailMedia } from '../../lib/chatToolDetails.js';
+import { toolRowMedia } from '../../lib/chatToolDetails.js';
 import { t } from '../../lib/i18n.js';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
@@ -1151,7 +1151,7 @@ describe('ChatTimeline Tools', () => {
   });
 
   describe('media', () => {
-    it('shows the source images, then the media, with players for video and audio', () => {
+    it('opens a mixed gallery from the closed row, with results before sources', () => {
       const display = structuredDisplay({
         details: [],
         media: [
@@ -1200,41 +1200,85 @@ describe('ChatTimeline Tools', () => {
             id: 'call',
             name: 'generate_video',
             arguments: { prompt: 'a cat' },
-            result: result,
-            ...{ display },
+            result,
+            display,
           }),
         ]),
       );
 
-      expect(document.querySelector('.tool-media')).toBeNull();
-      openDisclosures('.tool-event');
-      const [sources, media] = document.querySelectorAll('.tool-media');
-      expect(sources.querySelector('.teb-label').textContent).toBe(
-        t('chat.toolMediaSources'),
-      );
-      expect(
-        Array.from(sources.querySelectorAll('.tool-image-preview img'), (img) =>
-          img.getAttribute('src'),
-        ),
-      ).toEqual(['/api/files/frame.token']);
-      expect(media.querySelector('.teb-label').textContent).toBe(
-        t('chat.toolMedia'),
-      );
-      expect(
-        Array.from(media.querySelectorAll('.tool-image-preview img'), (img) =>
-          img.getAttribute('src'),
-        ),
-      ).toEqual(['/api/files/cat.token']);
-      expect(media.querySelector('video').getAttribute('src')).toBe(
+      const preview = document.querySelector('.tool-media-preview');
+      const row = preview.closest('details');
+      expect(row.open).toBe(false);
+      expect(preview.getAttribute('href')).toBe('/api/files/clip.token');
+      const previews = [...row.querySelectorAll('summary .tool-media-preview')];
+      expect(previews.map((link) => link.getAttribute('href'))).toEqual([
+        '/api/files/clip.token',
+        '/api/files/cat.token',
+        '/api/attachments/att_0123456789ab',
+      ]);
+      const more = row.querySelector('.tool-media-more');
+      expect(more.textContent.trim()).toBe('+1');
+      expect(row.querySelector('video[controls], .audio-player')).toBeNull();
+      preview.focus();
+      preview.click();
+      flushSync();
+      const viewer = document.querySelector('[role="dialog"]');
+      const next = viewer.querySelector(`[aria-label="${t('common.next')}"]`);
+      const current = () =>
+        viewer.querySelector('.media-lightbox__caption a').getAttribute('href');
+      expect(row.open).toBe(false);
+      expect(viewer.querySelector('video[controls]').getAttribute('src')).toBe(
         '/api/files/clip.token',
       );
-      // Audio plays in the same player as spoken replies.
-      expect(media.querySelector('.audio-player')).toBeTruthy();
-      expect(media.textContent).toContain('song.mp3');
-      // Only signed vBot files of a playable kind reach the page.
+      next.click();
+      flushSync();
+      expect(current()).toBe('/api/files/cat.token');
+      expect(viewer.querySelector('video')).toBeNull();
+      next.click();
+      flushSync();
+      expect(current()).toBe('/api/attachments/att_0123456789ab');
+      expect(viewer.querySelector('.audio-player')).toBeTruthy();
+      next.click();
+      flushSync();
+      expect(current()).toBe('/api/files/frame.token');
+      expect(
+        viewer.querySelector('.media-lightbox__caption').textContent,
+      ).toContain(t('chat.toolMedia.source'));
+      expect(viewer.querySelector('.audio-player')).toBeNull();
+      next.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+      );
+      flushSync();
+      expect(current()).toBe('/api/files/clip.token');
+      viewer.querySelector('.image-lightbox__close').click();
+      flushSync();
+      expect(document.activeElement).toBe(preview);
+      for (const [link, url] of [
+        [previews[1], '/api/files/cat.token'],
+        [previews[2], '/api/attachments/att_0123456789ab'],
+        [more, '/api/files/frame.token'],
+      ]) {
+        link.click();
+        flushSync();
+        const dialog = document.querySelector('[role="dialog"]');
+        expect(
+          dialog
+            .querySelector('.media-lightbox__caption a')
+            .getAttribute('href'),
+        ).toBe(url);
+        dialog.querySelector('.image-lightbox__close').click();
+        flushSync();
+        expect(row.open).toBe(false);
+      }
+      openDisclosures('.tool-event');
+      expect(row.querySelector('summary .tool-media-preview')).toBe(preview);
+      expect(
+        row.querySelector(
+          '.tool-event-body .tool-media-preview, .tool-event-body video, .tool-event-body .audio-player',
+        ),
+      ).toBeNull();
       expect(document.body.textContent).not.toContain('remote.png');
       expect(document.body.textContent).not.toContain('doc.pdf');
-      expect(document.querySelector('.tool-raw-call').open).toBe(false);
     });
 
     it.each(['read', 'analyze_image', 'web_fetch'])(
@@ -1309,20 +1353,43 @@ describe('ChatTimeline Tools', () => {
         for (const sessionState of [live, reloaded]) {
           await timeline.unmount();
           document.body.innerHTML = '';
-          timeline.render(sessionState);
-          expect(document.querySelector('.tool-image-preview')).toBeNull();
-          openDisclosures('.tool-event');
-          const previews = [
-            ...document.querySelectorAll('.tool-image-preview'),
-          ];
-          expect(previews).toHaveLength(name === 'analyze_image' ? 2 : 1);
-          const disclosure = previews[0].closest('details');
-          expect(disclosure.open).toBe(true);
-          expect(previews[0].querySelector('img').getAttribute('src')).toBe(
+          const session = fromStore(
+            writable(
+              sessionState === live
+                ? {
+                    ...live,
+                    timelineItems: [
+                      assistantRun('image-run', [
+                        toolItem({ ...toolCall, finished: false }),
+                      ]),
+                    ],
+                  }
+                : sessionState,
+            ),
+          );
+          timeline.mount({
+            get sessionState() {
+              return session.current;
+            },
+            agentName: 'Alpha',
+          });
+          if (sessionState === live) {
+            expect(document.querySelector('.tool-media-preview')).toBeNull();
+            session.current = live;
+            flushSync();
+          }
+          const preview = document.querySelector('.tool-media-preview');
+          const disclosure = preview.closest('details');
+          expect(disclosure.open).toBe(false);
+          expect(
+            disclosure.querySelectorAll('.tool-media-preview'),
+          ).toHaveLength(name === 'analyze_image' ? 2 : 1);
+          expect(disclosure.querySelector('.tool-media-more')).toBeNull();
+          expect(preview.querySelector('img').getAttribute('src')).toBe(
             expectedSource,
           );
-          previews[0].focus();
-          previews[0].click(); // Keyboard activation targets the link, not its image.
+          preview.focus();
+          preview.click(); // Keyboard activation targets the link.
           flushSync();
           expect(
             document
@@ -1331,11 +1398,13 @@ describe('ChatTimeline Tools', () => {
           ).toContain(expectedSource);
           pressEscape();
 
-          const thumbnail = previews[0].querySelector('img');
+          expect(disclosure.open).toBe(false);
+          openDisclosures('.tool-event');
+          const thumbnail = preview.querySelector('img');
           thumbnail.dispatchEvent(new Event('error'));
           expect(thumbnail.hidden).toBe(true);
           expect(thumbnail.nextElementSibling.getAttribute('role')).toBe('img');
-          previews[0].click();
+          preview.click();
           flushSync();
           document
             .querySelector('.image-lightbox__image')
@@ -1399,7 +1468,7 @@ describe('ChatTimeline Tools', () => {
         agentName: 'Alpha',
       });
       openDisclosures('.tool-event');
-      const original = document.querySelector('.tool-image-preview img');
+      const original = document.querySelector('.tool-media-preview img');
       original.dispatchEvent(new Event('error'));
       expect(original.hidden).toBe(true);
 
@@ -1420,7 +1489,7 @@ describe('ChatTimeline Tools', () => {
       };
       flushSync();
 
-      const updated = document.querySelector('.tool-image-preview img');
+      const updated = document.querySelector('.tool-media-preview img');
       expect(updated).not.toBe(original);
       expect(updated.hidden).toBe(false);
       expect(updated.getAttribute('src')).toBe('/api/files/second.signature');
@@ -1442,7 +1511,7 @@ describe('ChatTimeline Tools', () => {
       ['x'.repeat(129), false],
     ])('accepts only an opaque Attachment identity: %s', (id, accepted) => {
       expect(
-        toolDetailMedia(null, {
+        toolRowMedia(null, {
           artifacts: [
             {
               kind: 'read_media',
@@ -1497,7 +1566,7 @@ describe('ChatTimeline Tools', () => {
       );
 
       openDisclosures('.tool-event');
-      expect(document.querySelector('.tool-image-preview')).toBeNull();
+      expect(document.querySelector('.tool-media-preview')).toBeNull();
       expect(document.body.textContent).toContain('ordinary text');
     });
   });

@@ -602,6 +602,8 @@ def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() ->
     timeline = RunTimeline("run")
     command = "echo " + "x" * 5_000
     output = "".join(f"line {index}\n" for index in range(5_000))
+    image = {"kind": "read_media", "attachment_id": "att_end", "media_type": "image/png"}
+    artifacts = [{"kind": "other"}] * 21 + [image]
     call = {"id": "call", "name": "bash", "arguments": {"command": command, "timeout": 5}}
     details = [
         {"type": "text", "label": label, "source": {"from": origin, "path": path}}
@@ -621,7 +623,12 @@ def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() ->
         "tool_call_result",
         {
             "tool_call": call,
-            "result": {"ok": True, "error": None, "data": {"output": output}, "artifacts": []},
+            "result": {
+                "ok": True,
+                "error": None,
+                "data": {"output": output},
+                "artifacts": artifacts,
+            },
             "display": {"details": details},
         },
         second=3,
@@ -640,6 +647,7 @@ def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() ->
     assert tool["arguments"]["timeout"] == 5
     assert len(tool["arguments"]["command"]) < len(command)
     assert len(tool["result"]["data"]["output"]) < len(output)
+    assert tool["result"]["artifacts"] == artifacts[:20] + [image]
     # Detail texts are resolved from the whole call; an output keeps its end,
     # and a source without text drops its block.
     command_block, output_block = tool["display"]["details"]

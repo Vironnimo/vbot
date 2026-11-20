@@ -667,7 +667,7 @@ class RunTimeline:
     def _present_tool(self, child: JsonObject, raw: JsonObject) -> None:
         """Rebuild what the row shows of its call from the complete values."""
         arguments, arguments_cut = bounded_preview(raw["arguments"])
-        result, result_cut = bounded_preview(raw["result"])
+        result, result_cut = bounded_preview(raw["result"], tool_result=True)
         child.update(
             arguments=arguments,
             result=result,
