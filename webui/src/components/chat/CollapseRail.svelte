@@ -2,16 +2,8 @@
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
-  // The side line of an open disclosure body (Working group, Thinking, Tool
-  // details) as a way to close it from anywhere in a long body: clicking the
-  // line, or the knob that follows the viewport along it while the pointer is
-  // over the body, closes the enclosing <details> and brings its summary back
-  // into view. The summary stays the keyboard and screen-reader control, so
-  // the rail is pointer-only. The host body is a `.collapse-host`
-  // (styles/chat-timeline/entries.css), whose `--collapse-rail-line` names
-  // its border width.
-  let rail = $state(null);
-
+  // The summary handles keyboard and screen-reader interaction. The side line
+  // lets pointer users close the disclosure from anywhere along its body.
   function scrollContainer(element) {
     for (let node = element.parentElement; node; node = node.parentElement) {
       const { overflowY } = getComputedStyle(node);
@@ -23,7 +15,7 @@
   function collapse(event) {
     event.preventDefault();
     event.stopPropagation();
-    const details = rail?.closest('details');
+    const details = event.currentTarget.closest('details');
     if (!details) return;
     const summary = details.querySelector(':scope > summary');
     const scroller = scrollContainer(details);
@@ -39,17 +31,10 @@
 </script>
 
 <button
-  bind:this={rail}
   type="button"
   class="collapse-rail"
   tabindex="-1"
   aria-hidden="true"
-  use:tooltip={t('chat.collapseBlock')}
+  use:tooltip={{ text: t('chat.collapseBlock'), placement: 'pointer' }}
   onclick={collapse}
->
-  <span class="collapse-rail__knob">
-    <svg viewBox="0 0 16 16" width="10" height="10">
-      <path d="m4 10 4-4 4 4" />
-    </svg>
-  </span>
-</button>
+></button>

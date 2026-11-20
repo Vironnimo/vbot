@@ -14,6 +14,7 @@ import {
   toolChild,
 } from './ChatAssistantRun.support.js';
 import { t } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 function rowCancel(kind) {
   return document.querySelector(`.row-cancel[data-cancel="${kind}"]`);
@@ -733,6 +734,7 @@ describe('ChatAssistantRun', () => {
     );
 
     it('closes each open nested block from its own side line', () => {
+      vi.useFakeTimers();
       run.mount({
         item: assistantRun({
           items: [
@@ -751,7 +753,16 @@ describe('ChatAssistantRun', () => {
           (rail) => rail.closest('details') === details,
         );
 
-      railOf(tool).click();
+      const toolRail = railOf(tool);
+      toolRail.dispatchEvent(new MouseEvent('pointerenter', { clientY: 100 }));
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      const hint = document.querySelector('[role="tooltip"]');
+      expect(hint.textContent).toBe(t('chat.collapseBlock'));
+      const initialTop = parseFloat(hint.style.top);
+      toolRail.dispatchEvent(new MouseEvent('pointermove', { clientY: 140 }));
+      expect(parseFloat(hint.style.top) - initialTop).toBe(40);
+
+      toolRail.click();
       expect(tool.open).toBe(false);
       expect(group.open).toBe(true);
       railOf(group).click();
