@@ -31,7 +31,6 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderRateLimitError,
-    ProviderReplayLimitError,
     ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
     ProviderUsageLimitError,
@@ -290,7 +289,7 @@ def model_fallback_scope(
     """
     if isinstance(error, RunInterruptedError):
         return "route" if error.cause in {"provider", "network", "timeout"} else None
-    if isinstance(error, ProviderStreamingUnsupportedError | ProviderReplayLimitError):
+    if isinstance(error, ProviderStreamingUnsupportedError):
         return None
     if isinstance(error, ProviderAuthError | ProviderUsageLimitError):
         return "connection"

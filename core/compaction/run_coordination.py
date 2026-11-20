@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from core.chat import RequestState, checkpoint_ordinal, has_unconsumed_skill_activation
@@ -30,7 +29,6 @@ from core.compaction.compaction import (
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
-from core.providers.errors import ProviderReplayLimitError
 from core.providers.providers import context_capacity
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
@@ -411,7 +409,6 @@ class CompactionRunCoordinator:
         request_estimate: RequestContextEstimate | None = None,
         allow_continuation: bool = False,
         continue_same_run: bool = True,
-        replay_limit: ProviderReplayLimitError | None = None,
     ) -> RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
         if context.request_state is None:
@@ -430,18 +427,7 @@ class CompactionRunCoordinator:
         # A pending request comes from the user; otherwise a configured threshold fired.
         trigger, reason = ("manual", "requested") if forced else ("auto", settings.trigger)
         if not settings.auto and not forced:
-            if replay_limit is not None:
-                raise ProviderReplayLimitError(
-                    f"{replay_limit} Automatic Compaction is disabled."
-                ) from replay_limit
             return current_state
-        minimum_reclaim = MIN_AUTO_COMPACTION_RECLAIM_TOKENS
-        if replay_limit is not None:
-            # The transport already rejected this exact request. Retain the
-            # newest complete step and release any older compactable history.
-            minimum_reclaim = 0
-            if settings.strategy == "summary_tail":
-                settings = replace(settings, tail_tokens=1)
         if settings.strategy == "continuation" and not allow_continuation:
             if forced and not continue_same_run:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
@@ -450,16 +436,12 @@ class CompactionRunCoordinator:
         context_window = await self._host.run_transform(
             self._host.resolve_context_window, agent, target
         )
-        if context_window is None and replay_limit is None:
+        if context_window is None:
             if forced:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
             return current_state
         input_limit = target.adapter.input_token_limit(target.model_id)
-        capacity = (
-            context_capacity(context_window, input_limit)
-            if context_window is not None
-            else input_limit
-        )
+        capacity = context_capacity(context_window, input_limit)
 
         current_request_messages = continuation_request_messages or messages
         accounting = getattr(context, "context_usage", None) or RequestContextUsage()
@@ -481,7 +463,7 @@ class CompactionRunCoordinator:
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
 
-        should_compact = capacity is not None and self._host.compaction_service.should_auto_compact(
+        should_compact = self._host.compaction_service.should_auto_compact(
             input_tokens,
             capacity,
             settings.threshold,
@@ -498,20 +480,12 @@ class CompactionRunCoordinator:
         limit_reason: str | None = None
         if input_limit is not None and request_input.upper_bound > input_limit:
             limit_reason = "input_limit"
-        elif (
-            context_window is not None
-            and reservation > 0
-            and request_input.upper_bound > context_window - reservation
-        ):
+        elif reservation > 0 and request_input.upper_bound > context_window - reservation:
             limit_reason = "output_reservation"
         if limit_reason is not None:
             should_compact = True
             if not forced:
                 reason = limit_reason
-        if replay_limit is not None:
-            should_compact = True
-            if not forced:
-                reason = "replay_limit"
         if not should_compact and not forced:
             return current_state
         # Only this Run appends through its snapshot, but out-of-band writers
@@ -524,7 +498,6 @@ class CompactionRunCoordinator:
         # Compaction digests it; a user request compacts without waiting.
         if (
             not forced
-            and replay_limit is None
             and settings.strategy == "summary_tail"
             and has_unconsumed_skill_activation(session_messages, run_id=run.id)
         ):
@@ -536,7 +509,7 @@ class CompactionRunCoordinator:
             request_messages=continuation_request_messages or messages,
             active_adapter=target.adapter,
             active_model_id=target.model_id,
-            minimum_reclaim_tokens=minimum_reclaim,
+            minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
             estimate_factor=accounting.factor(target),
         )
         if not has_new_context:
@@ -551,7 +524,7 @@ class CompactionRunCoordinator:
         )
         _LOGGER.debug(
             "Compaction triggered (run=%s agent=%s session=%s trigger=%s reason=%s "
-            "input_tokens=%d context_capacity=%s context_window=%s ratio_threshold=%s "
+            "input_tokens=%d context_capacity=%d context_window=%d ratio_threshold=%s "
             "token_limit=%s)",
             run.id,
             run.agent_id,
@@ -622,7 +595,7 @@ class CompactionRunCoordinator:
                     active_tools=tools,
                     active_thinking_effort=agent.thinking_effort,
                     active_effort=current_state.effort,
-                    minimum_reclaim_tokens=minimum_reclaim,
+                    minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
                     estimate_factor=accounting.factor(target),
                     active_context=request_input,
                 )
@@ -645,8 +618,6 @@ class CompactionRunCoordinator:
                     COMPACTION_ABORTED_EVENT,
                     {"reason": "failed"},
                 )
-                if replay_limit is not None:
-                    raise ProviderReplayLimitError(f"{replay_limit} {exc}") from exc
                 cause = _expected_failure_cause(exc)
                 if cause is None:
                     _LOGGER.error(

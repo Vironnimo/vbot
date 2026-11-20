@@ -185,7 +185,7 @@ def _windows(executable: Path) -> tuple[UsageWindow, ...]:
 
 
 class AntigravityNative:
-    """An enrolled CLI's probes and stateless turns, retired as a unit on disconnect."""
+    """An enrolled CLI's probes and turns, retired as a unit on disconnect."""
 
     def __init__(
         self,
@@ -194,7 +194,10 @@ class AntigravityNative:
         on_auth_error: Callable[[str, str], None] | None = None,
         on_usage: Callable[[int, tuple[UsageWindow, ...]], None] | None = None,
     ) -> None:
+        from core.providers._antigravity_sessions import Conversations
+
         self.temporary_files = temporary_files
+        self.conversations = Conversations(temporary_files)
         self._on_auth_error = on_auth_error
         self._on_usage = on_usage
         self._closed = False
@@ -306,14 +309,19 @@ class AntigravityNative:
                 self._on_usage(started_at_ns, windows)
             yield executable
 
-    def abort(self) -> None:
+    def _abort_turns(self) -> None:
         self._closed = True
         for producer in self._turns:
             producer.cancel()
 
+    def abort(self) -> None:
+        self._abort_turns()
+        self.conversations.retire().close()
+
     async def aclose(self) -> None:
-        self.abort()
+        self._abort_turns()
         if self._leases or self._turns:
             await settle_before_cancelling(
                 asyncio.gather(*self._leases, *self._turns, return_exceptions=True)
             )
+        await self.conversations.close_sessions()

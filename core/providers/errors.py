@@ -75,16 +75,6 @@ class ProviderRequestTooLargeError(ProviderError):
         super().__init__(message, retryable=False)
 
 
-class ProviderReplayLimitError(ProviderError):
-    """The selected transport cannot carry this history replay before generation."""
-
-    failure_class = "rejected"
-    code = "provider_replay_limit"
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message, retryable=False)
-
-
 class ProviderImageLimitError(ProviderError):
     """A rejected request exceeded the stated image count; Chat can retire old images."""
 

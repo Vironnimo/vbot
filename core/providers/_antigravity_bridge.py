@@ -39,7 +39,7 @@ async def _serve(inventory: Path) -> None:
 
 
 def _guard(kind: str, state: Path, *, replay: bool = False) -> dict[str, Any]:
-    if kind in {"before", "before-tools"}:
+    if kind in {"before", "before-tools", "seed"}:
         # One model invocation per canonical request, even if agy tries another
         # inference after it sees a denied Tool. Never return a Tool result to agy.
         try:
@@ -51,7 +51,9 @@ def _guard(kind: str, state: Path, *, replay: bool = False) -> dict[str, Any]:
                     if time.monotonic() >= deadline:
                         return {"terminationBehavior": "terminate"}
                     time.sleep(0.05)
-            response: dict[str, Any] = {}
+            response: dict[str, Any] = (
+                {"terminationBehavior": "terminate"} if kind == "seed" else {}
+            )
             if replay:
                 parts = json.loads((state / "replay.json").read_text(encoding="utf-8"))
                 if (

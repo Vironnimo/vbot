@@ -11,7 +11,7 @@ import pytest
 from core.providers import antigravity
 from core.providers._antigravity_native import AntigravityNative
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD, RequestContextText
-from core.providers.errors import ProviderError, ProviderReplayLimitError
+from core.providers.errors import ProviderError
 from core.providers.providers import ProviderRegistry
 from core.storage import TemporaryFileManager
 
@@ -191,23 +191,87 @@ async def test_subscription_replays_large_results_and_steers_in_bounded_native_s
 
 
 @pytest.mark.asyncio
-async def test_subscription_replay_limits_precede_native_admission_and_allow_estimates(
+async def test_subscription_continues_reads_and_rebuilds_changed_history_without_compaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
-    async def unexpected_turn(_self: AntigravityNative) -> AsyncIterator[Path]:
-        pytest.fail("oversized requests must be rejected before the account/usage probe")
+    async def ready(_self: AntigravityNative) -> AsyncIterator[Path]:
         yield tmp_path / "agy"
 
-    monkeypatch.setattr(AntigravityNative, "turn", unexpected_turn)
+    monkeypatch.setattr(AntigravityNative, "turn", ready)
+    batches = [2, 6, 7, 8]
+    requests = []
+    sent_calls = 0
+
+    async def packet(_executable: str, **kwargs: Any) -> AsyncGenerator[dict]:
+        nonlocal sent_calls
+        requests.append(kwargs)
+        turn = len(requests) - 1
+        if turn >= len(batches):
+            yield {"type": "content_delta", "text": "Report."}
+            yield {"type": "finish", "reason": "stop"}
+            return
+        for _ in range(batches[turn]):
+            sent_calls += 1
+            yield {
+                "type": "tool_call_delta",
+                "id": f"id-{sent_calls}",
+                "name_delta": "read",
+                "arguments_delta": json.dumps({"file": f"file-{sent_calls}"}),
+            }
+        yield {"type": "finish", "reason": "tool_calls"}
+
+    monkeypatch.setattr(antigravity, "stream_turn", packet)
     registry = ProviderRegistry.load(Path(__file__).resolve().parents[3] / "resources")
-    adapter = antigravity.AntigravityAdapter(
-        registry.get("antigravity"), temporary_files=TemporaryFileManager(tmp_path)
+    native = AntigravityNative(temporary_files=TemporaryFileManager(tmp_path))
+    adapter = antigravity.AntigravityAdapter(registry.get("antigravity"), native=native)
+    key = adapter.request_context_kwargs(agent_id="coder", session_id="session")
+    tools = [{"name": "read", "description": "Read a file.", "parameters": {"type": "object"}}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": "Find the cause."}]
+    for size in batches:
+        result = await adapter.send(messages, model_id="hydrogen", tools=tools, **key)
+        calls = result["tool_calls"]
+        assert len(calls) == size
+        messages.append({"role": "assistant", "content": "", "tool_calls": calls})
+        for call in calls:
+            messages.append(
+                {"role": "tool", "tool_call_id": call["id"], "content": call["id"] + "Z" * 43_000}
+            )
+    messages.append({"role": "user", "content": "Report now."})
+    await adapter.send(messages, model_id="hydrogen", tools=tools, **key)
+    profile = requests[0]["conversation"]
+    assert profile.root.is_dir() and all(r["conversation"] is profile for r in requests)
+    assert not any(r["seed_batches"] for r in requests)
+    newest = "\n".join(requests[-1]["replay_steps"])
+    assert "Report now." in newest and "id-23" in newest
+    assert '"tool_call_id":"id-1"' not in newest and "Find the cause." not in newest
+
+    # An edit requires a cold rebuild, including material exceeding an entire staging batch.
+    messages[0] = {"role": "user", "content": "A different assignment."}
+    await adapter.send(messages, model_id="hydrogen", tools=tools, **key)
+    rebuilt = requests[-1]
+    assert rebuilt["conversation"] is not profile and not profile.root.exists()
+    assert len(rebuilt["seed_batches"]) == 2
+    packets = [*rebuilt["seed_batches"], rebuilt["replay_steps"]]
+    frames = [json.loads(line) for batch in packets for step in batch for line in step.splitlines()]
+    assert [r["content"] for r in frames if r.get("user_input")] == [
+        "A different assignment.",
+        "Report now.",
+    ]
+    for number in range(1, 24):
+        key_id = f"id-{number}"
+        assert (
+            "".join(
+                r["content"] for r in frames if r["role"] == "tool" and r["tool_call_id"] == key_id
+            )
+            == key_id + "Z" * 43_000
+        )
+    assert (
+        adapter.request_context_kwargs(
+            agent_id="coder", session_id="session", request_kind="compaction"
+        )
+        == {}
     )
-    text = "Long UTF-8 line 🛰.\n" * 20_000
-    messages = [{"role": "user", "content": text}]
-    assert adapter.estimate_request_input_tokens(messages, model_id="model-high") > 0
-    with pytest.raises(ProviderReplayLimitError, match="UTF-8 bytes") as error:
-        await adapter.send(messages, model_id="model-high")
-    assert not error.value.retryable
-    await adapter.aclose()
+    await native.conversations.close_sessions({("coder", "session")})
+    assert not rebuilt["conversation"].root.exists()
+    await native.aclose()

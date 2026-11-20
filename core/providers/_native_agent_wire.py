@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, override
 
 from core.providers.adapter import (
@@ -22,6 +23,15 @@ from core.providers.adapter import (
 )
 
 JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Conversation:
+    project_id: str | None
+    agent_id: str
+    session_id: str
+    generation_id: str | None
+    connection_id: str
 
 
 def native_tool_names(tools: Sequence[JsonObject], wire_limit: int) -> dict[str, str]:

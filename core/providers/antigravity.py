@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._antigravity_native import AntigravityNative
 from core.providers._antigravity_transport import stream_turn
 from core.providers._native_agent_wire import (
+    Conversation,
     JsonObject,
     NativeAgentAdapter,
     system_prompt,
     visible_message,
 )
 from core.providers.adapter import ModelLookup, is_request_context_message
-from core.providers.errors import CatalogEntrySkipped, ProviderError, ProviderReplayLimitError
+from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
 
 _REQUEST_WORKERS = BoundedWorkerPool(name="antigravity-request", max_workers=2)
 _STEP_BYTES = 48_000
-_MAX_REPLAY_STEPS = 8
+_STEPS_PER_BATCH = 8
 
 
 def _text(content: Any) -> str:
@@ -70,12 +72,16 @@ def _encode(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("@", r"\u0040")
 
 
-def _header(*, has_tools: bool, has_parts: bool = False) -> str:
+def _header(*, has_tools: bool, has_parts: bool = False, tool_results: bool = False) -> str:
     instructions = [
         "Continue this vBot conversation as the assistant. "
         "Read the JSON records in chronological order.",
         "The last message marked user_input is the most recent user input.",
     ]
+    if tool_results:
+        instructions.append(
+            "The tool records give vBot's execution results for the preceding calls."
+        )
     if has_parts:
         instructions.append(
             "Numbered parts of a message continue in order. "
@@ -133,11 +139,7 @@ class _ReplaySteps:
         self.steps[-1].append(line)
         self.remaining -= size + 1  # Leave room for the next record's newline.
 
-    def add_record(
-        self, record: JsonObject, number: int, line: str, size: int, *, dense: bool
-    ) -> None:
-        if size > self.remaining and not dense:
-            self.next_step()
+    def add_record(self, record: JsonObject, number: int, line: str, size: int) -> None:
         if size <= self.remaining:
             self.append(line, size)
             return
@@ -154,10 +156,11 @@ class _ReplaySteps:
                     self.next_step()
                     length = _prefix_that_fits(text, offset, self.remaining - overhead)
                 if (text and not length) or overhead > self.remaining:
-                    raise ProviderReplayLimitError(
+                    raise ProviderError(
                         f"Antigravity message {number} has {overhead} UTF-8 bytes of correlation "
                         f"metadata for one part. A replay step holds {_STEP_BYTES} bytes "
-                        "including its content."
+                        "including its content.",
+                        retryable=False,
                     )
                 frame[field] = text[offset : offset + length]
                 line = _encode(frame)
@@ -169,41 +172,23 @@ class _ReplaySteps:
 
 
 def _prompt(
-    messages: Sequence[Mapping[str, Any]], *, has_tools: bool
-) -> tuple[str, tuple[str, ...]]:
-    entries = []
-    total = 0
-    limit = _STEP_BYTES * _MAX_REPLAY_STEPS
-    for record in _records(messages):
+    records: Sequence[JsonObject], *, has_tools: bool, tool_results: bool = False
+) -> tuple[str, tuple[str, ...], tuple[tuple[str, ...], ...]]:
+    packed = _ReplaySteps()
+    for number, record in enumerate(records, start=1):
         line = _encode(record)
-        size = len(line.encode("utf-8"))
-        total += size
-        if total > limit:
-            raise ProviderReplayLimitError(
-                f"The Antigravity history already contains {total} UTF-8 bytes before framing. "
-                f"The route can carry {_MAX_REPLAY_STEPS} steps of {_STEP_BYTES} bytes. "
-                "Compact older history or reduce the size of a single message."
-            )
-        entries.append((record, line, size))
+        packed.add_record(record, number, line, len(line.encode("utf-8")))
+    header = _header(has_tools=has_tools, has_parts=packed.has_parts, tool_results=tool_results)
+    steps = tuple("\n".join(lines) for lines in packed.steps)
+    if len(steps) == 1 and len(header.encode("utf-8")) <= packed.remaining:
+        return "\n".join([header, *packed.steps[0]]), (), ()
+    batches = tuple(steps[i : i + _STEPS_PER_BATCH] for i in range(0, len(steps), _STEPS_PER_BATCH))
+    return header, batches[-1], batches[:-1]
 
-    # Keep complete records together unless the resulting gaps would exhaust the
-    # replay slots. The second pass uses those gaps for correlated fragments.
-    for dense in (False, True):
-        packed = _ReplaySteps()
-        for number, (record, line, size) in enumerate(entries, start=1):
-            packed.add_record(record, number, line, size, dense=dense)
-            if len(packed.steps) > _MAX_REPLAY_STEPS:
-                break
-        else:
-            header = _header(has_tools=has_tools, has_parts=packed.has_parts)
-            steps = tuple("\n".join(lines) for lines in packed.steps)
-            if len(steps) == 1 and len(header.encode("utf-8")) <= packed.remaining:
-                return "\n".join([header, *packed.steps[0]]), ()
-            return header, steps
-    raise ProviderReplayLimitError(
-        f"The {total}-byte Antigravity history exceeds {_MAX_REPLAY_STEPS} steps of {_STEP_BYTES} "
-        "UTF-8 bytes after framing its parts. Compact older history or reduce a single message."
-    )
+
+def _digest(value: Any) -> bytes:
+    encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).digest()
 
 
 def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
@@ -218,14 +203,22 @@ def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
 
 
 def _request(
-    messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-) -> tuple[str, str, tuple[str, ...], list[JsonObject]]:
-    prompt, replay_steps = _prompt(messages, has_tools=bool(tools))
-    return system_prompt(messages), prompt, replay_steps, _mcp_tools(tools)
+    messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]], model: str
+) -> tuple[str, list[JsonObject], list[JsonObject], bytes, tuple[bytes, ...]]:
+    system = system_prompt(messages)
+    inventory = _mcp_tools(tools)
+    records = list(_records(messages))
+    return (
+        system,
+        inventory,
+        records,
+        _digest((model, system, inventory)),
+        tuple(map(_digest, records)),
+    )
 
 
 class AntigravityAdapter(NativeAgentAdapter):
-    """Run one stateless native turn per Model step; vBot owns the history and Tools."""
+    """Continue verified native conversations while vBot owns canonical history and Tools."""
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("antigravity",)
 
@@ -241,13 +234,34 @@ class AntigravityAdapter(NativeAgentAdapter):
         connection_mode: str | None = None,
         http_transport: ProviderHTTPTransportScope | None = None,
         native: AntigravityNative | None = None,
+        connection_id: str | None = None,
         temporary_files: TemporaryFileManager | None = None,
     ) -> None:
         super().__init__(model_lookup, debug_recorder)
         self._config = config
+        self._connection_id = connection_id or config.connections[0].id
         self._connection_mode = connection_mode
         self._native = native or AntigravityNative(temporary_files=temporary_files)
         self._owns_native = native is None
+
+    @override
+    def request_context_kwargs(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+        prompt_cache_affinity_id: str | None = None,
+        session_generation_id: str | None = None,
+        request_kind: Literal["chat", "compaction", "utility"] = "chat",
+    ) -> JsonObject:
+        if request_kind != "chat":
+            return {}
+        return {
+            "_antigravity_conversation": Conversation(
+                project_id, agent_id, session_id, session_generation_id, self._connection_id
+            )
+        }
 
     @override
     async def stream(
@@ -262,20 +276,76 @@ class AntigravityAdapter(NativeAgentAdapter):
         temporary_files = self._native.temporary_files
         if temporary_files is None:
             raise ProviderError("Antigravity requires managed temporary storage.", retryable=False)
-        system, prompt, replay_steps, tools = await _REQUEST_WORKERS.run(
-            _request, messages, [] if choice == "none" else kwargs.get("tools") or []
+        key = kwargs.get("_antigravity_conversation")
+        if key is not None and not isinstance(key, Conversation):
+            raise ProviderError("Invalid Antigravity conversation context.", retryable=False)
+        system, tools, records, signature, history = await _REQUEST_WORKERS.run(
+            _request, messages, [] if choice == "none" else kwargs.get("tools") or [], model_id
         )
 
-        def open_turn(executable: Path) -> AsyncGenerator[dict]:
-            return stream_turn(
-                str(executable),
-                model=model_id,
-                system_prompt=system,
-                prompt=prompt,
-                replay_steps=replay_steps,
-                tools=tools,
-                temporary_files=temporary_files,
-            )
+        async def open_turn(executable: Path) -> AsyncGenerator[dict]:
+            async with AsyncExitStack() as stack:
+                profile = None
+                if key is not None:
+                    profile = await stack.enter_async_context(
+                        self._native.conversations.checkout(key, signature, history)
+                    )
+                start = len(profile.history) if profile else 0
+                # Repeat the call IDs with the real results. The native CLI recorded
+                # denials because only vBot is allowed to execute those calls.
+                include_calls = start > 0 and bool(records[start - 1].get("tool_calls"))
+                prompt, replay_steps, seed_batches = await _REQUEST_WORKERS.run(
+                    _prompt,
+                    records[start - int(include_calls) :],
+                    has_tools=bool(tools),
+                    tool_results=include_calls,
+                )
+                stream = await stack.enter_async_context(
+                    aclosing(
+                        stream_turn(
+                            str(executable),
+                            model=model_id,
+                            system_prompt=system,
+                            prompt=prompt,
+                            replay_steps=replay_steps,
+                            seed_batches=seed_batches,
+                            tools=tools,
+                            temporary_files=temporary_files,
+                            conversation=profile.native if profile else None,
+                        )
+                    )
+                )
+                content = []
+                calls = []
+                finish = None
+                async for delta in stream:
+                    if delta["type"] == "finish":
+                        finish = delta
+                        continue
+                    if profile:
+                        if delta["type"] == "content_delta":
+                            content.append(delta["text"])
+                        elif delta["type"] == "tool_call_delta":
+                            calls.append(
+                                {
+                                    "id": delta["id"],
+                                    "name": delta["name_delta"],
+                                    "arguments": json.loads(delta["arguments_delta"]),
+                                }
+                            )
+                    yield delta
+                if finish is None:
+                    raise ProviderError(
+                        "Antigravity CLI returned an incomplete turn.", retryable=False
+                    )
+                if profile:
+                    assistant = {
+                        "role": "assistant",
+                        "content": "".join(content),
+                        "tool_calls": calls,
+                    }
+                    profile.history = (*history, await _REQUEST_WORKERS.run(_digest, assistant))
+            yield finish
 
         async with aclosing(self._native.stream(open_turn)) as stream:
             async for delta in stream:
@@ -301,7 +371,7 @@ class AntigravityAdapter(NativeAgentAdapter):
             [system_prompt(messages), header, tools or []], model_id=model_id
         )[0]
         for record in _records(messages):
-            # Count before applying replay limits so Chat can project Compaction.
+            # Account for all canonical input even when the native conversation is warm.
             # Cache stable records independently and bound individual tokenizer inputs.
             line = _encode(record)
             for offset in range(0, len(line), 8192):
