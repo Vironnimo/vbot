@@ -270,9 +270,14 @@
   {#if desktopZoom}
     <DesktopZoomSetting {desktopZoom} />
   {/if}
-</div>
 
-<ContributionPreferences />
+  <details class="s-disclosure" data-setting-path="appearance.ui_layout">
+    <summary
+      ><span class="s-row-label">{t('contributions.title')}</span></summary
+    >
+    <ContributionPreferences />
+  </details>
+</div>
 
 <div class="s-footer">
   <SaveStatus

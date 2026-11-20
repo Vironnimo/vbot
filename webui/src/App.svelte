@@ -1125,9 +1125,14 @@
 {#if layoutEditorOpen}
   <Modal
     title={t('contributions.title')}
+    size="lg"
     onClose={() => (layoutEditorOpen = false)}
   >
-    {#snippet body()}<ContributionPreferences />{/snippet}
+    {#snippet body()}
+      <div class="modal-body">
+        <div class="s-group"><ContributionPreferences /></div>
+      </div>
+    {/snippet}
   </Modal>
 {/if}
 

@@ -7,15 +7,18 @@
   import { t } from '$lib/i18n.js';
   import SortableList from '../ui/SortableList.svelte';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import Banner from '../ui/Banner.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import Dropdown from '../Dropdown.svelte';
 
   const registry = useContributions();
+  const areaId = $props.id();
   let surface = $state('chat.composer.actions');
   const options = $derived(contributionSurfaceOptions());
   const layout = $derived(registry?.layout(surface) ?? {});
+  const disabled = $derived(!registry?.ready || registry.migrationPending);
   const entries = $derived.by(() => {
     const all = [
       ...builtinContributionEntries(surface),
@@ -69,53 +72,78 @@
 </script>
 
 {#if registry}
-  <section class="contribution-preferences">
-    <h3>{t('contributions.title')}</h3>
-    <p class="s-desc">{t('contributions.help')}</p>
-    {#if registry.error}<Banner variant="error">{registry.error}</Banner>{/if}
-    {#if !registry.ready}
-      <p role="status">{t('contributions.loading')}</p>
-      {#if registry.error}<Button
-          variant="tertiary"
-          onClick={() => registry.refresh()}
-          >{t('contributions.loadRetry')}</Button
-        >{/if}
-    {/if}
-    {#if registry.migrationPending}
-      <Banner>{t('contributions.migration')}</Banner>
-      <div class="contribution-preferences__toolbar">
-        <Button onClick={() => registry.migrate(true)}
-          >{t('contributions.importLayout')}</Button
-        >
-        <Button variant="tertiary" onClick={() => registry.migrate(false)}
-          >{t('contributions.useDefaults')}</Button
-        >
+  <div class="contribution-preferences">
+    {#if registry.error || !registry.ready || registry.migrationPending}
+      <div class="contribution-preferences__notice">
+        {#if registry.error}<Banner variant="error">{registry.error}</Banner
+          >{/if}
+        {#if !registry.ready}
+          <p class="s-row-desc" role="status">{t('contributions.loading')}</p>
+          {#if registry.error}<Button
+              variant="tertiary"
+              onClick={() => registry.refresh()}
+              >{t('contributions.loadRetry')}</Button
+            >{/if}
+        {/if}
+        {#if registry.migrationPending}
+          <Banner>{t('contributions.migration')}</Banner>
+          <div class="s-group-toolbar__actions">
+            <Button onClick={() => registry.migrate(true)}
+              >{t('contributions.importLayout')}</Button
+            >
+            <Button variant="tertiary" onClick={() => registry.migrate(false)}
+              >{t('contributions.useDefaults')}</Button
+            >
+          </div>
+        {/if}
       </div>
     {/if}
-    <fieldset disabled={!registry.ready || registry.migrationPending}>
-      <div class="contribution-preferences__toolbar">
-        <Dropdown
-          value={surface}
-          {options}
-          ariaLabel={t('contributions.surface')}
-          onValueChange={(value) => (surface = value)}
-        />
-        <Button variant="tertiary" onClick={() => registry.reset(surface)}
-          >{t('contributions.reset')}</Button
-        >
+    <fieldset class="s-group__rows" {disabled}>
+      <div class="s-row">
+        <div class="s-row-info">
+          <label class="s-row-label" for={areaId}
+            >{t('contributions.surface')}</label
+          >
+          <p class="s-row-desc">{t('contributions.help')}</p>
+        </div>
+        <div class="s-row-control">
+          <Dropdown
+            id={areaId}
+            value={surface}
+            {options}
+            ariaLabel={t('contributions.surface')}
+            triggerClass="settings-view__dropdown"
+            listClass="settings-view__thinking-list"
+            onValueChange={(value) => (surface = value)}
+          />
+        </div>
       </div>
       {#if entries.length}
         <SortableList
           items={entries}
           getLabel={(entry) => entry.title}
           onReorder={reorder}
-          class="contribution-preferences__list"
-          itemClass="contribution-preferences__item"
+          class="s-group__rows contribution-preferences__list"
+          itemClass="s-row s-row--compact"
+          {disabled}
           itemFocusable
         >
           {#snippet item(entry)}
-            <div class="contribution-preferences__row">
-              <span>{entry.title}</span>
+            <div class="s-row-info">
+              <span class="contribution-preferences__name">{entry.title}</span>
+              {#if !entry.replaces && entries.some((item) => item.replaces === entry.id)}
+                <InfoHint text={t('contributions.replacementHelp')} />
+                <Dropdown
+                  value={layout.replacements?.[entry.id] ?? ''}
+                  options={replacementOptions(entry)}
+                  ariaLabel={t('contributions.replacement', {
+                    name: entry.title,
+                  })}
+                  onValueChange={(value) => selectReplacement(entry.id, value)}
+                />
+              {/if}
+            </div>
+            <div class="s-row-control">
               <Toggle
                 size="sm"
                 checked={!(layout.hidden ?? []).includes(entry.id)}
@@ -123,51 +151,61 @@
                 onChange={(visible) => toggle(entry, visible)}
               />
             </div>
-            {#if !entry.replaces && entries.some((item) => item.replaces === entry.id)}
-              <Dropdown
-                value={layout.replacements?.[entry.id] ?? ''}
-                options={replacementOptions(entry)}
-                ariaLabel={t('contributions.replacement', {
-                  name: entry.title,
-                })}
-                onValueChange={(value) => selectReplacement(entry.id, value)}
-              />
-            {/if}
           {/snippet}
         </SortableList>
-      {:else}<p class="s-desc">{t('contributions.empty')}</p>{/if}
+      {:else}
+        <p class="contribution-preferences__notice s-row-desc">
+          {t('contributions.empty')}
+        </p>
+      {/if}
     </fieldset>
-    <SaveStatus
-      saving={registry.saving}
-      pending={registry.pending}
-      onClick={() => registry.retry()}
-    />
-  </section>
+    <div class="contribution-preferences__footer">
+      <SaveStatus
+        saving={registry.saving}
+        pending={registry.pending}
+        onClick={() => registry.retry()}
+      />
+      <Button
+        variant="tertiary"
+        {disabled}
+        onClick={() => registry.reset(surface)}
+      >
+        {t('contributions.reset')}
+      </Button>
+    </div>
+  </div>
 {/if}
 
 <style>
-  .contribution-preferences {
-    margin-top: 20px;
-  }
   fieldset {
     border: 0;
     padding: 0;
     margin: 0;
     min-width: 0;
   }
-  .contribution-preferences__toolbar,
-  .contribution-preferences__row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+  .contribution-preferences__notice {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+    padding: 12px 18px;
   }
   .contribution-preferences :global(.contribution-preferences__list) {
     list-style: none;
+    margin: 0;
     padding: 0;
+    border-top: 1px solid var(--border);
   }
-  .contribution-preferences :global(.contribution-preferences__item) {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
+  .contribution-preferences__name {
+    font-size: var(--fs-body-md);
+    overflow-wrap: anywhere;
+  }
+  .contribution-preferences__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
   }
 </style>

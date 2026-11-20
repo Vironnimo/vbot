@@ -1,7 +1,9 @@
 export default Object.freeze({
   'contributions.title': 'Interface layout',
   'contributions.help':
-    'Customize the interface on every browser connected to this server. Drag rows or use Alt+Arrow keys to reorder them. Extensions can offer replacements; unavailable replacements restore the standard element.',
+    'Changes apply to all browsers connected to this server. Drag rows or press Alt+Up or Alt+Down to reorder them.',
+  'contributions.replacementHelp':
+    'If an Extension replacement becomes unavailable, the standard element appears again.',
   'contributions.surface': 'Interface area',
   'contributions.reset': 'Restore this area',
   'contributions.visible': 'Show {name}',
