@@ -90,16 +90,14 @@
     return left.every((item, index) => item === right[index]);
   }
 
-  function addSkillDirectory() {
-    const directory = newSkillDirectory.trim();
-    if (!directory) {
-      return;
-    }
-
-    if (!skillDirectories.includes(directory)) {
-      skillDirectories = [...skillDirectories, directory];
-    }
-
+  function addSkillDirectories(paths) {
+    const next = [
+      ...new Set([
+        ...skillDirectories,
+        ...paths.map((path) => path.trim()).filter(Boolean),
+      ]),
+    ];
+    if (next.length !== skillDirectories.length) skillDirectories = next;
     newSkillDirectory = '';
     onError('');
   }
@@ -115,7 +113,7 @@
     }
 
     event.preventDefault();
-    addSkillDirectory();
+    addSkillDirectories([newSkillDirectory]);
   }
 
   async function saveSkillDirectories() {
@@ -177,6 +175,8 @@
         <PathField
           mode="directory"
           projectShortcuts
+          rememberLocation="skill-directories"
+          onSelectMany={addSkillDirectories}
           value={newSkillDirectory}
           onInput={(next) => (newSkillDirectory = next)}
           placeholder={t('settings.skills.pathPlaceholder')}
@@ -186,7 +186,7 @@
         <Button
           variant="secondary"
           disabled={!newSkillDirectory.trim()}
-          onClick={addSkillDirectory}
+          onClick={() => addSkillDirectories([newSkillDirectory])}
         >
           {t('settings.skills.addDirectory')}
         </Button>

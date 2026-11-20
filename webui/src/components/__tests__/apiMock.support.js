@@ -307,6 +307,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
             : {}),
         ...(typeof directory === 'string' ? { directory } : {}),
       }),
+    createServerFile: (params) => call('filesystem.create_file', params),
     listServerDirectory: ({ path = null, root, include_files } = {}) =>
       call('filesystem.list', {
         path,

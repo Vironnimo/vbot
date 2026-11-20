@@ -350,6 +350,7 @@ export {
 } from './api/agentSecrets.js';
 export {
   createServerDirectory,
+  createServerFile,
   listServerDirectory,
 } from './api/filesystem.js';
 

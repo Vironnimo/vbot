@@ -385,11 +385,10 @@ describe('PathField', () => {
         crumb.textContent.trim(),
       ),
     ).toEqual(['Places', 'C:', 'work', 'vBot']);
-    expect(rows()).toEqual(['.git', 'webui']);
-    dialog.querySelector('.path-browser__hidden button').click();
-    flushSync();
     expect(rows()).toEqual(['webui']);
-    dialog.querySelector('.path-browser__hidden button').click();
+    dialog.querySelector('[aria-label="View options"]').click();
+    await settle();
+    document.querySelector('[role="menuitem"]').click();
     flushSync();
     expect(rows()).toEqual(['.git', 'webui']);
 
@@ -494,8 +493,7 @@ describe('PathField', () => {
       [...dialog.querySelectorAll('.path-browser__row')].map((row) =>
         row.textContent.trim(),
       );
-    const button = (label) =>
-      dialog.querySelector(`.path-browser__bar [aria-label="${label}"]`);
+    const button = (label) => dialog.querySelector(`[aria-label="${label}"]`);
     const list = dialog.querySelector('[role="listbox"]');
 
     // A folder made outside the dialog shows once its folder opens again.
@@ -551,6 +549,59 @@ describe('PathField', () => {
     document.body.querySelector('.path-field__browse').click();
     await settle();
     expect(document.body.querySelector('[aria-label="New folder"]')).toBeNull();
+  });
+
+  it('creates a file inside the chosen root, selects it and reopens the remembered folder', async () => {
+    const entries = [file('before.md')];
+    const listDirectory = fakeServer({
+      '': { entries: [dir('docs')] },
+      docs: { entries },
+    });
+    const createFile = vi.fn(async ({ name }) => {
+      entries.push(file(name));
+      return { path: 'docs/' + name };
+    });
+    const onSelectMany = vi.fn();
+    render({
+      mode: 'file',
+      root: 'C:/repo',
+      rememberLocation: 'project-files',
+      createFile,
+      listDirectory,
+      onSelectMany,
+    });
+    const browse = () => document.querySelector('.path-field__browse').click();
+    browse();
+    await settle();
+    document.querySelector('.path-browser__row').click();
+    await settle();
+    document.querySelector('[aria-label="New"]').click();
+    await settle();
+    document.querySelector('[role="menuitem"]').click();
+    await settle();
+    const name = document.querySelector('.path-browser__new input');
+    type(name, 'after.md');
+    press(name, 'Enter');
+    await settle();
+    expect(createFile).toHaveBeenCalledExactlyOnceWith({
+      root: 'C:/repo',
+      path: 'docs',
+      name: 'after.md',
+    });
+    expect(
+      document
+        .querySelector('[aria-selected="true"].path-browser__row')
+        ?.textContent.trim(),
+    ).toBe('after.md');
+    document.querySelector('.path-browser .modal-footer .btn-primary').click();
+    flushSync();
+    expect(onSelectMany).toHaveBeenCalledExactlyOnceWith(['docs/after.md']);
+    listDirectory.mockClear();
+    browse();
+    await settle();
+    expect(listDirectory.mock.calls.map(([p]) => p.path)).toEqual(['docs']);
+    expect(document.querySelector('.path-browser__row.active')).toBeNull();
+    localStorage.clear();
   });
 
   it('opens a typed or pasted path from the trail', async () => {

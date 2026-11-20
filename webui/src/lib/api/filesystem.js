@@ -39,13 +39,20 @@ export function listServerDirectory(
 // Creates the folder `name` inside the directory `path` (the same forms as a
 // listing's `path`, with `root` relative to it) and resolves to `{path}`, the
 // new folder's path in that form. The params keep the RPC's own shape too.
-export function createServerDirectory({ path, name, root } = {}, options = {}) {
-  const method = 'filesystem.create_directory';
+export function createServerDirectory(params = {}, options = {}) {
+  return createEntry('filesystem.create_directory', params, options);
+}
+
+export function createServerFile(params = {}, options = {}) {
+  return createEntry('filesystem.create_file', params, options);
+}
+
+function createEntry(method, { path, name, root }, options) {
   if (typeof path !== 'string') {
     throw invalidRequest(method, 'Directory path must be a string');
   }
   if (typeof name !== 'string' || name === '') {
-    throw invalidRequest(method, 'Folder name must be a non-empty string');
+    throw invalidRequest(method, 'Entry name must be a non-empty string');
   }
   if (root !== undefined && (typeof root !== 'string' || root === '')) {
     throw invalidRequest(method, 'Directory root must be a non-empty string');

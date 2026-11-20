@@ -628,7 +628,7 @@ describe('Projects controller editing', () => {
 
     controller.updateEditField('display_name', 'Renamed');
     const save = controller.saveSelectedProject();
-    const adding = controller.addSkillFolder('missing');
+    const adding = controller.addSkillFolders(['missing']);
     running.resolve({
       project: { project_id: 'demo', display_name: 'Renamed' },
       scan: {},

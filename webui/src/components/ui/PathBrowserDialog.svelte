@@ -8,19 +8,9 @@
   // `value` that lists (the value itself or an ancestor, highlighting the
   // entry it came from), or of `startPath` when the value names none.
   //
-  // Like a desktop file dialog, a click highlights an entry and a double
-  // click or Enter opens a folder or chooses a file; Select takes the
-  // highlighted entry, or else the open folder (directory and any modes).
-  // Typing a filter highlights its first match, so Enter opens that one.
-  //
-  // Every navigation lists the folder anew, so folders made or removed
-  // meanwhile show up; Refresh (F5) lists the open one again. Clicking the
-  // trail's free space or Ctrl+L turns it into a path field, as an address bar
-  // does, and a path typed or pasted into the filter moves there too. With
-  // `createDirectory` (filesystem.create_directory params and result), New
-  // folder adds a folder to the open one and highlights it, so Select takes
-  // it; file mode, where a new empty folder holds nothing to choose, has none.
-  //
+  // Collection fields support desktop range and additive selection within a folder.
+  // Double click or Enter opens a directory. Its trailing arrow also opens it
+  // with a single click. Navigation, filtering and creation stay in the same dialog.
   // The dialog is moved to <body> before it renders, so the form dialog it
   // may open from neither styles nor submits it; Modal keeps only the newest
   // dialog answering Escape and Tab.
@@ -34,7 +24,9 @@
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
   import TextField from './TextField.svelte';
-  import Toggle from './Toggle.svelte';
+  import ContextMenu from './ContextMenu.svelte';
+  import { contextMenuAnchor } from './contextMenu.js';
+  import { isImeComposing } from '$lib/keyboard.js';
 
   const noop = () => {};
   const componentId = $props.id();
@@ -46,6 +38,9 @@
     startPath = '',
     listDirectory,
     createDirectory = null,
+    createFile = null,
+    multiple = false,
+    rememberLocation = '',
     loadShortcuts = null,
     onSelect = noop,
     onClose = noop,
@@ -71,6 +66,15 @@
       },
       get listDirectory() {
         return listDirectory;
+      },
+      get multiple() {
+        return multiple;
+      },
+      get rememberLocation() {
+        return rememberLocation;
+      },
+      get createFile() {
+        return createFile;
       },
       get createDirectory() {
         return createDirectory;
@@ -108,6 +112,36 @@
     });
   }
 
+  let menu = $state.raw(null);
+  function openActions(event, kind) {
+    const items = [];
+    let label;
+    if (kind === 'new') {
+      label = t('pathPicker.new');
+      if (browser.canCreate)
+        items.push({
+          id: 'directory',
+          label: t('pathPicker.newFolder'),
+          onSelect: () => browser.startCreate('directory'),
+        });
+      items.push({
+        id: 'file',
+        label: t('pathPicker.newFile'),
+        onSelect: () => browser.startCreate('file'),
+      });
+    } else {
+      label = t('pathPicker.view');
+      items.push({
+        id: 'hidden',
+        label: browser.showHidden
+          ? t('pathPicker.hideHidden')
+          : t('pathPicker.showHidden'),
+        onSelect: () => browser.setShowHidden(!browser.showHidden),
+      });
+    }
+    menu = { ...contextMenuAnchor(event), kind, label, items };
+  }
+
   const rowId = (index) => `${componentId}-row-${index}`;
   const pathInputId = `${componentId}-path`;
   const newNameId = `${componentId}-new-name`;
@@ -122,7 +156,7 @@
   }
 
   function handlePathKey(event) {
-    if (event.isComposing) return;
+    if (isImeComposing(event)) return;
     if (event.key === 'Enter') {
       void browser.goToTypedPath();
     } else if (event.key === 'Escape') {
@@ -135,12 +169,12 @@
   }
 
   function handleNewNameKey(event) {
-    if (event.isComposing) return;
+    if (isImeComposing(event) || browser.createBusy) return;
     if (event.key === 'Enter') {
-      void browser.createFolder();
+      void browser.create();
     } else if (event.key === 'Escape') {
       // The row closes; the dialog stays.
-      browser.cancelNewFolder();
+      browser.cancelCreate();
     } else {
       return;
     }
@@ -149,7 +183,7 @@
 
   // Shortcuts anywhere in the dialog's body, as in desktop file dialogs.
   function handleBodyKey(event) {
-    if (event.isComposing || event.defaultPrevented) return;
+    if (isImeComposing(event) || event.defaultPrevented) return;
     const command = event.ctrlKey || event.metaKey;
     if (event.key === 'F5' && !command && !event.altKey) {
       browser.refresh();
@@ -177,22 +211,40 @@
 
   // Keys shared by the filter field and the list.
   function handleNavigationKey(event, { inList = false } = {}) {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) {
+    if (event.altKey || isImeComposing(event)) return;
+    const command = event.ctrlKey || event.metaKey;
+    const activeRow = browser.rows[browser.activeIndex];
+    if (inList && multiple && command && event.key.toLowerCase() === 'a') {
+      browser.selectAll();
+      event.preventDefault();
       return;
     }
-    const activeRow = browser.rows[browser.activeIndex];
+    if (
+      command &&
+      !(inList && multiple && ['ArrowUp', 'ArrowDown', ' '].includes(event.key))
+    )
+      return;
+    const movement = { extend: multiple && event.shiftKey, focusOnly: command };
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp':
-        browser.moveActive(event.key === 'ArrowDown' ? 1 : -1);
+        browser.moveActive(event.key === 'ArrowDown' ? 1 : -1, movement);
         break;
       case 'Home':
       case 'End':
         if (!inList) return;
-        browser.moveActive(event.key === 'End' ? 1 : -1, { edge: true });
+        browser.moveActive(event.key === 'End' ? 1 : -1, {
+          edge: true,
+          ...movement,
+        });
+        break;
+      case ' ':
+        if (!inList || !multiple || !activeRow?.entry) return;
+        browser.mark(activeRow, { toggle: true });
         break;
       case 'Enter':
-        if (activeRow) {
+        if (multiple && browser.selectedPaths.length > 1) browser.choose();
+        else if (activeRow) {
           browser.open(activeRow);
         } else if (!browser.filter.trim() && browser.chosenPath !== null) {
           // A filter without matches chooses nothing.
@@ -360,32 +412,6 @@
                 />
               </svg>
             </Button>
-            {#if browser.canCreate}
-              <Button
-                variant="tertiary"
-                icon
-                ariaLabel={t('pathPicker.newFolder')}
-                tooltip={t('pathPicker.newFolder')}
-                disabled={!browser.folderReady || browser.creating}
-                onClick={browser.startNewFolder}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  width="15"
-                  height="15"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75zM8 7v4M6 9h4"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.4"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </Button>
-            {/if}
           </div>
           {#if browser.editingPath && browser.pathFailure}
             <p class="path-browser__error" role="alert">
@@ -413,14 +439,56 @@
                 }}
                 onkeydown={(event) => handleNavigationKey(event)}
               />
-              <label class="path-browser__hidden"
-                ><Toggle
-                  size="sm"
-                  checked={!browser.showHidden}
-                  ariaLabel={t('pathPicker.hideHidden')}
-                  onChange={(next) => browser.setShowHidden(!next)}
-                />{t('pathPicker.hideHidden')}</label
+              {#if createFile || browser.canCreate}
+                <Button
+                  variant="secondary"
+                  ariaLabel={createFile
+                    ? t('pathPicker.new')
+                    : t('pathPicker.newFolder')}
+                  aria-haspopup={createFile ? 'menu' : undefined}
+                  aria-expanded={createFile ? menu?.kind === 'new' : undefined}
+                  disabled={!browser.folderReady || Boolean(browser.creating)}
+                  onClick={(event) =>
+                    createFile
+                      ? openActions(event, 'new')
+                      : browser.startCreate('directory')}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg
+                  >
+                  {createFile ? t('pathPicker.new') : t('pathPicker.newFolder')}
+                </Button>
+              {/if}
+              <Button
+                variant="tertiary"
+                icon
+                ariaLabel={t('pathPicker.view')}
+                tooltip={t('pathPicker.view')}
+                aria-haspopup="menu"
+                aria-expanded={menu?.kind === 'view'}
+                onClick={(event) => openActions(event, 'view')}
               >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  aria-hidden="true"
+                  ><path d="M2 5h4m3 0h5M2 11h7m3 0h2" /><circle
+                    cx="7.5"
+                    cy="5"
+                    r="1.5"
+                  /><circle cx="10.5" cy="11" r="1.5" /></svg
+                >
+              </Button>
             </div>
           {/if}
 
@@ -450,7 +518,9 @@
                     aria-hidden="true"
                   >
                     <path
-                      d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
+                      d={browser.creating === 'file'
+                        ? 'M3.5 1.75h6l3 3v9.5h-9z M9.5 1.75v3h3'
+                        : 'M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z'}
                       fill="none"
                       stroke="currentColor"
                       stroke-width="1.3"
@@ -463,7 +533,13 @@
                     code
                     class="path-browser__new-name"
                     value={browser.newName}
-                    ariaLabel={t('pathPicker.newFolderName')}
+                    ariaLabel={browser.creating === 'file'
+                      ? t('pathPicker.fileName')
+                      : t('pathPicker.newFolderName')}
+                    placeholder={browser.creating === 'file'
+                      ? t('pathPicker.fileName')
+                      : undefined}
+                    disabled={browser.createBusy}
                     invalid={Boolean(browser.createFailure)}
                     onInput={browser.setNewName}
                     onkeydown={handleNewNameKey}
@@ -472,15 +548,15 @@
                     variant="primary"
                     loading={browser.createBusy}
                     disabled={!browser.newName.trim()}
-                    onClick={browser.createFolder}
-                    >{t('pathPicker.create')}</Button
+                    onClick={browser.create}>{t('pathPicker.create')}</Button
                   >
                   <Button
                     variant="tertiary"
                     icon
                     ariaLabel={t('common.cancel')}
                     tooltip={t('common.cancel')}
-                    onClick={browser.cancelNewFolder}
+                    disabled={browser.createBusy}
+                    onClick={browser.cancelCreate}
                   >
                     <svg
                       viewBox="0 0 16 16"
@@ -521,6 +597,12 @@
                       : toNativePath(browser.target, browser.separator),
                   })}
               aria-busy={browser.status === 'loading' || undefined}
+              aria-multiselectable={multiple && browser.view === 'folder'
+                ? 'true'
+                : undefined}
+              aria-describedby={multiple && browser.folderReady
+                ? componentId + '-selection-help'
+                : undefined}
               aria-activedescendant={browser.activeIndex >= 0
                 ? rowId(browser.activeIndex)
                 : undefined}
@@ -540,17 +622,41 @@
                   type="button"
                   tabindex="-1"
                   class="path-browser__row"
-                  class:active={index === browser.activeIndex}
+                  class:active={multiple
+                    ? browser.selectedKeys.includes(row.key)
+                    : index === browser.activeIndex}
+                  class:path-browser__cursor={multiple &&
+                    index === browser.activeIndex}
                   class:path-browser__row--hidden={row.entry?.hidden}
                   role="option"
-                  aria-selected={index === browser.activeIndex}
+                  aria-selected={multiple
+                    ? browser.selectedKeys.includes(row.key)
+                    : index === browser.activeIndex}
                   aria-label={row.entry
                     ? row.entry.kind === 'directory'
                       ? t('pathPicker.folder', { name: row.label })
                       : t('pathPicker.file', { name: row.label })
                     : undefined}
-                  onclick={() => browser.pick(row)}
-                  ondblclick={() => browser.open(row)}
+                  onclick={(event) => {
+                    const enterFolder = Boolean(
+                      event.target.closest?.('.path-browser__open'),
+                    );
+                    browser.pick(row, {
+                      extend: event.shiftKey,
+                      toggle:
+                        event.ctrlKey ||
+                        event.metaKey ||
+                        (event.pointerType === 'touch' &&
+                          multiple &&
+                          !enterFolder),
+                      enterFolder,
+                    });
+                    focusList();
+                  }}
+                  ondblclick={(event) => {
+                    if (!event.ctrlKey && !event.metaKey && !event.shiftKey)
+                      browser.open(row);
+                  }}
                 >
                   {#if row.entry?.kind === 'file'}
                     <svg
@@ -598,11 +704,36 @@
                       >{t('pathPicker.link')}</span
                     >
                   {/if}
+                  {#if row.entry?.kind === 'directory'}
+                    <span
+                      class="path-browser__open"
+                      use:tooltip={{ text: t('pathPicker.openFolder') }}
+                      aria-hidden="true"
+                      ><svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"><path d="m6 3 5 5-5 5" /></svg
+                      ></span
+                    >
+                  {/if}
                 </button>
               {/each}
             </div>
           </div>
 
+          {#if multiple && browser.folderReady}
+            <p
+              id={componentId + '-selection-help'}
+              class="path-browser__notice path-browser__selection-help"
+            >
+              <span>{t('pathPicker.selectHint')}</span><span
+                >{t('pathPicker.touchHint')}</span
+              >
+            </p>
+          {/if}
           {#if browser.folderReady && browser.unrenderedCount > 0}
             <p class="path-browser__notice">
               {t('pathPicker.moreRows', { count: browser.unrenderedCount })}
@@ -614,15 +745,20 @@
         </div>
       {/snippet}
       {#snippet footer()}
-        {#if browser.chosenValue}
+        {@const paths = browser.selectedPaths}
+        {@const choice =
+          paths.length > 1
+            ? t('pathPicker.selectedCount', { count: paths.length })
+            : paths[0] || browser.chosenValue}
+        {#if choice}
           <!-- A long path loses its start; the tooltip shows it whole. -->
           <code
             class="path-browser__choice"
             use:tooltip={{
-              text: browser.chosenValue,
+              text: choice,
               mono: true,
               whenTruncated: true,
-            }}><bdi>{browser.chosenValue}</bdi></code
+            }}><bdi>{choice}</bdi></code
           >
         {/if}
         <Button variant="secondary" onClick={onClose}
@@ -630,15 +766,19 @@
         >
         <Button
           variant="primary"
-          disabled={browser.chosenPath === null}
+          disabled={Boolean(browser.creating) ||
+            (!paths.length && browser.chosenPath === null)}
           onClick={browser.choose}
         >
-          {mode === 'file' || browser.activeEntry?.kind === 'file'
-            ? t('pathPicker.selectFile')
-            : t('pathPicker.selectFolder')}
+          {paths.length > 1
+            ? t('pathPicker.selectCount', { count: paths.length })
+            : mode === 'file' || browser.chosenKind === 'file'
+              ? t('pathPicker.selectFile')
+              : t('pathPicker.selectFolder')}
         </Button>
       {/snippet}
     </Modal>
+    <ContextMenu {menu} onClose={() => (menu = null)} />
   {/if}
 </div>
 
@@ -743,15 +883,40 @@
     flex: 1;
   }
 
-  .path-browser__hidden {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
+  .path-browser__tools {
+    flex-wrap: wrap;
+    gap: 6px;
   }
-
+  .path-browser__tools :global(.path-browser__filter) {
+    min-width: 9ch;
+  }
+  .path-browser__selection-help span + span {
+    display: none;
+  }
+  @media (pointer: coarse) {
+    .path-browser__selection-help span:first-child {
+      display: none;
+    }
+    .path-browser__selection-help span + span {
+      display: inline;
+    }
+  }
+  .path-browser__open {
+    display: grid;
+    place-items: center;
+    align-self: stretch;
+    margin-left: auto;
+    min-width: 32px;
+    color: var(--text-med);
+  }
+  .path-browser__open:hover {
+    background: var(--surface-3);
+    color: var(--text-hi);
+  }
+  .path-browser__list:focus-visible .path-browser__cursor {
+    outline: 1px solid var(--text-med);
+    outline-offset: -1px;
+  }
   .path-browser__panel {
     display: flex;
     min-height: 0;
@@ -844,7 +1009,8 @@
 
   .path-browser__row.active {
     color: var(--text-hi);
-    background: var(--selected-surface);
+    background: var(--accent-12);
+    box-shadow: inset 3px 0 var(--accent);
   }
 
   .path-browser__row--hidden {
