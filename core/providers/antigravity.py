@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, override
@@ -17,8 +17,8 @@ from core.providers._native_agent_wire import (
     system_prompt,
     visible_message,
 )
-from core.providers.adapter import ModelLookup
-from core.providers.errors import CatalogEntrySkipped, ProviderError
+from core.providers.adapter import ModelLookup, is_request_context_message
+from core.providers.errors import CatalogEntrySkipped, ProviderError, ProviderReplayLimitError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
@@ -32,10 +32,8 @@ if TYPE_CHECKING:
 
 
 _REQUEST_WORKERS = BoundedWorkerPool(name="antigravity-request", max_workers=2)
-_TRANSCRIPT_HEADER = (
-    "Continue this vBot conversation as the assistant. "
-    "Each JSON line is one message in chronological order."
-)
+_STEP_BYTES = 48_000
+_MAX_REPLAY_STEPS = 8
 
 
 def _text(content: Any) -> str:
@@ -53,24 +51,159 @@ def _text(content: Any) -> str:
     )
 
 
-def _prompt(messages: Sequence[Mapping[str, Any]], *, has_tools: bool) -> str:
-    conversation = [message for message in messages if message.get("role") != "system"]
-    records = []
-    for message in conversation:
+def _records(messages: Sequence[Mapping[str, Any]]) -> Iterator[JsonObject]:
+    for message in messages:
+        if message.get("role") == "system":
+            continue
         record = visible_message(message)
         text = _text(record["content"])
         if media := record.pop("media", None):
             text = "\n\n".join(filter(None, (text, _text(media))))
         record["content"] = text
-        # Preserve a literal @ in JSON without invoking the CLI's @file preprocessor.
-        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-        records.append(encoded.replace("@", r"\u0040"))
-    tool_scope = (
+        if record["role"] == "user" and not is_request_context_message(message):
+            record["user_input"] = True
+        yield record
+
+
+def _encode(value: Any) -> str:
+    # Preserve a literal @ in JSON without invoking the CLI's @file preprocessor.
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("@", r"\u0040")
+
+
+def _header(*, has_tools: bool, has_parts: bool = False) -> str:
+    instructions = [
+        "Continue this vBot conversation as the assistant. "
+        "Read the JSON records in chronological order.",
+        "The last message marked user_input is the most recent user input.",
+    ]
+    if has_parts:
+        instructions.append(
+            "Numbered parts of a message continue in order. "
+            "Join arguments_json parts for the same Tool call to read its arguments."
+        )
+    instructions.append(
         "Use the vbot MCP server for tool calls."
         if has_tools
         else "Answer directly without calling tools."
     )
-    return "\n".join([f"{_TRANSCRIPT_HEADER} {tool_scope}", *records])
+    return " ".join(instructions)
+
+
+def _fields(record: JsonObject, number: int) -> Iterator[tuple[JsonObject, str, str]]:
+    """Keep each field attributable to its original message and Tool call across steps."""
+    metadata = {key: value for key, value in record.items() if key not in ("content", "tool_calls")}
+    metadata["message"] = number
+    calls = record.get("tool_calls") or []
+    if record["content"] or not calls:
+        yield metadata, "content", record["content"]
+    for index, call in enumerate(calls, start=1):
+        source = {**metadata, "call": index, "tool_call_id": call["id"], "name": call["name"]}
+        arguments = json.dumps(call["arguments"], ensure_ascii=False, separators=(",", ":"))
+        yield source, "arguments_json", arguments
+
+
+def _prefix_that_fits(text: str, offset: int, budget: int) -> int:
+    """Largest code-point prefix fitting the available bytes after JSON escaping."""
+    low = 0
+    high = max(0, min(len(text) - offset, budget))
+    candidate = high
+    while low < high:
+        if len(_encode(text[offset : offset + candidate]).encode("utf-8")) - 2 <= budget:
+            low = candidate
+        else:
+            high = candidate - 1
+        candidate = (low + high + 1) // 2
+    return low
+
+
+class _ReplaySteps:
+    """Pack entire messages first; split a field when a message cannot fit a native step."""
+
+    def __init__(self) -> None:
+        self.steps: list[list[str]] = [[]]
+        self.remaining = _STEP_BYTES
+        self.has_parts = False
+
+    def next_step(self) -> None:
+        if self.steps[-1]:
+            self.steps.append([])
+            self.remaining = _STEP_BYTES
+
+    def append(self, line: str, size: int) -> None:
+        self.steps[-1].append(line)
+        self.remaining -= size + 1  # Leave room for the next record's newline.
+
+    def add_record(
+        self, record: JsonObject, number: int, line: str, size: int, *, dense: bool
+    ) -> None:
+        if size > self.remaining and not dense:
+            self.next_step()
+        if size <= self.remaining:
+            self.append(line, size)
+            return
+        self.has_parts = True
+        part = 0
+        for source, field, text in _fields(record, number):
+            offset = 0
+            while True:
+                part += 1
+                frame = {**source, "part": part, field: ""}
+                overhead = len(_encode(frame).encode("utf-8"))
+                length = _prefix_that_fits(text, offset, self.remaining - overhead)
+                if (text and not length) or overhead > self.remaining:
+                    self.next_step()
+                    length = _prefix_that_fits(text, offset, self.remaining - overhead)
+                if (text and not length) or overhead > self.remaining:
+                    raise ProviderReplayLimitError(
+                        f"Antigravity message {number} has {overhead} UTF-8 bytes of correlation "
+                        f"metadata for one part. A replay step holds {_STEP_BYTES} bytes "
+                        "including its content."
+                    )
+                frame[field] = text[offset : offset + length]
+                line = _encode(frame)
+                self.append(line, len(line.encode("utf-8")))
+                offset += length
+                if offset == len(text):
+                    break
+                self.next_step()
+
+
+def _prompt(
+    messages: Sequence[Mapping[str, Any]], *, has_tools: bool
+) -> tuple[str, tuple[str, ...]]:
+    entries = []
+    total = 0
+    limit = _STEP_BYTES * _MAX_REPLAY_STEPS
+    for record in _records(messages):
+        line = _encode(record)
+        size = len(line.encode("utf-8"))
+        total += size
+        if total > limit:
+            raise ProviderReplayLimitError(
+                f"The Antigravity history already contains {total} UTF-8 bytes before framing. "
+                f"The route can carry {_MAX_REPLAY_STEPS} steps of {_STEP_BYTES} bytes. "
+                "Compact older history or reduce the size of a single message."
+            )
+        entries.append((record, line, size))
+
+    # Keep complete records together unless the resulting gaps would exhaust the
+    # replay slots. The second pass uses those gaps for correlated fragments.
+    for dense in (False, True):
+        packed = _ReplaySteps()
+        for number, (record, line, size) in enumerate(entries, start=1):
+            packed.add_record(record, number, line, size, dense=dense)
+            if len(packed.steps) > _MAX_REPLAY_STEPS:
+                break
+        else:
+            header = _header(has_tools=has_tools, has_parts=packed.has_parts)
+            steps = tuple("\n".join(lines) for lines in packed.steps)
+            if len(steps) == 1 and len(header.encode("utf-8")) <= packed.remaining:
+                return "\n".join([header, *packed.steps[0]]), ()
+            return header, steps
+    raise ProviderReplayLimitError(
+        f"The {total}-byte Antigravity history exceeds {_MAX_REPLAY_STEPS} steps of {_STEP_BYTES} "
+        "UTF-8 bytes after framing its parts. Compact older history or reduce a single message."
+    )
 
 
 def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
@@ -86,8 +219,9 @@ def _mcp_tools(tools: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
 
 def _request(
     messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
-) -> tuple[str, str, list[JsonObject]]:
-    return system_prompt(messages), _prompt(messages, has_tools=bool(tools)), _mcp_tools(tools)
+) -> tuple[str, str, tuple[str, ...], list[JsonObject]]:
+    prompt, replay_steps = _prompt(messages, has_tools=bool(tools))
+    return system_prompt(messages), prompt, replay_steps, _mcp_tools(tools)
 
 
 class AntigravityAdapter(NativeAgentAdapter):
@@ -128,7 +262,7 @@ class AntigravityAdapter(NativeAgentAdapter):
         temporary_files = self._native.temporary_files
         if temporary_files is None:
             raise ProviderError("Antigravity requires managed temporary storage.", retryable=False)
-        system, prompt, tools = await _REQUEST_WORKERS.run(
+        system, prompt, replay_steps, tools = await _REQUEST_WORKERS.run(
             _request, messages, [] if choice == "none" else kwargs.get("tools") or []
         )
 
@@ -138,6 +272,7 @@ class AntigravityAdapter(NativeAgentAdapter):
                 model=model_id,
                 system_prompt=system,
                 prompt=prompt,
+                replay_steps=replay_steps,
                 tools=tools,
                 temporary_files=temporary_files,
             )
@@ -161,10 +296,19 @@ class AntigravityAdapter(NativeAgentAdapter):
     ) -> int:
         from core.utils.tokens import estimate_structured_tokens
 
-        return estimate_structured_tokens(
-            [system_prompt(messages), _prompt(messages, has_tools=bool(tools)), tools or []],
-            model_id=model_id,
+        header = _header(has_tools=bool(tools))
+        total = estimate_structured_tokens(
+            [system_prompt(messages), header, tools or []], model_id=model_id
         )[0]
+        for record in _records(messages):
+            # Count before applying replay limits so Chat can project Compaction.
+            # Cache stable records independently and bound individual tokenizer inputs.
+            line = _encode(record)
+            for offset in range(0, len(line), 8192):
+                total += estimate_structured_tokens(
+                    line[offset : offset + 8192], model_id=model_id
+                )[0]
+        return total
 
     @classmethod
     def normalize_catalog_entry(

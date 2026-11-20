@@ -60,7 +60,11 @@ def _json_file(path: Path, value: object) -> None:
 
 
 def _configuration(
-    root: Path, system_prompt: str, tools: list[dict[str, Any]], python: Path
+    root: Path,
+    system_prompt: str,
+    tools: list[dict[str, Any]],
+    python: Path,
+    replay_steps: tuple[str, ...] = (),
 ) -> tuple[Path, Path]:
     home, work = root / "home", root / "workspace"
     config = work / ".agents"
@@ -110,8 +114,13 @@ def _configuration(
     bridge_copy.write_bytes(_BRIDGE.read_bytes())
     prefix = f"{interpreter} -I -S -B vbot_hook.py"
     before = "before-tools" if tools else "before"
+    if replay_steps:
+        _json_file(root / "replay.json", replay_steps)
+    replay_option = " replay" if replay_steps else ""
     hooks = {
-        "PreInvocation": [{"type": "command", "command": f"{prefix} {before} ../.."}],
+        "PreInvocation": [
+            {"type": "command", "command": f"{prefix} {before} ../..{replay_option}"}
+        ],
         "PreToolUse": [
             {"matcher": "*", "hooks": [{"type": "command", "command": f"{prefix} guard ../.."}]}
         ],
@@ -230,6 +239,7 @@ async def _read_turn(
     model: str,
     prompt: str,
     names: dict[str, str],
+    replay_count: int = 0,
 ) -> AsyncIterator[dict[str, Any]]:
     assert process.stdin is not None and process.stdout is not None
     try:
@@ -254,11 +264,16 @@ async def _read_turn(
     pending: set[int] = set()
     agent_usage: dict[str, int] | None = None
     had_checkpoint = False
+    input_steps: set[int] = set()
     while True:
         tag, body = await _event(process.stdout)
         if tag == "result" and body.get("status") != "SUCCESS":
             raise _response_error(body.get("error"))
         step_type = body.get("step_type") if tag == "step_update" else None
+        if replay_count and step_type == "user_input" and body.get("state") == "DONE":
+            index = body.get("step_index")
+            if type(index) is int and index >= 0:
+                input_steps.add(index)
         if step_type == "checkpoint":
             had_checkpoint = True
         if step_type in {"user_input", "checkpoint", "error_message"}:
@@ -271,6 +286,14 @@ async def _read_turn(
                         "did not load vBot's Tool inventory from its local Python process"
                     )
                 raise _invalid("did not run vBot's pre-invocation hook")
+        # agy acknowledges the initial stdin message and each userMessage
+        # injected by the hook as separate completed user_input steps.
+        if (
+            replay_count
+            and (tag == "result" or step_type in {"agent_response", "tool"})
+            and len(input_steps) != 1 + replay_count
+        ):
+            raise _invalid("did not acknowledge the complete vBot conversation")
         if tag == "result":
             if pending:
                 raise _invalid("finished without a pre-execution denial for every Tool")
@@ -329,6 +352,7 @@ async def stream_turn(
     prompt: str,
     tools: list[dict[str, Any]],
     temporary_files: TemporaryFileManager,
+    replay_steps: tuple[str, ...] = (),
 ) -> AsyncGenerator[dict[str, Any]]:
     """Run the official CLI as an isolated one-turn child, always reaping its tree."""
     stack = contextlib.ExitStack()
@@ -340,7 +364,7 @@ async def stream_turn(
     def prepare() -> tuple[Path, Path, Path]:
         root = stack.enter_context(temporary_files.provider_directory())
         manifest = [{**tool, "name": short_names[tool["name"]]} for tool in tools]
-        home, work = _configuration(root, system_prompt, manifest, python)
+        home, work = _configuration(root, system_prompt, manifest, python, replay_steps)
         return root, home, work
 
     async def start(root: Path, home: Path, work: Path) -> None:
@@ -391,7 +415,7 @@ async def stream_turn(
         root, home, work = await settle_before_cancelling(_FILES.run(prepare))
         await settle_before_cancelling(start(root, home, work))
         assert process is not None
-        async for delta in _read_turn(process, root, model, prompt, names):
+        async for delta in _read_turn(process, root, model, prompt, names, len(replay_steps)):
             yield delta
     except (OSError, UnicodeError) as exc:
         raise _invalid("could not open or maintain its isolated local session") from exc

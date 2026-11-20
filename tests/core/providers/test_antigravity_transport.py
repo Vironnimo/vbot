@@ -70,6 +70,9 @@ async def child(monkeypatch: pytest.MonkeyPatch) -> _Child:
     [
         "call",
         "mixed",
+        "replay",
+        "missing_replay_file",
+        "missing_replay_step",
         "missing_receipt",
         "missing_denial",
         "pending_native",
@@ -83,6 +86,11 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child: _Child, case: str
 ) -> None:
     workspace: list[Path] = []
+    parts = (
+        ('{"role":"user","content":"älter"}', '{"role":"tool","content":"📁"}')
+        if "replay" in case
+        else ()
+    )
     runtime = tmp_path / "vBot package" / "runtime"
     monkeypatch.setattr(
         python_process,
@@ -124,12 +132,33 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
             cwd=str(cwd),
             model=_MODEL,
         )
-        child.event("step_update", step_type="user_input", state="DONE")
+        child.event("step_update", step_type="user_input", state="DONE", step_index=0)
         if case != "missing_inventory":
             (root / "listed").touch()
         if case not in {"missing_guard", "missing_inventory"}:
-            assert bridge._guard("before", root) == {}
-            assert bridge._guard("before", root) == {"terminationBehavior": "terminate"}
+            assert hooks["PreInvocation"][0]["command"].endswith(
+                "../.. replay" if parts else "../.."
+            )
+            if case == "missing_replay_file":
+                (root / "replay.json").unlink()
+                assert bridge._guard("before-tools", root, replay=True) == {
+                    "terminationBehavior": "terminate"
+                }
+            else:
+                assert bridge._guard("before-tools", root, replay=bool(parts)) == (
+                    {"injectSteps": [{"userMessage": part} for part in parts]} if parts else {}
+                )
+                assert bridge._guard("before-tools", root, replay=bool(parts)) == {
+                    "terminationBehavior": "terminate"
+                }
+                for index in range(1, len(parts) + 1):
+                    # A repeated acknowledgement cannot stand in for a missing step.
+                    child.event(
+                        "step_update",
+                        step_type="user_input",
+                        state="DONE",
+                        step_index=1 if case == "missing_replay_step" else index,
+                    )
         child.event("step_update", step_type="agent_response", state="ACTIVE", text_delta="text")
 
         def tool_step(index: int, tool: str, call_id: str) -> None:
@@ -191,8 +220,9 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
         prompt="ask",
         tools=[_DEFINITION],
         temporary_files=TemporaryFileManager(tmp_path),
+        replay_steps=parts,
     )
-    if case in {"call", "mixed"}:
+    if case in {"call", "mixed", "replay"}:
         deltas = [delta async for delta in stream]
         if case == "mixed":
             native = deltas.pop(-2)
@@ -225,7 +255,12 @@ async def test_turn_requires_native_isolation_and_confirmed_tool_denial(
             {"type": "finish", "reason": "tool_calls"},
         ]
     else:
-        expected = {"missing_guard": "pre-invocation hook", "missing_inventory": "Tool inventory"}
+        expected = {
+            "missing_guard": "pre-invocation hook",
+            "missing_inventory": "Tool inventory",
+            "missing_replay_step": "complete vBot conversation",
+            "missing_replay_file": "pre-invocation hook",
+        }
         seen = []
         with pytest.raises(ProviderError, match=expected.get(case)):
             async for delta in stream:

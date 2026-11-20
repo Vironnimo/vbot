@@ -380,7 +380,13 @@ def _neutralized_text(value: Any) -> Any:
 
     if isinstance(value, str):
         neutralized = neutralize_system_reminder_tags(value)
-        return value if neutralized == value else neutralized
+        if neutralized == value:
+            return value
+        return (
+            RequestContextText(neutralized)
+            if isinstance(value, RequestContextText)
+            else neutralized
+        )
     if not isinstance(value, list):
         return value
     blocks = list(value)
@@ -1094,7 +1100,7 @@ def note_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
             if payload is None:
                 continue
             flush_note_run()
-            request_messages.append({"role": "user", "content": payload[1]})
+            request_messages.append({"role": "user", "content": RequestContextText(payload[1])})
             continue
         kind: Literal["reminder", "channel"] = (
             "channel" if is_channel_message_note(note) else "reminder"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +30,7 @@ from core.providers.adapter import (
     estimate_wire_request_input_tokens,
     request_input_budget,
 )
-from core.providers.errors import ProviderContextOverflowError
+from core.providers.errors import ProviderContextOverflowError, ProviderReplayLimitError
 from core.providers.providers import RequestInput
 from core.usage import last_request_usage
 from core.utils.logging import get_logger
@@ -62,6 +62,7 @@ async def _send_streaming_model_request(
     model_reference: str | None = None,
     input_estimate: int | None = None,
     estimate_factor: float = 1.0,
+    intermediate_summary_note: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     session_address: SessionAddress | None = None,
     run_id: str | None = None,
     owner_name: str | None = None,
@@ -96,6 +97,12 @@ async def _send_streaming_model_request(
     recovery_budget: RequestInput | None = None
     reduction = 0
     omitted_exchanges = 0
+    # Only a verified replay rejection creates partitions. A successful part's
+    # summary accompanies the next part; only the final response can commit.
+    remaining: list[list[dict[str, Any]]] = []
+    replay_history: list[dict[str, Any]] | None = None
+    replay_prefix: list[dict[str, Any]] = []
+    previous_summary: list[dict[str, Any]] = []
     budget = asyncio.timeout(MODEL_REQUEST_TIMEOUT_SECONDS)
     try:
         async with budget:
@@ -131,8 +138,38 @@ async def _send_streaming_model_request(
                         raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
                     if omitted_exchanges:
                         response["_compaction_omitted_exchanges"] = omitted_exchanges
-                    return response
+                    if not remaining:
+                        return response
+                    assert intermediate_summary_note is not None
+                    previous_summary = [
+                        await COMPACTION_WORKERS.run(intermediate_summary_note, response)
+                    ]
+                    replay_history = remaining.pop()
+                except ProviderReplayLimitError as error:
+                    if intermediate_summary_note is None or reduction:
+                        raise
+                    if replay_history is None:
+                        start = next(
+                            (
+                                i
+                                for i, message in enumerate(messages[:-1])
+                                if message.get("role") != "system"
+                            ),
+                            len(messages) - 1,
+                        )
+                        replay_prefix = messages[:start]
+                        replay_history = messages[start:-1]
+                    cut = _replay_split(replay_history)
+                    if cut is None:
+                        raise ProviderReplayLimitError(
+                            f"{error} The smallest complete Compaction input still exceeds the "
+                            "replay limit. No checkpoint was saved."
+                        ) from error
+                    remaining.append(replay_history[cut:])
+                    replay_history = replay_history[:cut]
                 except ProviderContextOverflowError:
+                    if replay_history is not None:
+                        raise
 
                     def reduce_request(
                         characters: int, omit_old_exchanges: bool
@@ -229,10 +266,47 @@ async def _send_streaming_model_request(
                         error,
                     )
                     await _sleep(delay)
+                    continue
+                if replay_history is not None:
+                    messages = [
+                        *replay_prefix,
+                        *previous_summary,
+                        *replay_history,
+                        original_messages[-1],
+                    ]
+                    counted = await COMPACTION_WORKERS.run(
+                        _model_request_input_budget,
+                        adapter,
+                        model_id,
+                        messages,
+                        request_options.get("tools"),
+                        factor=estimate_factor,
+                    )
+                    input_estimate, recovery_budget = counted.estimated, counted.budget
     except TimeoutError as error:
         if not budget.expired():
             raise
         raise CompactionLimitError(_TIME_LIMIT_MESSAGE) from error
+
+
+def _replay_split(history: Sequence[dict[str, Any]]) -> int | None:
+    """Choose the nearest midpoint outside all pending native Tool calls."""
+    pending: set[str] = set()
+    cut = None
+    closest = len(history)
+    for index, message in enumerate(history):
+        role = message.get("role")
+        distance = abs(2 * index - len(history))
+        if not pending and role != "tool" and distance < closest:
+            cut, closest = index, distance
+        if role == "assistant":
+            for call in message.get("tool_calls") or ():
+                if not isinstance(call, dict) or not isinstance(call_id := call.get("id"), str):
+                    return None
+                pending.add(call_id)
+        elif role == "tool":
+            pending.discard(message.get("tool_call_id", ""))
+    return cut
 
 
 def _reported_input_capacity(adapter: Any, model_id: str, options: dict[str, Any]) -> int | None:

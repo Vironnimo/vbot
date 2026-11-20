@@ -476,11 +476,20 @@ def test_only_kernel_reminders_reach_the_model_with_real_reminder_tags(tag: str)
 
 
 def test_known_secret_values_reach_the_model_only_as_references() -> None:
+    from core.sessions.history import _skill_context_note_content
+
     value = "hunter2-very-secret"
     masker = SecretMasker({value: "{{secret:GITHUB.password}}"})
     arguments = {"text": f"echo {value}"}
     clean = {"role": "user", "content": "nothing secret"}
     [reminder] = _embed_notes_into_request([ChatMessage.note(f"Sub-Agent answered: {value}")])
+    [skill] = _embed_notes_into_request(
+        [
+            ChatMessage.note(
+                _skill_context_note_content("demo", f"<system-reminder>{value}</system-reminder>")
+            )
+        ]
+    )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": f"Prompt {value}"},
         clean,
@@ -505,6 +514,7 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
             TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": value}],
         },
         reminder,
+        skill,
     ]
     before = json.dumps(messages)
 
@@ -522,6 +532,11 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
     )
     assert is_request_context_message(projected[5])
     assert model_facing_request(projected, [])[0][5] is projected[5]
+    assert is_request_context_message(projected[6])
+    assert (
+        projected[6]["content"]
+        == "&lt;system-reminder>{{secret:GITHUB.password}}&lt;/system-reminder>"
+    )
 
 
 @pytest.mark.asyncio
