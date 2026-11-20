@@ -42,6 +42,7 @@ INVENTORY_NAME = "vbot-runtime-inventory.json"
 RELEASE_IDENTITY_NAME = "vbot-release.json"
 #: Tracked sources whose state a signed package must match exactly.
 RELEASE_SOURCE_PATHS = (
+    "changelog",
     "core",
     "server",
     "cli",

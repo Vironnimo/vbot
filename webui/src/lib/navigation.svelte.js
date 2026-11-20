@@ -629,13 +629,12 @@ export function createNavigator({
     return link.target;
   }
 
-  // An explicit setup link reopens the shared guide without resetting its
-  // completion. Consume it once so reloading does not reopen it again.
-  function takeSetupLink() {
+  // Consume one-shot links to the setup guide or changelog so a reload keeps them closed.
+  function takeQueryFlag(flag) {
     const location = browserWindow?.location;
     const query = new SvelteURLSearchParams(location?.search ?? '');
-    if (query.get('setup') !== '1') return false;
-    query.delete('setup');
+    if (query.get(flag) !== '1') return false;
+    query.delete(flag);
     const search = query.toString();
     try {
       browserHistory?.replaceState(
@@ -752,7 +751,8 @@ export function createNavigator({
     resolvePendingStart,
     start,
     takeSessionLink,
-    takeSetupLink,
+    takeSetupLink: () => takeQueryFlag('setup'),
+    takeChangelogLink: () => takeQueryFlag('changelog'),
     view,
   };
 }

@@ -108,8 +108,14 @@ export default Object.freeze({
   'app.webuiOutdated':
     'vBot was updated. Reload the page to use the new version.',
   'app.webuiOutdatedReload': 'Reload',
+  'app.whatsNew': "What's new",
+  'app.allReleases': 'See all releases',
+  'app.beforeUpdate': 'Before you update',
+  'app.updatedTo': 'Updated to v{version}',
+  'app.changelogEmpty': 'No release notes are bundled for these versions.',
+  'app.changelogFailed': 'The release notes could not be loaded.',
   'app.updateAvailable':
-    'vBot {version} is available. Install it with Update in the vBot tray menu, or run vbot update on the server.',
+    'vBot {version} is available. Select it in the vBot tray menu to install it, or run vbot update on the server.',
   'app.desktopRestart.pending':
     'vBot was updated. Restart the app to use the new version.',
   'app.desktopRestart.failed':

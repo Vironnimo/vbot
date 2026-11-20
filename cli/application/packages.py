@@ -63,6 +63,10 @@ _LOGGER = logging.getLogger("vbot.application.packages")
 _RELEASE_NUMBERS = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 
 
+class ReleaseOfferChangedError(ApplicationError):
+    """A different release appeared after the caller reviewed the update."""
+
+
 class OlderReleaseError(ApplicationError):
     """The update channel offers a version that is not newer than the active one."""
 
@@ -430,6 +434,7 @@ def download_release(
     *,
     progress: Callable[[str, str | None], None] | None = None,
     release_version: str | None = None,
+    reviewed_version_id: str | None = None,
 ) -> Path | None:
     """Download the channel's package, or an explicitly selected published release.
 
@@ -474,6 +479,10 @@ def download_release(
         active = read_json(install.version() / "release.json", limit=32 * 1024**2)
         if release_version is None and _not_newer(identity, active):
             raise OlderReleaseError(_older_release_message(install, identity, active))
+        if reviewed_version_id and identity["version_id"] != reviewed_version_id:
+            raise ReleaseOfferChangedError(
+                "The offered release changed. Review the new notices and run the update again."
+            )
         base = (
             selected_base
             if release_version is not None
@@ -494,14 +503,19 @@ def download_release(
     return directory / expected
 
 
-def newer_published_release(install: Installation, client: httpx.Client) -> dict[str, Any] | None:
+def newer_published_release(
+    install: Installation, client: httpx.Client, *, version: str | None = None
+) -> dict[str, Any] | None:
     """The release identity the channel publishes when an update would install it.
 
     ``None`` when the channel publishes the active version or one that is not
     newer, exactly the cases in which ``download_release`` downloads nothing.
     Reads only the identity (at most ``MAX_IDENTITY_BYTES``).
     """
-    identity = _channel_identity(client, install.download_base, install.channel)
+    base = install.asset_base(version) if version else install.download_base
+    identity = _channel_identity(client, base, install.channel)
+    if version and identity.get("version") != version:
+        raise ApplicationError("Release identity names a different version")
     if identity["version_id"] == install.version().name:
         return None
     active = read_json(install.version() / "release.json", limit=32 * 1024**2)

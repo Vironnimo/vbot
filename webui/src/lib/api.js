@@ -85,6 +85,7 @@ export {
   readExtensionPageToolCall,
   getDataStoreStatus,
   getApplicationUpdateStatus,
+  getApplicationChangelog,
   createDataSnapshot,
   acknowledgeDataStoreIncident,
   listBackgroundActivity,

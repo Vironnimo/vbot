@@ -126,6 +126,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         (),
         "Dismiss a finished background activity for all clients.",
     ),
+    service("application.changelog", "query", params(), (), "Read bundled stable release notes."),
     service(
         "application.update_status",
         "query",

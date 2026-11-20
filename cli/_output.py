@@ -305,6 +305,13 @@ def print_application_update_result(
         print(f"  Status: vbot update status {operation.id}")
     if operation.phase == "prepared":
         print(f"  Activate: vbot update activate {operation.id}")
+    if (
+        operation.phase == "completed"
+        and not operation.rollback
+        and not unchanged
+        and install.channel == "release"
+    ):
+        print("What's new: vbot application changelog")
     if handoff and not operation.terminal:
         print(
             "End your turn now. The updater will arrange a continuation "

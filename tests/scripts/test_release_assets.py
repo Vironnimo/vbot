@@ -10,6 +10,8 @@ from scripts import release_assets
 
 def test_a_release_is_complete_only_with_every_package_and_its_identity(tmp_path: Path) -> None:
     names = release_assets.expected_assets("1.2.3")
+    assert "vbot-changelog.json" in names
+    assert names - {"vbot-changelog.json"} == release_assets.expected_assets("1.2.3", "main")
     for name in names:
         (tmp_path / name).write_text("x", encoding="utf-8")
     identity = {"schema_version": 1, "version": "1.2.3", "revision": "abc", "channel": "main"}

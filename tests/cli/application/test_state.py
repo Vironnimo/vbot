@@ -191,6 +191,7 @@ def test_operation_details_round_trip_with_the_established_root_fields(tmp_path,
     install = _server_install(tmp_path)
     operation = Operation(
         id="upd_labels",
+        reviewed_version_id="rel_reviewed" if kind == "ordinary" else None,
         previous_label="1.0 (aaaaaaaa)",
         target_label="1.1 (bbbbbbbb)",
         release_version="1.2.3" if kind == "release" else None,

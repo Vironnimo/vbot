@@ -200,6 +200,7 @@ def _equivalent_request(
     restart: bool,
     handoff_ticket: str | None,
     release_version: str | None = None,
+    reviewed_version_id: str | None = None,
     rollback: bool = False,
     restore_snapshot: str | None = None,
 ) -> bool:
@@ -208,6 +209,7 @@ def _equivalent_request(
         (rollback or operation.package == requested_package)
         and operation.restart is restart
         and operation.handoff_ticket == handoff_ticket
+        and operation.reviewed_version_id == reviewed_version_id
         and operation.release_version == release_version
         and operation.rollback is rollback
         and operation.restore_snapshot == restore_snapshot
@@ -223,6 +225,7 @@ def request_update(
     handoff_token: str | None = None,
     host: bool = False,
     release_version: str | None = None,
+    reviewed_version_id: str | None = None,
     rollback: bool = False,
     restore_snapshot: str | None = None,
 ) -> Operation:
@@ -272,6 +275,7 @@ def request_update(
                 restart=restart,
                 handoff_ticket=handoff_ticket,
                 release_version=release_version,
+                reviewed_version_id=reviewed_version_id,
                 rollback=rollback,
                 restore_snapshot=restore_snapshot,
             ):
@@ -299,6 +303,7 @@ def request_update(
                 previous_version=install.version().name,
                 handoff_ticket=handoff_ticket,
                 release_version=release_version,
+                reviewed_version_id=reviewed_version_id,
                 rollback=rollback,
                 rollback_source=rollback_source,
                 restore_snapshot=restore_snapshot,

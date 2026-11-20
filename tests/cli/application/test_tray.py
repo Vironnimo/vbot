@@ -79,6 +79,10 @@ class Actions(TrayActions):
         self._call(f"open_extension_page:{extension}:{page_id}:{route}")
 
     @override
+    def open_changelog(self, version: str) -> None:
+        self._call(f"changelog:{version}")
+
+    @override
     def start_update(self) -> None:
         self._call("start_update")
 
@@ -234,7 +238,7 @@ def test_update_is_disabled_while_an_operation_is_active():
     controller._poll_state()
 
     menu = _labels(controller)
-    assert menu["Update to vBot 0.4.3"].enabled is False
+    assert menu["vBot 0.4.3 is available"].enabled is False
     controller.invoke("start_update")
     assert actions.calls == []
 
@@ -244,7 +248,7 @@ def test_the_update_item_names_a_newer_version_or_checks_for_one():
     controller = TrayController(actions)
     controller._poll_state()
 
-    assert "Update to vBot 0.4.3" not in _labels(controller)
+    assert "vBot 0.4.3 is available" not in _labels(controller)
     controller.invoke("check_for_updates")
     _run_opened(controller)
     assert actions.calls == ["check_for_updates"]
@@ -253,7 +257,7 @@ def test_the_update_item_names_a_newer_version_or_checks_for_one():
     controller._poll_state()
     menu = _labels(controller)
     assert "Check for updates" not in menu
-    assert menu["Update to vBot 0.4.3"].action == "start_update"
+    assert menu["vBot 0.4.3 is available"].action == "start_update"
     buttons = [item.action for item in controller.presentation().status.buttons]
     assert "start_update" in buttons
 
@@ -401,6 +405,11 @@ def test_clicked_toast_opens_its_session_or_the_status_window():
     )
     _run_queued(controller)
     assert actions.calls[-1] == "open_extension_page:factory:board:/card/one"
+    controller.activate_toast(
+        Toast("updated:1.2.3", "update_result", "Updated", "", changelog_version="1.2.3")
+    )
+    _run_queued(controller)
+    assert actions.calls[-1] == "changelog:1.2.3"
 
 
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
@@ -562,21 +571,21 @@ def test_update_request_disables_duplicate_clicks_until_facade_reports_completio
 
     controller.invoke("start_update")
     controller._poll_state()  # can only see the previous update before dispatch
-    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
+    assert _labels(controller)["vBot 0.4.3 is available"].enabled is False
     _run_queued(controller)
     # The request returned, but the facade has not reported the update yet.
-    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
+    assert _labels(controller)["vBot 0.4.3 is available"].enabled is False
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update"]
 
     actions.current = replace(actions.current, update_phase="preparing")
     controller._poll_state()
-    assert _labels(controller)["Update to vBot 0.4.3"].enabled is False
+    assert _labels(controller)["vBot 0.4.3 is available"].enabled is False
 
     actions.current = replace(actions.current, update_phase="completed")
     controller._poll_state()
-    assert _labels(controller)["Update to vBot 0.4.3"].enabled is True
+    assert _labels(controller)["vBot 0.4.3 is available"].enabled is True
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update", "start_update"]

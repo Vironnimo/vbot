@@ -23,7 +23,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: python scripts/release_changelog.py check "$RELEASE_VERSION"
+
   ci:
+    needs: changelog
     name: main-build CI
     runs-on: ubuntu-latest
     # A main-build run takes about ten minutes; its backend jobs may take 45.
@@ -40,12 +51,14 @@ jobs:
         run: python scripts/release_gate.py --sha "$GITHUB_SHA"
 
   windows:
+    needs: changelog
     uses: ./.github/workflows/windows-package.yml
     with:
       release_mode: true
     secrets: inherit
 
   linux:
+    needs: changelog
     uses: ./.github/workflows/linux-package.yml
     with:
       release_mode: true
@@ -60,6 +73,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Validate release metadata
         run: |
@@ -91,6 +106,12 @@ jobs:
           path: assets
           merge-multiple: true
 
+      - name: Build release notes and changelog asset
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^)
+          python scripts/release_changelog.py notes "$RELEASE_VERSION" --previous "$previous" > release-notes.md
+          python scripts/release_changelog.py asset --out assets/vbot-changelog.json
+
       # The installers verify their downloads against the digests vbot-release.json records.
       - name: Validate complete release assets and record their digests
         run: >-
@@ -104,7 +125,7 @@ jobs:
           gh release create "${RELEASE_TAG}"
           --target "${GITHUB_SHA}"
           --title "${RELEASE_TAG}"
-          --generate-notes
+          --notes-file release-notes.md
           assets/*
 
   smoke:

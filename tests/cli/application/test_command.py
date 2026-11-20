@@ -602,3 +602,60 @@ def test_access_mode_change_refuses_what_the_server_could_not_start_with(
         command.dispatch(parse_args(["application", "access", "set", *argv]))
 
     assert load_installation(install.root).server_access is None
+
+
+@pytest.mark.parametrize(
+    ("tty", "args", "answer", "proceed"),
+    [
+        (True, [], "", False),
+        (True, [], "y", True),
+        (True, ["--yes"], None, True),
+        (False, [], None, True),
+    ],
+)
+def test_update_prints_skipped_warnings_before_acceptance(
+    tmp_path, monkeypatch, capsys, tty, args, answer, proceed
+):
+    from cli.application import availability
+
+    install = replace(_install(tmp_path), release_public_key="test")
+    monkeypatch.setattr(command, "discover", lambda: install)
+    notes = [
+        {"version": v, "date": "2026-11-20", "markdown": "", "before_update": f"Back up {v}."}
+        for v in ["1.2.5", "1.2.4"]
+    ]
+    monkeypatch.setattr(availability, "review", lambda _, **kw: (notes, "reviewed"))
+    monkeypatch.setattr(command.sys.stdin, "isatty", lambda: tty)
+    monkeypatch.setattr(command.sys.stdout, "isatty", lambda: tty)
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+
+    def prompt(_):
+        assert answer is not None
+        return answer
+
+    monkeypatch.setattr(command, "_answer", prompt)
+    accepted = []
+
+    def accept(*a, **kw):
+        assert kw["reviewed_version_id"] == "reviewed"
+        accepted.append(True)
+        return Operation(id="upd_notice")
+
+    monkeypatch.setattr(operations, "request_update", accept)
+    assert run(["update", "--detach", *args]) == 0
+    output = capsys.readouterr().out
+    assert output.index("Back up 1.2.5.") < output.index("Back up 1.2.4.")
+    assert bool(accepted) == proceed
+
+
+def test_application_changelog_reads_latest_or_selected_release(tmp_path, monkeypatch, capsys):
+    from core.utils import changelog
+
+    monkeypatch.setattr(changelog, "DIRECTORY", tmp_path)
+    for version in ["1.0.2", "1.0.10"]:
+        (tmp_path / f"{version}.md").write_text(
+            f"# v{version} - 2026-11-20\n## Fixes\n- {version} fix.", encoding="utf-8"
+        )
+    for args, expected in [([], "1.0.10"), (["v1.0.2"], "1.0.2")]:
+        assert run(["application", "changelog", *args]) == 0
+        assert f"{expected} fix" in capsys.readouterr().out

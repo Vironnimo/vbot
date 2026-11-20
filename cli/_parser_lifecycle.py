@@ -89,6 +89,11 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         help="Update operation id for status or activate",
     )
     update_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Print pre-update notices and continue without asking in a terminal",
+    )
+    update_parser.add_argument(
         "--detach",
         action="store_true",
         help="Return after the independent updater accepts the operation",

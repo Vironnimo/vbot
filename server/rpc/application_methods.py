@@ -19,7 +19,7 @@ from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string, rpc_request_fields
-from server.update_availability import UpdateAvailabilityWatch
+from server.update_availability import UpdateAvailabilityWatch, bundled_changelog
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.application")
@@ -191,8 +191,16 @@ async def _update_status(state: Any, params: JsonObject) -> JsonObject:
     return await watch.status()
 
 
+async def _changelog(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params, rpc_request_fields("application.changelog"), "application.changelog"
+    )
+    return {"releases": await bundled_changelog()}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
+        "application.changelog": _changelog,
         "application.update_status": _update_status,
         "application.update_continuation": _update_continuation,
         "application.update_handoff_mint": _update_handoff_mint,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +12,7 @@ import httpx
 import pytest
 
 from cli.application import availability
-from cli.application.state import CHANNEL_DOWNLOADS, Installation
+from cli.application.state import CHANNEL_DOWNLOADS, CHANNEL_URLS, Installation
 
 _START = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
 
@@ -71,6 +73,7 @@ def test_check_stores_whether_an_update_would_install_a_newer_version(
         "channel": "release",
         "checked_at": "2026-11-02T08:00:00.000000Z",
         "error": None,
+        "notes": None,
         "available": expected,
     }
     # Every reader (tray, server, CLI) sees the stored answer.
@@ -133,3 +136,49 @@ def test_an_unreadable_record_only_makes_the_check_due(tmp_path: Path) -> None:
     result = availability.refresh(install, client=channel.client(), now=lambda: _START)
 
     assert channel.requests == 1 and result.available is not None
+
+
+@pytest.mark.parametrize(
+    "case", ["verified", "wrong-digest", "offline", "oversized", "invalid-date", "main"]
+)
+def test_offered_update_survives_optional_changelog_failures(tmp_path, case):
+    channel = "main" if case == "main" else "release"
+    install = replace(_install(tmp_path), release_url=CHANNEL_URLS[channel])
+    releases = [
+        {
+            "version": f"0.4.{patch}",
+            "date": "2026-11-20",
+            "before_update": None,
+            "markdown": "## Fixes\n- Fixed.",
+        }
+        for patch in [35, 37, 36, 38]
+    ]
+    if case == "invalid-date":
+        releases[1]["date"] = "2026-11-31"
+    data = json.dumps({"schema_version": 1, "releases": releases}).encode()
+    if case == "oversized":
+        data += b" " * (256 * 1024)
+    digest = "0" * 64 if case == "wrong-digest" else hashlib.sha256(data).hexdigest()
+    identity = {
+        **_Channel(version="0.4.37").identity,
+        "channel": channel,
+        "assets": {"vbot-changelog.json": digest},
+    }
+    requests = []
+
+    def answer(request):
+        requests.append(str(request.url))
+        if len(requests) == 1:
+            return httpx.Response(200, json=identity)
+        if case == "offline":
+            raise httpx.ConnectError("unavailable")
+        return httpx.Response(200, content=data)
+
+    with httpx.Client(transport=httpx.MockTransport(answer)) as client:
+        result = availability.check(install, client=client)
+    assert result.available and not result.error
+    assert availability.read(install) == result
+    assert result.notes == ([releases[1], releases[2]] if case == "verified" else None)
+    assert requests == [f"{CHANNEL_DOWNLOADS[channel]}/vbot-release.json"] + (
+        [] if channel == "main" else [f"{install.asset_base('0.4.37')}/vbot-changelog.json"]
+    )

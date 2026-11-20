@@ -24,10 +24,12 @@ IDENTITY = "vbot-release.json"
 IDENTITY_LIMIT = 4096
 
 
-def expected_assets(version: str) -> set[str]:
+def expected_assets(version: str, channel: str | None = "release") -> set[str]:
     packages = [("windows-x86_64", shape) for shape in WINDOWS_SHAPES]
     packages += [(platform, "server") for platform in LINUX_PLATFORMS]
     names = {IDENTITY}
+    if channel == "release":
+        names.add("vbot-changelog.json")
     for platform, shape in packages:
         archive = f"vbot-{platform}-{shape}.zip"
         names |= {archive, f"{archive}.sig", f"vbot-{platform}-{shape}-runtime-inventory.json"}
@@ -41,10 +43,10 @@ def problems(
     *,
     identity: dict[str, object] | None = None,
     revision: str | None = None,
-    channel: str | None = None,
+    channel: str | None = "release",
 ) -> list[str]:
     found = set(names)
-    result = [f"missing asset {name}" for name in sorted(expected_assets(version) - found)]
+    result = [f"missing asset {name}" for name in sorted(expected_assets(version, channel) - found)]
     if identity is not None:
         wanted = {"version": version, "revision": revision, "channel": channel}
         for key, value in wanted.items():

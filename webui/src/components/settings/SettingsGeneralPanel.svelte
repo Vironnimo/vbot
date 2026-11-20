@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, untrack } from 'svelte';
+  import { getContext, onDestroy, untrack } from 'svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -24,6 +24,7 @@
     getDataDirectoryValue,
   } from '$lib/settingsView.js';
 
+  const openChangelog = getContext('openChangelog');
   const noop = () => {};
 
   let {
@@ -295,7 +296,13 @@
         </div>
       </div>
       <div class="s-row-control server-fact">
-        <span class="server-fact__value">{buildValue}</span>
+        {#if buildKnown}
+          <Button variant="tertiary" onClick={() => openChangelog?.()}
+            >{buildValue}</Button
+          >
+        {:else}
+          <span class="server-fact__value">{buildValue}</span>
+        {/if}
         {#if buildKnown}
           <CopyButton
             class="server-fact__copy"
