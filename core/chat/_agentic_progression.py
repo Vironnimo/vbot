@@ -71,7 +71,11 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
     request_input_budget,
 )
-from core.providers.errors import ProviderImageLimitError, ProviderRequestTooLargeError
+from core.providers.errors import (
+    ProviderImageLimitError,
+    ProviderReplayLimitError,
+    ProviderRequestTooLargeError,
+)
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     QueuedRunItem,
@@ -467,76 +471,79 @@ class AgenticProgression:
                 target.model_id,
                 len(messages_for_request),
             )
-            # Finalization requests keep the pinned Tool list: dropping it would
-            # change the Provider prompt-cache prefix. The finalization note and
-            # the bounded refusal below stop further Tool use instead.
-            # Calls resolve against the listed Tools plus those announced as
-            # enabled; a Tool announced as removed keeps its own name.
-            offered_tool_names = [str(tool.get("name")) for tool in tools]
-            removed_tool_names: frozenset[str] = frozenset()
-            if state.tool_epoch is not None:
-                offered_tool_names.extend(state.tool_epoch.announced_names)
-                removed_tool_names = state.tool_epoch.removed_names
-            step_started_perf = time.perf_counter()
-            record_span(
-                "chat.request_build",
-                build_started,
-                ended=step_started_perf,
-                track=track,
-                name="request build",
-                args=run_args,
-            )
-            workspace = getattr(agent, "workspace", None)
-            output_scope = OutputFileScope(
-                context.project_cwd
-                if context.project_cwd is not None
-                else Path(workspace)
-                if workspace
-                else None,
-                context.permissions,
-            )
-            tool_dispatch_context = self._model_step.tool_context(
-                context, target, state, removed_tool_names
-            )
-            # The Assistant turn is named before the request, so the Tool Calls
-            # that start while it streams report the turn they belong to.
-            assistant_message_id = _new_message_id()
-            tool_round: ToolRound | None = None
-            tool_iteration_limit = effective_tool_iteration_limit(
-                self._max_tool_iterations, context.request.max_tool_iterations
-            )
-            if context.tool_progress.finalization_reason is None and (
-                tool_iteration_limit is None
-                or context.tool_progress.iteration_count < tool_iteration_limit
-            ):
-                # Only a turn whose Tool Calls may run starts them early; the
-                # others are refused once the response is complete.
-                tool_round = ToolRound(
-                    tool_dispatch_context,
-                    assistant_message_id=assistant_message_id,
-                    iteration_number=request_iteration_number,
-                )
-                tool_rounds.push_async_callback(tool_round.aclose)
-
-            def start_tool_calls(
-                raw_calls: list[JsonObject],
-                tool_round: ToolRound | None = tool_round,
-                offered_tool_names: list[str] = offered_tool_names,
-                removed_tool_names: frozenset[str] = removed_tool_names,
-                public_model: str = target.public_model,
-            ) -> None:
-                assert tool_round is not None
-                tool_calls = _offered_tool_calls(
-                    _parse_response_tool_calls(raw_calls) or [],
-                    offered_tool_names,
-                    self._dependencies.tools,
-                    removed=removed_tool_names,
-                )
-                # A restart before the turn persists still shows these calls.
-                context.stream_draft.record_tool_calls(model=public_model, tool_calls=tool_calls)
-                tool_round.start(tool_calls)
-
+            replay_compacted = False
             while True:
+                # Finalization requests keep the pinned Tool list: dropping it would
+                # change the Provider prompt-cache prefix. The finalization note and
+                # the bounded refusal below stop further Tool use instead.
+                # Calls resolve against the listed Tools plus those announced as
+                # enabled; a Tool announced as removed keeps its own name.
+                offered_tool_names = [str(tool.get("name")) for tool in tools]
+                removed_tool_names: frozenset[str] = frozenset()
+                if state.tool_epoch is not None:
+                    offered_tool_names.extend(state.tool_epoch.announced_names)
+                    removed_tool_names = state.tool_epoch.removed_names
+                step_started_perf = time.perf_counter()
+                record_span(
+                    "chat.request_build",
+                    build_started,
+                    ended=step_started_perf,
+                    track=track,
+                    name="request build",
+                    args=run_args,
+                )
+                workspace = getattr(agent, "workspace", None)
+                output_scope = OutputFileScope(
+                    context.project_cwd
+                    if context.project_cwd is not None
+                    else Path(workspace)
+                    if workspace
+                    else None,
+                    context.permissions,
+                )
+                tool_dispatch_context = self._model_step.tool_context(
+                    context, target, state, removed_tool_names
+                )
+                # The Assistant turn is named before the request, so the Tool Calls
+                # that start while it streams report the turn they belong to.
+                assistant_message_id = _new_message_id()
+                tool_round: ToolRound | None = None
+                tool_iteration_limit = effective_tool_iteration_limit(
+                    self._max_tool_iterations, context.request.max_tool_iterations
+                )
+                if context.tool_progress.finalization_reason is None and (
+                    tool_iteration_limit is None
+                    or context.tool_progress.iteration_count < tool_iteration_limit
+                ):
+                    # Only a turn whose Tool Calls may run starts them early; the
+                    # others are refused once the response is complete.
+                    tool_round = ToolRound(
+                        tool_dispatch_context,
+                        assistant_message_id=assistant_message_id,
+                        iteration_number=request_iteration_number,
+                    )
+                    tool_rounds.push_async_callback(tool_round.aclose)
+
+                def start_tool_calls(
+                    raw_calls: list[JsonObject],
+                    tool_round: ToolRound | None = tool_round,
+                    offered_tool_names: list[str] = offered_tool_names,
+                    removed_tool_names: frozenset[str] = removed_tool_names,
+                    public_model: str = target.public_model,
+                ) -> None:
+                    assert tool_round is not None
+                    tool_calls = _offered_tool_calls(
+                        _parse_response_tool_calls(raw_calls) or [],
+                        offered_tool_names,
+                        self._dependencies.tools,
+                        removed=removed_tool_names,
+                    )
+                    # A restart before the turn persists still shows these calls.
+                    context.stream_draft.record_tool_calls(
+                        model=public_model, tool_calls=tool_calls
+                    )
+                    tool_round.start(tool_calls)
+
                 run.raise_if_cancelled()
                 context_capacity = await self._requests.targets.resolve_context_capacity_async(
                     agent, target
@@ -590,6 +597,30 @@ class AgenticProgression:
                             if context.owner_binding is not None
                             else None,
                         )
+                except ProviderReplayLimitError as exc:
+                    if replay_compacted or self._compaction_service is None:
+                        raise
+                    compacted_state = await self._compaction_runs.maybe_auto_compact_state(
+                        context,
+                        target,
+                        usage=None,
+                        continuation_request_messages=messages_for_request,
+                        request_estimate=request_estimate,
+                        allow_continuation=True,
+                        replay_limit=exc,
+                    )
+                    if compacted_state is state:
+                        raise
+                    replay_compacted = True
+                    context.request_state = state = compacted_state
+                    messages, tools = state.messages, state.tools
+                    evaluated_tool_key = None
+                    build_started = time.perf_counter()
+                    (
+                        messages_for_request,
+                        request_estimate,
+                    ) = await self._model_step._prepare_model_request(context, target, state)
+                    continue
                 except (ProviderRequestTooLargeError, ProviderImageLimitError) as exc:
                     if isinstance(exc, ProviderImageLimitError):
                         target = replace(

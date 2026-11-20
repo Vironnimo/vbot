@@ -38,7 +38,7 @@ async def _serve(inventory: Path) -> None:
         await server.run(read, write, server.create_initialization_options())
 
 
-def _guard(kind: str, state: Path) -> dict[str, str]:
+def _guard(kind: str, state: Path, *, replay: bool = False) -> dict[str, Any]:
     if kind in {"before", "before-tools"}:
         # One model invocation per canonical request, even if agy tries another
         # inference after it sees a denied Tool. Never return a Tool result to agy.
@@ -51,10 +51,20 @@ def _guard(kind: str, state: Path) -> dict[str, str]:
                     if time.monotonic() >= deadline:
                         return {"terminationBehavior": "terminate"}
                     time.sleep(0.05)
+            response: dict[str, Any] = {}
+            if replay:
+                parts = json.loads((state / "replay.json").read_text(encoding="utf-8"))
+                if (
+                    not isinstance(parts, list)
+                    or not parts
+                    or not all(isinstance(part, str) and part for part in parts)
+                ):
+                    raise ValueError("Invalid replay")
+                response["injectSteps"] = [{"userMessage": part} for part in parts]
             (state / "invocation").touch(exist_ok=False)
-        except OSError:
+        except OSError, ValueError:
             return {"terminationBehavior": "terminate"}
-        return {}
+        return response
     if kind != "guard":
         raise ValueError("Unknown Antigravity hook")
     try:
@@ -78,4 +88,5 @@ if __name__ == "__main__":
             site.addsitedir(path)
         asyncio.run(_serve(Path(directory) / "tools.json"))
     else:
-        sys.stdout.write(json.dumps(_guard(operation, Path(directory))) + "\n")
+        response = _guard(operation, Path(directory), replay=package_dirs == ["replay"])
+        sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))

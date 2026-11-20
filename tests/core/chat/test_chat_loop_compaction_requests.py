@@ -13,6 +13,7 @@ from core.chat._request_history import _restore_in_run_tool_result_content
 from core.compaction import TOOL_RESULT_COMPACTED_FIELD, CompactionService
 from core.extensions import ExtensionRegistry
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
+from core.providers.errors import ProviderReplayLimitError
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
@@ -37,6 +38,38 @@ class _ContextAdapter(RecordingCompactionAdapter):
     @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": {**context, "adapter": id(self)}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_enabled", [True, False])
+async def test_a_rejected_native_replay_uses_the_sessions_compaction_policy(
+    tmp_path: Path,
+    policy_enabled: bool,
+) -> None:
+    adapter = RecordingCompactionAdapter(
+        [ProviderReplayLimitError("native replay too large"), {"content": "Done"}],
+        summaries=["RESULT FROM THE OLD HISTORY"],
+    )
+    runtime = real_compaction_runtime(tmp_path, adapter, {"auto": policy_enabled})
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    session.append(ChatMessage.user("Initial investigation"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="measurement " * 1000))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+    request = loop.send("coder", "Use the result", session_id=session.id)
+    if not policy_enabled:
+        with pytest.raises(ProviderReplayLimitError, match="Automatic Compaction is disabled"):
+            await request
+        assert adapter.events == ["agent"]
+        return
+    await request
+    assert adapter.events == ["agent", "compaction", "agent"]
+    first, rebuilt = adapter.requests
+    assert "measurement " in json.dumps(first["messages"])
+    assert "measurement " in json.dumps(adapter.stream_requests[0]["messages"])
+    assert "RESULT FROM THE OLD HISTORY" in json.dumps(rebuilt["messages"])
+    assert "measurement " not in json.dumps(rebuilt["messages"])
+    assert "Use the result" in json.dumps(rebuilt["messages"])
+    assert [m.role for m in session.load()].count("compaction_checkpoint") == 1
 
 
 @pytest.mark.asyncio

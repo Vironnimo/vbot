@@ -24,16 +24,24 @@ The headless stream reports the Model's token counts on the completed `agent_res
 
 Each name in the vBot MCP inventory comes from the request's Tool list. Chat exposes its fixed `call_tool` proxy for Tools discovered through `load_tools` or announced during the prompt epoch. Existing epochs receive the proxy when a callable Tool is missing from their pinned list (`../chat/request-building.md` -> Fixed proxy transport).
 
+The Model Context window and the size of a single native user message are independent. With CLI 1.5.12 and Hydrogen High, a 282,000-character input reached the pre-invocation hook intact. The Model recovered random values through offset 179,908 but missed every value at and after 195,910, including when stdin contained two text blocks. The [archived Hermes agy adapter](https://github.com/Realtyxxx/hermes-plugin-antigravity-agy/blob/ec07f86e6d918803ac5e328a4780d0ec0f48d0b8/README.md#L8-L12) reports the same loss of recent history during single-message replay. Another [Hermes integration](https://github.com/soyelmismo/hermes-antigravity-subscription/blob/f1c1a8ccc5a560b8d5926e2b7e4b544d272d2dd2/client.py#L1068-L1109) continues a native conversation. vBot reconstructs canonical history because its native Tool denials differ from the actual vBot Tool Results and a Session can change between requests.
+
+Short transcripts travel in one native input. Long replays use up to eight user messages of 48,000 UTF-8 bytes each, supplied by the documented [PreInvocation hook](https://antigravity.google/docs/hooks/#preinvocation). The Tool inventory and execution guards also apply to these turns. Each injected message must receive a distinct native `user_input` acknowledgement before vBot accepts a reply or dispatches a Tool. A hook acknowledgement confirms delivery to the CLI. Model visibility was checked separately with random values. Replaying a 4.5-million-character synthetic transcript as 72 user messages still lost early values. The bounded replay raises `ProviderReplayLimitError` before starting inference, allowing Chat to use the Session's Compaction Policy. See [Compaction recovery](../compaction/strategies-and-checkpoints.md#recovery-after-a-physical-replay-limit).
+
 ## Agent-facing text
 
 | Text | Purpose |
 | --- | --- |
 | `Continue this vBot conversation as the assistant.` | A newly launched CLI must continue from the last message, including after a Tool Result. |
-| `Each JSON line is one message in chronological order.` | The CLI receives one input turn containing the transcript. This identifies the boundaries between user messages, Assistant turns and Tool Results. |
+| `Read the JSON records in chronological order.` | The transcript may arrive across native user messages. Each record identifies its canonical source. |
+| `The last message marked user_input is the most recent user input.` | Distinguishes a new user request or Steer from injected reminders and Skill instructions carried in the same wire role. |
+| `Numbered parts of a message continue in order. Join arguments_json parts for the same Tool call to read its arguments.` | Only sent when a large field spans records. Part numbers and call IDs preserve the order and attribution of split Tool Calls and Results. |
 | `Use the vbot MCP server for tool calls.` / `Answer directly without calling tools.` | Directs the Model to the Tools enabled for this request. CLI 1.5.12 proposed its built-in `manage_task` even with an empty native Tool list. |
 | `This tool was blocked before execution.` followed by `Use a tool from the vbot MCP server or answer directly.` or `Answer directly.` | Tells the Model the effect of the blocked call and how to continue with the inventory available on this step. |
 
 ## Verification
+
+On 2026-11-20, Hydrogen High returned three random values from earlier, middle and recent Tool Results plus a fourth value from the new user request in order from a roughly 294 kB replay. No further Tool was called. A separate Run started from twelve synthetic file results exceeding the replay bound. Automatic Compaction used two successful summaries, and the Run returned both the early and late verification values after two additional directory reads.
 
 In separate packaged Chat Runs with CLI 1.5.12 and `gemini-4-hydrogen-high`, a native `manage_task` received a correlated failure and the Run recovered by reading a random file value. An Agent with only an on-demand `read` retrieved a second random value through `load_tools` and `call_tool`. Both Runs completed with the exact expected answer.
 
