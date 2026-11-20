@@ -36,7 +36,7 @@ def history_timeline(
 
 
 def history_tool_call(messages: Sequence[JsonObject], tool_id: str) -> JsonObject | None:
-    """Return the complete arguments and result of one Tool row of *messages*.
+    """Return the Tool name, complete arguments and result of one row of *messages*.
 
     *tool_id* is the row's timeline id; ``None`` when no row has it.
     """

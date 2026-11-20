@@ -1000,6 +1000,71 @@ describe('ChatTimeline Tools', () => {
       );
     });
 
+    it.each(['run row', 'standalone event'])(
+      'copies the complete shell command from a %s with a shortened display',
+      async (source) => {
+        const words = ['program', ...Array(18).fill('x'.repeat(950))];
+        const command = words.join(' ');
+        const writeText = stubClipboard();
+        const loadToolCall = vi
+          .fn()
+          .mockResolvedValue({ shell_command: command });
+        const display = structuredDisplay({
+          primary: [
+            {
+              kind: 'description',
+              value: 'Run program',
+              detail_kind: 'command',
+              detail: command.slice(0, 8191) + '…',
+              copyable: true,
+            },
+          ],
+          details: [
+            {
+              type: 'text',
+              label: 'command',
+              text: command.slice(0, 16383) + '…',
+              truncated: true,
+            },
+          ],
+        });
+        const call = { id: 'call-shell', name: 'bash' };
+        const state = sessionWithTool([
+          toolItem({ ...call, arguments: { argv: words }, display }),
+        ]);
+        if (source === 'standalone event') {
+          state.timelineItems = [
+            {
+              type: 'event',
+              id: 'standalone',
+              event: {
+                type: 'tool_call_started',
+                payload: {
+                  tool_call: { ...call, arguments: { command } },
+                  display,
+                },
+              },
+            },
+          ];
+        }
+        timeline.render(state, { onLoadToolCall: loadToolCall });
+        expect(loadToolCall).not.toHaveBeenCalled();
+        document.querySelector('.te-primary-value').focus();
+        await flushAsync();
+        if (source === 'run row') {
+          expect(loadToolCall).toHaveBeenCalledWith({
+            runId: 'run-tool',
+            toolId: 'call-shell',
+          });
+        } else {
+          expect(loadToolCall).not.toHaveBeenCalled();
+        }
+        document.querySelector('.copyable-value-card button').click();
+        await flushAsync();
+        expect(writeText).toHaveBeenCalledWith(command);
+      },
+    );
+
     it('compacts a structured read path and exposes a delayed-hover/focus/touch copy card', async () => {
       vi.useFakeTimers();
       const writeText = stubClipboard();

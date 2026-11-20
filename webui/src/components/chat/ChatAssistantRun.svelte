@@ -207,8 +207,8 @@
   }
 
   // Loads the whole call of a Tool row that previews it, or null.
-  function rawCallLoader(tool) {
-    if (!loadToolCall || !tool?.rawTruncated || !item?.runId) return null;
+  function rawCallLoader(tool, needed = tool?.rawTruncated) {
+    if (!needed || !loadToolCall || !item?.runId) return null;
     return () => loadToolCall({ runId: item.runId, toolId: tool.id });
   }
 
@@ -682,7 +682,15 @@
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
               {#if rowPresentation.primary.length > 0}
-                <ToolPrimaryLine primary={rowPresentation.primary} />
+                <ToolPrimaryLine
+                  primary={rowPresentation.primary}
+                  loadRaw={rawCallLoader(
+                    child,
+                    rowPresentation.primary.some(
+                      (part) => part.reveal?.needsRaw,
+                    ),
+                  )}
+                />
               {/if}
               {@render toolFacts(rowPresentation.facts)}
               <ToolSecretsUsed uses={rowPresentation.secretsUsed} />

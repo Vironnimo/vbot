@@ -13,6 +13,7 @@ import {
   streamingPreviewArguments,
   toolNameForRunTool,
   toolDisplay,
+  shellCommandPresentation,
   executionStateTitle,
 } from './toolFacts.js';
 import { t } from '$lib/i18n.js';
@@ -130,8 +131,13 @@ export const toolStatusDetails = (tool, nowMs = Date.now()) => {
 
 export const toolRowPresentation = (tool) => {
   const display = toolDisplay(tool);
+  const shellCommand =
+    toolNameForRunTool(tool) === 'bash' ? shellCommandPresentation(tool) : null;
   const structuredPrimary = Array.isArray(display?.primary)
-    ? display.primary.map(toolPrimaryPart).filter(Boolean).slice(0, 2)
+    ? display.primary
+        .map((part) => toolPrimaryPart(part, shellCommand))
+        .filter(Boolean)
+        .slice(0, 2)
     : [];
   const displaySummary = trimmedString(display?.summary);
   const legacySummary =
@@ -205,7 +211,7 @@ function isCodeLike(kind, quoted = false) {
  * `mono` for code-like values, `whenTruncated` when it shows only while the
  * row clips the visible text, and `copy` labels when a card offers Copy.
  */
-function toolPrimaryPart(part) {
+function toolPrimaryPart(part, shellCommand) {
   if (!isPlainObject(part)) {
     return null;
   }
@@ -228,11 +234,11 @@ function toolPrimaryPart(part) {
     kind,
     text,
     truncate,
-    reveal: toolPrimaryReveal(part, kind, text, fullText),
+    reveal: toolPrimaryReveal(part, kind, text, fullText, shellCommand),
   };
 }
 
-function toolPrimaryReveal(part, kind, text, fullText) {
+function toolPrimaryReveal(part, kind, text, fullText, shellCommand) {
   const tooltipMode = ['always', 'none', 'truncated'].includes(part.tooltip)
     ? part.tooltip
     : 'truncated';
@@ -241,13 +247,15 @@ function toolPrimaryReveal(part, kind, text, fullText) {
     return null;
   }
   const valueKind = detail ? trimmedString(part.detail_kind) || 'text' : kind;
+  const command = valueKind === 'command' ? shellCommand : null;
   const copyLabels = COPY_LABELS[valueKind]?.() ?? [
     t('chat.copyToolValue'),
     t('chat.toolValueCopied'),
   ];
   return {
     title: detail ? fullText : '',
-    value: detail || fullText,
+    value: command?.command || detail || fullText,
+    ...(command?.needsRaw ? { needsRaw: true } : {}),
     mono: isCodeLike(valueKind, !detail && part.quote === true),
     whenTruncated: !detail && tooltipMode === 'truncated' && text === fullText,
     copy:

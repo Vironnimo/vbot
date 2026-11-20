@@ -190,7 +190,7 @@ def test_history_keeps_reused_tool_ids_separate_and_matches_live_child_ids() -> 
     assert len({item["id"] for item in history["items"]}) == 2
     # The whole call of each row reads back by its row id.
     assert [history_tool_call(messages, item["id"]) for item in history["items"]] == [
-        {"arguments": {"path": step}, "result": step} for step in ("one", "two")
+        {"name": "read", "arguments": {"path": step}, "result": step} for step in ("one", "two")
     ]
     assert history_tool_call(messages, "unknown") is None
 

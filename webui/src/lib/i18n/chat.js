@@ -469,6 +469,7 @@ export default Object.freeze({
   'chat.toolChanges': 'Changes',
   'chat.toolRawCall': 'Raw call and result',
   'chat.toolRawLoading': 'Loading the call…',
+  'chat.toolValueUnavailable': 'The full value is unavailable.',
   'chat.toolRawUnavailable': 'The call could not be loaded: {error}',
   'chat.toolDetailTruncated': 'Shortened. The raw call holds the full text.',
   'chat.toolDetailLabel.command': 'Command',

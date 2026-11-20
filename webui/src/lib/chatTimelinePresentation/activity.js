@@ -9,7 +9,7 @@ import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 import {
   toolNameForRunTool,
-  toolArguments,
+  shellCommandPresentation,
   toolStatus,
   isToolPreparing,
   toolStartedTimestamp,
@@ -440,6 +440,7 @@ export const backgroundTasks = (
         description: commandRowState.description,
         command: commandRowState.command,
         fullCommand: commandRowState.fullCommand,
+        runId: item.runId,
         commandId: commandRowState.commandId,
         rowState: commandRowState,
         target: null,
@@ -705,12 +706,17 @@ export const backgroundCommandRowState = (
     known && COMMAND_PROGRESS[known.status] === COMMAND_ENDED_WITH_STATUS
       ? known
       : (callEnd ?? known ?? COMMAND_STATE_ENDED);
-  const fullCommand = bashArgument(tool, 'command');
+  const {
+    command: fullCommand,
+    description,
+    needsRaw,
+  } = shellCommandPresentation(tool);
   return {
     commandId,
     command: commandPreview(fullCommand),
     fullCommand,
-    description: bashArgument(tool, 'description').replace(/\s+/g, ' '),
+    description: description.replace(/\s+/g, ' '),
+    needsRaw,
     dotStatus: state.stillRunning
       ? 'running'
       : COMMAND_DOT_STATUSES[state.status],
@@ -720,11 +726,6 @@ export const backgroundCommandRowState = (
     callEnded: Boolean(callEnd),
   };
 };
-
-function bashArgument(tool, name) {
-  const args = parseJsonValue(toolArguments(tool));
-  return trimmedString(isPlainObject(args) ? args[name] : '');
-}
 
 function commandPreview(command) {
   return (

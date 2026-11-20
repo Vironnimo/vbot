@@ -671,8 +671,10 @@ describe('Tool row presentation', () => {
   });
 
   it('reveals the command a Bash description stands for and fitting values only while clipped', () => {
+    const script = 'python -m pytest\necho Done…';
     const [described] = toolRowPresentation({
       name: 'bash',
+      arguments: { cmd: script },
       display: {
         primary: [
           {
@@ -682,7 +684,7 @@ describe('Tool row presentation', () => {
             tooltip: 'always',
             quote: true,
             copyable: true,
-            detail: 'python -m pytest\n  -x',
+            detail: script,
             detail_kind: 'command',
           },
         ],
@@ -708,7 +710,7 @@ describe('Tool row presentation', () => {
       text: 'Run the test suite',
       reveal: {
         title: 'Run the test suite',
-        value: 'python -m pytest\n  -x',
+        value: script,
         mono: true,
         whenTruncated: false,
         copy: {
@@ -717,6 +719,7 @@ describe('Tool row presentation', () => {
         },
       },
     });
+    expect(described.reveal.needsRaw).toBeFalsy();
     expect(command.reveal).toMatchObject({
       title: '',
       value: 'git status',

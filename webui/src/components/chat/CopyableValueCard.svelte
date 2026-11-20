@@ -9,11 +9,14 @@
   // command stands for). The value keeps its line breaks and scrolls when
   // long; the Copy action stays in view.
   import { floatingHoverCard } from '$lib/tooltip.js';
+  import { t } from '$lib/i18n.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
 
   let {
     value = '',
+    needsRaw = false,
+    loadValue = null,
     title = '',
     mono = false,
     copyLabel = '',
@@ -22,12 +25,40 @@
     showDelayMs = undefined,
     placement = 'top',
   } = $props();
+
+  let attempt = $state.raw(null);
+  let current = $derived(attempt?.preview === value ? attempt : null);
+  let copyText = $derived(needsRaw ? current?.text || '' : value);
+
+  async function readOnOpen(open) {
+    if (!open || !needsRaw || !loadValue || current?.pending || current?.text)
+      return;
+    const request = { preview: value, pending: true };
+    attempt = request;
+    let text;
+    try {
+      text = await loadValue();
+    } catch {
+      // Opening the card again retries a failed read.
+    }
+    if (attempt === request) {
+      attempt = {
+        preview: request.preview,
+        text: typeof text === 'string' ? text : '',
+      };
+    }
+  }
 </script>
 
-{#if value}
+{#if value || (needsRaw && loadValue)}
   <span
     class="floating-tooltip copyable-value-card"
-    use:floatingHoverCard={{ showDelayMs, placement, whenTruncated }}
+    use:floatingHoverCard={{
+      showDelayMs,
+      placement,
+      whenTruncated,
+      onOpenChange: readOnOpen,
+    }}
   >
     <span class="copyable-value-card__body">
       {#if title}
@@ -35,11 +66,18 @@
       {/if}
       <span
         class="copyable-value-card__value"
-        class:copyable-value-card__value--mono={mono}>{value}</span
+        class:copyable-value-card__value--mono={mono}>{copyText || value}</span
       >
+      {#if needsRaw && !copyText}
+        <span role="status"
+          >{current?.pending
+            ? t('common.loading')
+            : t('chat.toolValueUnavailable')}</span
+        >
+      {/if}
     </span>
     <CopyButton
-      text={value}
+      text={copyText}
       class="copyable-value-card__copy"
       label={copyLabel}
       {copiedLabel}

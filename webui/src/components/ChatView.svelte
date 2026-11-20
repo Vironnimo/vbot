@@ -1307,6 +1307,8 @@
             onStopSubAgentWork={actions.handleStopSubAgentWork}
             onStopBackgroundCommand={actions.handleStopBackgroundCommand}
             onLoadCommandOutput={actions.loadCommandOutput}
+            onLoadToolCall={(call) =>
+              chatController.loadToolCall(target.activeSessionState, call)}
           >
             {#snippet advancedSettings()}
               {#if target.activeSessionState?.sessionId}

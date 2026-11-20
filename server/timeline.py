@@ -368,6 +368,12 @@ async def timeline_tool_call(
         raw = await FILE_PREVIEW_WORKERS.run(project)
     if raw is None:
         raise ValueError("The Tool call is unavailable; reload the conversation.")
+    if raw.pop("name", None) == "bash" and isinstance(raw["arguments"], dict):
+        from core.tools.shell import shell_display_values
+
+        command, _ = await FILE_PREVIEW_WORKERS.run(shell_display_values, raw["arguments"])
+        if command is not None:
+            raw["shell_command"] = command
     return await _public_frame(
         state,
         {"run_id": run_id, "tool_id": tool_id, "history_generation": generation, **raw},
