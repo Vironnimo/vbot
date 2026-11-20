@@ -37,7 +37,7 @@ from core.tools.background_tasks import (
 from core.tools.command_manager import CommandManager, NotRunReason
 from core.tools.file_state import os_error_reason
 from core.tools.model_names import called_tool_name
-from core.tools.process_tree import RunningProcess
+from core.tools.process_tree import KillNotConfirmedError, RunningProcess
 from core.tools.shell import SHELL_TOOL_NAME, format_command_delivery, register_shell_tool
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
 from core.utils.config import Config
@@ -45,9 +45,11 @@ from tests.core.tools.command_manager_helpers import (
     OWNER,
     FakeLauncher,
     FakeProcess,
+    FakeTree,
     Harness,
     command_harness,
     format_report,
+    turns,
 )
 from tests.core.tools.terminal_helpers import make_context as terminal_context
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -82,6 +84,8 @@ class FakeSubAgents:
         self.stopped: list[str] = []
 
     async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
+        if caller == CHILD and self.grandchild:
+            return [dataclasses.replace(self.grandchild, parent_id=None)]
         if caller != OWNER:
             return ()
         return [self.child] if self.grandchild is None else [self.child, self.grandchild]
@@ -292,9 +296,12 @@ async def test_list_shows_the_subagents_then_the_commands_of_this_session_and_it
         "serve",
     ]
 
-    # A Sub-Agent sees its own commands, never its parent's or a sibling's.
+    # A Sub-Agent sees its descendant and its own command, never its parent's or a sibling's.
     own = data(await tasks.call({"action": "list"}, owner=CHILD))["tasks"]
-    assert [(row["id"], "subagent" in row) for row in own] == [(child, False)]
+    assert [(row["id"], "subagent" in row) for row in own] == [
+        ("sub_grandchild", False),
+        (child, False),
+    ]
     assert sibling not in json.dumps(listed)
 
     empty = data(await tasks.call({"action": "list"}, owner=SessionAddress("p", "a", "s")))
@@ -331,9 +338,8 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     )
     # The call names only the id; the user sees which command it is.
     shown = tasks.shown({"action": "status", "id": command_id}, result)
-    assert [
-        item["title"] for block in shown if block["type"] == "results" for item in block["items"]
-    ] == ["serve"]
+    assert shown[0]["type"] == "results" and shown[0]["items"][0]["title"] == "serve"
+    assert shown[1]["label"] == "output"
     own = owner == OWNER
     assert status.get("subagent") == (None if own else "sub_child")
     # Its result goes to the Session that ran it; the Agent can stop it with the call named.
@@ -582,8 +588,10 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
     )
     # Its exit code is vBot's kill, not the command's.
     assert "exit_code" not in stopped
-    notices = [block["text"] for block in tasks.shown(args, result) if block["type"] == "notice"]
-    assert any(stopped["stopped_because"] in notice for notice in notices)
+    shown = tasks.shown(args, result)
+    assert shown[0]["type"] == "results" and shown[0]["items"][0]["title"] == "serve"
+    notices = [block["text"] for block in shown if block["type"] == "notice"]
+    assert "The Agent in this Session stopped the command." in notices
     assert all(note in notices for note in stopped.get("notes", []))
     output_file(stopped["next"])
     assert process.tree.terminations == 1
@@ -597,6 +605,59 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
         assert (report.stop_reason, submission["address"]) == ("parent", CHILD)
         assert "sub_child" in stopped["notes"][0]
         await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
+
+
+@pytest.mark.parametrize("first_kill", ["confirmed", "refused", "unconfirmed"])
+@pytest.mark.asyncio
+async def test_concurrent_ancestor_stops_name_only_the_request_that_claimed_the_stop(
+    tmp_path: Path, first_kill: str
+) -> None:
+    killing = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run_blocking(function: Callable[..., object], /, *args: object) -> object:
+        if getattr(function, "__func__", None) is FakeTree.terminate and not killing.is_set():
+            killing.set()
+            await release.wait()
+            if first_kill == "refused":
+                raise PermissionError("access denied")
+            if first_kill == "unconfirmed":
+                raise KillNotConfirmedError("processes survived")
+        return function(*args)
+
+    async with command_harness(tmp_path, run_blocking=run_blocking) as harness:
+        tasks = Tasks(harness)
+        tasks.subagents.grandchild = dataclasses.replace(
+            tasks.subagents.child, id="sub_grandchild", session=GRANDCHILD, parent_id="sub_child"
+        )
+        command_id, _ = await tasks.background(owner=GRANDCHILD)
+        args = {"action": "stop", "id": command_id}
+        first = asyncio.create_task(tasks.call(args, owner=CHILD))
+        await asyncio.wait_for(killing.wait(), 5)
+        second = asyncio.create_task(tasks.call(args, owner=OWNER))
+        await turns()
+        release.set()
+
+        for index, result in enumerate(await asyncio.gather(first, second)):
+            if index == 0 and first_kill != "confirmed":
+                assert error(result)["code"] == "stop_failed"
+                continue
+            stopped = data(result)
+            # A refused kill releases its claim to the waiter; an unconfirmed kill keeps it.
+            claimed = index == 0 or first_kill == "refused"
+            assert (stopped["stopped_because"] == "you stopped it.") is claimed
+            assert ("notes" in stopped) is claimed
+            shown = tasks.registry.display_for_call(
+                BACKGROUND_TASKS_TOOL_NAME, args, context=tasks.contexts[index], result=result
+            )
+            [notice] = [
+                block["text"] for block in shown["details"] if block.get("level") == "warning"
+            ]
+            assert notice == (
+                "The Agent in this Session stopped the command."
+                if claimed
+                else "An Agent above Sub-Agent sub_grandchild stopped the command."
+            )
 
 
 @pytest.mark.parametrize("before", ["", "collecting\n"], ids=["nothing", "a statement"])
@@ -707,8 +768,16 @@ async def _later_reads_speak_to_their_reader(
     await tasks.commands.finish(own_stopped)
 
     async def reason(command_id: str, reader: SessionAddress) -> str:
-        shown = data(await tasks.call({"action": "status", "id": command_id}, owner=reader))
-        because: str = shown["stopped_because"]
+        args = {"action": "status", "id": command_id}
+        result = await tasks.call(args, owner=reader)
+        warnings = [b["text"] for b in tasks.shown(args, result) if b.get("level") == "warning"]
+        if command_id == parent_stopped:
+            owner = "Sub-Agent sub_child" if reader == OWNER else "the Agent in this Session"
+            assert warnings == [f"An Agent above {owner} stopped the command."]
+        else:
+            actor = "Sub-Agent sub_child" if reader == OWNER else "The Agent in this Session"
+            assert warnings == [f"{actor} stopped the command."]
+        because: str = data(result)["stopped_because"]
         return because
 
     parent_stop = {reader: await reason(parent_stopped, reader) for reader in (OWNER, CHILD)}

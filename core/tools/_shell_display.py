@@ -1,9 +1,10 @@
 """Command details shared by shell calls and background task status and stop calls."""
 
 from core.tools._shell_arguments import shell_display_values
-from core.tools._shell_results import exit_code_text
+from core.tools._shell_results import duration, exit_code_text, stopped_because
 from core.tools._tool_display import display_notice, display_text
-from core.tools.tools import JsonObject
+from core.tools.command_manager import CommandReport
+from core.tools.tools import JsonObject, ToolContext
 
 
 def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
@@ -17,14 +18,40 @@ def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> lis
     return blocks
 
 
+def record_command_stop(
+    context: ToolContext,
+    report: CommandReport,
+    *,
+    subagent: str | None = None,
+    stopped_here: bool = False,
+) -> None:
+    """Name who stopped the command from the perspective of the user viewing this Session."""
+    reason = report.stop_reason
+    if reason is None or report.not_run is not None:
+        return
+    if reason == "user":
+        message = f"You stopped the command after {duration(report.elapsed_seconds)}."
+    elif stopped_here or reason == "agent":
+        actor = (
+            f"Sub-Agent {subagent}"
+            if subagent and not stopped_here
+            else "The Agent in this Session"
+        )
+        message = f"{actor} stopped the command."
+    elif reason == "parent":
+        owner = f"Sub-Agent {subagent}" if subagent else "the Agent in this Session"
+        message = f"An Agent above {owner} stopped the command."
+    else:
+        message = f"Stopped: {stopped_because(report)}"
+    context.add_display_notice("warning", message)
+
+
 def command_result_details(data: JsonObject) -> list[JsonObject]:
     """Show the output and each fact about what ran, including processes still alive."""
     blocks = [display_text("output", source="result", path=("data", "output"))]
     status = data.get("status")
     if status == "running":
         blocks.append(display_notice("info", "The command continues in the background."))
-    if status == "stopped" and isinstance(data.get("stopped_because"), str):
-        blocks.append(display_notice("warning", f"Stopped: {data['stopped_because']}"))
     if status == "not_run":
         reason = data.get("not_run_because")
         message = f"The command did not run: {reason}" if reason else "The command did not run."
@@ -34,11 +61,14 @@ def command_result_details(data: JsonObject) -> list[JsonObject]:
         blocks.append(
             display_notice("warning", f"The command exited with code {exit_code_text(code)}.")
         )
+    elif status == "exited" and code is None:
+        blocks.append(display_notice("warning", "The command exited with an unknown exit code."))
     failed = data.get("failed_programs")
     if isinstance(failed, list) and failed:
         blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))
-    if isinstance(data.get("hint"), str):
-        blocks.append(display_notice("info", f"Hint: {data['hint']}"))
+    hint = data.get("hint")
+    if isinstance(hint, str) and hint.strip():
+        blocks.append(display_notice("info", f"Hint: {hint.strip()}"))
     processes = data.get("still_running")
     if isinstance(processes, list) and processes:
         names = ", ".join(str(item) for item in processes)

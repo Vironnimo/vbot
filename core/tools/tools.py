@@ -282,22 +282,25 @@ def _checked_arguments(
 
 
 def _detail_blocks(
-    context: ToolContext | None, result: JsonObject | None, built: Sequence[JsonObject]
+    context: ToolContext | None,
+    result: JsonObject | None,
+    built: Sequence[JsonObject],
+    *,
+    recorded_first: bool,
 ) -> list[JsonObject]:
-    """Return the call's recorded detail blocks, which follow the ``built`` ones.
+    """Combine execution-time detail blocks with those built from the final result.
 
     A failed call without an error notice, such as one rejected before its
     handler ran, shows the result's error message.
     """
-    blocks = copy.deepcopy(context.presentation_details) if context is not None else []
+    recorded = copy.deepcopy(context.presentation_details) if context is not None else []
+    blocks = [*recorded, *built] if recorded_first else [*built, *recorded]
     error = result.get("error") if isinstance(result, dict) and result.get("ok") is False else None
     message = error.get("message") if isinstance(error, dict) else None
     if (
         isinstance(message, str)
         and message.strip()
-        and not any(
-            block["type"] == "notice" and block["level"] == "error" for block in (*built, *blocks)
-        )
+        and not any(block["type"] == "notice" and block["level"] == "error" for block in blocks)
     ):
         blocks.append(display_notice("error", message))
     return blocks
@@ -507,7 +510,8 @@ class ToolRegistry:
     ) -> JsonObject:
         """Return display metadata for a concrete tool invocation."""
         facts = context.presentation_facts if context is not None else ()
-        payload = self.get(name).display.to_payload(
+        display = self.get(name).display
+        payload = display.to_payload(
             arguments,
             context=context,
             result=result,
@@ -522,7 +526,12 @@ class ToolRegistry:
         if context is not None and context.presentation_portal:
             payload["portal"] = dict(context.presentation_portal)
         if "details" in payload:
-            payload["details"].extend(_detail_blocks(context, result, payload["details"]))
+            payload["details"] = _detail_blocks(
+                context,
+                result,
+                payload["details"],
+                recorded_first=display.recorded_details_first,
+            )
         return payload
 
     def get(self, name: str) -> Tool:

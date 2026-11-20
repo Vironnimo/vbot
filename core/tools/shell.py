@@ -13,7 +13,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from core.permissions import CommandChecker, PermissionBoundary, PermissionDenied
+from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
@@ -32,7 +32,10 @@ from core.tools._shell_arguments import (
     shell_display_parts,
     validate_workdir,
 )
-from core.tools._shell_display import shell_detail_blocks
+from core.tools._shell_arguments import (
+    shell_display_values as shell_display_values,
+)
+from core.tools._shell_display import record_command_stop, shell_detail_blocks
 from core.tools._shell_results import (
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
@@ -382,7 +385,7 @@ class ShellTool:
                 self._keep(self._release_when_finished(command_id, grants.pop_all().close))
         if call.background:
             return await self._background_result(
-                call, command_id, names, context.permissions, reason="background"
+                call, command_id, names, context, reason="background"
             )
         return await self._wait(context, call, command_id, names, cli_grant)
 
@@ -492,7 +495,7 @@ class ShellTool:
         call: _ShellCall,
         command_id: str,
         names: ToolNames,
-        permissions: PermissionBoundary,
+        context: ToolContext,
         *,
         reason: str,
         idle: bool = False,
@@ -513,7 +516,7 @@ class ShellTool:
             call,
             report,
             names,
-            permissions,
+            context,
             reason=reason,
             idle=idle,
             recovery_failed=recovery_failed,
@@ -717,7 +720,7 @@ class ShellTool:
         report = self._commands.report(command_id)
         if report.ended and not report.still_running:
             waited = await self._waited_hint(context, report)
-            return _result(call, report, names, context.permissions, waited=waited)
+            return _result(call, report, names, context, waited=waited)
         # Listed from now on, so the user and the Agent can see and stop it; a
         # command that ended is delivered by this result, not later.
         handed_off = True
@@ -725,7 +728,7 @@ class ShellTool:
         if moved.is_set():
             reason = "moved"
         return await self._background_result(
-            call, command_id, names, context.permissions, reason=reason, idle=idle
+            call, command_id, names, context, reason=reason, idle=idle
         )
 
     async def _waited_hint(self, context: ToolContext, report: CommandReport) -> str | None:
@@ -798,7 +801,7 @@ def _result(
     call: _ShellCall,
     report: CommandReport,
     names: ToolNames,
-    permissions: PermissionBoundary,
+    context: ToolContext,
     *,
     reason: str = "",
     idle: bool = False,
@@ -818,7 +821,8 @@ def _result(
                 f"{SHELL_MODEL_NAME} was not run: {problem}",
                 retryable=retryable,
             )
-        data = ended_result(report, names, permissions=permissions)
+        data = ended_result(report, names, permissions=context.permissions)
+        record_command_stop(context, report)
         if waited is not None and "hint" not in data:
             data["hint"] = waited
     else:

@@ -980,12 +980,29 @@ async def test_output_a_pipe_stage_holds_back_is_explained_while_running_and_aft
         assert stage in stopped["hint"] and "lost" in stopped["hint"]
 
 
+def test_unknown_exit_code_warns_without_an_empty_hint() -> None:
+    blocks = shell_detail_blocks(
+        {"command": "build"}, tool_success({"status": "exited", "hint": " "})
+    )
+    assert [block for block in blocks if block["type"] == "notice"] == [
+        {
+            "type": "notice",
+            "level": "warning",
+            "text": "The command exited with an unknown exit code.",
+        }
+    ]
+
+
 @pytest.mark.parametrize("request_kind", ["stop", "background", "turn-cancelled"])
 @pytest.mark.asyncio
 async def test_the_user_stops_the_command_or_moves_it_to_the_background(
     shell: Shell, request_kind: str
 ) -> None:
-    call = shell.call({"command": "build"})
+    context = shell.context()
+    arguments = {"command": "build"}
+    call = asyncio.create_task(
+        dispatch_as_executor(shell.registry, context, arguments, [SHELL_TOOL_NAME, *COMPANIONS])
+    )
     process = await shell.started()
     process.write("compiling\n")
     await eventually(lambda: bool(shell.cancel_callbacks))
@@ -1004,10 +1021,12 @@ async def test_the_user_stops_the_command_or_moves_it_to_the_background(
         }
         notices = [
             block["text"]
-            for block in shell_detail_blocks({"command": "build"}, tool_success(result))
+            for block in shell.registry.display_for_call(
+                SHELL_TOOL_NAME, arguments, context=context, result=tool_success(result)
+            )["details"]
             if block["type"] == "notice"
         ]
-        assert notices == ["Stopped: the user stopped it after 12 seconds."]
+        assert notices == ["You stopped the command after 12 seconds."]
     elif request_kind == "background":
         assert shell.background_callbacks[0]() is True
         result = data(await shell.returned(call))
@@ -1354,6 +1373,17 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert inspect["error"]["code"] == "invalid_arguments"
     conflict = await shell.call({"command": "ls", "timeout": 5, "timeout_ms": 5})
     assert conflict["error"]["code"] == "invalid_arguments"
+    for malformed_notes in (True, [["stdin", "input"]]):
+        invalid_notes = await shell.call(
+            {
+                "command": "ls",
+                "no_effect_fields": malformed_notes,
+                "tty": True,
+                "run_in_background": True,
+            }
+        )
+        assert invalid_notes["error"]["code"] == "invalid_arguments"
+        assert "no_effect_fields" in invalid_notes["error"]["message"]
     assert shell.launcher.argv == []
 
 
@@ -1373,17 +1403,6 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
             False,
         ),
         (
-    for malformed_notes in (True, [["stdin", "input"]]):
-        invalid_notes = await shell.call(
-            {
-                "command": "ls",
-                "no_effect_fields": malformed_notes,
-                "tty": True,
-                "run_in_background": True,
-            }
-        )
-        assert invalid_notes["error"]["code"] == "invalid_arguments"
-        assert "no_effect_fields" in invalid_notes["error"]["message"]
             OSError(errno.ENOSPC, "Datenträger voll"),
             False,
             "Tell the user that the disk is full.",

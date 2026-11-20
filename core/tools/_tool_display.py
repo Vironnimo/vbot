@@ -187,6 +187,8 @@ class ToolDisplay:
     # ``add_display_text``/``add_display_memory_changes``).
     details: bool = False
     detail_builder: ToolDisplayDetailBuilder | None = None
+    # Put the execution-time task summary ahead of blocks derived from the result.
+    recorded_details_first: bool = False
 
     def __post_init__(self) -> None:
         _validate_display_strings(self.summary_fields, "summary_fields")
@@ -199,6 +201,8 @@ class ToolDisplay:
             raise ValueError("Tool display fact_builder must be callable")
         if not isinstance(self.details, bool):
             raise ValueError("Tool display details must be a boolean")
+        if not isinstance(self.recorded_details_first, bool):
+            raise ValueError("Tool display recorded_details_first must be a boolean")
         if self.detail_builder is not None and not callable(self.detail_builder):
             raise ValueError("Tool display detail_builder must be callable")
         if isinstance(self.max_characters, bool) or not isinstance(self.max_characters, int):
