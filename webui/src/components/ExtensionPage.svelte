@@ -133,6 +133,7 @@
   let observedDescriptor = '';
   let observedUiScope = '';
   let pageLayerOpen = $state(false);
+  let contentHeight = $state(null);
   let searchEntries = $state([]);
   const runSubscriptions = new SvelteMap();
   const embeds = createExtensionSessionEmbeds((context, slot, href) => {
@@ -348,6 +349,7 @@
   function invalidateContext(reason) {
     const previous = frameContext;
     frameContext = null;
+    contentHeight = null;
     embeds.slots.clear();
     previous?.specialist?.close();
     searchEntries = [];
@@ -535,6 +537,17 @@
     if (data.type === 'vbot.extension.ready') {
       context.ready = true;
       post(context, contextPayload(context));
+      return;
+    }
+    if (
+      context.ready &&
+      embedded &&
+      uiContext.surface === 'settings.sections' &&
+      data.type === 'vbot.extension.content.height' &&
+      Number.isSafeInteger(data.height) &&
+      data.height > 0
+    ) {
+      contentHeight = Math.min(data.height, 1600);
       return;
     }
     if (
@@ -1171,7 +1184,10 @@
       }}>{entry.label}</button
     >
   {/each}
-  <div class="extension-page">
+  <div
+    class="extension-page"
+    style:height={contentHeight ? `${contentHeight}px` : undefined}
+  >
     <iframe
       class:extension-page--layer={embedded && pageLayerOpen}
       bind:this={frame}
@@ -1217,7 +1233,7 @@
   .extension-page {
     position: relative;
     width: 100%;
-    height: 100%;
+    height: var(--contribution-height, 100%);
     min-height: 0;
     overflow: clip;
   }

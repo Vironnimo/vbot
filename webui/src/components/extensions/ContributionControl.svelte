@@ -189,6 +189,5 @@
   .contribution-view {
     width: 100%;
     min-width: 0;
-    height: var(--contribution-height);
   }
 </style>

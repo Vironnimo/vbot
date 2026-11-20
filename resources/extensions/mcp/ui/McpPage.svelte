@@ -5,6 +5,7 @@
   import { setApplicationTimeZone } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
   import { applyExtensionTheme } from '@vbot/extension-sdk/lib/extensionTheme.js';
   import { provideNavigation } from '@vbot/extension-sdk/lib/navigation.svelte.js';
+  import EmbeddedSettingsPage from '@vbot/extension-sdk/ui/EmbeddedSettingsPage.svelte';
   import SettingsMcpPanel from './SettingsMcpPanel.svelte';
 
   let { bridgeClient = null } = $props();
@@ -42,16 +43,8 @@
 </script>
 
 <svelte:head><title>{t('mcp.title')}</title></svelte:head>
-<main class="mcp-page">
+<EmbeddedSettingsPage {client}>
   {#if ready}
     <SettingsMcpPanel {client} {subscribeInvalidations} {agentsRefreshToken} />
   {/if}
-</main>
-
-<style>
-  .mcp-page {
-    height: 100%;
-    overflow: auto;
-    padding: 12px;
-  }
-</style>
+</EmbeddedSettingsPage>

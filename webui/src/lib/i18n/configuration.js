@@ -93,7 +93,7 @@ export default Object.freeze({
     'How Agents search and read the web, create media, and delegate work.',
   'settings.pages.integrations': 'Integrations',
   'settings.pages.integrationsDescription':
-    'Messaging Channels, Extensions, MCP connections, and saved credentials.',
+    'Messaging Channels, Extensions, and MCP connections.',
   'settings.pages.archiveDescription':
     'Restore deleted Agents, Projects and Sessions or delete them for good, and choose how long vBot keeps them.',
   'settings.pages.system': 'System',
