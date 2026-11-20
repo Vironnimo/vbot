@@ -14,6 +14,7 @@
   import CopyableValueCard from './CopyableValueCard.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import CollapseRail from './CollapseRail.svelte';
+  import { toolRowMedia, workingGroupMedia } from '$lib/chatToolDetails.js';
   import ToolMedia from './ToolMedia.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
@@ -510,7 +511,7 @@
                   </svg>
                 </Button>
               {/if}
-              <ToolMedia tool={child} />
+              <ToolMedia items={toolRowMedia(child)} />
             </summary>
             <ToolDetails
               tool={child}
@@ -596,7 +597,7 @@
                 label={sendTimeLabel}
                 details={sendStatusDetails}
               />
-              <ToolMedia tool={child} />
+              <ToolMedia items={toolRowMedia(child)} />
             </summary>
             <ToolDetails
               tool={child}
@@ -743,7 +744,7 @@
                   </svg>
                 </Button>
               {/if}
-              <ToolMedia tool={child} />
+              <ToolMedia items={toolRowMedia(child)} />
             </summary>
             <ToolDetails
               tool={child}
@@ -964,6 +965,7 @@
             >
               <path d="M4 6l4 4 4-4" />
             </svg>
+            <ToolMedia items={workingGroupMedia(group.children)} />
           </summary>
           <div class="working-block__body collapse-host">
             <CollapseRail />

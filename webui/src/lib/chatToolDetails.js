@@ -37,13 +37,13 @@ function mediaFilename(value) {
 // and the `source` files it started from), then the stored media of its
 // result. Only signed file URLs and opaque Attachment identities are used,
 // never raw Tool paths or external addresses.
-export function toolRowMedia(tool, result = tool?.result) {
+function mediaCandidates(tool, result) {
   const displayed = toolDisplay(tool)?.media;
   const parsed = parseJsonValue(result);
   const stored = Array.isArray(parsed?.artifacts)
     ? parsed.artifacts.filter((item) => item?.kind === 'read_media')
     : [];
-  const candidates = [
+  return [
     ...(Array.isArray(displayed) ? displayed : []).map((item) => ({
       kind: item?.kind,
       src:
@@ -67,8 +67,23 @@ export function toolRowMedia(tool, result = tool?.result) {
       source: false,
     })),
   ];
+}
+
+export function toolRowMedia(tool, result = tool?.result) {
+  return galleryItems(mediaCandidates(tool, result));
+}
+
+export function workingGroupMedia(children) {
+  return galleryItems(
+    children.flatMap((child) =>
+      child.type === 'tool_call' ? mediaCandidates(child, child.result) : [],
+    ),
+  );
+}
+
+function galleryItems(candidates) {
   const seen = new Set();
-  // Results lead the gallery, even when a generation recorded its inputs first.
+  // Prefer a result even when an earlier call used the same file as a source.
   candidates.sort((a, b) => Number(a.source) - Number(b.source));
   return candidates.flatMap((item) => {
     if (

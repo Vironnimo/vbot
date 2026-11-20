@@ -206,8 +206,7 @@ a.inline-attachment:focus-visible {
 
 /* The row sets the height. Its preview stretches across the summary padding
    without participating in the row's intrinsic height. */
-.tool-event:has(> summary > .tool-media-previews),
-.working-block[open]:has(.tool-media-previews) {
+:is(.tool-event, .working-block):has(> summary > .tool-media-previews) {
   align-self: stretch;
   width: 100%;
 }

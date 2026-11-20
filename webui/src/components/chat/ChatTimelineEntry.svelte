@@ -67,6 +67,7 @@
   import ChatPortal from './ChatPortal.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
+  import { toolRowMedia } from '$lib/chatToolDetails.js';
   import ToolMedia from './ToolMedia.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
@@ -626,8 +627,10 @@
               details={() => toolStatusDetails(eventToolRow)}
             />
             <ToolMedia
-              tool={eventToolRow}
-              result={toolResultValueForEvent(item.event)}
+              items={toolRowMedia(
+                eventToolRow,
+                toolResultValueForEvent(item.event),
+              )}
             />
           </summary>
           <ToolDetails

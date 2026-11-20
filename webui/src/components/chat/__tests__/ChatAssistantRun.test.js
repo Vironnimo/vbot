@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { fromStore, writable } from 'svelte/store';
 
 import {
   assistantRun,
@@ -15,6 +16,11 @@ import {
 } from './ChatAssistantRun.support.js';
 import { t } from '../../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
+
+vi.mock(
+  'svelte/store',
+  () => import('../../../../node_modules/svelte/src/store/index-client.js'),
+);
 
 function rowCancel(kind) {
   return document.querySelector(`.row-cancel[data-cancel="${kind}"]`);
@@ -496,6 +502,95 @@ describe('ChatAssistantRun', () => {
       expect(block.querySelector('.tool-event')).toBe(child);
       expect(child.open).toBe(true);
       expect(child.querySelector('.tool-event-body')).toBe(body);
+    });
+
+    it('collects arriving media in its own folded Working summary', () => {
+      const source = {
+        kind: 'image',
+        url: '/api/files/source.sig',
+        filename: 'source.png',
+        role: 'source',
+      };
+      const image = {
+        kind: 'image',
+        url: '/api/files/output.sig',
+        filename: 'output.png',
+      };
+      const video = {
+        kind: 'video',
+        url: '/api/files/clip.sig',
+        filename: 'clip.mp4',
+      };
+      const call = readChild({
+        id: 'first',
+        display: { media: [source, image] },
+      });
+      const pending = toolChild('mcp_media', {}, { id: 'second' });
+      const otherSpan = [
+        outputItem('Next step.'),
+        reasoningItem('Read text.'),
+        readChild({ id: 'text' }),
+      ];
+      const state = fromStore(
+        writable(assistantRun({ items: [call, pending, ...otherSpan] })),
+      );
+      run.mount({
+        get item() {
+          return state.current;
+        },
+        chatWorkingMode: 'compact',
+      });
+      const [block, other] = document.querySelectorAll('.working-block');
+      const summary = block.querySelector('summary');
+      const links = () =>
+        [...summary.querySelectorAll('.tool-media-preview')].map((a) =>
+          a.getAttribute('href'),
+        );
+      expect(links()).toEqual([image.url, source.url]);
+
+      const completed = {
+        ...pending,
+        status: 'success',
+        finished: true,
+        display: { media: [image, video] },
+        result: {
+          artifacts: [
+            {
+              kind: 'read_media',
+              attachment_id: 'att_audio',
+              media_type: 'audio/wav',
+              filename: 'sound.wav',
+            },
+          ],
+        },
+      };
+      state.current = assistantRun({ items: [call, completed, ...otherSpan] });
+      flushSync();
+      expect(links()).toEqual([
+        image.url,
+        video.url,
+        '/api/attachments/att_audio',
+      ]);
+      const more = summary.querySelector('.tool-media-more');
+      expect(more.textContent.trim()).toBe('+1');
+      expect(other.querySelector('.tool-media-previews')).toBeNull();
+      more.focus();
+      more.click();
+      flushSync();
+      const dialog = document.querySelector('[role="dialog"]');
+      expect(
+        dialog.querySelector('.media-lightbox__caption a').getAttribute('href'),
+      ).toBe(source.url);
+      expect(block.open).toBe(false);
+      expect(block.querySelector('.tool-event')).toBeNull();
+      dialog.querySelector('.image-lightbox__close').click();
+      flushSync();
+      expect(document.activeElement).toBe(more);
+      setDisclosureOpen('.working-block');
+      expect(summary.querySelector('.tool-media-more')).toBe(more);
+      expect(
+        block.querySelectorAll('.tool-event .tool-media-previews'),
+      ).toHaveLength(2);
     });
 
     const laterOutput = outputItem('Done.', { id: 'later-output' });
