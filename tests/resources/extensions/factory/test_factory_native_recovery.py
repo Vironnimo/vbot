@@ -580,12 +580,9 @@ async def test_deleted_linked_card_does_not_poison_mutations_or_restart(
     factory = await establish(harness, tmp_path)
     native = harness.service.records().native
     work = await task(harness, factory, "")
-    card = await harness.service.records().create_card(
-        "product", "Linked", "Scope", origin="operator"
-    )
-    await harness.service.records().change(
-        card["id"], {"state": "discarded"}, actor="user", event="discarded"
-    )
+    # Start from a proposal so the scheduler cannot admit the Card during setup.
+    card = await harness.service.records().create_card("product", "Linked", "Scope", origin="agent")
+    await harness.operation("card.discard", id=card["id"])
     work = await native.change_task(
         work["id"], {"state": "blocked", "reason": "workflow", "workflow_card_id": card["id"]}
     )
