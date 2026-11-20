@@ -787,6 +787,7 @@
 
 <style>
   .chat-workspace {
+    --bg: var(--chat-bg);
     display: flex;
     flex: 1;
     min-width: 0;

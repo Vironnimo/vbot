@@ -2,6 +2,7 @@
    shares the left and right edges of the message text, the column's gutter.
    On phones it keeps using the whole width. */
 .chat-view {
+  --bg: var(--chat-bg);
   --chat-footer-inset: var(--chat-msg-gutter);
   --chat-activity-width: 272px;
 

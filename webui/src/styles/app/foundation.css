@@ -46,6 +46,10 @@
   /* Warm graphite foundation: low-chroma surfaces with clearly separated
      steps, so hierarchy reads from tone instead of from border lines. */
   --bg: #15130f;
+  /* The Chat sits one shade above --bg so long replies read softer, yet
+     stays darker than the Main menu and Secondary panes
+     (--secondary-surface). The Chat views redefine --bg to it. */
+  --chat-bg: #191713;
   --secondary-surface: #1a1814;
   /* The mark's two metals (webui/public/brand/), lifted for text on the
      Main menu surface. */
