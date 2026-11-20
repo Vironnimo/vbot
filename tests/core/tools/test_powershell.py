@@ -32,6 +32,7 @@ from core.tools._powershell import (
 )
 from core.tools.command_manager import CommandManager, CommandReport, NotRunReason
 from core.tools.shell_environment import RunIdentity, command_environment
+from tests.directory_links import link_directory
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("pwsh") is None, reason="Real PowerShell 7"
@@ -179,13 +180,25 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
     for folder in ("project/src", "plain/sub"):
         (box / folder).mkdir(parents=True)
     (box / "project" / "file.txt").write_text("x")
+    link_directory(tmp_path / "alias", box)
+    link_directory(tmp_path / "project-link", box / "project")
+    other = tmp_path / "other"
+    other.mkdir()
+    declared_link = tmp_path / "declared-link"
+    link_directory(declared_link, other)
     refused = (
         "Remove-Item -Recurse -Force project",
         "rm -r -fo .\\project\\* -ErrorAction SilentlyContinue",
         # The folder that holds a protected one, and the user's own folders.
         "Remove-Item -Recurse -Force .",
-        'Remove-Item -Recurse -Force "$env:USERPROFILE\\*"',
-        "Remove-Item -Recurse -Force C:\\*",
+        'Test-Guard "$env:USERPROFILE\\*"',
+        "Test-Guard C:\\*",
+        "Test-Guard project -WhatIf:$false",
+        "Test-Guard '..\\alias\\project'",
+        "Test-Guard '..\\project-link\\*'",
+        "Test-Guard '..\\declared-link' -Literal",
+        "Test-Guard $extended -Literal",
+        "Test-Guard $short -Literal",
         "Move-Item project moved",
         # An empty path means the profile or the current directory to PowerShell.
         "Set-Location $null",
@@ -195,13 +208,28 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
         "Push-Location -LiteralPath project/file.txt",
         "Set-Location *",  # More than one matching directory.
     )
+    # Test known system roots and alternate spellings through the real guard, with
+    # no operation after it. A failed assertion must never risk non-test data.
+    probe = (
+        "function Test-Guard { [CmdletBinding(SupportsShouldProcess)] "
+        "param([string]$Path, [switch]$Literal) "
+        "[VBotGuard]::Keep($PSCmdlet, @($Path), $Literal, 'remove') }\n"
+        "$extended = '\\\\?\\' + (Get-Item project).FullName\n"
+        "$short = cmd /d /c 'for %I in (project) do @echo %~fsI'\n"
+    )
     command = "\n".join(
         f"try {{ {statement}; 'ran-{index}' }} catch {{ \"refused-{index}: $_\" }}"
         for index, statement in enumerate(refused)
     ) + (
         # What is named singly goes, and so does a folder nobody protects.
         "\nRemove-Item project\\file.txt; Remove-Item -Recurse project\\src\n"
+        # Operating on the unprotected junction itself leaves its target in place.
+        "try { Test-Guard '..\\project-link' -Literal; 'link-ok' } catch { 'link-refused' }\n"
+        # A separately registered link name protects only that name. The host
+        # does not open configured roots to discover other target spellings.
+        "try { Test-Guard '..\\other' -Literal; 'other-ok' } catch { 'other-refused' }\n"
         "Remove-Item -Recurse plain; Remove-Item -Recurse project -WhatIf | Out-Null\n"
+        "try { [VBotGuard]::GuardLocation([VBotSetLocation]::new()); 'no-runtime-ok' } catch {}\n"
         "try { cd -lp '' } catch [System.Management.Automation.ParameterBindingException] "
         "{ 'caught-' + $_.Exception.ParameterName }\n"
         # Binding errors from other cmdlets retain their ordinary statement scope.
@@ -212,12 +240,18 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
         "\"left: $((Get-ChildItem -Name) -join ',') in $(Split-Path -Leaf $PWD)\""
     )
 
-    code, output = await _run_protected(box, command, [str(box / "project")])
+    code, output = await _run_protected(
+        box, probe + command, [str(box / "project"), str(declared_link)]
+    )
 
     assert code == 0, output
-    for index in range(len(refused)):
+    for index, statement in enumerate(refused):
         assert f"refused-{index}: " in output and f"ran-{index}" not in output, output
+        if statement.startswith("Test-Guard "):
+            message = output.split(f"refused-{index}: ", 1)[1].splitlines()[0]
+            assert "vBot protects this folder." in message
     assert "caught-LiteralPath" in output and "entered-project" in output
+    assert "link-ok" in output and "no-runtime-ok" in output and "other-ok" in output
     assert "vBot protects this folder." in output
     assert "left: project in box" in output
     assert list((box / "project").iterdir()) == []
@@ -695,8 +729,9 @@ async def test_the_command_starts_like_a_new_shell(tmp_path: Path) -> None:
         ("$null = @($input)", False),
         ("if ($false) { $global:input }", False),
         ("function unused { $input }", True),
+        ("$null = $env:input; $null = ${local:other:input}", True),
     ],
-    ids=["standalone", "empty-input", "lexical-input", "nested-input"],
+    ids=["standalone", "empty-input", "lexical-input", "nested-input", "distinct-variables"],
 )
 async def test_empty_console_input_preserves_process_block_effects(
     tmp_path: Path, begin: str, runs: bool

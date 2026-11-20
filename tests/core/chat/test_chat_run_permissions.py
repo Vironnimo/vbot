@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -107,7 +108,7 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
             "read": "work_area",
             "write": "scratch",
             "web": "listed",
-            "allow": ["Web(docs.example)"],
+            "allow": ["Web(docs.example)", "Edit({home}/.cache)"],
             "deny": ["Read({workdir}/secrets/**)", "Web(blocked.example)"],
         },
     )
@@ -133,6 +134,15 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
     # The Agent's own configuration is never readable.
     own_config = boundary.check_path(tmp_path / "data" / "agents" / "coder" / "agent.json", "read")
     assert own_config is not None and own_config.reason == "protected_location"
+    if sys.platform == "win32":
+        cache = Path.home() / ".cache"
+        host_entry = cache / "vbot-powershell-host" / "entry.bin"
+        assert boundary.check_path(cache / "other" / "entry.bin", "write") is None
+        assert boundary.check_path(host_entry, "read") is None
+        refused = boundary.check_path(host_entry, "write")
+        assert refused is not None and refused.reason == "protected_location"
+        refused_tree = boundary.check_path(cache, "write", subtree=True)
+        assert refused_tree is not None and refused_tree.reason == "protected_location"
 
     # The System Prompt names the boundary in the Model's path form.
     prompt = _system_prompt(runtime)

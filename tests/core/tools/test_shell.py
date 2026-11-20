@@ -600,6 +600,9 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
 
     monkeypatch.setattr(shell_module, "command_environment", environment)
     monkeypatch.setattr(shell_module.shutil, "which", executable)
+    monkeypatch.setattr(
+        shell_module, "powershell_executable", lambda path: Path(executable("pwsh", path=path))
+    )
     for count, path in enumerate(("first-path", "changed-path"), start=1):
         current_path = path
         result = data(await shell.call({"command": "build", "run_in_background": True}))
@@ -611,6 +614,26 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
     assert [path for _thread, path in resolved] == ["first-path", "changed-path"]
     assert {path for _thread, path in prepared} == {"first-path", "changed-path"}
     assert all(thread != loop_thread for thread, _path in [*prepared, *resolved])
+
+
+def test_powershell_lookup_uses_only_absolute_path_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    name = "pwsh.exe" if sys.platform == "win32" else "pwsh"
+    (tmp_path / name).touch(mode=0o755)
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "pwsh.cmd").touch()
+    assert shell_module.powershell_executable(str(install)) is None
+    binary = install / name
+    binary.touch(mode=0o755)
+    relative_entries = os.pathsep.join(("", ".", "install"))
+    assert shell_module.powershell_executable(relative_entries) is None
+    assert (
+        shell_module.powershell_executable(os.pathsep.join((relative_entries, str(install))))
+        == binary
+    )
 
 
 def _numbered(count: int) -> list[str]:
@@ -683,6 +706,16 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
     assert result["output"] == "pg_ctl: kein Server läuft"
     assert len(result["notes"]) == 2  # timeout interpretation and inferred encoding
     encoding_note = next(note for note in result["notes"] if "cp1252" in note)
+    display = shell.registry.display_for_call(
+        SHELL_TOOL_NAME,
+        {"command": "program", "description": "Check output"},
+        result=tool_success(result),
+    )
+    assert "description" in display["hidden_argument_keys"]
+    assert all(
+        note in [block["text"] for block in display["details"] if block["type"] == "notice"]
+        for note in result["notes"]
+    )
     if ended:
         return
     command_id = result["command_id"]
@@ -1053,6 +1086,10 @@ async def test_processes_left_running_are_named_with_the_call_that_stops_them(
         command_id = result["command_id"]
         assert (result["status"], result["exit_code"]) == ("exited", 0)
         assert result["still_running"] == ["server.exe (pid 42)"]
+        assert any(
+            "server.exe (pid 42)" in block.get("text", "")
+            for block in shell_detail_blocks({"command": "start-server"}, tool_success(result))
+        )
         assert stop_calls(result["next"]) == [{"action": "stop", "id": command_id}]
         # The result showed the end: nothing more is delivered.
         assert shell.sink.submissions == []

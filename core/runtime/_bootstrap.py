@@ -1140,7 +1140,13 @@ def _protected_folders(data_dir: Path, projects: ProjectStore, agents: AgentStor
     decision 2026-11-16; ``core/tools/_powershell.py``, Guards). A store that
     cannot be read protects nothing of its own: the command still runs.
     """
-    folders = [str(data_dir)]
+    folders = [str(data_dir.absolute())]
+    # A configured data directory can itself be a junction. The stores already
+    # return resolved Project and Workspace paths.
+    with suppress(OSError):
+        resolved = str(data_dir.resolve())
+        if resolved != folders[0]:
+            folders.append(resolved)
     with suppress(Exception):
         folders.extend(project.cwd for project in projects.list() if project.cwd)
     with suppress(Exception):

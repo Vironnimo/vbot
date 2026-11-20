@@ -630,7 +630,9 @@ class RunTimeline:
         elif kind == "tool_call_result":
             message = payload.get("message") or {}
             raw["result"] = copy.deepcopy(payload.get("result", message.get("content")))
-            child.update(streaming=False, finished=True, finishedAt=event.get("timestamp"))
+            child.update(
+                streaming=False, finished=True, finishedAt=event.get("timestamp"), output=""
+            )
             raw["display"] = merged_secrets_used(
                 raw.get("display"),
                 payload.get("display", message.get("tool_display", raw.get("display"))),
@@ -640,7 +642,7 @@ class RunTimeline:
             child["status"] = _tool_status(
                 raw["result"], child["name"], raw["display"], payload.get("error")
             )
-        elif kind == "tool_call_output":
+        elif kind == "tool_call_output" and not child["finished"]:
             child["output"] = payload.get("output", "")
         elif kind == "subagent_session_started":
             child["subAgentSession"] = copy.deepcopy(payload.get("data") or {})

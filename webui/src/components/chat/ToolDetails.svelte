@@ -14,7 +14,11 @@
   // A row may carry only previews of a long call (`tool.rawTruncated`); the
   // whole call loads through `loadRaw` once a section showing it opens.
   import { untrack } from 'svelte';
-  import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
+  import {
+    toolDetailBlocks,
+    toolDetailMedia,
+    toolOutputPreview,
+  } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import CollapseRail from './CollapseRail.svelte';
   import ToolDetailSection from './ToolDetailSection.svelte';
@@ -30,8 +34,6 @@
     open = true,
     toolName = '',
     args,
-    // Live output while the call runs: the command's newest output lines.
-    output = '',
     result,
     resultFailed = false,
     showResult = true,
@@ -73,9 +75,9 @@
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
   let media = $derived(toolDetailMedia(tool, result));
-  let streamed = $derived(Boolean(output));
+  let output = $derived(toolOutputPreview(tool));
   let streamsReplaceOutput = $derived(
-    streamed &&
+    output &&
       Boolean(
         blocks?.some(
           (block) => block.type === 'text' && block.label === 'output',
@@ -188,7 +190,7 @@
   {#if blocks}
     {#each blocks as block, index (index)}
       {#if block.type === 'text'}
-        {#if block.label === 'output' && streamed}
+        {#if block.label === 'output' && output}
           {@render outputSections()}
         {:else}
           {@const clampKey = `${viewKey}:${block.label}:${index}`}

@@ -40,6 +40,7 @@ from core.tools._interpreter_host import InterpreterHost
 from core.tools._shell_results import format_command_delivery, not_run_problem
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
+    COMMAND_RECENT_LINES,
     COMMAND_RETENTION_SECONDS,
     COMMAND_TAIL_CHARS,
     COMMAND_TEMPORARY_CATEGORY,
@@ -61,6 +62,7 @@ from core.utils.timestamps import parse_timestamp
 from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.command_manager_helpers import (
     OWNER,
+    FakeProcess,
     FakeSink,
     FakeTree,
     Harness,
@@ -100,8 +102,12 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
             ["red plain", "after title"],
         ),
         (
-            [b"progress 10%\rprogress 50%\r", b"progress 100%\n", b"done\r\n"],
-            ["progress 100%", "done"],
+            [b"progress 10%\rprogress 50%\r", b"progress 100%\nabcdef\r", b"XY\rZ\n"],
+            ["progress 100%", "ZYcdef"],
+        ),
+        (
+            [b"first\r\x1b[", b"Kok\nsecond\rOK\x1b[0", b"K\nthird\x1b[2K\rOK\n"],
+            ["ok", "OK", "OK"],
         ),
         # A CRLF split between reads ends the line like one.
         ([b"kept\r", b"\nnext\r\n"], ["kept", "next"]),
@@ -133,6 +139,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
     ids=[
         "escapes",
         "redrawn-line",
+        "explicitly-cleared-redraw",
         "split-line-break",
         "backspace",
         "utf-8",
@@ -242,7 +249,7 @@ async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
     await turns()
     # A short second UTF-16 line is visible immediately too, not held back
     # until the command ends while looking for a possible encoding change.
-    assert harness.manager.report(command_id).transcript.head == ("red", "second")
+    assert harness.manager.report(command_id).transcript.head == ("redTIAL-", "second")
     assert log_path.read_bytes() == b"".join(chunks[:3])
     for chunk in chunks[3:]:
         process.write(chunk)
@@ -251,7 +258,7 @@ async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
 
     assert log_path.read_bytes() == b"".join(chunks)
     assert report.log_path == log_path
-    assert report.transcript.head == ("red", "second", "progress 100%", "abc � � ä partial")
+    assert report.transcript.head == ("redTIAL-", "second", "progress 100%", "abc � � ä partial")
 
 
 @pytest.mark.asyncio
@@ -367,7 +374,9 @@ async def test_a_log_file_that_cannot_be_written_reports_what_it_kept_and_why(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line", "erased-line-end"])
+@pytest.mark.parametrize(
+    "output", ["lines", "one-line", "erased-redraw", "erased-long-line", "erased-line-end"]
+)
 async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
     harness: Harness, output: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -379,7 +388,19 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         lines = ["".join(chr(ord("a") + number % 26) for number in range(200_000))]
         text = lines[0]
     chunks = [text[start : start + 16_384] for start in range(0, len(text), 16_384)]
-    if output == "erased-long-line":
+    if output == "one-line":
+        # Redraw across the gap between the retained start and end, up to the
+        # middle of the retained end. Its untouched suffix must stay visible.
+        replacement = "x" * (len(text) - COMMAND_TAIL_CHARS // 2)
+        chunks.extend(["\r", replacement[:16_384], replacement[16_384:]])
+        lines = [replacement + text[len(replacement) :]]
+    elif output == "erased-redraw":
+        # An erase after the cursor cuts the old suffix, even when the redraw
+        # stopped in the omitted middle of a very long line.
+        replacement = "xy" * COMMAND_TAIL_CHARS
+        chunks.extend(["\r", replacement, "\x1b[K"])
+        lines = [replacement]
+    elif output == "erased-long-line":
         # A backspace right after the line in progress was shortened to its end
         # leaves that end shorter than the tail's limit; the lines after it, also
         # those that arrive later, still replace it.
@@ -418,7 +439,7 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
             InterpreterHost.in_process(), report.log_path, run_blocking=run_inline
         )
         assert snapshot is not None and snapshot.transcript == transcript
-    elif output == "one-line":
+    elif output in ("one-line", "erased-redraw"):
         # A line too long for both: its start and its end.
         (line,) = lines
         assert transcript.head == (line[:COMMAND_HEAD_CHARS],)
@@ -671,6 +692,23 @@ async def test_untracked_pipe_writer_cannot_delay_completion_or_stop(
     assert "late output" in body and "may be incomplete" in body
     assert ("disk is full" in body) is disk_full
     assert "complete raw output" not in body
+
+
+@pytest.mark.asyncio
+async def test_a_failed_output_reader_releases_the_pipe_while_the_command_runs(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken_read(process: FakeProcess) -> bytes:
+        raise OSError("unreadable pipe")
+
+    monkeypatch.setattr(FakeProcess, "read", broken_read)
+    command_id, process = await harness.launch()
+    await turns()
+    assert not process.close_output()  # Already closed by the reader.
+    assert not harness.manager.report(command_id).ended
+    process.exit(7)
+    report = await harness.finish(command_id)
+    assert report.output_incomplete and report.exit_code == 7
 
 
 @pytest.mark.asyncio
@@ -994,6 +1032,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
         else None
     )
     running_outcomes = {"running", "moved", "owned_running"}
+    expected_latest: dict[int, str] = {}
     restored_owner = OWNER
     secret_output = outcome in {"secret", "secret_delivered", "owned_secret"}
     key = "ghp_" + "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY3zA5"
@@ -1011,10 +1050,19 @@ async def test_background_checkpoint_recovers_once_after_restart(
             await harness.manager.to_background_durably(command_id, deliver=True)
             if secret_output:
                 process.write(key + "\n")
-            if outcome == "running":
+            if outcome in running_outcomes:
                 # Output after its last saved state reaches only the raw log.
-                process.write("compiled 3 files\n")
+                prefix = {
+                    "running": "x" * (COMMAND_HEAD_CHARS + 1),
+                    "moved": "\n".join(map(str, range(COMMAND_RECENT_LINES + 1))),
+                    "owned_running": "first\n" + "x" * (COMMAND_TAIL_CHARS + 1),
+                }[outcome]
+                process.write(f"{prefix}\ncompiled 3 files\n")
                 await turns()
+                expected_latest = {
+                    count: harness.manager.latest_output(command_id, count)
+                    for count in (-1, 0, 1, COMMAND_RECENT_LINES + 10)
+                }
             if outcome not in running_outcomes:
                 process.exit(9101 if outcome == "not_run_once" else 0)
                 await harness.finish(command_id)
@@ -1137,6 +1185,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert len(notes) == 1
                 assert command_id in str(notes[0].content)
             report = restored.manager.report(command_id)
+            for count, expected in expected_latest.items():
+                assert restored.manager.latest_output(command_id, count) == expected
             if secret_output:
                 content = "\n".join(
                     str(message.content)

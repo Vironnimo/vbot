@@ -20,10 +20,10 @@ without any terminal behind them:
   sequence: a UTF-8 terminal does not interpret them, and they occur as text,
   such as UTF-8 decoded as Latin-1 (``Ã\\x9f`` for ``ß``), whose rest of the line
   a C1 sequence start would swallow.
-- ``\\r\\n`` ends a line like ``\\n``. A lone ``\\r`` restarts the current line: the
-  next text replaces it, so a redrawn progress line keeps its final state, and a
-  line that ends with ``\\r`` keeps its text.
-- A backspace erases the character before it on the current line.
+- ``\\r\\n`` ends a line like ``\\n``. A lone ``\\r`` returns to the start of the
+  line. New text overwrites only the characters it reaches. A program can clear
+  a redrawn line with CSI K / 0K (to its end) or CSI 2K (the whole line).
+- A backspace steps back one character, erasing it at the end of the line.
 - Other C0 controls and DEL are removed; tabs stay.
 
 Only the transcript is cleaned: the log file has the bytes as the command wrote
@@ -37,8 +37,9 @@ from __future__ import annotations
 
 import itertools
 import re
+from array import array
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import NamedTuple
 
 from ._command_decoding import CommandOutputDecoder, DecoderState
@@ -243,12 +244,15 @@ class OutputLines:
         self._first: tuple[str, int] | None = None
         self._tail = TailLines(tail_chars)
         self._total = 0
-        # The line still being written: its text in _parts, or for a long line
-        # its end there and its start in _start.
-        self._parts: list[str] = []
-        self._parts_chars = 0
+        # The current line, or its retained end and start once it is too long.
+        # Mutable character buffers keep repeated small overwrites inexpensive.
+        self._end = array("w")
+        self._start: array[str] | None = None
+        # On a long line, a redraw can end between the two retained windows.
+        # Keep its newest characters in case CSI K removes the old suffix.
+        self._redraw = array("w")
         self._chars = 0
-        self._start: str | None = None
+        self._cursor = 0
         # Changes since the last ``take_update``.
         self._head_added: list[str] = []
         self._first_added = False
@@ -256,41 +260,97 @@ class OutputLines:
     # The line still being written
 
     def append(self, text: str) -> None:
-        """Add *text* to the current line."""
-        self._parts.append(text)
-        self._parts_chars += len(text)
-        self._chars += len(text)
-        if self._parts_chars > 2 * self._tail_chars:
-            self._shorten()
+        """Write *text* at the cursor, updating the parts of the line we retain."""
+        stop = self._cursor + len(text)
+        if self._cursor > self._chars:
+            # Erasing the whole line held the cursor in place. Only a later
+            # write makes the blank columns before it part of the output.
+            self._chars = self._cursor
+            self._end = array("w", " " * min(self._chars, self._tail_chars))
+            if self._chars > len(self._end):
+                self._start = array(
+                    "w", " " * min(self._chars, max(self._tail_chars, self._head_chars))
+                )
+        if self._cursor == self._chars:
+            self._end.fromunicode(text)
+        else:
+            if self._start is not None and self._cursor < len(self._start):
+                head_count = min(len(text), len(self._start) - self._cursor)
+                self._start[self._cursor : self._cursor + head_count] = array(
+                    "w", text[:head_count]
+                )
+            if self._start is not None and stop < self._chars:
+                self._redraw.fromunicode(text)
+                if len(self._redraw) > 2 * self._tail_chars:
+                    del self._redraw[: -self._tail_chars]
+            elif self._redraw:
+                self._redraw = array("w")
+            tail_start = self._chars - len(self._end)
+            overlap = max(self._cursor, tail_start)
+            if stop > overlap:
+                self._end[overlap - tail_start : stop - tail_start] = array(
+                    "w", text[overlap - self._cursor :]
+                )
+        self._cursor = stop
+        self._chars = max(self._chars, stop)
+        if len(self._end) > 2 * self._tail_chars:
+            if self._start is None:
+                self._start = self._end[: max(self._head_chars, self._tail_chars)]
+            del self._end[: -self._tail_chars]
+
+    def rewind(self) -> None:
+        """Return to the start of the current line."""
+        self._cursor = 0
+        self._redraw = array("w")
+
+    def erase_in_line(self, mode: int) -> None:
+        """Clear to the end (CSI K / 0K) or erase the whole line (CSI 2K)."""
+        if mode == 2:
+            cursor = self._cursor
+            self.clear_line()
+            self._cursor = cursor
+        elif self._cursor < self._chars:
+            tail_start = self._chars - len(self._end)
+            if self._start is not None and self._cursor <= len(self._start):
+                self._end = self._start[: self._cursor]
+                self._start = None
+            else:
+                del self._end[max(0, self._cursor - tail_start) :]
+                if len(self._redraw) > len(self._end):
+                    self._end = self._redraw
+            self._chars = self._cursor
+            self._redraw = array("w")
 
     def erase(self) -> None:
-        """Erase the last character of the current line."""
-        if not self._chars:
+        """Back up one character, erasing it at the end of the line."""
+        if not self._cursor:
             return
-        while self._parts and not self._parts[-1]:
-            self._parts.pop()
-        if self._parts:
-            self._parts[-1] = self._parts[-1][:-1]
-            self._parts_chars -= 1
+        at_end = self._cursor == self._chars
+        self._cursor -= 1
+        if self._redraw:
+            self._redraw.pop()
+        if not at_end:
+            return
+        if self._end:
+            self._end.pop()
         self._chars -= 1
-        if not self._parts_chars and self._start is not None and self._chars <= len(self._start):
-            # The kept end is erased and what is left of the line is its kept start.
-            self._parts = [self._start[: self._chars]]
-            self._parts_chars = self._chars
+        if self._start is not None and self._chars <= len(self._start):
+            self._end = self._start[: self._chars]
             self._start = None
 
     def clear_line(self) -> None:
         """Empty the current line."""
-        self._parts.clear()
-        self._parts_chars = 0
+        self._end = array("w")
+        self._redraw = array("w")
+        self._cursor = 0
         self._chars = 0
         self._start = None
 
     def complete(self) -> None:
         """Complete the current line, also an empty one."""
-        text = "".join(self._parts)
+        text = self._end.tounicode()
         chars = self._chars
-        start = self._start
+        start = self._start[: self._head_chars].tounicode() if self._start is not None else None
         self.clear_line()
         self._add(text, chars, start)
 
@@ -312,30 +372,16 @@ class OutputLines:
         if lines[-1]:
             self.append(lines[-1])
 
-    def _shorten(self) -> None:
-        """Keep only the start and the end of a long current line.
-
-        The start is as long as the end, so a line erased to the length a whole
-        line can have is whole again (``erase``).
-        """
-        text = "".join(self._parts)
-        if self._start is None:
-            self._start = text[: max(self._head_chars, self._tail_chars)]
-        end = text[-self._tail_chars :]
-        self._parts = [end]
-        self._parts_chars = len(end)
-
     def _current(self) -> tuple[str, str, int] | None:
         """The current line as ``OutputUpdate.current_line``."""
         if not self._chars:
             return None
-        if len(self._parts) > 1:
-            self._parts[:] = ["".join(self._parts)]
-        text = self._parts[0] if self._parts else ""
-        end = text[-self._tail_chars :]
+        end = self._end[-self._tail_chars :].tounicode()
         if self._chars == len(end):
             return end, "", self._chars
-        start = (self._start if self._start is not None else text)[: self._head_chars]
+        start = (self._start if self._start is not None else self._end)[
+            : self._head_chars
+        ].tounicode()
         return end, start, self._chars
 
     # Completed lines
@@ -399,10 +445,10 @@ class OutputLines:
         self.clear_line()
         if update.current_line is not None:
             end, start, chars = update.current_line
-            self._parts = [end]
-            self._parts_chars = len(end)
+            self._end = array("w", end)
             self._chars = chars
-            self._start = start if chars > len(end) else None
+            self._cursor = chars
+            self._start = array("w", start) if chars > len(end) else None
 
     # Reading
 
@@ -452,23 +498,28 @@ class OutputCleaner:
     def __init__(self, *, head_chars: int, tail_chars: int) -> None:
         self._filter = _EscapeFilter()
         self._lines = OutputLines(head_chars=head_chars, tail_chars=tail_chars)
-        # A lone CR was seen: the next text replaces the current line.
-        self._restart = False
         self._ended = False
 
     def feed(self, data: bytes) -> OutputUpdate:
         """Add output bytes."""
         if data and not self._ended:
-            self._apply(self._filter.decode(data))
+            self._decode(data)
         return self._lines.take_update(self._filter.decoder_state())
 
     def end(self) -> OutputUpdate:
         """The output ended: decode what is left and complete the current line."""
         if not self._ended:
             self._ended = True
-            self._apply(self._filter.decode(b"", final=True))
+            self._decode(b"", final=True)
             self._lines.end()
         return self._lines.take_update(self._filter.decoder_state())
+
+    def _decode(self, data: bytes, *, final: bool = False) -> None:
+        for part in self._filter.decode(data, final=final):
+            if isinstance(part, str):
+                self._apply(part)
+            else:
+                self._lines.erase_in_line(part)
 
     def _apply(self, text: str) -> None:
         if not text:
@@ -477,35 +528,22 @@ class OutputCleaner:
             # A line ends the same either way: the CR only restarts the line.
             text = text.replace("\r\n", "\n")
         if _LINE_CONTROL_BUT_LF.search(text) is None:
-            if self._restart:
-                self._restart = False
-                # A line break keeps the line's text; other text replaces it.
-                if not text.startswith("\n"):
-                    self._lines.clear_line()
             self._lines.add_text(text)
             return
         position = 0
         for match in _LINE_CONTROL.finditer(text):
             if match.start() > position:
-                self._append(text[position : match.start()])
+                self._lines.append(text[position : match.start()])
             control = match.group()
             if control == "\n":
-                self._restart = False
                 self._lines.complete()
             elif control == "\r":
-                self._restart = True
-            elif control == "\b" and not self._restart:
-                # After a lone CR the cursor is at the line's start: nothing to erase.
+                self._lines.rewind()
+            elif control == "\b":
                 self._lines.erase()
             position = match.end()
         if position < len(text):
-            self._append(text[position:])
-
-    def _append(self, text: str) -> None:
-        if self._restart:
-            self._restart = False
-            self._lines.clear_line()
-        self._lines.append(text)
+            self._lines.append(text[position:])
 
 
 class _EscapeFilter:
@@ -516,12 +554,14 @@ class _EscapeFilter:
         self._state = "text"
         self._osc = False
         self._length = 0
+        self._erase_mode: int | None = None
 
     def decoder_state(self) -> DecoderState:
         """The decoding state acknowledged by this cleaner update."""
         return self._decoder.getstate()
 
-    def decode(self, data: bytes, *, final: bool = False) -> str:
+    def decode(self, data: bytes, *, final: bool = False) -> Iterator[str | int]:
+        """Yield printable runs and the two erase-in-line modes used by redraws."""
         text = self._decoder.decode(data, final=final).decode("utf-8")
         output: list[str] = []
         index = 0
@@ -533,9 +573,13 @@ class _EscapeFilter:
                 index = stop
                 if match is None:
                     break
+            if self._state == "csi" and text[index] == "K" and self._erase_mode is not None:
+                yield "".join(output)
+                output.clear()
+                yield self._erase_mode
             if self._consume(text[index], output):
                 index += 1
-        return "".join(output)
+        yield "".join(output)
 
     def _consume(self, char: str, output: list[str]) -> bool:
         """Advance the parser; ``False`` means the character is processed again."""
@@ -562,6 +606,7 @@ class _EscapeFilter:
                 self._state = "text"
             elif "\x20" <= char <= "\x3f" and self._length < _MAX_SEQUENCE_CHARACTERS:
                 self._length += 1
+                self._erase_mode = int(char) if self._length == 1 and char in "02" else None
             else:
                 self._state = "text"
                 return False
@@ -594,6 +639,7 @@ class _EscapeFilter:
         self._state = state
         self._osc = osc
         self._length = 0
+        self._erase_mode = 0
 
 
 __all__ = ["OutputCleaner", "OutputLines", "OutputUpdate", "TailLines"]

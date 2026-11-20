@@ -303,9 +303,12 @@ function preferredToolErrorValue(value) {
   return null;
 }
 
+export function toolOutputPreview(tool) {
+  return tool?.finished ? '' : (tool?.output ?? '');
+}
+
 function preferredBashResultValue(data, tool) {
-  const hasStreamedOutput = Boolean(tool?.output);
-  if (!hasStreamedOutput && hasMeaningfulToolDetail(data.output)) {
+  if (!toolOutputPreview(tool) && hasMeaningfulToolDetail(data.output)) {
     return sanitizeToolDetailNode(data.output);
   }
 

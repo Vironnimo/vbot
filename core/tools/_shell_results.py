@@ -30,7 +30,6 @@ from core.tools.command_manager import (
     CommandLaunchError,
     CommandNotStartedError,
     CommandReport,
-    CommandTranscript,
     StopReason,
 )
 from core.tools.file_state import os_error_reason
@@ -509,7 +508,7 @@ def command_output_text(report: CommandReport) -> str:
     part's room is cut inside it: the head keeps its start, the tail its end.
     """
     transcript = report.transcript
-    whole = _whole_lines(transcript)
+    whole = transcript.whole_lines()
     if whole is not None and _text_chars(whole) <= SHELL_OUTPUT_CHARS:
         return "\n".join(whole)
     head = list(transcript.head)
@@ -534,8 +533,8 @@ def running_output_text(report: CommandReport) -> str:
     (``running_output_note``), and a marker naming it too said it twice.
     """
     transcript = report.transcript
-    whole = _whole_lines(transcript)
-    lines = whole if whole is not None else list(transcript.tail)
+    whole = transcript.whole_lines()
+    lines = whole if whole is not None else transcript.tail
     first_cut = 0 if whole is not None else transcript.tail_cut
     if len(lines) > SHELL_RUNNING_OUTPUT_LINES:
         lines, first_cut = lines[-SHELL_RUNNING_OUTPUT_LINES:], 0
@@ -544,15 +543,6 @@ def running_output_text(report: CommandReport) -> str:
     if earlier or cut:
         kept.insert(0, f"[... {_omission(earlier, cut, earlier=True)} omitted ...]")
     return "\n".join(kept)
-
-
-def _whole_lines(transcript: CommandTranscript) -> list[str] | None:
-    """Every line of the output, when the transcript holds all of them whole."""
-    if transcript.tail_cut:
-        return None
-    # A head cut short holds the start of a line the tail can hold whole.
-    lines = [*transcript.tail] if transcript.head_cut else [*transcript.head, *transcript.tail]
-    return lines if len(lines) == transcript.total_lines else None
 
 
 def _last_lines(lines: Sequence[str], first_cut: int, room: int) -> tuple[list[str], int]:

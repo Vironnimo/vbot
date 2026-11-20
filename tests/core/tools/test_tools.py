@@ -375,6 +375,17 @@ def test_detail_blocks_follow_the_built_then_recorded_order_and_show_an_unnotice
     assert "details" not in _display_for_call(ToolDisplay(), {}, context=context)
 
 
+def test_text_blocks_mark_only_shortened_literal_text() -> None:
+    text = "x" * 16_384
+    assert display_text("command", text=text) == {"type": "text", "label": "command", "text": text}
+    assert display_text("command", text=text + "x") == {
+        "type": "text",
+        "label": "command",
+        "text": text[:-1] + "…",
+        "truncated": True,
+    }
+
+
 @pytest.mark.parametrize(
     ("arguments", "result", "facts"),
     [

@@ -40,13 +40,13 @@ from core.tools._background_tasks_arguments import (
     is_message_action,
     normalize_background_tasks_arguments,
 )
+from core.tools._shell_display import command_result_details
 from core.tools._shell_results import (
     TERMINAL_TOOL_NAME,
     ToolNames,
     duration,
     ended_result,
     exit_code_hex,
-    exit_code_text,
     lost_output,
     named_tools,
     output_encoding_note,
@@ -58,7 +58,7 @@ from core.tools._shell_results import (
     silence_note,
     stop_call,
 )
-from core.tools._tool_display import display_notice, display_results, display_text
+from core.tools._tool_display import display_notice, display_results
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.command_manager import (
     CommandManager,
@@ -406,6 +406,7 @@ class BackgroundTasksTool:
         # Every stop result shows the command's end; its own Session needs no delivery.
         if subagent is None:
             self._acknowledge_when_persisted(context, command_id)
+        context.add_display_results([_shown_task(_command_row(report, subagent))])
         data = _ended(report, subagent, names, context.permissions)
         notes: list[str] = []
         if before.ended or report.stop_reason is None:
@@ -414,12 +415,8 @@ class BackgroundTasksTool:
                     "The shell had already exited; the processes it left running were stopped: "
                     f"{processes_text(before.still_running)}."
                 )
-                context.add_display_notice(
-                    "info", f"Stopped the processes {report.label} left running."
-                )
             else:
                 notes.append("The command had already ended; nothing was stopped.")
-                context.add_display_notice("info", f"{report.label} had already ended.")
         else:
             if report.stop_reason == reason:
                 data["stopped_because"] = _STOPPED_BY_YOU
@@ -427,7 +424,6 @@ class BackgroundTasksTool:
                     notes.append(
                         f"The Sub-Agent {subagent} receives a message that you stopped it."
                     )
-            context.add_display_notice("info", f"Stopped {report.label}.")
         if notes:
             data["notes"] = [*notes, *data.get("notes", [])]
         return data
@@ -747,22 +743,7 @@ def background_tasks_detail_blocks(
                 )
             ]
         return [display_results([_shown_task(data)])]
-    blocks = [display_text("output", source="result", path=("data", "output"))]
-    if data.get("status") == "running":
-        blocks.append(display_notice("info", "The command keeps running in the background."))
-    if data.get("status") == "not_run":
-        blocks.append(display_notice("warning", "The command did not run."))
-    exit_code = data.get("exit_code")
-    if (
-        data.get("status") == "exited"
-        and isinstance(exit_code, int)
-        and not isinstance(exit_code, bool)
-        and exit_code != 0
-    ):
-        blocks.append(
-            display_notice("warning", f"The command exited with code {exit_code_text(exit_code)}.")
-        )
-    return blocks
+    return command_result_details(data)
 
 
 def _shown_task(row: JsonObject) -> JsonObject:

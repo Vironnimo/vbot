@@ -26,6 +26,7 @@ from typing import Any
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
 from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference, unescape_references
+from core.tools._argument_repair import load_json_value
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     powershell_literal,
@@ -553,25 +554,61 @@ def inherited_env_keys_note(names: list[str]) -> str:
     )
 
 
+def _display_field(obj: JsonObject, field: str, depth: int = 0) -> JsonObject:
+    """Keep only this field's spellings and wrappers when displaying a rejected call."""
+    selected: JsonObject = {}
+    for key, value in obj.items():
+        word = spelling(key)
+        if word in {"arguments", "request", "action"} and depth < 8:
+            if word != "action" and isinstance(value, str):
+                try:
+                    value = load_json_value(value)
+                except ValueError:
+                    continue
+            if isinstance(value, dict):
+                selected[key] = _display_field(value, field, depth + 1)
+        elif (
+            word == field
+            or (field == "command" and (word == "commands" or _FIELD_ALIASES.get(key) == field))
+            or (field == "description" and word in _DESCRIPTION_FIELDS)
+        ):
+            selected[key] = value
+    return selected
+
+
+def shell_display_values(arguments: JsonObject) -> tuple[str | None, str | None]:
+    """Read the command and description, preserving unambiguous values in a rejected call."""
+    try:
+        values = normalize_shell_arguments(arguments)
+    except TypeError, ValueError:
+        values = {}
+        for field in ("command", "description"):
+            try:
+                values[field] = normalize_shell_arguments(_display_field(arguments, field)).get(
+                    field
+                )
+            except ValueError:
+                # A contradictory field has no single value to show. Raw call keeps both.
+                continue
+    command = values.get("command")
+    description = values.get("description")
+    return (
+        command if isinstance(command, str) and command.strip() else None,
+        description.strip() if isinstance(description, str) and description.strip() else None,
+    )
+
+
 def shell_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     """Show the description, else the command, whatever dialect the call used.
 
     The command stays copyable either way: in its own value card, or as the
     detail of the description that stands in for it.
     """
-    try:
-        normalized = normalize_shell_arguments(arguments)
-    except ValueError:
-        normalized = arguments
-    if not isinstance(normalized, dict):
-        return ()
-    description = normalized.get("description")
-    raw_command = normalized.get("command")
-    command = raw_command if isinstance(raw_command, str) and raw_command.strip() else None
-    if isinstance(description, str) and description.strip():
+    command, description = shell_display_values(arguments)
+    if description:
         return (
             ToolDisplayPart(
-                description.strip(),
+                description,
                 kind="description",
                 quote=True,
                 tooltip="always" if command else "truncated",

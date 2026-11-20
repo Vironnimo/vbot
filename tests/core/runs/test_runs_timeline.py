@@ -613,6 +613,9 @@ def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() ->
     ]
     started = {"details": details, "secrets_used": ["TOKEN (environment)"]}
     emit(timeline, "tool_call_started", {"tool_call": call, "display": started}, second=1)
+    progress = {"tool_call_id": "call", "output": "newest lines"}
+    emit(timeline, "tool_call_output", progress, second=2)
+    assert block(timeline)["items"][0]["output"] == "newest lines"
     emit(
         timeline,
         "tool_call_result",
@@ -623,7 +626,10 @@ def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() ->
         },
         second=3,
     )
+    assert not block(timeline)["items"][0].get("output")
+    emit(timeline, "tool_call_output", progress, second=4)
     [tool] = block(timeline)["items"]
+    assert not tool.get("output")
     assert {"toolCall", "startedEvent", "resultEvent", "events"}.isdisjoint(tool)
     assert (tool["startedAt"], tool["finishedAt"]) == (
         "2026-10-15T10:00:01Z",

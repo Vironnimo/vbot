@@ -10,6 +10,9 @@ using System.Management.Automation.Language;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.PowerShell.Commands;
 public sealed class VBotPowerShellHost : PSHost, IHostSupportsInteractiveSession {
     readonly PSHost inner;
@@ -231,9 +234,53 @@ public static class VBotUnassignedVariables {
     }
 }
 public static class VBotGuard {
-    static string[] folders = new string[0];
+    static string[] folders = Array.Empty<string>();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    static extern uint GetFullPathNameW(string path, uint size, StringBuilder full, IntPtr filePart);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
+        IntPtr security, FileMode mode, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path,
+        uint size, uint flags);
     static string Normal(string path) {
-        try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }
+        try {
+            if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) {
+                path = @"\\" + path.Substring(8);
+            } else if (path.StartsWith(@"\\?\", StringComparison.Ordinal) &&
+                path.Length >= 7 && path[5] == ':' && path[6] == '\\') {
+                path = path.Substring(4);
+            }
+            // Lexical only. Path.GetFullPath may query the filesystem to expand a
+            // short name, including a registered folder on an unrelated, offline share.
+            uint size = GetFullPathNameW(path, 0, null, IntPtr.Zero);
+            if (size == 0) return null;
+            var buffer = new StringBuilder(checked((int)size));
+            uint length = GetFullPathNameW(path, size, buffer, IntPtr.Zero);
+            return length > 0 && length < size
+                ? Path.TrimEndingDirectorySeparator(buffer.ToString()) : null;
+        }
+        catch { return null; }
+    }
+    // Resolve short names and intermediate junctions from the open directory itself.
+    // Removing or moving the link as a leaf operates on the link; folder/* follows it.
+    static string DirectoryPath(string path, bool followLeaf) {
+        const uint directoryHandle = 0x02000000, openReparsePoint = 0x00200000;
+        try {
+            if (!Directory.Exists(path)) return null;
+            using (var handle = CreateFileW(path, 0, FileShare.ReadWrite | FileShare.Delete,
+                IntPtr.Zero, FileMode.Open, directoryHandle | (followLeaf ? 0 : openReparsePoint),
+                IntPtr.Zero)) {
+                if (handle.IsInvalid) return null;
+                var buffer = new StringBuilder(260);
+                uint size = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Capacity, 0);
+                if (size >= buffer.Capacity) {
+                    buffer = new StringBuilder(checked((int)size));
+                    size = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Capacity, 0);
+                }
+                return size > 0 && size < buffer.Capacity ? Normal(buffer.ToString()) : null;
+            }
+        }
         catch { return null; }
     }
     public static void Protect(string[] more) {
@@ -244,7 +291,10 @@ public static class VBotGuard {
             Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolder.ProgramFiles,
             Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.Windows,
             Environment.SpecialFolder.CommonApplicationData }) {
-            try { all.Add(Environment.GetFolderPath(known)); } catch { }
+            try {
+                all.Add(Environment.GetFolderPath(known, Environment.SpecialFolderOption.DoNotVerify));
+            }
+            catch { }
         }
         if (all.Count != 0 && !string.IsNullOrEmpty(all[0])) {
             all.Add(Path.Combine(all[0], "Downloads"));
@@ -254,8 +304,7 @@ public static class VBotGuard {
             .Where(folder => folder != null).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
     // The protected folder that *path* is or contains; null when it is neither.
-    static string Holds(string path) {
-        var full = Normal(path);
+    static string Holds(string full) {
         if (full == null) return null;
         if (string.Equals(Path.GetPathRoot(full), full, StringComparison.OrdinalIgnoreCase)) {
             return full;
@@ -290,7 +339,8 @@ public static class VBotGuard {
     // Refuses to remove or move a protected folder, a folder that contains one,
     // or everything directly in one at once (`folder\*`).
     public static void Keep(PSCmdlet cmdlet, string[] paths, bool literal, string verb) {
-        if (paths == null || Bound(cmdlet, "WhatIf")) return;
+        if (paths == null || (cmdlet.MyInvocation.BoundParameters.TryGetValue("WhatIf",
+            out var whatIf) && LanguagePrimitives.IsTrue(whatIf))) return;
         var selective = Bound(cmdlet, "Include") || Bound(cmdlet, "Filter");
         foreach (var path in paths) {
             if (string.IsNullOrEmpty(path)) continue;
@@ -323,9 +373,13 @@ public static class VBotGuard {
         }
     }
     static void Check(PSCmdlet cmdlet, string resolved, bool content, string path, string verb) {
-        var kept = Holds(resolved);
-        if (kept == null) return;
         var full = Normal(resolved);
+        var kept = Holds(full);
+        if (kept == null) {
+            full = DirectoryPath(resolved, content);
+            kept = Holds(full);
+            if (kept == null) return;
+        }
         var message = "Cannot " + verb + (content ? " everything in '" : " '") + full + "'" +
             (content ? " at once" : "") +
             (string.Equals(kept, full, StringComparison.OrdinalIgnoreCase) ? "" :
@@ -345,13 +399,17 @@ public static class VBotGuard {
     // written by that binder or by the provider end the command.
     // PowerShell exposes ErrorAction on its command runtime only internally.
     public static void GuardLocation(PSCmdlet cmdlet) {
-        if (Bound(cmdlet, "ErrorAction")) return;
-        var runtime = cmdlet.CommandRuntime;
-        var action = runtime.GetType().GetProperty("ErrorAction",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (Equals(action.GetValue(runtime), ActionPreference.Continue)) {
-            action.SetValue(runtime, ActionPreference.Stop);
+        try {
+            if (Bound(cmdlet, "ErrorAction")) return;
+            var runtime = cmdlet.CommandRuntime;
+            var action = runtime?.GetType().GetProperty("ErrorAction",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (action != null && action.CanWrite &&
+                Equals(action.GetValue(runtime), ActionPreference.Continue)) {
+                action.SetValue(runtime, ActionPreference.Stop);
+            }
         }
+        catch { } // A runtime without a writable error action keeps its ordinary behavior.
     }
 }
 [Cmdlet(VerbsCommon.Remove, "Item", DefaultParameterSetName = "Path", SupportsShouldProcess = true,

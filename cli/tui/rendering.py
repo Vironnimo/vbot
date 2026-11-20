@@ -401,7 +401,7 @@ def tool_detail(item: JsonObject) -> str:
         parts.append(f"Arguments\n{_indent(structured(args))}")
     if used := _secrets_used(display):
         parts.append("Secrets used\n" + "\n".join(f"  {entry}" for entry in used))
-    if item.get("output"):
+    if not item.get("finished") and item.get("output"):
         parts.append(f"Output\n{_indent(content_text(item['output']))}")
     if item.get("result") is not None:
         parts.append(f"Result\n{_indent(structured(_json_value(item['result'])))}")

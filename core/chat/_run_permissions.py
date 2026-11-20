@@ -48,6 +48,7 @@ from core.prompts import (
 from core.skills.policy import SkillPackageRef
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner, session_artifact_dirs, terminal_log_scope
+from core.tools import _powershell_host
 from core.utils.config import VBOT_ROOT
 from core.utils.logging import get_logger
 
@@ -67,11 +68,11 @@ _INVALID_CEILING = (
 
 
 @cache
-def installation_dirs() -> tuple[Path, ...]:
-    """vBot's installation and the running interpreter's environment, never writable.
+def installation_dirs(home: Path) -> tuple[Path, ...]:
+    """Runtime code that a restricted Agent cannot replace.
 
     A source checkout (``.git`` beside the packages) is the user's working tree,
-    not an installation: there only the interpreter environment is protected,
+    not an installation: there the interpreter and compiled shell host stay protected,
     so a restricted Agent may still change vBot's sources where its rules allow.
     """
     candidates: list[Path] = []
@@ -81,7 +82,10 @@ def installation_dirs() -> tuple[Path, ...]:
         if prefix:
             candidates.append(Path(prefix))
     candidates.append(Path(sys.executable).parent)
-    return tuple(dict.fromkeys(path.resolve() for path in candidates))
+    directories = tuple(dict.fromkeys(path.resolve() for path in candidates))
+    if sys.platform == "win32":
+        return (*directories, _powershell_host.cache_directory(home))
+    return directories
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,16 +153,17 @@ class SessionPermissions:
         )
         artifacts = session_artifact_dirs(data_dir, artifact_folder) if artifact_folder else ()
         terminal_logs = terminal_log_scope(data_dir, artifact_folder)
+        home = Path.home()
         context = BoundaryContext(
             workdir=self.workdir,
-            home=Path.home(),
+            home=home,
             data_dir=data_dir,
             project_root=self.project_root,
             scratch_root=scratch_root,
             workspace=self.workspace,
             agent_config=self.agent_config,
             rule_files=self.rule_files,
-            install_dirs=installation_dirs(),
+            install_dirs=installation_dirs(home),
             readable_dirs=(*artifacts, *skill_dirs),
             scoped_artifact_reads=ScopedArtifactReads(terminal_logs.root, terminal_logs.allows),
             session_read_folders=self.read_folders,

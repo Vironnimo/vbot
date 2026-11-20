@@ -542,8 +542,11 @@ class CommandManager:
         """The newest *lines* clean output lines (at most ``COMMAND_RECENT_LINES``),
         the line still being written included."""
         if command_id in self._recovered:
-            report = self.report(command_id)
-            return "\n".join((*report.transcript.head, *report.transcript.tail)[-lines:])
+            transcript = self.report(command_id).transcript
+            if lines <= 0:
+                return ""
+            recent = transcript.whole_lines() or transcript.tail
+            return "\n".join(recent[-min(lines, COMMAND_RECENT_LINES) :])
         return self._get(command_id).latest(lines)
 
     def status(self, command_id: str) -> CommandStatus | None:
