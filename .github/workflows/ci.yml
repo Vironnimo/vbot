@@ -100,6 +100,32 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/pdf-browser
         run: python -m playwright install --with-deps --only-shell chromium
+      - name: Warm the PowerShell command parser
+        # On Linux ARM64 a cold parser hit its start deadline during the parallel suite.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import asyncio
+          import shutil
+          from pathlib import Path
+
+          from core.permissions.commands.commands import CommandAnalyzer
+
+          async def warm_parser():
+              executable = shutil.which("pwsh")
+              if executable is None:
+                  return
+              analyzer = CommandAnalyzer(powershell_executable=Path(executable))
+              try:
+                  await analyzer.analyze(
+                      "Get-Location", shell="powershell", cwd=Path.cwd(), env={}, home=Path.home()
+                  )
+              finally:
+                  await analyzer.aclose()
+
+          asyncio.run(warm_parser())
+          PY
       - name: Warm the native host toolchain
         # The first clang-cl build on a fresh runner reads cold LLVM and SDK files
         # for 20-30 s, more than a test may take; later builds take seconds.
