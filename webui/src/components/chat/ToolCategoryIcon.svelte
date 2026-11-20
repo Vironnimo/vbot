@@ -27,6 +27,18 @@
   {:else if category === 'web'}
     <circle cx="8" cy="8" r="6" />
     <path d="M2 8h12M8 2c-2 2.2-2 9.8 0 12M8 2c2 2.2 2 9.8 0 12" />
+  {:else if category === 'media'}
+    <path d="M7.3 13H2V3h8M2.2 10.6l3.3-3.2 2.7 2.6" />
+    <circle cx="7.5" cy="5.6" r=".85" fill="currentColor" stroke="none" />
+    <path d="M11.7 11.6v-6l2.7-.8" />
+    <ellipse
+      cx="10.3"
+      cy="12"
+      rx="2.1"
+      ry="1.75"
+      fill="currentColor"
+      stroke="none"
+    />
   {:else if category === 'agent'}
     <circle cx="4" cy="4" r="1.75" />
     <circle cx="12" cy="12" r="1.75" />

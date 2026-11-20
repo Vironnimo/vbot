@@ -453,7 +453,13 @@ describe('groupTransientCards', () => {
 describe('Tool row presentation', () => {
   it.each([
     ['read', 'read'],
-    ['analyze_image', 'read'],
+    ['analyze_image', 'media'],
+    ['generate_image', 'media'],
+    ['generate_music', 'media'],
+    ['generate_speech', 'media'],
+    ['generate_video', 'media'],
+    ['portal', 'media'],
+    ['show_widget', 'media'],
     ['edit', 'change'],
     ['write', 'change'],
     ['apply_patch', 'change'],

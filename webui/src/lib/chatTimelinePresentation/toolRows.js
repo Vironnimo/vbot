@@ -522,13 +522,22 @@ function searchToolLabel(args, includePath) {
 // Tool rows show one icon per category so long Runs can be scanned by shape
 // (user decision 2026-11-20). Unknown and MCP Tools fall back to `other`.
 const TOOL_CATEGORIES = new Map([
-  ...['read', 'analyze_image'].map((name) => [name, 'read']),
+  ['read', 'read'],
   ...['edit', 'write', 'apply_patch'].map((name) => [name, 'change']),
   ...['bash', 'powershell', 'execute_code', 'terminal', 'background_tasks'].map(
     (name) => [name, 'run'],
   ),
   ['session_search', 'search'],
   ...['web_search', 'web_fetch'].map((name) => [name, 'web']),
+  ...[
+    'analyze_image',
+    'generate_image',
+    'generate_music',
+    'generate_speech',
+    'generate_video',
+    'portal',
+    'show_widget',
+  ].map((name) => [name, 'media']),
   ...['subagent', 'message_parent'].map((name) => [name, 'agent']),
 ]);
 
