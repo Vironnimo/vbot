@@ -36,7 +36,7 @@
      theme instead of the browser's light default. */
   color-scheme: dark;
   color: #f1ede6;
-  background: #1f1d19;
+  background: #15130f;
   font-family: 'Geist', system-ui, sans-serif;
   font-synthesis: none;
   font-optical-sizing: auto;
@@ -45,17 +45,17 @@
 
   /* Warm graphite foundation: low-chroma surfaces with clearly separated
      steps, so hierarchy reads from tone instead of from border lines. */
-  --bg: #1f1d19;
-  --secondary-surface: #24221e;
+  --bg: #15130f;
+  --secondary-surface: #1a1814;
   /* The mark's two metals (webui/public/brand/), lifted for text on the
      Main menu surface. */
   --brand-steel: #a39c94;
   --brand-copper: #c98d52;
-  --surface: #282521;
-  --surface-2: #302d28;
-  --surface-3: #3a3630;
-  --border: #38342f;
-  --border-2: #4c463f;
+  --surface: #1e1b17;
+  --surface-2: #26231e;
+  --surface-3: #302c26;
+  --border: #2e2a25;
+  --border-2: #423c35;
   /* Semantic surface roles keep controls with different meanings independently
      themeable even when two roles currently resolve to the same palette step. */
   --field-surface: var(--surface-2);
@@ -77,7 +77,7 @@
      full-brightness headings and bold stand out and paragraphs do not glare. */
   --text-body: #e3ded6;
   --text-med: #b3aa9e;
-  --text-lo: #a99f93;
+  --text-lo: #9d9387;
   --text-faint: #6b635a;
   --accent: #e8870a;
   /* Text and icons placed on a solid accent fill. */
@@ -97,7 +97,7 @@
   --accent-40: color-mix(in srgb, var(--accent) 40%, transparent);
   --accent-60: color-mix(in srgb, var(--accent) 60%, transparent);
   --accent-pale: var(--accent-12);
-  /* Keyboard focus for controls: a solid accent ring (>= 4.5:1 on every
+  /* Keyboard focus for controls: a solid accent ring (>= 5:1 on every
      surface) separated from the control by a background-colored gap. Text
      entry fields also match focus on click, so they signal focus with an
      accent border plus the softer field halo instead. */
