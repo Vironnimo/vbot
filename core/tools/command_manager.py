@@ -246,10 +246,10 @@ class CommandManager:
         self._recovered[report.command_id] = (report, retained_at)
         self._notify(report.command_id)
 
-    async def flush(self) -> None:
-        """Wait until every queued command checkpoint is durable."""
+    async def flush(self, command_id: str | None = None) -> None:
+        """Wait until one command's queued checkpoints, or all checkpoints, are durable."""
         if self._checkpoints is not None:
-            await self._checkpoints.flush()
+            await self._checkpoints.flush(command_id)
 
     async def wait_recovered(self) -> None:
         """Wait for startup recovery and its durable completion deliveries."""
@@ -488,7 +488,7 @@ class CommandManager:
         """Publish a background handoff only after its recovery state is durable."""
         report = self.to_background(command_id, deliver=deliver)
         try:
-            await self.flush()
+            await self.flush(command_id)
         except Exception as error:
             raise CommandCheckpointError(
                 f"Recovery state for the started command {command_id} could not be saved"

@@ -86,7 +86,7 @@ class CommandServices:
     # Only whether it will still wake its Session may have changed: nothing to save.
     announce: Callable[[str], None]
     checkpoint: Callable[[str], None]
-    flush: Callable[[], Awaitable[None]]
+    flush: Callable[[str], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -921,7 +921,7 @@ class CommandRecord:
             try:
                 # Persist the end before handing it over. A crash after Session
                 # persistence but before acknowledgement is deduplicated on restart.
-                await self._services.flush()
+                await self._services.flush(self.command_id)
                 if not self._delivering:
                     return
                 # A Session move can finish while the checkpoint is being saved.

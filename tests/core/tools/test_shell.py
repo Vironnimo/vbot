@@ -844,7 +844,7 @@ async def test_checkpoint_failure_reports_the_command_that_already_started(
     monkeypatch: pytest.MonkeyPatch,
     background: bool,
 ) -> None:
-    async def failed_checkpoint() -> None:
+    async def failed_checkpoint(command_id: str) -> None:
         raise OSError("checkpoint disk unavailable")
 
     with monkeypatch.context() as patch:

@@ -1268,10 +1268,14 @@ async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
             first, _process = await harness.launch()
-            second, _other = await harness.launch()
+            second, other_process = await harness.launch()
             fail.add(first)
             harness.manager.to_background(first, deliver=True)
-            harness.manager.to_background(second, deliver=True)
+            await harness.manager.to_background_durably(second, deliver=True)
+            other_process.exit(0)
+            report = await harness.finish(second)
+            await eventually(lambda: bool(harness.sink.bodies))
+            assert harness.sink.bodies == [format_report(report)]
             with pytest.raises(OSError, match="checkpoint disk unavailable"):
                 await harness.manager.flush()
             assert [row["command_id"] for row in sessions.background_command_read()] == [second]
@@ -1472,10 +1476,10 @@ async def test_transferred_commands_deliver_to_their_new_session(
     if before_submit:
         flush = harness.manager._services.flush
 
-        async def paused_flush() -> None:
+        async def paused_flush(command_id: str) -> None:
             flushing.set()
             await flushed.wait()
-            await flush()
+            await flush(command_id)
 
         monkeypatch.setattr(
             harness.manager, "_services", replace(harness.manager._services, flush=paused_flush)
