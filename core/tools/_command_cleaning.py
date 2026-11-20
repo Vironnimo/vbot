@@ -13,9 +13,9 @@ without any terminal behind them:
   strings OSC, DCS, SOS, PM and APC (titles, hyperlinks), each started by ESC.
   Parsing is bounded, so an unterminated sequence cannot hide output: a line
   break or a character that cannot continue a sequence ends it. An ESC that
-  cannot start a control, before a lowercase letter, a control character or
-  non-ASCII text, is data and shows as the text ``\\x1b``: PowerShell writes one
-  for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
+  cannot start a control, at EOF or before a lowercase letter, a control
+  character or non-ASCII text, is data and shows as the text ``\\x1b``. PowerShell
+  writes one for ```e`` in a double-quoted string, as in a Markdown span ```expected```.
 - The C1 code points U+0080-U+009F are removed one by one and never start a
   sequence: a UTF-8 terminal does not interpret them, and they occur as text,
   such as UTF-8 decoded as Latin-1 (``Ã\\x9f`` for ``ß``), whose rest of the line
@@ -579,6 +579,9 @@ class _EscapeFilter:
                 yield self._erase_mode
             if self._consume(text[index], output):
                 index += 1
+        if final and self._state == "escape" and self._length == 0:
+            output.append(_VISIBLE_ESCAPE)
+            self._state = "text"
         yield "".join(output)
 
     def _consume(self, char: str, output: list[str]) -> bool:
