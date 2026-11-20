@@ -186,6 +186,7 @@ def test_preview_and_ambiguous_source_never_write(tmp_path):
     authoring = SkillAuthoringService()
     target = tmp_path / "skills"
     preview = authoring.install(target, str(source), dry_run=True)
+    assert authoring.install(target, str(source), return_choices=True) == preview
     assert preview.operation == "candidates"
     assert [(item["path"], item["name"]) for item in preview.candidates] == [
         ("skills/a", "research"),
@@ -226,6 +227,8 @@ def test_repeat_is_unchanged_and_overwrite_requires_explicit_replace(tmp_path):
     assert preview.operation == "preview"
     assert preview.candidates[0]["exists"] is True
     assert preview.candidates[0]["unchanged"] is False
+    decision = authoring.install(target, str(source), return_choices=True)
+    assert (decision.operation, decision.sha256) == ("confirm_replace", preview.sha256)
     assert local.exists()
     replaced = authoring.install(target, str(source), replace=True)
     assert replaced.operation == "replaced"

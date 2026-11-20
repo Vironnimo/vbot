@@ -66,6 +66,7 @@ from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.permission_methods import cli_permission_errors
 from server.rpc.statistics_methods import statistics_service
 from server.rpc.validation import (
+    _optional_bool,
     _optional_string,
     _reject_unsupported,
     _required_string,
@@ -249,6 +250,7 @@ async def _validated_install(state: Any, params: JsonObject) -> JsonObject:
         "ref": ref,
         "replace": replace,
         "dry_run": dry_run,
+        "return_choices": _optional_bool(params, "return_choices", default=False),
         "expected_sha256": expected_sha256,
     }
 

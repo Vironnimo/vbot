@@ -18,23 +18,13 @@ const { default: SkillInstallDialog } =
 let component;
 const onInstalled = vi.fn();
 const onClose = vi.fn();
-const preview = (extra = {}) => ({
-  operation: 'preview',
+const result = (extra = {}) => ({
+  operation: 'installed',
   name: 'demo',
   scope: 'agent:main',
   package_path: '.',
-  files: 3,
   sha256: 'a'.repeat(64),
   warnings: [],
-  candidates: [
-    {
-      name: 'demo',
-      description: 'description-sentinel',
-      path: '.',
-      exists: false,
-      unchanged: false,
-    },
-  ],
   ...extra,
 });
 const button = (name) =>
@@ -58,9 +48,10 @@ async function settle() {
     flushSync();
   }
 }
-function render() {
+function render(listDirectory) {
   component = mount(SkillInstallDialog, {
     target: document.body,
+    context: new Map([['pathServices', { listDirectory }]]),
     props: {
       initialScope: 'agent:main',
       scopeOptions: [
@@ -75,9 +66,10 @@ function render() {
 }
 beforeEach(() => {
   init('en');
-  vi.clearAllMocks();
-  installSkill.mockResolvedValue(preview());
-  installSkillArchive.mockResolvedValue(preview());
+  vi.resetAllMocks();
+  localStorage.clear();
+  installSkill.mockResolvedValue(result());
+  installSkillArchive.mockResolvedValue(result());
 });
 afterEach(async () => {
   if (component) await unmount(component);
@@ -86,96 +78,101 @@ afterEach(async () => {
 });
 
 describe('Skill installation dialog', () => {
-  it('previews a link in the selected private scope and installs exactly the reviewed package', async () => {
+  it('installs a link directly in the selected scope', async () => {
     render();
-    expect(button(t('skills.install.check')).disabled).toBe(true);
+    const action = button(t('skills.install.action'));
+    expect(action.disabled).toBe(true);
     input('skill-install-source', 'https://example.test/demo.skill');
-    click(button(t('skills.install.check')));
+    click(action);
     await settle();
-    expect(installSkill).toHaveBeenCalledWith(
+    expect(installSkill).toHaveBeenCalledExactlyOnceWith(
       {
         source: 'https://example.test/demo.skill',
         scope: 'agent:main',
-        dry_run: true,
+        return_choices: true,
       },
       { signal: expect.any(AbortSignal) },
     );
-    expect(
-      document.querySelector('.skills-install-preview h3').textContent,
-    ).toBe('demo');
-    installSkill.mockResolvedValue({ ...preview(), operation: 'installed' });
-    click(button(t('skills.install.action')));
-    await settle();
-    expect(installSkill).toHaveBeenLastCalledWith(
-      {
-        source: 'https://example.test/demo.skill',
-        scope: 'agent:main',
-        dry_run: false,
-        replace: false,
-        path: '.',
-        expected_sha256: 'a'.repeat(64),
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(onInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ operation: 'installed' }),
-    );
+    expect(onInstalled).toHaveBeenCalledExactlyOnceWith([result()]);
   });
 
-  it('requires an explicit replacement choice that survives dismissing the destination selector and clears when inputs change', async () => {
-    installSkill.mockResolvedValue(
-      preview({ candidates: [{ exists: true, unchanged: false }] }),
+  it('installs the picked folders together, confirming only a replacement and retrying only a failed source', async () => {
+    const source = 'C:/skills';
+    const dirs = ['a', 'b', 'c', 'd'].map((name) => ({
+      name,
+      kind: 'directory',
+    }));
+    render(async ({ path }) => ({
+      path,
+      separator: '/',
+      entries: path === null ? [{ name: source, kind: 'directory' }] : dirs,
+    }));
+    installSkill.mockImplementation(async ({ source: path, replace }) => {
+      if (path.endsWith('/d') && !replace)
+        return result({ operation: 'confirm_replace', name: 'd' });
+      if (path.endsWith('/a') && installSkill.mock.calls.length === 1)
+        throw new Error('failed-a');
+      return result({
+        name: path.at(-1),
+        operation: replace ? 'replaced' : 'installed',
+      });
+    });
+    click(button(t('pathPicker.browse')));
+    await settle();
+    click(document.querySelector('.path-browser__row'));
+    await settle();
+    const rows = [...document.querySelectorAll('.path-browser__row')];
+    click(rows[0]);
+    rows[2].dispatchEvent(
+      new MouseEvent('click', { bubbles: true, shiftKey: true }),
     );
-    render();
-    input('skill-install-source', 'https://example.test/demo.skill');
-    click(button(t('skills.install.check')));
-    await settle();
-    const replaceAction = () => button(t('skills.install.replaceAction'));
-    expect(replaceAction().disabled).toBe(true);
-    click(document.querySelector('[role="checkbox"]'));
-    expect(replaceAction().disabled).toBe(false);
-
-    // Escape closes only the open destination list; a second Escape closes
-    // the dialog.
-    const escape = (target) =>
-      target.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Escape',
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    const destination = button(t('skills.install.destination'));
-    click(destination);
-    await settle();
-    const list = document.querySelector('[role="listbox"]');
-    expect(document.activeElement).toBe(list);
-    escape(list);
+    rows[1].dispatchEvent(
+      new MouseEvent('click', { bubbles: true, ctrlKey: true }),
+    );
+    rows[3].dispatchEvent(
+      new MouseEvent('click', { bubbles: true, metaKey: true }),
+    );
     flushSync();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(document.querySelector('[role="listbox"]')).toBeNull();
-    expect(document.activeElement).toBe(destination);
-    expect(replaceAction().disabled).toBe(false);
-    escape(destination);
-    expect(onClose).toHaveBeenCalledTimes(1);
-
-    input('skill-install-source', 'https://example.test/changed.skill');
-    expect(document.querySelector('.skills-install-preview')).toBeNull();
-    click(button(t('skills.install.check')));
+    expect(rows.map((row) => row.getAttribute('aria-selected'))).toEqual([
+      'true',
+      'false',
+      'true',
+      'true',
+    ]);
+    click(button(t('pathPicker.selectCount', { count: 3 })));
+    click(button(t('skills.install.batchAction', { count: 3 })));
     await settle();
-    expect(
-      document.querySelector('[role="checkbox"]').getAttribute('aria-checked'),
-    ).toBe('false');
-    click(document.querySelector('[role="checkbox"]'));
-    click(replaceAction());
+    expect(installSkill.mock.calls.map(([p]) => p.source)).toEqual([
+      'C:/skills/a',
+      'C:/skills/c',
+      'C:/skills/d',
+    ]);
+    expect(document.querySelector('[role="alert"]').textContent).toBe(
+      'failed-a',
+    );
+    expect(onInstalled).not.toHaveBeenCalled();
+    click(button(t('skills.install.replaceAction')));
     await settle();
     expect(installSkill).toHaveBeenLastCalledWith(
-      expect.objectContaining({ replace: true, dry_run: false }),
+      expect.objectContaining({
+        source: 'C:/skills/d',
+        path: '.',
+        replace: true,
+        expected_sha256: result().sha256,
+      }),
       expect.any(Object),
     );
+    click(button(t('common.retry')));
+    await settle();
+    expect(onInstalled.mock.calls[0][0].map((r) => r.name)).toEqual([
+      'a',
+      'c',
+      'd',
+    ]);
+    expect(installSkill).toHaveBeenCalledTimes(5);
   });
 
-  it('selects a package from a repository before allowing installation', async () => {
+  it('asks for a package only when the source contains multiple candidates', async () => {
     installSkill.mockResolvedValueOnce({
       operation: 'candidates',
       candidates: [
@@ -184,81 +181,37 @@ describe('Skill installation dialog', () => {
       ],
     });
     render();
-    input('skill-install-source', 'https://github.com/example/repo');
-    click(button(t('skills.install.check')));
+    input('skill-install-source', 'https://example.test/repo');
+    click(button(t('skills.install.action')));
     await settle();
-    expect(button(t('skills.install.action'))).toBeUndefined();
     click(button(t('skills.install.choose')));
     await settle();
     click([...document.querySelectorAll('[role="option"]')][1]);
     await settle();
     expect(installSkill).toHaveBeenLastCalledWith(
-      expect.objectContaining({ path: 'skills/two', dry_run: true }),
+      expect.objectContaining({ path: 'skills/two', return_choices: true }),
       expect.any(Object),
     );
-    expect(document.querySelector('.skills-install-preview')).not.toBeNull();
+    expect(onInstalled).toHaveBeenCalledOnce();
   });
 
-  it('uploads the selected client file for preview and installation without a server path', async () => {
+  it('uploads a selected archive once and aborts outstanding work on unmount', async () => {
+    installSkillArchive.mockImplementation(() => new Promise(() => {}));
     render();
     click(button(t('skills.install.fileTab')));
-    const file = new File(['archive-sentinel'], 'demo.skill', {
-      type: 'application/octet-stream',
-    });
+    const file = new File(['archive-sentinel'], 'demo.skill');
     const picker = document.querySelector('input[type="file"]');
     Object.defineProperty(picker, 'files', { value: [file] });
     picker.dispatchEvent(new Event('change', { bubbles: true }));
     flushSync();
-    click(button(t('skills.install.check')));
-    await settle();
-    expect(installSkillArchive).toHaveBeenCalledWith(
+    click(button(t('skills.install.action')));
+    expect(installSkillArchive).toHaveBeenCalledExactlyOnceWith(
       file,
-      { scope: 'agent:main', dry_run: true },
+      { scope: 'agent:main', return_choices: true },
       expect.any(Object),
     );
     expect(installSkill).not.toHaveBeenCalled();
-    click(button(t('skills.install.action')));
-    await settle();
-    expect(installSkillArchive).toHaveBeenLastCalledWith(
-      file,
-      expect.objectContaining({
-        dry_run: false,
-        expected_sha256: 'a'.repeat(64),
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it('retains failed input for retry and does not leave stale install approval', async () => {
-    installSkill.mockRejectedValueOnce(new Error('error-sentinel'));
-    render();
-    input('skill-install-source', 'https://example.test/demo.skill');
-    click(button(t('skills.install.check')));
-    await settle();
-    expect(document.querySelector('[role="alert"]').textContent).toBe(
-      'error-sentinel',
-    );
-    expect(document.getElementById('skill-install-source').value).toBe(
-      'https://example.test/demo.skill',
-    );
-    expect(button(t('skills.install.check')).disabled).toBe(false);
-    expect(onInstalled).not.toHaveBeenCalled();
-    click(button(t('skills.install.check')));
-    await settle();
-    click(button(t('skills.install.destination')));
-    await settle();
-    click(document.querySelector('[role="option"]'));
-    expect(document.querySelector('.skills-install-preview')).toBeNull();
-  });
-
-  it('disables repeated submission while checking and aborts the request when unmounted', async () => {
-    installSkill.mockImplementation(() => new Promise(() => {}));
-    render();
-    input('skill-install-source', 'https://example.test/demo.skill');
-    click(button(t('skills.install.check')));
-    expect(button(t('skills.install.check')).disabled).toBe(true);
-    expect(document.getElementById('skill-install-source').disabled).toBe(true);
-    const signal = installSkill.mock.calls[0][1].signal;
+    const signal = installSkillArchive.mock.calls[0][2].signal;
     await unmount(component);
     component = null;
     expect(signal.aborted).toBe(true);

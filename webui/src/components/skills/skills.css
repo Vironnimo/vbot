@@ -595,39 +595,7 @@ button.skills-librarian__skill:focus-visible,
   gap: 16px;
   padding: 12px 0 0 15px;
 }
-.skills-install-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--field-surface);
-  overflow-wrap: anywhere;
-}
-.skills-install-preview h3 {
-  margin: 0;
-  color: var(--text-hi);
-  font-size: var(--fs-body-md);
-  font-weight: 600;
-}
-.skills-install-preview p {
-  margin: 0;
-}
-.skills-install-preview__meta {
-  color: var(--text-lo);
-  font-size: var(--fs-body-sm);
-  line-height: 1.5;
-}
-/* The replace choice with its consequence, aligned under its label. */
-.skills-install-replace {
-  display: grid;
-  gap: 4px;
-  margin-top: 4px;
-}
-.skills-install-replace .skills-install-preview__meta {
-  padding-left: 26px;
-}
+
 @media (max-width: 960px) {
   .skills-view .skills-nav {
     display: none;

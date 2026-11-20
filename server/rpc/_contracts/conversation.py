@@ -1001,6 +1001,7 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
                 "ref": _ID,
                 "replace": boolean(),
                 "dry_run": boolean(),
+                "return_choices": boolean(),
                 "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             },
             ("scope", "source"),

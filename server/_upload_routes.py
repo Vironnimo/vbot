@@ -24,9 +24,16 @@ def register_upload_routes(app: FastAPIType) -> None:
     @app.post("/api/skills/install")
     async def upload_skill(request: Request) -> JsonObject:
         params: JsonObject = dict(request.query_params)
-        if set(params) - {"scope", "path", "replace", "dry_run", "expected_sha256"}:
+        if set(params) - {
+            "scope",
+            "path",
+            "replace",
+            "dry_run",
+            "return_choices",
+            "expected_sha256",
+        }:
             raise HTTPException(status_code=422, detail="Unsupported Skill upload parameters")
-        for key in ("replace", "dry_run"):
+        for key in ("replace", "dry_run", "return_choices"):
             if key in params:
                 if params[key] not in {"true", "false"}:
                     raise HTTPException(status_code=422, detail=f"{key} must be true or false")

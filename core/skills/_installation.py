@@ -117,6 +117,7 @@ def install_package(
     ref: str | None = None,
     replace: bool = False,
     dry_run: bool = False,
+    return_choices: bool = False,
     archive: bytes | None = None,
     expected_sha256: str | None = None,
 ) -> SkillInstallResult:
@@ -158,7 +159,7 @@ def install_package(
     if len(candidates) != 1:
         if not candidates:
             raise PackageError("The linked Skill name was not found in its source repository.")
-        if dry_run:
+        if dry_run or return_choices:
             return SkillInstallResult("candidates", bundle.source, candidates=candidates)
         paths = ", ".join(f"{item['path']} ({item['name']})" for item in candidates)
         raise PackageError(f"Source contains multiple Skills. Select one with --path: {paths}")
@@ -191,9 +192,18 @@ def install_package(
             sha256,
             list(selected["warnings"]),
         )
-        if dry_run:
+        if (
+            exists
+            and not same
+            and not dry_run
+            and (not destination.is_dir() or not (destination / "SKILL.md").is_file())
+        ):
+            raise PackageError(
+                "Existing destination is not a Skill package; it was left unchanged."
+            )
+        if dry_run or (return_choices and exists and not same and not replace):
             return SkillInstallResult(
-                "preview",
+                "preview" if dry_run else "confirm_replace",
                 bundle.source,
                 name,
                 selected_path,
@@ -208,10 +218,6 @@ def install_package(
             raise PackageError(
                 f"Skill '{name}' already exists with different files. Inspect it first; "
                 "use --replace --yes to replace the complete package."
-            )
-        if exists and (not destination.is_dir() or not (destination / "SKILL.md").is_file()):
-            raise PackageError(
-                "Existing destination is not a Skill package; it was left unchanged."
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
         history = SkillHistory(destination.parent)

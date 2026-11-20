@@ -177,6 +177,7 @@ class SkillAuthoringService:
         ref: str | None = None,
         replace: bool = False,
         dry_run: bool = False,
+        return_choices: bool = False,
         archive: bytes | None = None,
         expected_sha256: str | None = None,
     ) -> SkillInstallResult:
@@ -193,6 +194,7 @@ class SkillAuthoringService:
                 ref=ref,
                 replace=replace,
                 dry_run=dry_run,
+                return_choices=return_choices,
                 archive=archive,
                 expected_sha256=expected_sha256,
             )

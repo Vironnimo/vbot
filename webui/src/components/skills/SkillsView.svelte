@@ -503,26 +503,36 @@
     ]);
   }
 
-  async function installed(result) {
+  async function installed(results) {
+    const [result] = results;
     showInstall = false;
-    navigation.navigate([
-      result.scope === actions.GLOBAL_SCOPE ? 'global' : 'all',
-    ]);
+    const collection =
+      results.length > 1 || result.scope === actions.GLOBAL_SCOPE
+        ? result.scope
+        : 'all';
+    navigation.navigate([collection]);
     await tick();
     searchQuery = '';
     statusFilter = 'all';
     // A later resource event can supersede our refresh; the winning inventory
     // response still fulfills this selection unless the user navigates away.
-    pendingInstallSelection = { name: result.name, scope: result.scope };
+    pendingInstallSelection =
+      results.length === 1 ? { name: result.name, scope: result.scope } : null;
     onToast({
       title:
-        result.operation === 'unchanged'
-          ? t('skills.install.unchanged')
-          : t('skills.install.success', { name: result.name }),
+        results.length > 1
+          ? t('skills.install.batchDone', { count: results.length })
+          : result.operation === 'unchanged'
+            ? t('skills.install.unchanged')
+            : t('skills.install.success', { name: result.name }),
       variant: 'success',
     });
-    if (result.warnings?.length)
-      onToast({ title: result.warnings.join('\n'), variant: 'warn' });
+    for (const entry of results)
+      if (entry.warnings?.length)
+        onToast({
+          title: [entry.name, ...entry.warnings].join('\n'),
+          variant: 'warn',
+        });
     await loadInventory();
   }
 
