@@ -34,6 +34,7 @@ from cli.tui.rendering import (
     flatten,
     pretty,
     terminal_text,
+    tool_summary,
     truncated,
 )
 from cli.tui.state import Conversation, JsonObject
@@ -836,7 +837,11 @@ class ConversationApp(App[int]):
                 )
             if data.get("command_id") and data["command_id"] not in seen:
                 seen.add(data["command_id"])
-                command = (item.get("arguments") or {}).get("command", data["command_id"])
+                command = tool_summary(item)
+                if not command:
+                    arguments = item.get("arguments")
+                    value = arguments.get("command") if isinstance(arguments, dict) else None
+                    command = value if isinstance(value, str) and value else data["command_id"]
                 choices.append((f"Command · {command}", ("command", data)))
         for row in view.facts.get("reflection_runs", []):
             choices.append(

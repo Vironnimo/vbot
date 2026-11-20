@@ -181,7 +181,7 @@ class RunTimeline:
             )
 
     def raw_tool_call(self, child_id: str) -> JsonObject | None:
-        """Return the complete arguments and result of one Tool row, or None.
+        """Return the Tool name, complete arguments and result of one row, or None.
 
         The result is None while the call runs; the arguments are None before
         its start supplied them.
@@ -190,6 +190,7 @@ class RunTimeline:
         if raw is None:
             return None
         return {
+            "name": raw.get("name"),
             "arguments": copy.deepcopy(raw.get("arguments")),
             "result": copy.deepcopy(raw.get("result")),
         }
@@ -612,6 +613,7 @@ class RunTimeline:
         raw = self._raw_calls.setdefault(child["id"], {"arguments": None, "result": None})
         if call:
             child["name"] = call.get("name") or child["name"]
+            raw["name"] = child["name"]
             child["index"] = call.get("index", child.get("index"))
             if "arguments" in call:
                 raw["arguments"] = copy.deepcopy(call["arguments"])

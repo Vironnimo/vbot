@@ -26,6 +26,7 @@
     onStopSubAgentWork,
     onStopBackgroundCommand,
     onLoadCommandOutput,
+    onLoadToolCall,
     onOpenTaskMenu,
   } = $props();
 
@@ -194,6 +195,12 @@
   </span>
   <CopyableValueCard
     value={task.fullCommand}
+    needsRaw={task.rowState.needsRaw}
+    loadValue={onLoadToolCall && task.runId && task.tool?.id
+      ? async () =>
+          (await onLoadToolCall({ runId: task.runId, toolId: task.tool.id }))
+            .shell_command
+      : null}
     title={task.description}
     mono
     copyLabel={t('chat.copyCommand')}
@@ -232,7 +239,7 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <span
           class="chat-activity__task-copy"
-          tabindex={task.fullCommand ? 0 : undefined}
+          tabindex={task.fullCommand || task.rowState.needsRaw ? 0 : undefined}
         >
           {@render commandContent(task)}
         </span>

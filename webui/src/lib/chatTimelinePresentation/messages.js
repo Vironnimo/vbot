@@ -7,17 +7,6 @@ import { timestampToMs, formatDurationMs } from './time.js';
 import { attachmentUrl, isSpeechPlaybackUrl } from '$lib/mediaUrls.js';
 import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
 import { isPermissionDeniedResult } from '$lib/permissionRules.js';
-// Rendering a cancelled Tool result uses the server's stable failure code.
-function toolResultCancelledByUser(result) {
-  if (typeof result === 'string') {
-    try {
-      result = JSON.parse(result);
-    } catch {
-      return false;
-    }
-  }
-  return result?.error?.code === 'cancelled_by_user';
-}
 
 export const isUserItem = (item) =>
   item.type === 'assistant_run'
@@ -674,9 +663,6 @@ export const metaForEvent = (event) => {
 export const isToolEvent = (event) =>
   event.type === 'tool_call_started' || event.type === 'tool_call_result';
 
-export const isFailedToolEvent = (event) =>
-  event.type === 'tool_call_result' && hasToolResultError(event);
-
 export const isTerminalEvent = (event) => event.type.startsWith('run_');
 
 function isRenderableUserContentBlock(block) {
@@ -693,43 +679,35 @@ function attachmentUrlForId(attachmentId) {
   return normalizedId ? attachmentUrl(normalizedId) : '';
 }
 
-function hasErrorResult(result) {
-  if (!result || typeof result !== 'object') {
-    return false;
-  }
-
-  return Boolean(
-    result.error ||
-    result.ok === false ||
-    result.success === false ||
-    ['error', 'failed'].includes(result.status),
+// Standalone Tool events have no Run row carrying the server's _tool_status.
+export function toolResultStatus(event) {
+  const result = parseJsonValue(
+    event.payload?.result ?? messageFromEvent(event)?.content,
   );
-}
-
-export function hasToolResultError(event) {
-  // A cancelled call and one the Permission Rules refused are not errors.
+  const name = toolNameForEvent(event);
+  if (result?.error?.code === 'cancelled_by_user') return 'cancelled';
+  if (isPermissionDeniedResult(result)) return 'refused';
   if (
-    hasToolResultCancellation(event) ||
-    isPermissionDeniedResult(toolResultValueForEvent(event))
+    (name === 'bash' || name === 'execute_code') &&
+    result?.ok === true &&
+    result.data?.status === 'stopped'
   ) {
-    return false;
+    return 'cancelled';
   }
-  if (event.payload?.error) {
-    return true;
+  if (
+    event.payload?.error ||
+    result?.error ||
+    result?.ok === false ||
+    result?.success === false ||
+    ['error', 'failed'].includes(result?.status) ||
+    (name === 'execute_code' &&
+      ['failed', 'timed_out'].includes(result?.data?.status))
+  ) {
+    return 'failed';
   }
-
-  return hasErrorResult(parseJsonValue(toolResultValueForEvent(event)));
-}
-
-export function hasToolResultCancellation(event) {
-  return toolResultCancelledByUser(toolResultValueForEvent(event));
-}
-
-export function hasToolResultPartial(event) {
-  const rawResult =
-    event.payload?.result ?? messageFromEvent(event)?.content ?? null;
-  const result = parseJsonValue(rawResult);
   const display =
     event.payload?.display ?? messageFromEvent(event)?.tool_display;
-  return result?.ok === true && toolDisplayRecordsError(display);
+  return isPlainObject(result) && toolDisplayRecordsError(display)
+    ? 'partial'
+    : 'success';
 }

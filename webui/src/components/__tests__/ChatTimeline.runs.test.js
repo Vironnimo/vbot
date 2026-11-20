@@ -721,24 +721,23 @@ describe('ChatTimeline Runs', () => {
     expect(document.body.textContent).toContain('The first half of the answer');
   });
 
-  it('renders live Tool output before a Result arrives', () => {
+  it('renders live Tool output literally before a Result arrives', () => {
     const sessionState = timelineSession();
+    const output = '{"artifacts": ["log"], "note": null}';
     sessionState.timelineItems = [
       assistantRun('run-tool-output', [
         toolItem({
           id: 'call-one',
           name: 'bash',
           arguments: { command: 'printf hello' },
-          output: 'hello\nwarn',
+          output,
         }),
       ]),
     ];
     timeline.render(sessionState);
 
     openDisclosures('.tool-event');
-    expect(detailRow('chat.toolDetailLabel.output').textContent).toContain(
-      'hello',
-    );
+    expect(detailText('chat.toolDetailLabel.output')).toBe(output);
   });
 
   it('renders the bash Result output even if the row still carries a live preview', () => {

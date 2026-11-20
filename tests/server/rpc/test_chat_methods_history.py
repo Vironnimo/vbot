@@ -853,6 +853,8 @@ async def test_timeline_previews_a_tool_call_and_reads_it_whole_on_request(
     history: _History,
 ) -> None:
     content = "line\n" * 2_000
+    argv = ["program", "two words", *(letter * 950 for letter in "abcdefghijklmnopqr")]
+    shell_args = {"action": {"type": "exec", "command": argv}}
     seed_history(
         history.session(),
         [
@@ -862,6 +864,7 @@ async def test_timeline_previews_a_tool_call_and_reads_it_whole_on_request(
                 content=None,
                 tool_calls=[
                     ToolCall(id="call-one", name="read", arguments={"path": "a.txt"}),
+                    ToolCall(id="call-two", name="bash", arguments=shell_args),
                 ],
             ),
             ChatMessage.tool(
@@ -869,12 +872,15 @@ async def test_timeline_previews_a_tool_call_and_reads_it_whole_on_request(
                 name="read",
                 content=json.dumps(tool_success({"path": "a.txt", "content": content})),
             ),
+            ChatMessage.tool(
+                tool_call_id="call-two", name="bash", content=json.dumps(tool_success({}))
+            ),
             _summary("run-one", "summary"),
         ],
     )
     timeline = await history.read(method="chat.timeline", child_limit=10)
     run = next(item for item in timeline["items"] if item["type"] == "assistant_run")
-    [tool] = [child for child in run["items"] if child["type"] == "tool_call"]
+    tool, shell = [child for child in run["items"] if child["type"] == "tool_call"]
     # The row carries a preview: small fields whole, long ones shortened.
     assert tool["rawTruncated"] is True
     assert tool["arguments"] == {"path": "a.txt"}
@@ -891,6 +897,16 @@ async def test_timeline_previews_a_tool_call_and_reads_it_whole_on_request(
     )
     assert raw["arguments"] == {"path": "a.txt"}
     assert json.loads(raw["result"])["data"]["content"] == content
+    shell_raw = await history.read(
+        method="chat.tool_call",
+        session_id="session-one",
+        run_id="run-one",
+        tool_id=shell["id"],
+        history_generation=timeline["history_generation"],
+    )
+    assert shell_raw["arguments"] == shell_args
+    assert shell["rawTruncated"] is False
+    assert shell_raw["shell_command"] == " ".join(["program", "'two words'", *argv[2:]])
     for tool_id, generation in (
         ("unknown", timeline["history_generation"]),
         (tool["id"], "stale"),

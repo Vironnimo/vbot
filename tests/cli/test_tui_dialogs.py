@@ -389,7 +389,15 @@ async def test_activity_inspects_and_stops_the_selected_child_not_its_parent(
                 "name": "subagent",
                 "arguments": {"description": "Investigate the bug"},
                 "result": {"ok": True, "data": child},
-            }
+            },
+            {
+                "id": "build",
+                "type": "tool_call",
+                "name": "bash",
+                "arguments": {"cmd": ["npm", "run", "build"]},
+                "display": {"primary": [{"kind": "description", "value": "Build the package"}]},
+                "result": {"ok": True, "data": {"command_id": "cmd_build"}},
+            },
         ]
         if source == "history"
         else []
@@ -410,6 +418,9 @@ async def test_activity_inspects_and_stops_the_selected_child_not_its_parent(
         await pilot.pause()
         await pilot.press("f5")
         await pilot.pause()
+        if source == "history":
+            assert isinstance(app.screen, Picker)
+            assert any(label == "Command · Build the package" for label, _ in app.screen.choices)
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, Picker)

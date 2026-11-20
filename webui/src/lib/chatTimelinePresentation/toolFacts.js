@@ -1,6 +1,7 @@
 import { isPlainObject } from '$lib/values.js';
 import { t } from '$lib/i18n.js';
 import { timestampToMs } from './time.js';
+import { parseJsonValue, trimmedString } from './values.js';
 
 export const toolStatus = (tool) => {
   if (tool.status === 'failed') {
@@ -89,4 +90,51 @@ export function toolDisplay(tool) {
 export function toolDisplayFromEvent(event) {
   const display = event?.payload?.display;
   return isPlainObject(display) ? display : null;
+}
+
+// The shell's display owns argv quoting and argument dialects. The command
+// block keeps the literal text past the primary part's shorter limit.
+export function shellCommandPresentation(tool) {
+  const display = toolDisplay(tool);
+  const primary = Array.isArray(display?.primary) ? display.primary : [];
+  const part = primary.find((part) => part?.kind === 'command');
+  const title = primary.find((part) => part?.kind === 'description');
+  const block = Array.isArray(display?.details)
+    ? display.details.find(
+        (block) =>
+          block?.type === 'text' &&
+          block.label === 'command' &&
+          typeof block.text === 'string',
+      )
+    : null;
+  const args = parseJsonValue(toolArguments(tool));
+  const description = trimmedString(
+    title?.full_value || title?.value || args?.description,
+  );
+  const primaryCommand = part?.full_value || part?.value || title?.detail;
+  const argument = typeof args?.command === 'string' ? args.command : '';
+  const command =
+    block?.text ??
+    (typeof primaryCommand === 'string' ? primaryCommand : argument);
+  // Older displays only marked a cut with an ellipsis. A standalone event
+  // can carry the complete command alongside that same shortened display.
+  if (
+    command.endsWith('…') &&
+    argument.length >= command.length &&
+    tool.rawTruncated !== true &&
+    argument.startsWith(command.slice(0, -1))
+  ) {
+    return { command: argument, description, needsRaw: false };
+  }
+  // The server bounds strings by Unicode code point. A Secret reference can
+  // replace part of an already-shortened historical display before it arrives.
+  const limit = block ? 16384 : primaryCommand ? 8192 : 1000;
+  const legacyCut =
+    command.endsWith('…') &&
+    (command.includes('{{secret:') || Array.from(command).length === limit);
+  const needsRaw =
+    block?.truncated === true ||
+    legacyCut ||
+    (!command && isPlainObject(args) && Object.keys(args).length > 0);
+  return { command, description, needsRaw };
 }

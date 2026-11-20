@@ -385,8 +385,8 @@ class CommandRecord:
             self._submit(sink, body)
         return True
 
-    async def stop(self, reason: StopReason) -> None:
-        """Stop the command and every process it started; returns once none runs.
+    async def stop(self, reason: StopReason) -> bool:
+        """Stop the process tree; return whether this request claimed the command's stop reason.
 
         The first reason wins. ``scope`` withdraws the result delivery; ``agent``
         delivers nothing more, since the kill's own result shows the outcome.
@@ -430,7 +430,7 @@ class CommandRecord:
                             raise await self._stop_error(failure) from failure
                         # This kill ended the command: when every stop before
                         # it gave its reason back, the reason is this one's.
-                        self._request_stop(reason)
+                        claimed = self._request_stop(reason) or claimed
         except BaseException:
             if not kill_sent and not self.ended:
                 # The command runs on; what it does from now on is its own.
@@ -450,6 +450,7 @@ class CommandRecord:
                 self.to_background(deliver=False)
             raise
         await self._finished.wait()
+        return claimed
 
     def acknowledge(self) -> None:
         """A durable result showed the command's end: deliver nothing more.

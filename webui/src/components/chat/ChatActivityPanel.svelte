@@ -70,6 +70,7 @@
     // (`(commandId) => Promise`, see CommandOutput.svelte); null offers no
     // output view.
     onLoadCommandOutput = null,
+    onLoadToolCall = null,
     // Whether the panel is open; Chat reserves room for it beside the
     // timeline while it is. The Chat header's toggle (`toggleId`) opens and
     // closes it; Escape closes it too.
@@ -457,6 +458,7 @@
             {onStopSubAgentWork}
             {onStopBackgroundCommand}
             {onLoadCommandOutput}
+            {onLoadToolCall}
             onOpenTaskMenu={openTaskMenu}
           />
         {/if}

@@ -8,7 +8,7 @@
 
   import CopyableValueCard from './CopyableValueCard.svelte';
 
-  let { primary = [] } = $props();
+  let { primary = [], loadRaw = null } = $props();
 
   function quickTooltip(reveal) {
     if (!reveal || reveal.copy) {
@@ -38,6 +38,9 @@
         {part.text}{#if part.reveal?.copy}
           <CopyableValueCard
             value={part.reveal.value}
+            needsRaw={part.reveal.needsRaw}
+            loadValue={loadRaw &&
+              (async () => (await loadRaw())?.shell_command)}
             title={part.reveal.title}
             mono={part.reveal.mono}
             whenTruncated={part.reveal.whenTruncated}

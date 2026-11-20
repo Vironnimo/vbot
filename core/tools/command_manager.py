@@ -511,11 +511,20 @@ class CommandManager:
         stopped, an end it reaches by itself reports its exit code, and a
         background result is delivered unless a ``scope`` stop withdrew it.
         """
+        report, _ = await self.stop_with_outcome(command_id, reason)
+        return report
+
+    async def stop_with_outcome(
+        self,
+        command_id: str,
+        reason: StopReason,
+    ) -> tuple[CommandReport, bool]:
+        """Stop the process tree; also say whether this request claimed the stop reason."""
         if command_id in self._recovered:
-            return self.report(command_id)
+            return self.report(command_id), False
         record = self._get(command_id)
-        await record.stop(reason)
-        return record.report()
+        stopped_here = await record.stop(reason)
+        return record.report(), stopped_here
 
     def acknowledge(self, command_id: str) -> None:
         """A durable Tool result showed the command's end: deliver nothing more.

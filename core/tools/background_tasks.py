@@ -40,7 +40,7 @@ from core.tools._background_tasks_arguments import (
     is_message_action,
     normalize_background_tasks_arguments,
 )
-from core.tools._shell_display import command_result_details
+from core.tools._shell_display import command_result_details, record_command_stop
 from core.tools._shell_results import (
     TERMINAL_TOOL_NAME,
     ToolNames,
@@ -334,6 +334,7 @@ class BackgroundTasksTool:
         # The call names only the id: the user sees which command it is.
         context.add_display_results([_shown_task(_command_row(report, subagent))])
         if report.ended:
+            record_command_stop(context, report, subagent=subagent)
             self._checks.pop(report.command_id, None)
             if subagent is None:
                 self._acknowledge_when_persisted(context, report.command_id)
@@ -386,7 +387,7 @@ class BackgroundTasksTool:
         # Sub-Agent did not see the stop and gets a message.
         reason: StopReason = "agent" if subagent is None else "parent"
         try:
-            report = await self._commands.stop(command_id, reason)
+            report, stopped_here = await self._commands.stop_with_outcome(command_id, reason)
         except CommandNotFoundError:
             return tool_failure("task_not_found", self._not_found(command_id, "stop", tree))
         except CommandStopError as error:
@@ -407,6 +408,7 @@ class BackgroundTasksTool:
         if subagent is None:
             self._acknowledge_when_persisted(context, command_id)
         context.add_display_results([_shown_task(_command_row(report, subagent))])
+        record_command_stop(context, report, subagent=subagent, stopped_here=stopped_here)
         data = _ended(report, subagent, names, context.permissions)
         notes: list[str] = []
         if before.ended or report.stop_reason is None:
@@ -417,13 +419,10 @@ class BackgroundTasksTool:
                 )
             else:
                 notes.append("The command had already ended; nothing was stopped.")
-        else:
-            if report.stop_reason == reason:
-                data["stopped_because"] = _STOPPED_BY_YOU
-                if subagent is not None:
-                    notes.append(
-                        f"The Sub-Agent {subagent} receives a message that you stopped it."
-                    )
+        elif stopped_here and data["status"] == "stopped":
+            data["stopped_because"] = _STOPPED_BY_YOU
+            if subagent is not None:
+                notes.append(f"Sub-Agent {subagent} receives a message about this stop.")
         if notes:
             data["notes"] = [*notes, *data.get("notes", [])]
         return data
@@ -780,7 +779,9 @@ def register_background_tasks_tool(
         argument_normalizer=normalize_background_tasks_arguments,
         result_schema={"type": "object"},
         display=ToolDisplay(
-            parts_builder=_display_parts, detail_builder=background_tasks_detail_blocks
+            parts_builder=_display_parts,
+            detail_builder=background_tasks_detail_blocks,
+            recorded_details_first=True,
         ),
     )
     return tool

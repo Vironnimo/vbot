@@ -263,7 +263,20 @@ describe('ChatActivityPanel', () => {
       }),
       failedBash: backgroundCommandTask({
         id: 'bash-failed',
-        arguments: { command: 'npm test', description: 'Run the tests' },
+        arguments: {
+          action: { type: 'exec', command: ['npm', 'test'] },
+          title: 'Run the tests',
+        },
+        display: {
+          primary: [
+            {
+              kind: 'description',
+              value: 'Run the tests',
+              detail: 'npm test',
+              detail_kind: 'command',
+            },
+          ],
+        },
       }),
       runningBash: backgroundCommandTask({
         id: 'bash-running',
@@ -380,6 +393,54 @@ describe('ChatActivityPanel', () => {
         }),
       );
     }
+  });
+
+  it('loads a shortened command on focus before enabling Copy', async () => {
+    const command = 'program ' + 'x'.repeat(17500) + '\nlast line\n';
+    const preview = command.slice(0, 16383) + '…';
+    const tool = backgroundCommandTask({
+      id: 'call-one',
+      arguments: { argv: ['program', 'x'.repeat(999)] },
+      rawTruncated: false,
+      display: {
+        primary: [
+          {
+            kind: 'description',
+            value: 'Start the service',
+            detail: command.slice(0, 8191) + '…',
+          },
+        ],
+        details: [
+          { type: 'text', label: 'command', text: preview, truncated: true },
+        ],
+      },
+    });
+    const raw = Promise.withResolvers();
+    const onLoadToolCall = vi.fn(() => raw.promise);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    openPanel({
+      timelineItems: [{ ...runItem([tool]), runId: 'run-one' }],
+      onLoadToolCall,
+    });
+    const copy = document.querySelector('.copyable-value-card__copy');
+    expect(copy.disabled).toBe(true);
+    expect(onLoadToolCall).not.toHaveBeenCalled();
+    rowContaining('Start the service').querySelector('[tabindex="0"]').focus();
+    expect(onLoadToolCall).toHaveBeenCalledWith({
+      runId: 'run-one',
+      toolId: 'call-one',
+    });
+    raw.resolve({ shell_command: command });
+    await vi.waitFor(() => expect(copy.disabled).toBe(false));
+    expect(
+      document.querySelector('.copyable-value-card__value').textContent,
+    ).toBe(command);
+    copy.click();
+    expect(writeText).toHaveBeenCalledWith(command);
   });
 
   it('closes on Escape and hands focus from inside to its toggle', () => {
