@@ -37,7 +37,7 @@ from core.tools import _command_decoding as command_decoding_module
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._interpreter_host import InterpreterHost
-from core.tools._shell_results import not_run_problem
+from core.tools._shell_results import format_command_delivery, not_run_problem
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
     COMMAND_RETENTION_SECONDS,
@@ -601,6 +601,79 @@ async def test_working_leftovers_hold_the_end(harness: Harness, activity: str) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("leftover", [False, True], ids=["tree-exited", "quiet-server"])
+async def test_completion_includes_output_still_being_processed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, leftover: bool
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    feed = command_output_module.CommandOutput.feed
+
+    async def slow_feed(output: command_output_module.CommandOutput, data: bytes) -> None:
+        entered.set()
+        await release.wait()
+        await feed(output, data)
+
+    monkeypatch.setattr(command_output_module.CommandOutput, "feed", slow_feed)
+    command_id, process = await harness.launch(
+        formatter=lambda report: "\n".join(report.transcript.head)
+    )
+    harness.manager.to_background(command_id, deliver=True)
+    process.write("first\n")
+    await entered.wait()
+    process.write("final diagnosis")
+    process.exit(7, leftovers=[SERVER] if leftover else [])
+    try:
+        await harness.advance(5)
+        assert not harness.manager.report(command_id).ended
+        assert not harness.sink.bodies
+    finally:
+        release.set()
+    await harness.advance(4)
+    assert harness.sink.bodies == ["first\nfinal diagnosis"]
+    if leftover:
+        assert harness.manager.report(command_id).still_running == (SERVER,)
+        process.end_leftovers()
+    report = await harness.finish(command_id)
+    assert not report.output_incomplete
+    assert report.log_path is not None and report.log_path.read_bytes() == b"first\nfinal diagnosis"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disk_full", [False, True])
+async def test_untracked_pipe_writer_cannot_delay_completion_or_stop(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, disk_full: bool
+) -> None:
+    if disk_full:
+        monkeypatch.setattr(
+            command_output_module, "_write_all", lambda *_: (0, OSError(errno.ENOSPC, "full"))
+        )
+    command_id, process = await harness.launch(
+        formatter=lambda report: format_command_delivery(
+            report, permissions=PermissionBoundary.UNRESTRICTED
+        )
+    )
+    harness.manager.to_background(command_id, deliver=True)
+    # The shell exited. Only a writer outside its tracked tree holds the pipe.
+    process.exit(0, leftovers=[SERVER])
+    process.tree.running.clear()
+    for _ in range(6):
+        process.write("late output\n")
+        await harness.advance(0.25)
+    stop = asyncio.create_task(harness.manager.stop(command_id, "user"))
+    for _ in range(8):
+        process.write("late output\n")
+        await harness.advance(0.25)
+    assert stop.done()
+    report = await stop
+    assert report.finished and report.output_incomplete and report.stop_reason is None
+    assert process.tree.terminations == 0
+    (body,) = harness.sink.bodies
+    assert "late output" in body and "may be incomplete" in body
+    assert ("disk is full" in body) is disk_full
+    assert "complete raw output" not in body
+
+
+@pytest.mark.asyncio
 async def test_processes_that_cannot_be_inspected_at_the_exit_keep_the_command_running(
     harness: Harness,
 ) -> None:
@@ -898,6 +971,8 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "owned_delivered",
         "secret",
         "secret_delivered",
+        "old_pid_hint",
+        "old_pid_hint_delivered",
         "owned_secret",
         "not_run_once",
     ],
@@ -960,6 +1035,16 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 # The harness formatter contains only status; retain an output
                 # body like the shell's real formatter supplies to checkpoints.
                 checkpoint["body"] = harness.sink.bodies[0] + "\n" + key
+            if outcome.startswith("old_pid_hint"):
+                checkpoint["body"] = (
+                    f"The background command {command_id} (work) exited with code 0 "
+                    "after 1 second.\n"
+                    "Processes it started still run: server.exe (pid 42). Stop them with the shell "
+                    "command Stop-Process -Id 42 when they are no longer needed.\n"
+                    "Command output: (none)"
+                )
+                if outcome == "old_pid_hint_delivered":
+                    await sessions.get(OWNER).add_note_async(checkpoint["body"])
             if outcome == "not_run_once":
                 assert checkpoint["consumed_once_secrets"] == ["ONE_TIME"]
                 # Rebuild the delivery from durable metadata after restart.
@@ -1001,7 +1086,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert sessions.background_command_read() == []
                 return
             expected_delivery = (
-                outcome not in {"delivered", "withdrawn", "secret_delivered"}
+                outcome
+                not in {"delivered", "withdrawn", "secret_delivered", "old_pid_hint_delivered"}
                 and execution_owner is None
             )
             submission_count = int(expected_delivery)
@@ -1012,6 +1098,9 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     body = restored.sink.bodies[0]
                     assert "was stopped after at least 2 minutes 5 seconds: " in body
                     assert "compiled 3 files" in body
+                if outcome == "old_pid_hint":
+                    assert "Stop-Process" not in restored.sink.bodies[0]
+                    assert command_id in restored.sink.bodies[0]
                 if outcome == "not_run_once":
                     body = restored.sink.bodies[0]
                     assert "ONE_TIME" in body and "provide them again before retrying" in body
@@ -1195,10 +1284,14 @@ async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
             first, _process = await harness.launch()
-            second, _other = await harness.launch()
+            second, other_process = await harness.launch()
             fail.add(first)
             harness.manager.to_background(first, deliver=True)
-            harness.manager.to_background(second, deliver=True)
+            await harness.manager.to_background_durably(second, deliver=True)
+            other_process.exit(0)
+            report = await harness.finish(second)
+            await eventually(lambda: bool(harness.sink.bodies))
+            assert harness.sink.bodies == [format_report(report)]
             with pytest.raises(OSError, match="checkpoint disk unavailable"):
                 await harness.manager.flush()
             assert [row["command_id"] for row in sessions.background_command_read()] == [second]
@@ -1399,10 +1492,10 @@ async def test_transferred_commands_deliver_to_their_new_session(
     if before_submit:
         flush = harness.manager._services.flush
 
-        async def paused_flush() -> None:
+        async def paused_flush(command_id: str) -> None:
             flushing.set()
             await flushed.wait()
-            await flush()
+            await flush(command_id)
 
         monkeypatch.setattr(
             harness.manager, "_services", replace(harness.manager._services, flush=paused_flush)

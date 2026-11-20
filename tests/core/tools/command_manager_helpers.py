@@ -94,6 +94,7 @@ class FakeProcess:
         self._output: asyncio.Queue[bytes] = asyncio.Queue()
         self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         self._eof = False
+        self._pipe_closed = False
         # POSIX: an interrupt reaches the process group; on Windows none is sent.
         self.interruptible = False
         self.exits_on_interrupt = False
@@ -119,8 +120,12 @@ class FakeProcess:
             self.exit(130)
         return True
 
-    def close_output(self) -> None:
+    def close_output(self) -> bool:
+        if self._pipe_closed:
+            return False
+        self._pipe_closed = True
         self._output.put_nowait(b"")
+        return True
 
     def close(self) -> None:
         self.released = True
@@ -133,7 +138,8 @@ class FakeProcess:
         return self._output.qsize()
 
     def write(self, data: str | bytes) -> None:
-        self._output.put_nowait(data.encode() if isinstance(data, str) else data)
+        if not self._pipe_closed:
+            self._output.put_nowait(data.encode() if isinstance(data, str) else data)
 
     def exit(self, code: int, *, leftovers: Iterable[RunningProcess] = ()) -> None:
         """The shell exits; *leftovers* keep running and hold the output pipe."""
@@ -141,11 +147,11 @@ class FakeProcess:
         if not self._exit.done():
             self._exit.set_result(code)
         if all(process.name == "conhost.exe" for process in self.tree.running):
-            self._output.put_nowait(b"")
+            self.close_output()
 
     def end_leftovers(self) -> None:
         self.tree.running.clear()
-        self._output.put_nowait(b"")
+        self.close_output()
 
 
 class FakeLauncher:

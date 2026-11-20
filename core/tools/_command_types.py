@@ -39,8 +39,8 @@ COMMAND_RECENT_LINES = 200
 # ``on_output`` receives this many newest lines at most this often.
 COMMAND_PROGRESS_LINES = 40
 COMMAND_PROGRESS_SECONDS = 0.5
-# After the shell exited, and after its last process ended, output is read for
-# at most this long before the command's outcome is fixed.
+# Initial grace for output after shell exit and grace to reach pipe EOF once the
+# process tree is gone. Processing bytes already received has no deadline.
 COMMAND_DRAIN_SECONDS = 1.0
 # After the shell exited, processes it left running that print nothing, start
 # nothing and use no CPU this long end the command: they wait, like a server.
@@ -174,6 +174,8 @@ class CommandReport:
     # Names only: one-time Secrets consumed for this launch, including a shell
     # bootstrap that never ran the command. Kept for honest retry guidance.
     consumed_once_secrets: tuple[str, ...] = ()
+    # Capture failed or an open pipe had to be closed after the process tree ended.
+    output_incomplete: bool = False
 
     @property
     def status(self) -> CommandStatus:
@@ -261,8 +263,8 @@ class CommandProcess(Protocol):
         Returns whether a request was sent; a kill follows when it was not.
         """
 
-    def close_output(self) -> None:
-        """Stop reading: the pipe ends after the bytes already received."""
+    def close_output(self) -> bool:
+        """End the pipe after buffered bytes; True if it was still open."""
 
     def close(self) -> None:
         """Release the process and its pipe once nothing of it runs any longer."""

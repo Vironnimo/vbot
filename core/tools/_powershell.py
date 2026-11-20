@@ -96,8 +96,8 @@ Desktop, Downloads, both AppData folders, ProgramData, Program Files and
 Windows, and the request's folders: vBot's data directory and the roots of
 Projects and Workspaces. ``Set-Location``, ``Push-Location`` and
 ``Get-ChildItem`` refuse an explicitly passed empty path with PowerShell's own
-binding message, and the first two end the command when their path does not
-exist, with PowerShell's own error, unless the command passed ``-ErrorAction``
+binding message, and the first two end the command with PowerShell's own error
+when the location change fails, unless the command passed ``-ErrorAction``
 or changed ``$ErrorActionPreference``. A refusal ends the command as ``throw``
 does: ``try``/``catch`` catches it, ``-ErrorAction`` does not silence it. The
 guards are against mistakes, not intent: native programs, .NET calls and a
@@ -414,6 +414,14 @@ RUNNER_STATEMENTS = r"""& {
             $exception = $caught.Exception
             if ($exception -is [System.Management.Automation.MethodInvocationException] -and
                 $exception.InnerException) { $exception = $exception.InnerException }
+            if ($exception -is [System.Management.Automation.ActionPreferenceStopException]) {
+                $cause = $exception.ErrorRecord.Exception
+                # Older PowerShell 7 releases lack this exception type.
+                if ($cause -and $cause.GetType().FullName -eq
+                    'System.Management.Automation.NativeCommandExitException') {
+                    return $cause.ExitCode
+                }
+            }
             if ($exception -isnot [System.Management.Automation.LoopFlowException]) {
                 return 1
             }

@@ -191,6 +191,9 @@ async def test_guards_keep_protected_folders_and_end_a_command_that_lost_its_tar
         "Set-Location $null",
         "Get-ChildItem ''",
         "Set-Location missing",
+        "Set-Location project/file.txt",
+        "Push-Location -LiteralPath project/file.txt",
+        "Set-Location *",  # More than one matching directory.
     )
     command = "\n".join(
         f"try {{ {statement}; 'ran-{index}' }} catch {{ \"refused-{index}: $_\" }}"
@@ -348,6 +351,18 @@ _PRINTED_ERROR_TEXT = "; ".join(
             "cmd /c exit 5; Get-Item silenced-sentinel -ErrorAction Ignore",
             1,
             ("NativeCommandExitException",),
+        ),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; $ErrorActionPreference = 'Stop'; "
+            "cmd /c exit 7; 'after-native-exit'",
+            7,
+            ("NativeCommandExitException",),
+        ),
+        (
+            "$PSNativeCommandUseErrorActionPreference = $true; $ErrorActionPreference = 'Stop'; "
+            "try { cmd /c exit 7 } catch {}; Get-Item missing-sentinel",
+            1,
+            ("missing-sentinel",),
         ),
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
@@ -549,6 +564,8 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "ignored-error-after-native",
         "native-error-preference",
         "native-error-then-ignored-error",
+        "terminating-native-exit",
+        "caught-native-exit-then-powershell-error",
         "requires",
         "english-messages-own-culture",
         "parse-error",

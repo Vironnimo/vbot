@@ -616,7 +616,8 @@ def _ended(
         data["subagent"] = subagent
     shell.pop("command_id", None)
     data.update(shell)
-    location = output_location(report, f"{data.get('output', '')}\n{data.get('next', '')}")
+    shown = "\n".join([data.get("output", ""), data.get("next", ""), *data.get("notes", [])])
+    location = output_location(report, shown)
     if location is not None:
         data["next"] = f"{data['next']} {location}" if "next" in data else location
     return data

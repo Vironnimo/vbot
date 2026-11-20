@@ -425,7 +425,7 @@ def resolve_timeout(
     """
     if timeout_ms is not None:
         seconds = timeout_ms / 1000
-        if timeout is not None and timeout not in (seconds, timeout_ms):
+        if timeout is not None and timeout != seconds:
             raise ToolContractError(
                 f"{tool_name} was not run: timeout ({timeout:g} s) and timeout_ms "
                 f"({timeout_ms:g} ms) disagree; send one of them."

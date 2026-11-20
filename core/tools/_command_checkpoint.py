@@ -115,6 +115,7 @@ class CommandCheckpoints:
         # When each command started, in seconds since the epoch.
         self._started_at: dict[str, float] = {}
         self._tail: asyncio.Task[None] | None = None
+        self._pending_writes: dict[str, asyncio.Task[None]] = {}
         self._write_errors: dict[str, Exception] = {}
         self._generations: dict[str, str] = {}
         # The stored ceiling of each command's Session boundary; None for full access.
@@ -185,6 +186,7 @@ class CommandCheckpoints:
             "log_path": str(report.log_path) if report.log_path is not None else None,
             "failed_programs": list(report.failed_programs),
             "jobs_ended": report.jobs_ended,
+            "output_incomplete": report.output_incomplete,
             "log_loss": (
                 {"kept_bytes": report.log_loss.kept_bytes, "kept_lines": report.log_loss.kept_lines}
                 if report.log_loss is not None
@@ -240,21 +242,26 @@ class CommandCheckpoints:
                 self._write_errors.pop(command_id, None)
 
         self._tail = asyncio.create_task(write(), name="command-checkpoint")
-        self._tail.add_done_callback(self._done)
+        self._pending_writes[command_id] = self._tail
+        self._tail.add_done_callback(lambda task: self._done(command_id, task))
 
-    @staticmethod
-    def _done(task: asyncio.Task[None]) -> None:
+    def _done(self, command_id: str, task: asyncio.Task[None]) -> None:
+        if self._pending_writes.get(command_id) is task:
+            del self._pending_writes[command_id]
         if not task.cancelled() and (error := task.exception()) is not None:
             _LOGGER.error("Saving command recovery state failed", exc_info=error)
 
-    async def flush(self) -> None:
-        while (tail := self._tail) is not None:
-            await asyncio.gather(asyncio.shield(tail), return_exceptions=True)
-            if self._tail is tail:
+    async def flush(self, command_id: str | None = None) -> None:
+        """Wait for this command's latest checkpoint, or all commands at shutdown."""
+        while self._pending_writes:
+            tail = self._tail if command_id is None else self._pending_writes.get(command_id)
+            if tail is None:
                 break
-        # A successful checkpoint for another command must not hide an earlier
-        # failure. Only replacing that command's full checkpoint repairs it.
-        if self._write_errors:
+            await asyncio.gather(asyncio.shield(tail), return_exceptions=True)
+        if command_id is not None:
+            if error := self._write_errors.get(command_id):
+                raise error
+        elif self._write_errors:
             raise next(iter(self._write_errors.values()))
 
     def withdraw(self, matches: Callable[[SessionAddress], bool]) -> None:
@@ -398,7 +405,6 @@ class CommandCheckpoints:
         rows.clear()
         # Publish every status and persist each recovered end before awaiting
         # any Session's delivery; an occupied Session cannot hide another one.
-        await self.flush()
         if deliveries and sink is not None:
             await asyncio.gather(*(self._deliver(entry, sink) for entry in deliveries))
         await self.flush()
@@ -428,8 +434,21 @@ class CommandCheckpoints:
         )
 
     async def _deliver(self, entry: _Recovered, sink: CompletionSink) -> None:
+        from ._shell_results import delivery_lists_processes, format_command_delivery
+
         assert entry.body is not None
+        command_id = entry.report.command_id
+        # A saved shell delivery can still recommend stopping an old PID.
+        # Check the original Note for deduplication before refreshing the body.
+        refresh_processes = delivery_lists_processes(entry.body, command_id)
         while entry.pending:
+            try:
+                await self.flush(command_id)
+            except Exception:
+                # The write was logged; the final recovery flush reports it.
+                return
+            if not entry.pending:
+                return
             if self._secrets is not None:
                 try:
                     entry.body = await self.store.run_async(
@@ -453,6 +472,18 @@ class CommandCheckpoints:
                 return
             if not entry.pending:
                 return
+            if refresh_processes:
+                refresh_processes = False
+                # Rebuild from the restored report (which owns no live processes).
+                # Source and output remain content even if they resemble stop advice.
+                entry.body = format_command_delivery(
+                    entry.report,
+                    permissions=_delivery_boundary(
+                        entry.report, self._ceilings[command_id], self.store.data_dir
+                    ),
+                )
+                self._save(entry)
+                continue
             if entry.execution_owner is not None:
                 # A restored execution epoch can never be admitted again. Keep
                 # its result in the same canonical Session without starting a
@@ -640,4 +671,5 @@ def _report(row: dict[str, Any]) -> CommandReport:
             else None
         ),
         jobs_ended=bool(state.get("jobs_ended", False)),
+        output_incomplete=bool(state.get("output_incomplete", False)),
     )
