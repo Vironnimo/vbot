@@ -26,6 +26,7 @@ import psutil  # type: ignore[import-untyped]
 from cli.application import processes
 from cli.application.packages import (
     OlderReleaseError,
+    ReleaseOfferChangedError,
     download_release,
     require_access_compatible_release,
     require_version_switch_release,
@@ -489,7 +490,17 @@ def execute(install: Installation, operation: Operation) -> None:
                 operation.id,
                 progress=progress,
                 release_version=operation.release_version,
+                reviewed_version_id=operation.reviewed_version_id,
             )
+        except ReleaseOfferChangedError as exc:
+            from cli.application import availability
+
+            availability.check(install)
+            operation.error = str(exc)
+            operation.transition(
+                install, "failed", "The offered release changed before installation"
+            )
+            return
         except OlderReleaseError as exc:
             # An expected refusal before anything changed, not a worker failure.
             operation.error = str(exc)

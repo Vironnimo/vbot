@@ -78,6 +78,7 @@ class Toast:
     failure: bool = False
     session: tuple[str, str] | None = None
     extension_page: tuple[str, str, str] | None = None
+    changelog_version: str | None = None
 
 
 class ToastSink(Protocol):
@@ -135,7 +136,9 @@ class Notifier:
         owns_server: bool,
         update_active: Callable[[], bool],
         hold_seconds: float = 1.5,
+        updated_version: str = "",
     ) -> None:
+        self._updated_version = updated_version
         self._sink = sink
         self._rpc = rpc
         self._owns_server = owns_server
@@ -167,10 +170,11 @@ class Notifier:
                 server_toast, self._server_toast = self._server_toast, False
             if server_toast:
                 self._sink.dismiss(SERVER_TOAST_KEY)
-            self._track(asyncio.get_running_loop().create_task(self._refresh_settings()))
+            self._track(asyncio.get_running_loop().create_task(self._connected_settings()))
             return
         if status.connection == "unknown":
             return
+        self._notify_activation()
         with self._lock:
             confirmed = self._armed and status.connection == "refused"
             self._armed = False
@@ -313,6 +317,25 @@ class Notifier:
             body += f"\n{operation.message}"
         self._sink.show(Toast(f"update:{operation.id}", "update_result", title, body, failed))
 
+    async def _connected_settings(self) -> None:
+        await self._refresh_settings()
+        self._notify_activation()
+
+    def _notify_activation(self) -> None:
+        with self._lock:
+            version, self._updated_version = self._updated_version, ""
+            if not version or not self._enabled.get("update_result", True):
+                return
+        self._sink.show(
+            Toast(
+                f"updated:{version}",
+                "update_result",
+                f"Updated to v{version}",
+                "What's new?",
+                changelog_version=version,
+            )
+        )
+
     def update_available(self, label: str, *, requested: bool) -> None:
         """Announce a newer published version; a check the user asked for always shows."""
 
@@ -324,7 +347,7 @@ class Notifier:
                 AVAILABILITY_TOAST_KEY,
                 "update_available",
                 "vBot update available",
-                f"vBot {label} is available. Choose Update in the tray menu to install it.",
+                f"vBot {label} is available. Select it in the tray menu to update.",
             )
         )
 

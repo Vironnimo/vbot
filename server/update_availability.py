@@ -20,6 +20,7 @@ from typing import Any
 
 from cli.application import availability
 from cli.application.state import ApplicationError, Installation, discover
+from core.utils import changelog
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -48,6 +49,11 @@ def owning_installation(data_dir: Path) -> Installation | None:
     ):
         return None
     return install
+
+
+async def bundled_changelog() -> list[changelog.Release]:
+    """Stable release notes shipped with this running server, also available offline."""
+    return await _WORKERS.run(changelog.bundled)
 
 
 class UpdateAvailabilityWatch:

@@ -724,6 +724,16 @@ describe('App', () => {
   });
 
   it('names a newer vBot version until its notice is dismissed', async () => {
+    const notes = ['0.4.36', '0.4.35'].map((version) => ({
+      version,
+      date: '2026-11-20',
+      before_update: '- Backup ' + version,
+      markdown:
+        '## Before you update\n- Backup ' +
+        version +
+        '\n## Fixes\n- Fixed ' +
+        version,
+    }));
     const available = {
       version_id: 'rel_new',
       version: '0.4.36',
@@ -732,7 +742,12 @@ describe('App', () => {
     rpcMock.mockImplementation(
       createAppRpcMock({
         methods: {
-          'application.update_status': () => ({ installed: true, available }),
+          'application.update_status': () => ({
+            installed: true,
+            available,
+            channel: 'release',
+            notes,
+          }),
         },
       }),
     );
@@ -745,6 +760,25 @@ describe('App', () => {
         notice,
       ),
     );
+    document.querySelector(`${UPDATE_NOTICE} .toast-actions button`).click();
+    await waitForCondition(() =>
+      expect(document.querySelector('[role=dialog]')?.textContent).toContain(
+        'Fixed 0.4.35',
+      ),
+    );
+    const dialog = document.querySelector('[role=dialog]');
+    const content = dialog.textContent;
+    expect(content.indexOf('Backup 0.4.36')).toBeLessThan(
+      content.indexOf('Backup 0.4.35'),
+    );
+    expect(content.indexOf('Backup 0.4.35')).toBeLessThan(
+      content.indexOf('Fixed 0.4.36'),
+    );
+    expect(content.match(/Backup 0.4.36/g)).toHaveLength(1);
+    expect(content.indexOf('Fixed 0.4.36')).toBeLessThan(
+      content.indexOf('Fixed 0.4.35'),
+    );
+    dialog.querySelector('button').click();
     document.querySelector(`${UPDATE_NOTICE} .toast-close`).click();
     flushSync();
     expect(document.querySelector(UPDATE_NOTICE)).toBeNull();
@@ -754,6 +788,56 @@ describe('App', () => {
     await Promise.resolve();
     flushSync();
     expect(document.querySelector(UPDATE_NOTICE)).toBeNull();
+  });
+
+  it('shows bundled changes once after a version change and stays quiet on first visit', async () => {
+    const entries = ['1.0.9', '1.0.10', '1.0.11'].map((version) => ({
+      version,
+      date: '2026-11-20',
+      before_update: null,
+      markdown: '## Highlights\nRelease ' + version,
+    }));
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'application.changelog': () => ({
+            releases: entries.slice().reverse(),
+          }),
+        },
+      }),
+    );
+    const connection = mountApp();
+    const hello = (version) =>
+      connection.onEvent({
+        type: 'connection_ready',
+        active_runs: [],
+        server: { version },
+      });
+    const notice = () =>
+      document.querySelector('[data-toast-id="application-updated"]');
+    hello('1.0.9');
+    await waitForCondition(() =>
+      expect(localStorage.getItem('vbot.lastSeenRelease')).toBe('1.0.9'),
+    );
+    expect(notice()).toBeNull();
+    hello('1.0.11');
+    await waitForCondition(() =>
+      expect(notice()?.textContent).toContain('1.0.11'),
+    );
+    notice().querySelector('.toast-actions button').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('[role=dialog]')?.textContent).toContain(
+        'Release 1.0.10',
+      ),
+    );
+    expect(document.querySelector('[role=dialog]').textContent).not.toContain(
+      'Release 1.0.9',
+    );
+    notice().querySelector('.toast-close').click();
+    hello('1.0.11');
+    await Promise.resolve();
+    flushSync();
+    expect(notice()).toBeNull();
   });
 
   it('offers Desktop server switching outside the inert app content', async () => {

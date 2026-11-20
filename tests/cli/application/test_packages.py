@@ -618,6 +618,12 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
                 download_release(install, "upd_test")
             assert not package.called
             return
+        if channel == "release" and published != "rel_active":
+            from cli.application.packages import ReleaseOfferChangedError
+
+            with pytest.raises(ReleaseOfferChangedError):
+                download_release(install, "upd_test", reviewed_version_id="different_offer")
+            assert not package.called
         result = download_release(
             install, "upd_test", progress=lambda _message, label: labels.append(label)
         )

@@ -60,6 +60,7 @@ async def test_update_status_reports_the_stored_answer_of_the_owning_installatio
     assert await status(watch) == {
         "installed": True,
         "channel": "release",
+        "notes": None,
         "checked_at": _AT,
         "available": {"version_id": "rel_newer", "version": "0.4.36", "label": "0.4.36"},
     }
@@ -93,3 +94,23 @@ async def test_the_watch_publishes_only_a_changed_answer(
         await watch.aclose()
 
     assert publications == ["", "rel_newer"]
+
+
+@pytest.mark.asyncio
+async def test_bundled_changelog_reads_the_running_payload_and_preserves_future_sections(
+    tmp_path, monkeypatch
+):
+    from core.utils import changelog
+
+    monkeypatch.setattr(changelog, "DIRECTORY", tmp_path)
+    for version in ["1.0.2", "1.0.10"]:
+        (tmp_path / f"{version}.md").write_text(
+            f"# v{version} - 2026-11-20\n## Before you update\n- Back up.\n"
+            "## Future section\n- Details.",
+            encoding="utf-8",
+        )
+    response = await dispatch_method(object(), "application.changelog", {}, method_handlers())
+    entries = response["releases"]
+    assert [entry["version"] for entry in entries] == ["1.0.10", "1.0.2"]
+    assert entries[0]["before_update"] == "- Back up."
+    assert "## Future section" in entries[0]["markdown"]

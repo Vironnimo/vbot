@@ -412,6 +412,12 @@
   margin-top: 8px;
 }
 
+.toast-actions a {
+  color: var(--accent);
+  font-size: var(--fs-body-sm);
+  text-underline-offset: 3px;
+}
+
 .toast-close {
   display: flex;
   flex-shrink: 0;

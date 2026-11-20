@@ -15,6 +15,7 @@ from cli._output import print_application_update_result
 from cli._progress import ProgressPrinter
 from cli.application.state import ApplicationError, Installation, Operation, discover, exclusive
 from cli.formatting import output_mode
+from core.utils import changelog
 
 if TYPE_CHECKING:
     from cli._server_target import ServerInstance
@@ -25,6 +26,12 @@ def add_parsers(subparsers) -> None:
     commands = app.add_subparsers(dest="command", required=True)
     commands.add_parser(
         "status", help="Show the installed version, latest update and newest published version"
+    )
+    changelog = commands.add_parser(
+        "changelog", help="Read the bundled stable release notes offline"
+    )
+    changelog.add_argument(
+        "version", nargs="?", help="Release X.Y.Z or vX.Y.Z. Omit for the latest bundled release"
     )
     channel = commands.add_parser(
         "channel", help="Select whether updates install releases or the newest main build"
@@ -116,6 +123,47 @@ def _print(value, *, lines: list[str] | None = None) -> None:
         print("\n".join(lines))
 
 
+def _print_changelog(version: str | None) -> int:
+    try:
+        if version is None:
+            releases = changelog.bundled(limit=1)
+        else:
+            releases = [changelog.read_release(changelog.DIRECTORY, version.removeprefix("v"))]
+    except FileNotFoundError:
+        raise ApplicationError(
+            f"No bundled notes for {version}. See {changelog.RELEASES_URL}"
+        ) from None
+    except (ValueError, OSError) as error:
+        raise ApplicationError(str(error)) from error
+    if releases:
+        release = releases[0]
+        lines = [f"# v{release['version']} - {release['date']}", "", release["markdown"]]
+    else:
+        lines = [f"No release notes are bundled yet. See {changelog.RELEASES_URL}"]
+    _print({"releases": releases}, lines=lines)
+    return 0
+
+
+def _confirm_update(releases: list[changelog.Release], *, yes: bool) -> bool:
+    warnings = changelog.pre_update_text(releases)
+    if not warnings:
+        return True
+    # Structured stdout remains a single JSON result for scripts.
+    stream = sys.stderr if output_mode.get() == "plain" else sys.stdout
+    print(f"Before you update\n{warnings}", file=stream, flush=True)
+    if len(releases) == changelog.MAX_RELEASES:
+        print(f"See all releases: {changelog.RELEASES_URL}", file=stream)
+    if (
+        yes
+        or not sys.stdin.isatty()
+        or not sys.stdout.isatty()
+        or os.environ.get("VBOT_UPDATE_HANDOFF")
+    ):
+        return True
+    print("Install this update? [y/N] ", end="", file=stream, flush=True)
+    return (_answer("") or "").lower() in {"y", "yes"}
+
+
 def _print_update_result(
     install: Installation, operation: Operation, *, handoff: bool = False
 ) -> None:
@@ -158,6 +206,8 @@ def _wait_update(install: Installation, operation: Operation) -> Operation:
 
 
 def dispatch(args: argparse.Namespace, *, app_instance: ServerInstance | None = None) -> int | None:
+    if args.area == "application" and args.command == "changelog":
+        return _print_changelog(args.version)
     install = discover()
     if (
         app_instance is not None
@@ -440,6 +490,17 @@ def _dispatch_installed(
             # An Agent on another server updating a client has no local Run to resume.
             handoff = None
         options = {"release_version": release_version} if release_version is not None else {}
+        if package is None:
+            from cli.application import availability
+
+            notes, reviewed = availability.review(
+                install, selected=release_version, prepared=prepared_version
+            )
+            if reviewed is not None:
+                options["reviewed_version_id"] = reviewed
+            if not _confirm_update(notes, yes=args.yes):
+                _print({"cancelled": True}, lines=["Update cancelled."])
+                return 0
         operation = operations.request_update(
             install,
             package=package,

@@ -617,7 +617,7 @@ def test_update_available_toast_respects_its_setting_unless_the_user_asked(
         "update-available",
         "update_available",
         "vBot update available",
-        "vBot 0.5.0 is available. Choose Update in the tray menu to install it.",
+        "vBot 0.5.0 is available. Select it in the tray menu to update.",
     )
     assert sink.shown == ([expected] if shown else [])
 
@@ -641,3 +641,20 @@ def test_notification_policy_is_checked_at_completion_and_again_before_showing_a
 
     asyncio.run(exercise())
     assert sink.shown == []
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.asyncio
+async def test_activation_notifies_once_after_reading_notification_preferences(enabled):
+    sink = _Sink()
+    notifier = Notifier(
+        sink,
+        _server({"update_result": enabled}),
+        owns_server=True,
+        update_active=lambda: False,
+        updated_version="1.2.3",
+    )
+    for _ in range(2):
+        notifier.status_changed(_CONNECTED)
+        await _settle()
+    assert [toast.changelog_version for toast in sink.shown] == (["1.2.3"] if enabled else [])

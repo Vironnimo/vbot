@@ -20,7 +20,24 @@ The `--match` skips the rolling `main-build` tag. The reachable remote tag and G
 
 Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
-### 2. Bump the version
+### 2. Write the changelog
+
+Write one English file at `changelog/X.Y.Z.md` for this stable release. Read every commit since the previous stable tag, including bodies (`git log --format=full v<prev>..HEAD`), and the diff when a subject is unclear. Review every Conventional Commits `!` and every new database migration in core and bundled Extensions, including positional and keyword declarations:
+
+```bash
+git diff v<prev>..HEAD -- core resources/extensions | grep -nE '^\+.*(Migration\(|breaks_older)'
+```
+
+Start the file with `# vX.Y.Z - YYYY-MM-DD` using the UTC release date. Use these exact level-two headings in this order, omitting empty sections.
+
+1. **Before you update.** Explain who is affected, what changes, and what to do before installing. Include user-facing breaks, changed defaults, renamed or removed settings and commands, manual steps, urgent security fixes and every new `breaks_older=True` migration. Name each affected database: older versions refuse it afterwards, and going back requires restoring its pre-update data snapshot, losing everything written to that database since. Review each marked break for actual user impact. An Extension API break affecting third-party authors goes under Improvements as **Extensions**; omit purely internal breaks.
+2. **Highlights.** One to three changes users will notice in daily use. Skip when nothing stands out.
+3. **Improvements** and **Fixes.** Group by area, such as Chat, Agents, Desktop or Installation. Use Markdown bullets, one line per user-visible effect. Combine related commits. Describe the problem fixed or the new capability in the user's terms.
+4. Omit internal refactors, tests, docs, CI, tooling, merge commits, reverts and changes reverted within this release, Model DB maintenance and implementation details. A five-fix release should fit on one screen.
+
+Run `python scripts/release_changelog.py check X.Y.Z`. The publisher adds the compare link. The rolling main build has no release entry. The published JSON asset contains at most 50 releases and 256 KiB; the GitHub release archive links to the rest.
+
+### 3. Bump the version
 
 The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump it (semver):
 
@@ -28,7 +45,7 @@ The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump
 version = "X.Y.Z"
 ```
 
-### 3. Check the latest CI run on `main`; do not run the complete suite locally
+### 4. Check the latest CI run on `main`; do not run the complete suite locally
 
 `main-build.yml` runs the complete CI, together with the main packages, on every push to `main`. Check the latest push run before releasing, and wait for it while it is still running (`gh run watch <run-id> --exit-status`):
 
@@ -40,18 +57,18 @@ A run cancelled because a newer push superseded it says nothing; check the newer
 
 If it failed, read the failures (`gh run view <run-id> --log-failed`), fix them on `main`, and push the fix (`.vorch/workflows/push-workflow.md`), whose CI run must pass before you continue; a `main` already known to be red only fails the release gate after its full run time. A first-run backend test failure blocks the release even when its isolated diagnostic retry passes; fix the original failure before dispatching again.
 
-The push in step 4 runs the complete local checks and starts the `main-build` run of the release commit. The dispatched Release workflow does not run the CI a second time: its `main-build CI` job waits for that run and blocks tag and Release creation until its CI passed, while the release packages build. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
+The push in step 5 runs the complete local checks and starts the `main-build` run of the release commit. The dispatched Release workflow does not run the CI a second time: its `main-build CI` job waits for that run and blocks tag and Release creation until its CI passed, while the release packages build. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
 
-### 4. Commit and push
+### 5. Commit and push
 
 ```bash
-git add pyproject.toml
+git add pyproject.toml changelog/X.Y.Z.md
 git commit -m "chore(release): bump version to X.Y.Z"
 ```
 
-Then push `main` through `.vorch/workflows/push-workflow.md`. Dispatch the release (step 5) as soon as `python scripts/push.py` has pushed, without waiting for the `main-build` run first: the Release workflow waits for it itself. Still follow that run to its end as the push workflow's step 4 requires, alongside the release run in step 6.
+Then push `main` through `.vorch/workflows/push-workflow.md`. Dispatch the release (step 6) as soon as `python scripts/push.py` has pushed, without waiting for the `main-build` run first: the Release workflow waits for it itself. Still follow that run to its end as the push workflow's step 4 requires, alongside the release run in step 7.
 
-### 5. Dispatch the gated release workflow
+### 6. Dispatch the gated release workflow
 
 Dispatch `.github/workflows/release.yml` from `main`. Pass the version without the leading `v`:
 
@@ -59,7 +76,7 @@ Dispatch `.github/workflows/release.yml` from `main`. Pass the version without t
 gh workflow run release.yml --ref main -f version=X.Y.Z
 ```
 
-The workflow runs three gates in parallel. `ci` (`main-build CI`) runs no tests itself: `scripts/release_gate.py` waits for the `main-build` run of the dispatched commit and passes once one of its runs completed with every job of the reusable `.github/workflows/ci.yml` successful. It fails as soon as that CI failed or was cancelled, and when no run starts within ten minutes; a commit whose push changed only development documentation starts none, so start one with `gh workflow run main-build.yml --ref main`, then dispatch the release again. That CI covers the static checks (Ruff format and lint, mypy) on Linux x64 and Windows; the complete backend test suite on Linux x64, Linux ARM64 and Windows (three shards), all with the one supported Python version (`PROJECT.md` -> Development -> Python version); and the WebUI format, lint, test and build steps. The E2E suite is not part of it. It is also manually dispatchable. All backend test jobs, including the Windows shards, inherit the shared `-n auto --dist=worksteal` configuration and use the runner-selected worker count without a platform-specific cap; failed backend tests run once more alone for diagnosis, but the first failure still fails the job even when the retry passes. Keep this policy for subsequent CI and release runs; resolve test isolation or readiness failures in their owning fixtures instead of reducing Windows concurrency. Large Session/participant fixtures have explicit 120-second test budgets.
+After the changelog check passes, the workflow runs three gates in parallel. `ci` (`main-build CI`) runs no tests itself: `scripts/release_gate.py` waits for the `main-build` run of the dispatched commit and passes once one of its runs completed with every job of the reusable `.github/workflows/ci.yml` successful. It fails as soon as that CI failed or was cancelled, and when no run starts within ten minutes; a commit whose push changed only development documentation starts none, so start one with `gh workflow run main-build.yml --ref main`, then dispatch the release again. That CI covers the static checks (Ruff format and lint, mypy) on Linux x64 and Windows; the complete backend test suite on Linux x64, Linux ARM64 and Windows (three shards), all with the one supported Python version (`PROJECT.md` -> Development -> Python version); and the WebUI format, lint, test and build steps. The E2E suite is not part of it. It is also manually dispatchable. All backend test jobs, including the Windows shards, inherit the shared `-n auto --dist=worksteal` configuration and use the runner-selected worker count without a platform-specific cap; failed backend tests run once more alone for diagnosis, but the first failure still fails the job even when the retry passes. Keep this policy for subsequent CI and release runs; resolve test isolation or readiness failures in their owning fixtures instead of reducing Windows concurrency. Large Session/participant fixtures have explicit 120-second test budgets.
 
 `windows` and `linux` call `windows-package.yml` and `linux-package.yml` in signed release mode with channel `release`. The Windows workflow builds all three shapes (`server`, `server-desktop`, `desktop-client`) with locked CPython dependencies, exercises disposable payload installation, update and lifecycle (the minimal server package additionally provisions managed STT and both TTS recipes, including repeated Chatterbox setup, without model weights or inference), compiles the per-user Inno installers, and runs each compiled installer and uninstaller through `scripts/windows/smoke_installer.ps1` in a disposable CI runner, checking its target, startup selection, server shutdown and preserved data. The Linux workflow builds the `linux-aarch64` and `linux-x86_64` server packages, each on a runner of its own architecture, and exercises installation, update, lifecycle and uninstall with `scripts/linux/smoke.py`. Configure `VBOT_RELEASE_SIGNING_KEY` as a repository secret containing a base64 raw Ed25519 private key; the builds sign every update archive with it and embed only its public key. A missing key or package failure blocks publication. See `scripts/windows/README.md` and `scripts/linux/README.md` for the build contracts.
 
@@ -75,10 +92,9 @@ To re-run only the public-distribution smoke test without creating or changing a
 gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 ```
 
-The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The one addition is the data-compatibility notice of step 7, only when that step requires it. The house style is the single auto-generated line GitHub produces:
-`**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
+The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It publishes the Markdown file followed by a blank line and `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/v<prev>...vX.Y.Z`. The previous stable tag is the nearest reachable from the release commit's parent. The publish job builds `vbot-changelog.json` before recording the asset digests. All migration notices ship with the release.
 
-### 6. Verify the workflow ran and the assets attached
+### 7. Verify the workflow ran and the assets attached
 
 Wait for the dispatched workflow and confirm the release and its assets landed. The Installers and `vbot update` fail without them:
 
@@ -86,45 +102,27 @@ Wait for the dispatched workflow and confirm the release and its assets landed. 
 gh run list --workflow=release.yml --limit 3            # find the run for vX.Y.Z
 gh run watch <run-id> --exit-status                      # wait until it succeeds
 gh release view vX.Y.Z --json assets --jq '.assets[].name' > assets.txt
-python scripts/release_assets.py --names assets.txt --version X.Y.Z
+python scripts/release_assets.py --names assets.txt --version X.Y.Z --channel release
 gh release view --json tagName --jq .tagName             # the latest release
 ```
 
-Expect: the `main-build CI` gate and all Windows package, Linux package, publish and Public Distribution canary jobs succeed; `release_assets.py` prints nothing and exits 0, so the release carries, for each `server`, `server-desktop` and `desktop-client` shape, `vBot-X.Y.Z-windows-x86_64-<shape>.exe`, `vbot-windows-x86_64-<shape>.zip`, its `.zip.sig` and `vbot-windows-x86_64-<shape>-runtime-inventory.json`; for `linux-aarch64` and `linux-x86_64`, `vbot-<platform>-server.zip`, its `.zip.sig` and `vbot-<platform>-server-runtime-inventory.json`; and `vbot-release.json`, which records the SHA-256 digest of each of the others. The latest release resolves to `vX.Y.Z`.
+Expect: the `main-build CI` gate and all Windows package, Linux package, publish and Public Distribution canary jobs succeed; `release_assets.py` prints nothing and exits 0, so the release carries, for each `server`, `server-desktop` and `desktop-client` shape, `vBot-X.Y.Z-windows-x86_64-<shape>.exe`, `vbot-windows-x86_64-<shape>.zip`, its `.zip.sig` and `vbot-windows-x86_64-<shape>-runtime-inventory.json`; for `linux-aarch64` and `linux-x86_64`, `vbot-<platform>-server.zip`, its `.zip.sig` and `vbot-<platform>-server-runtime-inventory.json`; the release-only `vbot-changelog.json`; and `vbot-release.json`, which records the SHA-256 digest of each of the others. The latest release resolves to `vX.Y.Z`.
 
-### 7. Add the data-compatibility notice when a migration breaks older versions
+## Correcting published notes
 
-A data migration declared with `breaks_older=True` makes every older vBot refuse the database it ran on (`.vorch/domain-maps/database.md` -> Evolution contract, item 4). Users must be able to read this in the release notes before they update, because going back afterwards means restoring a data snapshot from before the update. Check whether the release adds such a migration to a core owner or a bundled Extension (declarations are `Migration(name, breaks_older, apply)`, keyword or positional), and review every match:
-
-```bash
-git diff v<prev>..vX.Y.Z -- core resources/extensions | grep -nE '^\+.*(Migration\(|breaks_older)'
-```
-
-When none is added, stop: the notes stay exactly as generated. When one is added, prepend one notice per affected database above the generated line, keeping that line unchanged:
+Correct the version's Markdown file on `main` and commit the correction. Regenerate the body using the previous stable tag and update the GitHub release:
 
 ```bash
-notice='**Data compatibility**: this release migrates the `<database>` database in a way older vBot versions cannot read. After updating, an older version refuses to open it; going back requires restoring a data snapshot taken before the update, which loses everything written to that database since.'
-{ printf '%s\n\n' "$notice"; gh release view vX.Y.Z --json body --jq .body; } \
-  | gh release edit vX.Y.Z --notes-file -
+python scripts/release_changelog.py notes X.Y.Z --previous vA.B.C > release-notes.md
+gh release edit vX.Y.Z --notes-file release-notes.md
 ```
 
-`<database>` is the kernel database name (`sessions`, `ext.<extension>.<name>`, ...). This notice is the only prose a release body may carry.
-
-## Fixing notes after the fact
-
-`gh release edit` has no `--generate-notes`. If a release ends up with the wrong body (e.g. hand-written notes), regenerate the house-style notes via the API and overwrite, then add the step 7 notice again if the release requires one:
-
-```bash
-gh api repos/Vironnimo/vbot/releases/generate-notes \
-  -f tag_name=vX.Y.Z -f previous_tag_name=v<prev> --jq .body \
-  | gh release edit vX.Y.Z --notes-file -
-```
+The published asset and packages retain their original bytes and digests. The next stable release includes the correction in its asset and bundled history.
 
 ## Gotchas
 
 - **Default version bump**: when the user does not name a version, bump only the patch component of the synchronized latest release by one. Change scope does not override this default.
-- **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows. The single exception is the step 7 data-compatibility notice above that line, required when the release adds a `breaks_older=True` migration and forbidden otherwise.
-- **Assets are mandatory**: Windows requires each shape's installer and signed update archive, Linux each platform's signed server package, and the Installers and updaters read `vbot-release.json` (version and asset digests) from the release downloads. `scripts/release_assets.py` defines the complete set. Never skip step 6.
+- **Assets are mandatory**: Windows requires each shape's installer and signed update archive, Linux each platform's signed server package, and the Installers and updaters read `vbot-release.json` (version and asset digests) from the release downloads. `scripts/release_assets.py` defines the complete set. Never skip step 7.
 - **Package identity**: the package workflows build and smoke-test each package once; publish downloads and attaches exactly those files without rebuilding or repackaging.
 - **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and assets cannot be acquired before publication. Package behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
 - **`main-build` is not a release**: never cut a release from it or tag it `vX.Y.Z`; `main-build.yml` owns that prerelease and republishes it after every push to `main` whose CI and packages passed.

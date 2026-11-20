@@ -61,6 +61,7 @@ _PINNED_SQLITE = b"pinned sqlite"
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     for directory in (
+        "changelog",
         "core",
         "cli",
         "server",
@@ -216,6 +217,7 @@ def test_copy_application_respects_shape_and_exclusions(
         source, destination, shape, search_target=build_windows.SEARCH_TARGET
     )
 
+    assert (destination / "changelog" / "included.txt").is_file()
     assert (destination / "vbot_extension_sdk").exists()
     assert (
         destination / f"resources/sdk/vbot_extension_sdk-{SDK_VERSION}-py3-none-any.whl"

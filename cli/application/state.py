@@ -425,6 +425,7 @@ class Operation:
     worker_pid: int | None = None
     worker_created: float | None = None
     release_version: str | None = None
+    reviewed_version_id: str | None = None
     rollback: bool = False
     rollback_source: str | None = None
     restore_snapshot: str | None = None
@@ -441,6 +442,7 @@ class Operation:
         # Keep display and recovery metadata outside the original record shape.
         # Admission prevents predecessor hosts from rewriting this sidecar.
         labels = {name: value.pop(name) for name in _OPERATION_DETAILS}
+        labels["reviewed_version_id"] = value.pop("reviewed_version_id")
         write_json(contained(install.root, f"operations/details/{safe_id(self.id)}.json"), labels)
         # Ordinary updates retain the original record shape. Explicit switches
         # also mark their target intent in the root record's schema version.
@@ -556,6 +558,8 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
             ):
                 raise ApplicationError("Invalid update version label")
             value[name] = label
+        if labels.get("reviewed_version_id") is not None:
+            value["reviewed_version_id"] = safe_id(labels["reviewed_version_id"])
         release_version = labels.get("release_version")
         if release_version is not None:
             if not isinstance(release_version, str):

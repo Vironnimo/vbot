@@ -20,6 +20,8 @@
 </p>
 
 <p align="center">
+  <a href="changelog/">Changelog</a> ·
+  <a href="https://github.com/Vironnimo/vbot/releases">Releases</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#what-you-get">Features</a> ·
   <a href="#a-closer-look">Screenshots</a> ·

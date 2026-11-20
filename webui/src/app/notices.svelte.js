@@ -2,6 +2,8 @@ import { SvelteSet } from 'svelte/reactivity';
 
 import {
   dismissUpdateNotice,
+  releasesUrl,
+  rememberRunningVersion,
   updateNoticeDismissed,
 } from '$lib/applicationUpdate.js';
 import { t } from '$lib/i18n.js';
@@ -14,6 +16,7 @@ export function createAppNotices(context) {
   // Closed notices that return at the next connection.
   const closed = new SvelteSet();
   // Versions dismissed in this page; storage keeps the newest across reloads.
+  let updated = $state(null);
   let dismissedUpdate = $state('');
 
   const closable = (id) => () => closed.add(id);
@@ -67,10 +70,21 @@ export function createAppNotices(context) {
     ) {
       return null;
     }
+    const notes = context.updateStatus?.notes;
+    const main = context.updateStatus?.channel === 'main';
+    const tag = main ? 'main-build' : 'v' + update.version;
+    const label = t('app.whatsNew');
     return {
       id: 'application-update',
       variant: 'info',
-      message: t('app.updateAvailable', { version: update.label }),
+      message: t('app.updateAvailable', {
+        version: main ? update.label : update.version,
+      }),
+      actions: [
+        notes?.length
+          ? { label, onClick: () => context.openChangelog({ releases: notes }) }
+          : { label, href: releasesUrl + '/tag/' + encodeURIComponent(tag) },
+      ],
       onDismiss: () => {
         dismissUpdateNotice(update.version_id);
         dismissedUpdate = update.version_id;
@@ -103,6 +117,22 @@ export function createAppNotices(context) {
       // A Desktop restart also loads the new WebUI, so it replaces the reload.
       context.restartOffered ? restartNotice() : reloadNotice(),
       updateNotice(),
+      updated &&
+        !context.restartOffered &&
+        !context.webuiOutdated && {
+          id: 'application-updated',
+          variant: 'info',
+          message: t('app.updatedTo', { version: updated.until }),
+          actions: [
+            {
+              label: t('app.whatsNew'),
+              onClick: () => context.openChangelog(updated),
+            },
+          ],
+          onDismiss: () => {
+            updated = null;
+          },
+        },
       context.extensionNotice,
     ].filter(Boolean),
   );
@@ -112,5 +142,9 @@ export function createAppNotices(context) {
       return list;
     },
     connectionOpened: () => closed.clear(),
+    sawVersion(version) {
+      const previous = rememberRunningVersion(version);
+      if (previous) updated = { after: previous, until: version };
+    },
   };
 }

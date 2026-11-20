@@ -37,13 +37,19 @@
       {#if toast.actions?.length}
         <div class="toast-actions">
           {#each toast.actions as action (action.label)}
-            <Button
-              variant={action.variant ?? 'secondary'}
-              loading={action.loading}
-              onClick={action.onClick}
-            >
-              {action.label}
-            </Button>
+            {#if action.href}
+              <a href={action.href} target="_blank" rel="noopener noreferrer"
+                >{action.label}</a
+              >
+            {:else}
+              <Button
+                variant={action.variant ?? 'secondary'}
+                loading={action.loading}
+                onClick={action.onClick}
+              >
+                {action.label}
+              </Button>
+            {/if}
           {/each}
         </div>
       {/if}

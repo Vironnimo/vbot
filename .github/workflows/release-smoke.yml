@@ -36,7 +36,9 @@ jobs:
             exit 1
           fi
           gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' > assets.txt
-          python scripts/release_assets.py --names assets.txt --version "${RELEASE_TAG#v}"
+          channel=()
+          if [[ -f "changelog/${RELEASE_TAG#v}.md" ]]; then channel=(--channel release); fi
+          python scripts/release_assets.py --names assets.txt --version "${RELEASE_TAG#v}" "${channel[@]}"
 
   linux:
     name: linux (${{ matrix.architecture }})

@@ -359,6 +359,29 @@ def test_tray_starts_update_workers_itself_and_for_other_requesters(
 
     facade.start_update()
     assert requested == [{"host": True}]
+
+    notes = [
+        {
+            "version": "1.0.0",
+            "date": "2026-11-20",
+            "before_update": "Save your snapshot.",
+            "markdown": "",
+        }
+    ]
+    monkeypatch.setattr(host.availability, "review", lambda _: (notes, "rel_reviewed"))
+    confirmations = []
+
+    def cancel(version, warnings):
+        confirmations.append((version, warnings))
+        return False
+
+    monkeypatch.setattr(host, "_confirm_release", cancel)
+    facade.start_update()
+    assert confirmations == [("1.0.0", "v1.0.0\nSave your snapshot.")]
+    assert requested == [{"host": True}]
+    monkeypatch.setattr(host, "_confirm_release", lambda *_: True)
+    facade.start_update()
+    assert requested[-1] == {"host": True, "reviewed_version_id": "rel_reviewed"}
     facade.state()
     assert dispatched == []
     # Another process, such as a CLI inside a coding agent's Windows Job, handed one over.

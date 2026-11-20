@@ -1,6 +1,7 @@
 <script module>
   import { t } from '$lib/i18n.js';
 
+  const loadChangelogDialog = () => import('./app/ChangelogDialog.svelte');
   const loadOnboardingView = () => import('./components/OnboardingView.svelte');
   const loadExtensionPage = () => import('./components/ExtensionPage.svelte');
   const loadAgentsView = () => import('./components/AgentsView.svelte');
@@ -554,6 +555,11 @@
     try {
       appControllerState.webuiOutdated =
         await isWebuiOutdated(getServedWebuiBuild);
+      if (!appControllerState.webuiOutdated && !desktop.restartOffered) {
+        appNotices.sawVersion(
+          appControllerState.connectionSnapshot?.server?.version,
+        );
+      }
     } catch {
       // Keep the last answer when the served build cannot be read.
     }
@@ -673,6 +679,7 @@
   navigator.start();
 
   onMount(() => {
+    if (navigator.takeChangelogLink()) openChangelog();
     const stopClientMetrics = startClientMetrics({
       report: reportClientMetrics,
     });
@@ -733,7 +740,16 @@
   }
 
   let extensionNotice = $state.raw(null);
+  let changelogRequest = $state.raw(null);
+  function openChangelog(request = {}) {
+    changelogRequest = request;
+  }
+  setContext('openChangelog', openChangelog);
   const appNotices = createAppNotices({
+    openChangelog,
+    get updateStatus() {
+      return appControllerState.applicationUpdate;
+    },
     get approvalRequests() {
       return serverUnavailable
         ? []
@@ -761,6 +777,19 @@
     },
   });
 </script>
+
+{#if changelogRequest}
+  {#key changelogRequest}
+    <LazyContent load={loadChangelogDialog}>
+      {#snippet children(ChangelogDialog)}
+        <ChangelogDialog
+          request={changelogRequest}
+          onClose={() => (changelogRequest = null)}
+        />
+      {/snippet}
+    </LazyContent>
+  {/key}
+{/if}
 
 <svelte:window onbeforeunload={protectPendingEdits} />
 

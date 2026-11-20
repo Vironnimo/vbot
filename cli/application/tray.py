@@ -129,6 +129,8 @@ class TrayActions(Protocol):
 
     def open_extension_page(self, extension: str, page_id: str, route: str) -> None: ...
 
+    def open_changelog(self, version: str) -> None: ...
+
     def start_update(self) -> None: ...
 
     def check_for_updates(self) -> None: ...
@@ -336,7 +338,7 @@ class TrayController:
             (
                 separator,
                 TrayMenuItem(
-                    f"Update to vBot {state.available_update}",
+                    f"vBot {state.available_update} is available",
                     "start_update",
                     enabled=not update_active,
                 )
@@ -425,6 +427,10 @@ class TrayController:
     def activate_toast(self, toast: Toast) -> None:
         """Open what a clicked toast refers to."""
 
+        if toast.changelog_version is not None:
+            version = toast.changelog_version
+            self._queue("open_changelog", lambda: self._actions.open_changelog(version))
+            return
         if toast.extension_page is not None:
             target = toast.extension_page
             self._queue("open_extension_page", lambda: self._actions.open_extension_page(*target))

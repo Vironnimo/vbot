@@ -186,15 +186,24 @@ def test_current_version_finishes_without_stop_snapshot_or_handoff(tmp_path, mon
     assert operation.previous_version == operation.candidate_version == install.version().name
 
 
-@pytest.mark.parametrize("older", [False, True], ids=["active-version", "older-version"])
-def test_a_channel_publishing_the_active_version_completes_without_download(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, older: bool
+@pytest.mark.parametrize("offered", ["active", "older", "changed"])
+def test_channel_update_finishes_without_download_for_active_older_or_changed_offer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offered: str
 ):
     install = _install(tmp_path)
     operation = Operation(id="upd_current", previous_version="rel_old")
 
-    def download(*_args, **_kwargs):
-        if older:
+    from cli.application import availability
+
+    refreshed = []
+    monkeypatch.setattr(availability, "check", lambda _: refreshed.append(True))
+    operation.reviewed_version_id = "rel_reviewed"
+
+    def download(*_args, **kwargs):
+        assert kwargs["reviewed_version_id"] == "rel_reviewed"
+        if offered == "changed":
+            raise worker.ReleaseOfferChangedError("changed")
+        if offered == "older":
             raise worker.OlderReleaseError("The release channel offers an older vBot")
 
     monkeypatch.setattr(worker, "download_release", download)
@@ -209,9 +218,17 @@ def test_a_channel_publishing_the_active_version_completes_without_download(
     worker.execute(install, operation)
 
     # A channel offering an older version fails the update before anything changed.
-    assert operation.phase == ("failed" if older else "completed")
-    assert operation.error == ("The release channel offers an older vBot" if older else None)
-    assert operation.candidate_version == (None if older else "rel_old")
+    assert operation.phase == ("completed" if offered == "active" else "failed")
+    assert (
+        operation.error
+        == {
+            "active": None,
+            "older": "The release channel offers an older vBot",
+            "changed": "changed",
+        }[offered]
+    )
+    assert bool(refreshed) == (offered == "changed")
+    assert operation.candidate_version == ("rel_old" if offered == "active" else None)
     assert install.version().name == "rel_old"
 
 

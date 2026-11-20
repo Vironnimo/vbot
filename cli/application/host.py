@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -47,6 +48,7 @@ from cli.server_management import (
     classify_server,
 )
 from core.extensions.notifications import page_link
+from core.utils import changelog
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import process_started
@@ -87,9 +89,11 @@ class ApplicationFacade:
             if isinstance(running_version, EllipsisType)
             else running_version
         )
+        self._successor_notice = ""
         self._status_error = ""
         self._active_version_id = ""
         self._display_version = ""
+        self._active_release = False
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
         self._observed_target = processes.target(install) if install.owns_server else None
@@ -130,9 +134,9 @@ class ApplicationFacade:
         except Exception as error:
             self.report_error(f"Could not read update status: {error}")
             operation, update_idle = None, False
+        version = self._version()
         self._observe_update(operation)
         server_state, server_url = self._server()
-        version = self._version()
         state = TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
@@ -160,6 +164,8 @@ class ApplicationFacade:
             version = self._version()
         except ApplicationError, OSError:
             version = ""
+        if successor and self._active_release:
+            self._successor_notice = version
         if successor:
             kind, text = "tray_restarted", f"Tray restarted into vBot {version}"
         else:
@@ -180,6 +186,7 @@ class ApplicationFacade:
             rpc,
             owns_server=self._install.owns_server,
             update_active=self._update_running,
+            updated_version=self._successor_notice,
         )
         from cli.application.desktop import desktop_sign_in
 
@@ -193,6 +200,7 @@ class ApplicationFacade:
             device_sign_in=None if self._install.owns_server else desktop_sign_in,
         )
         self._notifier, self._monitor = notifier, monitor
+        self._successor_notice = ""
         monitor.start()
 
     def unwatch(self) -> None:
@@ -349,9 +357,25 @@ class ApplicationFacade:
             raise ApplicationError("The Desktop has no server to open this page on")
         webbrowser.open(f"{target.url}{page}")
 
+    def open_changelog(self, version: str) -> None:
+        changelog.version_key(version)
+        url = (
+            self._browser_url("/?changelog=1")
+            if self._install.owns_server
+            else f"{changelog.RELEASES_URL}/tag/v{version}"
+        )
+        webbrowser.open(url)
+
     def start_update(self) -> None:
         with self._recording("Could not start an update"):
-            operations.request_update(self._install, host=True)
+            notes, reviewed = availability.review(self._install)
+            warnings = changelog.pre_update_text(notes)
+            if warnings and not _confirm_release(notes[0]["version"], warnings):
+                return
+            if reviewed is not None:
+                operations.request_update(self._install, host=True, reviewed_version_id=reviewed)
+            else:
+                operations.request_update(self._install, host=True)
 
     def check_for_updates(self) -> None:
         """Ask the update channel now and answer with a toast either way."""
@@ -482,6 +506,7 @@ class ApplicationFacade:
         if active.name != self._active_version_id:
             release = read_json(active / "release.json", limit=32 * 1024**2)
             version = release.get("version")
+            self._active_release = release.get("channel") == "release"
             self._display_version = version if isinstance(version, str) else ""
             self._active_version_id = active.name
             self._source_label = None
@@ -592,9 +617,9 @@ class ApplicationFacade:
         journal = self._activity.journal
         if not requested and (journal.has(ref) or self._announced_recently()):
             return
-        journal.record("update_available", f"vBot {newer.label} is available", ref=ref)
+        journal.record("update_available", f"vBot {result.offered_label} is available", ref=ref)
         if self._notifier is not None:
-            self._notifier.update_available(newer.label, requested=requested)
+            self._notifier.update_available(result.offered_label, requested=requested)
 
     def _announced_recently(self) -> bool:
         since = datetime.now(UTC) - _AVAILABLE_NOTICE_INTERVAL
@@ -622,14 +647,14 @@ class ApplicationFacade:
 
     def _available_label(self) -> str:
         result = self._current_availability()
-        return result.available.label if result is not None and result.available else ""
+        return result.offered_label if result is not None else ""
 
     def _availability_row(self) -> str:
         result = self._current_availability()
         if result is None:
             return "Not checked yet"
         if result.available is not None:
-            text = f"vBot {result.available.label} is available"
+            text = f"vBot {result.offered_label} is available"
         elif result.checked_at:
             text = "This is the newest version"
         else:
@@ -681,7 +706,16 @@ class ApplicationFacade:
                 ref=operation.id,
                 at=_canonical_or_empty(operation.updated_at),
             )
-            if not self._progress_history and self._notifier is not None:
+            successor_will_notify = (
+                operation.phase == "completed"
+                and self._activation_changed()
+                and self._active_release
+            )
+            if (
+                not self._progress_history
+                and self._notifier is not None
+                and not successor_will_notify
+            ):
                 self._notifier.update_finished(operation, summary)
             return
         if target and target != self._progress_announced:
@@ -825,6 +859,34 @@ def _local_time(value: str, *, full: bool = False) -> str:
     except ValueError:
         return value
     return moment.strftime("%Y-%m-%d %H:%M" if full else "%H:%M:%S")
+
+
+def _confirm_release(version: str, warnings: str) -> bool:
+    """Run the native modal on its own UI thread while the tray stays responsive."""
+    changelog.version_key(version)
+    powershell = Path(os.environ["SYSTEMROOT"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-STA",
+            "-Command",
+            Path(__file__).with_name("confirm_update.ps1").read_text(encoding="utf-8"),
+        ],
+        input=json.dumps(
+            {
+                "version": version,
+                "text": warnings,
+                "url": f"{changelog.RELEASES_URL}/tag/v{version}",
+            }
+        ).encode(),
+        capture_output=True,
+        creationflags=subprocess_creation_flags(),
+    )
+    if result.returncode not in (0, 10):
+        raise ApplicationError("Could not show the update notices. Run vbot update in a terminal.")
+    return result.returncode == 10
 
 
 def _open_folder(path: Path) -> None:

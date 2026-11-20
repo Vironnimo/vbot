@@ -8,7 +8,7 @@ from pathlib import Path
 from vbot_extension_sdk import SDK_VERSION
 
 SHAPES = ("server", "server-desktop", "desktop-client")
-APP_COMMON = ("core", "cli", "vbot_extension_sdk")
+APP_COMMON = ("changelog", "core", "cli", "vbot_extension_sdk")
 APP_SERVER = ("server", "resources", "webui/dist")
 APP_DESKTOP = ("desktop",)
 # The Desktop Client hosts the native desktop target without loading the
