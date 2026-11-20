@@ -17,6 +17,7 @@
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import ToolRowStatus from './ToolRowStatus.svelte';
+  import ToolCategoryIcon from './ToolCategoryIcon.svelte';
   import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import {
     backgroundCommandRowState,
@@ -51,6 +52,7 @@
     subAgentToolStatusLabel,
     timestampForItem,
     toolRowPresentation,
+    toolCategory,
     toolArguments,
     toolNameForRunTool,
     toolStatus,
@@ -416,6 +418,7 @@
               )}
           >
             <summary class="tool-event-line subagent-line">
+              <ToolCategoryIcon category="agent" />
               <span class="te-fn">
                 {t('chat.subagent.label')}
               </span>
@@ -537,6 +540,7 @@
               )}
           >
             <summary class="tool-event-line subagent-line">
+              <ToolCategoryIcon category="agent" />
               <span class="te-fn">
                 {t('chat.subagent.sendLabel')}
               </span>
@@ -640,6 +644,9 @@
               )}
           >
             <summary class="tool-event-line">
+              <ToolCategoryIcon
+                category={toolCategory(toolNameForRunTool(child))}
+              />
               <span class="te-fn">{toolNameForRunTool(child)}</span>
               {#if rowPresentation.primary.length > 0}
                 <ToolPrimaryLine

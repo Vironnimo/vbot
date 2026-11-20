@@ -737,7 +737,11 @@ describe('ChatTimeline Tools', () => {
             '.teb-clamp-toggle',
           ),
         ).toBeNull();
-        // The command and its output read as one block.
+        // The row shows its Tool category, and the command and its output
+        // read as one block.
+        expect(
+          document.querySelector('.tool-event-line .te-icon').dataset.category,
+        ).toBe('run');
         expect(command.classList.contains('teb-section--command')).toBe(true);
         expect(
           detailRow('chat.toolDetailLabel.output').classList.contains(

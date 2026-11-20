@@ -49,6 +49,7 @@
     toolResultValueForEvent,
     toolRowFromEvent,
     toolRowPresentation,
+    toolCategory,
     toolStatusDetails,
     toolStatusLabel,
     userContentBlocks,
@@ -69,6 +70,7 @@
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import ToolRowStatus from './ToolRowStatus.svelte';
+  import ToolCategoryIcon from './ToolCategoryIcon.svelte';
   import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import UserMessageText from './UserMessageText.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
@@ -601,6 +603,9 @@
             viewState.setOpen(disclosureKey('tool'), event.currentTarget.open)}
         >
           <summary class="tool-event-line">
+            <ToolCategoryIcon
+              category={toolCategory(toolNameForEvent(item.event))}
+            />
             <span class="te-fn">{toolNameForEvent(item.event)}</span>
             {#if eventPresentation.primary.length > 0}
               <ToolPrimaryLine primary={eventPresentation.primary} />

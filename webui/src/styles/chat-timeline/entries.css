@@ -402,14 +402,14 @@
   align-items: center;
   gap: 7px;
   padding: 2px 0;
-  color: var(--text-med);
+  color: var(--text-lo);
   font-family: var(--font-ui);
   font-size: 12px;
   user-select: none;
 }
 
 .reasoning-header:hover {
-  color: var(--text-hi);
+  color: var(--text-med);
 }
 
 .reasoning-duration {
@@ -417,11 +417,16 @@
   opacity: 0.7;
 }
 
-.reasoning-icon {
-  width: 10px;
-  height: 10px;
+/* Thought rows carry no icon (user decision 2026-11-20): the empty column
+   lines their label up with Tool names (13px icon + 8px gap there), so rows
+   with an icon read as actions and rows without as the Agent thinking. */
+.reasoning-spacer {
+  width: 14px;
   flex-shrink: 0;
-  opacity: 0.4;
+}
+
+.reasoning-summary__label {
+  font-style: italic;
 }
 
 .r-chevron {
