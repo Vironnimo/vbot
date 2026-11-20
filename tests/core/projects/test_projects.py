@@ -288,6 +288,7 @@ def test_override_fields_constant_contains_all_overridable_fields() -> None:
                 "compaction_policy",
                 "tool_access",
                 "tool_loading",
+                "permission_profile",
                 "permission_rules",
             }
         )
