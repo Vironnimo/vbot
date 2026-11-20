@@ -167,6 +167,7 @@
     <ToolDetailSection
       label={t('chat.toolDetailLabel.output')}
       value={output}
+      mode="literal"
       follow={live}
     />
   {/if}

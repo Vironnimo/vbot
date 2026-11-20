@@ -114,7 +114,6 @@ export {
   compactionSummaryText,
   metaForEvent,
   isToolEvent,
-  isFailedToolEvent,
   isTerminalEvent,
 } from './chatTimelinePresentation/messages.js';
 export {

@@ -1,12 +1,8 @@
 import {
   toolCallFromEvent,
   toolNameForEvent,
-  hasToolResultError,
-  hasToolResultPartial,
-  hasToolResultCancellation,
-  toolResultValueForEvent,
+  toolResultStatus,
 } from './messages.js';
-import { isPermissionDeniedResult } from '$lib/permissionRules.js';
 import {
   toolDisplayFromEvent,
   toolStatus,
@@ -66,17 +62,7 @@ export const toolRowFromEvent = (event) => {
     finishedAt: resultEvent?.timestamp ?? null,
     result: resultEvent?.payload?.result,
     timing: resultEvent?.payload?.timing ?? null,
-    status: resultEvent
-      ? hasToolResultCancellation(event)
-        ? 'cancelled'
-        : isPermissionDeniedResult(toolResultValueForEvent(event))
-          ? 'refused'
-          : hasToolResultError(event)
-            ? 'failed'
-            : hasToolResultPartial(event)
-              ? 'partial'
-              : 'success'
-      : 'running',
+    status: resultEvent ? toolResultStatus(resultEvent) : 'running',
   };
 };
 

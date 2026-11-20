@@ -19,7 +19,6 @@
     hasReadableReasoning,
     hasUserContentBlocks,
     isAssistantItem,
-    isFailedToolEvent,
     isFileContentBlock,
     isFileMentionContentBlock,
     isAudioMediaContentBlock,
@@ -50,7 +49,6 @@
     toolResultValueForEvent,
     toolRowFromEvent,
     toolRowPresentation,
-    toolStatus,
     toolStatusDetails,
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
@@ -569,6 +567,7 @@
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}
     {@const eventToolRow = toolRowFromEvent(item.event)}
+    {@const status = eventToolRow.status}
     {@const eventPresentation = toolRowPresentation(eventToolRow)}
     {@const eventWidget = showWidgetFromTool(eventToolRow)}
     {@const eventPortal = portalFromTool(eventToolRow)}
@@ -601,11 +600,13 @@
         >
           <summary class="tool-event-line">
             <span
-              class:error={toolStatus(eventToolRow) === 'failed'}
-              class:partial={toolStatus(eventToolRow) === 'partial'}
-              class:refused={toolStatus(eventToolRow) === 'refused'}
-              class:running={toolStatus(eventToolRow) === 'running'}
-              class:done={toolStatus(eventToolRow) === 'success'}
+              class:error={status === 'failed'}
+              class:partial={status === 'partial'}
+              class:refused={status === 'refused'}
+              class:cancelled={status === 'cancelled'}
+              class:interrupted={status === 'interrupted'}
+              class:running={status === 'running'}
+              class:done={status === 'success'}
               class="te-dot"
               use:tooltip={() => toolStatusDetails(eventToolRow)}>●</span
             >
@@ -629,7 +630,7 @@
             toolName={toolNameForEvent(item.event)}
             args={toolCallFromEvent(item.event)?.arguments}
             result={toolResultValueForEvent(item.event)}
-            resultFailed={isFailedToolEvent(item.event)}
+            resultFailed={status === 'failed'}
             showResult={Boolean(toolResultValueForEvent(item.event))}
             viewKey={disclosureKey('tool')}
           />

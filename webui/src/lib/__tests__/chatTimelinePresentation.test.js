@@ -8,7 +8,6 @@ import {
   groupTransientCards,
   imageReferenceLabel,
   isToolPreparing,
-  isFailedToolEvent,
   labelForEvent,
   labelForMessage,
   takeoverSeparatorLabel,
@@ -789,7 +788,6 @@ describe('Tool row presentation', () => {
       const tool = toolRowFromEvent(event);
       expect(toolStatus(tool)).toBe(status);
       expect(toolStatusLabel(tool)).toBe(t(label));
-      expect(isFailedToolEvent(event)).toBe(false);
     },
   );
 

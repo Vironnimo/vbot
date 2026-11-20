@@ -353,6 +353,34 @@ describe('ChatTimeline Tools', () => {
       expect(resultCode.textContent).toContain('Invalid regular expression');
     });
 
+    it.each([
+      ['bash', 'stopped', 'cancelled'],
+      ['execute_code', 'stopped', 'cancelled'],
+      ['execute_code', 'failed', 'error'],
+      ['execute_code', 'timed_out', 'error'],
+      ['terminal', 'stopped', 'done'],
+    ])(
+      'shows the outcome of a standalone %s event with status %s',
+      (name, status, dotClass) => {
+        const sessionState = timelineSession();
+        sessionState.timelineItems = [
+          {
+            id: 'standalone',
+            type: 'event',
+            event: {
+              type: 'tool_call_result',
+              payload: {
+                tool_call: { id: 'call', name },
+                result: { ok: true, data: { status } },
+              },
+            },
+          },
+        ];
+        timeline.render(sessionState);
+        expect(summaryLine().querySelector(`.te-dot.${dotClass}`)).toBeTruthy();
+      },
+    );
+
     it("shows a Tool's detail blocks and keeps its raw call behind a disclosure", () => {
       const display = structuredDisplay({
         hidden_argument_keys: ['patch'],
