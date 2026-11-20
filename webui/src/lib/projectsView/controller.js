@@ -606,10 +606,14 @@ export function createProjectsController({
   // server checks that it exists and is no Source yet. A refused folder
   // leaves the list again, and its reason is returned for the folder field
   // instead of the page banner.
-  async function addSkillFolder(path) {
+  async function addSkillFolders(paths) {
     const before = state.editForm.sources;
-    const next = addSkillFolderSource(before, path, (source) =>
-      sourceKind(source, state.activeSources),
+    const next = paths.reduceRight(
+      (sources, path) =>
+        addSkillFolderSource(sources, path, (source) =>
+          sourceKind(source, state.activeSources),
+        ),
+      before,
     );
     if (next === before) return { ok: false, error: '' };
     const previous = JSON.stringify(before);
@@ -1118,7 +1122,7 @@ export function createProjectsController({
     trackModelDropdownOpen,
     updateAddField,
     updateEditField,
-    addSkillFolder,
+    addSkillFolders,
     moveAutoLoadEntry,
     updateModelsRefreshToken,
     updateProjectsRefreshToken,

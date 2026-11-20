@@ -211,7 +211,7 @@ export function extendPrefix(matches, prefix) {
 
 /**
  * The dialog's view of a listing: entries containing the filter text,
- * including hidden ones unless the user hides them. A dot-prefixed filter
+ * including hidden ones when requested. A dot-prefixed filter
  * still reaches hidden entries.
  */
 export function filterEntries(entries, query = '', { showHidden = true } = {}) {
@@ -342,7 +342,7 @@ export function listingFailureText(reason, { root = '' } = {}) {
 }
 
 /**
- * The sentence for a failed `filesystem.create_directory`. With the `root` a
+ * The sentence for a failed picker creation request. With the `root` a
  * picker keeps to, a refused folder is one that lies outside it.
  */
 export function creationFailureText(error, { root = '' } = {}) {

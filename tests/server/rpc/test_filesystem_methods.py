@@ -97,6 +97,21 @@ async def test_creates_a_folder_and_refuses_an_existing_one_with_a_reason(
     relative = await _call({"path": "new", "name": "inner", "root": str(tmp_path)}, create)
     with caplog.at_level(logging.DEBUG, logger=_DISPATCHER_LOGGER):
         existing = await _call({"path": "", "name": "new", "root": str(tmp_path)}, create)
+    file_path = tmp_path / "new" / "notes.md"
+    file_params = {"path": "new", "root": str(tmp_path), "name": "notes.md"}
+    assert await _call(file_params, "filesystem.create_file") == {
+        "ok": True,
+        "result": {"path": "new/notes.md"},
+    }
+    assert file_path.read_bytes() == b""
+    file_path.write_bytes(b"kept")
+    duplicate = await _call(file_params, "filesystem.create_file")
+    assert duplicate["error"]["data"] == {"reason": "exists"}
+    assert file_path.read_bytes() == b"kept"
+    folder = await _call(
+        {"path": "", "root": str(tmp_path), "name": "new"}, "filesystem.create_file"
+    )
+    assert folder["error"]["data"] == {"reason": "exists"}
     # A name the user chose that exists is a routine answer, not a warning.
     levels = [record.levelno for record in caplog.records if record.name == _DISPATCHER_LOGGER]
     malformed = await _call({"path": tmp_path.as_posix()}, create)

@@ -405,7 +405,20 @@ export default Object.freeze({
   'pathPicker.trail': 'Folder path',
   'pathPicker.up': 'Up one folder',
   'pathPicker.filter': 'Filter this folder',
-  'pathPicker.filterPlaceholder': 'Filter…',
+  'pathPicker.filterPlaceholder': 'Filter this folder…',
+  'pathPicker.view': 'View options',
+  'pathPicker.showHidden': 'Show hidden files',
+  'pathPicker.new': 'New',
+  'pathPicker.newFile': 'New file',
+  'pathPicker.fileName': 'File name',
+  'pathPicker.openFolder': 'Open folder',
+  'pathPicker.noVisible': 'No visible entries in this folder.',
+  'pathPicker.selectHint':
+    'Ctrl or ⌘ + click to add to the selection. Shift + click selects a range.',
+  'pathPicker.touchHint':
+    'Tap entries to select them. Tap a folder’s arrow to open it.',
+  'pathPicker.selectedCount': '{count} selected',
+  'pathPicker.selectCount': 'Select {count} items',
   'pathPicker.hideHidden': 'Hide hidden files',
   'pathPicker.contents': 'Contents of {path}',
   'pathPicker.empty': 'This folder is empty.',
@@ -437,12 +450,11 @@ export default Object.freeze({
   'pathPicker.create': 'Create',
   'pathPicker.createFailure.exists':
     'Something with this name already exists here.',
-  'pathPicker.createFailure.invalidName':
-    'This name cannot be used for a folder here.',
+  'pathPicker.createFailure.invalidName': 'This name cannot be used here.',
   'pathPicker.createFailure.denied':
-    'vBot is not allowed to create a folder here.',
+    'You do not have write access to this folder.',
   'pathPicker.createFailure.gone': 'This folder no longer exists.',
   'pathPicker.createFailure.timeout':
-    'The folder did not answer in time. The new folder may still appear; refresh to check.',
-  'pathPicker.createFailure.failed': 'The folder could not be created.',
+    'The folder did not answer in time. Refresh to check whether the entry was created.',
+  'pathPicker.createFailure.failed': 'The entry could not be created.',
 });

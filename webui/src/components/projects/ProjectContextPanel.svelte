@@ -1,4 +1,5 @@
 <script>
+  import { createServerFile } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -30,17 +31,16 @@
       : t('projects.instructions.mainNone'),
   );
 
-  function addAutoLoadEntry(path = projectsState.autoLoadDraft) {
-    const entry = path.trim();
-    if (entry === '') {
-      return;
-    }
-    if (!projectsState.editForm.auto_load.includes(entry)) {
-      projectsController.updateEditField('auto_load', [
-        ...projectsState.editForm.auto_load,
-        entry,
-      ]);
-    }
+  function addAutoLoadEntries(paths) {
+    const previous = projectsState.editForm.auto_load;
+    const next = [
+      ...new Set([
+        ...previous,
+        ...paths.map((path) => path.trim()).filter(Boolean),
+      ]),
+    ];
+    if (next.length !== previous.length)
+      projectsController.updateEditField('auto_load', next);
     projectsState.autoLoadDraft = '';
   }
 
@@ -56,7 +56,7 @@
   function handleAutoLoadKeydown(event) {
     if (event.key === 'Enter' && !isImeComposing(event)) {
       event.preventDefault();
-      addAutoLoadEntry();
+      addAutoLoadEntries([projectsState.autoLoadDraft]);
     }
   }
 </script>
@@ -160,6 +160,7 @@
             id="project-edit-auto-load"
             class="projects-file-input"
             mode="file"
+            createFile={createServerFile}
             root={projectRoot}
             value={projectsState.autoLoadDraft}
             placeholder={t('projects.manage.autoLoadPlaceholder')}
@@ -168,7 +169,9 @@
             onInput={(next) => {
               projectsState.autoLoadDraft = next;
             }}
-            onSelect={addAutoLoadEntry}
+            onSelect={(path) => addAutoLoadEntries([path])}
+            onSelectMany={addAutoLoadEntries}
+            rememberLocation="project-additional-files"
             onkeydown={handleAutoLoadKeydown}
           />
         </div>

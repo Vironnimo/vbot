@@ -16,8 +16,8 @@ limit applies, so a large directory still yields every entry a typed name can re
 
 A directory that exists but cannot be read is ``unreadable``, never ``not_found``.
 
-Pickers also create a folder where the user is browsing (``create_directory``),
-under the same path rules and budget: one new folder with one name, inside an
+Pickers also create folders and empty files where the user is browsing,
+under the same path rules and budget: one new entry with one name, inside an
 existing directory, never parents along the way and never an existing entry.
 """
 
@@ -105,7 +105,7 @@ class DirectoryListingError(VBotError):
 
 
 class DirectoryCreationError(VBotError):
-    """A folder could not be created; ``reason`` says why."""
+    """An entry could not be created; ``reason`` says why."""
 
     def __init__(self, reason: CreationFailureReason, message: str) -> None:
         super().__init__(message)
@@ -231,19 +231,14 @@ def _list(
 
 
 async def create_directory(path: str, name: str, *, root: str | None = None) -> str:
-    """Create the folder ``name`` inside the existing directory ``path``.
+    """Create one folder in the browsed directory without replacing an entry."""
+    return await create_entry(path, name, kind="directory", root=root)
 
-    ``path`` follows :func:`list_directory` (absolute, ``~`` / ``~/...``, or with
-    ``root`` relative to it). ``name`` is one folder name the server's system
-    accepts. Returns the new folder's path in the listing form of ``path``.
 
-    Raises :class:`ListingPathError` for a path the request may not name and
-    :class:`DirectoryCreationError` when the folder cannot be created, also with
-    the reason ``timeout`` when the filesystem does not answer within the listing
-    budget; the folder may then still appear once the filesystem answers.
-    """
+async def create_entry(path: str, name: str, *, kind: EntryKind, root: str | None = None) -> str:
+    """Create one directory or empty file under the same path rules and budget as a listing."""
     timeout_seconds = DIRECTORY_LISTING_TIMEOUT_SECONDS
-    task = asyncio.ensure_future(_POOL.run(_create, path, name, root=root))
+    task = asyncio.ensure_future(_POOL.run(_create, path, name, kind=kind, root=root))
     try:
         done, _pending = await asyncio.wait((task,), timeout=timeout_seconds)
     except asyncio.CancelledError:
@@ -252,15 +247,15 @@ async def create_directory(path: str, name: str, *, root: str | None = None) -> 
     if not done:
         _abandon(task)
         raise DirectoryCreationError(
-            "timeout", f"{path or root} did not answer in time; the folder may still appear."
+            "timeout", f"{path or root} did not answer in time; the entry may still appear."
         )
     return task.result()
 
 
-def _create(path: str, name: str, *, root: str | None) -> str:
+def _create(path: str, name: str, *, kind: EntryKind, root: str | None) -> str:
     if "\x00" in path or "\x00" in (root or ""):
         raise ListingPathError("A path cannot contain a NUL character.")
-    _check_folder_name(name)
+    _check_entry_name(name)
     if root is None:
         parent = _absolute(path)
         shown_parent = PurePath(parent).as_posix()
@@ -271,7 +266,12 @@ def _create(path: str, name: str, *, root: str | None) -> str:
         shown_parent = "/".join(parts) or "The listing root"
         shown = "/".join([*parts, name])
     try:
-        os.mkdir(os.path.join(parent, name))
+        target = Path(parent, name)
+        if kind == "directory":
+            target.mkdir()
+        else:
+            with target.open("xb"):
+                pass
     except FileExistsError as error:
         raise DirectoryCreationError("exists", f"{shown} already exists.") from error
     except OSError as error:
@@ -279,7 +279,7 @@ def _create(path: str, name: str, *, root: str | None) -> str:
     return shown
 
 
-def _check_folder_name(name: str) -> None:
+def _check_entry_name(name: str) -> None:
     """One name the server's system accepts; Windows also refuses its reserved names."""
     separators = "/\\" if os.sep == "\\" else "/"
     invalid = (
@@ -289,14 +289,16 @@ def _check_folder_name(name: str) -> None:
         or (sys.platform == "win32" and is_reserved_name(name))
     )
     if invalid:
-        raise DirectoryCreationError("invalid_name", f"{name!r} cannot name a folder here.")
+        raise DirectoryCreationError("invalid_name", f"{name!r} cannot name a file or folder here.")
 
 
 def _creation_failure(
     parent: str, shown_parent: str, name: str, error: OSError
 ) -> DirectoryCreationError:
     if getattr(error, "winerror", None) == _ERROR_INVALID_NAME:
-        return DirectoryCreationError("invalid_name", f"{name!r} cannot name a folder here.")
+        return DirectoryCreationError(
+            "invalid_name", f"{name!r} cannot name a file or folder here."
+        )
     if isinstance(error, (FileNotFoundError, NotADirectoryError)):
         try:
             status = stat_or_none(parent)
@@ -305,12 +307,20 @@ def _creation_failure(
         if status is not None and not stat.S_ISDIR(status.st_mode):
             return DirectoryCreationError("not_a_directory", f"{shown_parent} is not a directory.")
         return DirectoryCreationError("not_found", f"No such directory: {shown_parent}")
+    # Windows reports access denied when exclusive file creation meets a directory.
+    if isinstance(error, (PermissionError, IsADirectoryError)):
+        try:
+            existing = stat_or_none(os.path.join(parent, name), follow_symlinks=False)
+        except OSError:
+            existing = None
+        if existing is not None:
+            return DirectoryCreationError("exists", f"{name} already exists in {shown_parent}.")
     if isinstance(error, PermissionError) or error.errno == errno.EROFS:
         return DirectoryCreationError(
-            "denied", f"A folder cannot be created in {shown_parent}: access is denied."
+            "denied", f"An entry cannot be created in {shown_parent}: access is denied."
         )
     # The operating system's own text may be localized; the reason is what counts.
-    return DirectoryCreationError("failed", f"A folder could not be created in {shown_parent}.")
+    return DirectoryCreationError("failed", f"An entry could not be created in {shown_parent}.")
 
 
 def _places(needle: str) -> DirectoryListing:
@@ -490,6 +500,7 @@ __all__ = [
     "DirectoryListingError",
     "ListingPathError",
     "create_directory",
+    "create_entry",
     "list_directory",
     "list_directory_sync",
 ]

@@ -1,10 +1,10 @@
-"""Server filesystem browsing RPC handlers for path pickers: listing and new folders."""
+"""Server filesystem browsing RPC handlers for path pickers: listing and creating entries."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.utils.directory_listing import DirectoryListing, create_directory, list_directory
+from core.utils.directory_listing import DirectoryListing, EntryKind, create_entry, list_directory
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -45,22 +45,23 @@ async def _list_filesystem(_state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _create_filesystem_directory(_state: Any, params: JsonObject) -> JsonObject:
-    """Create the folder ``name`` inside the directory ``path`` and return its path.
+    return await _create_filesystem_entry(params, "directory")
 
-    ``path`` follows ``filesystem.list`` (absolute, ``~`` or ``~/...``, or with
-    ``root`` relative to it, ``""`` being the root); the result's ``path`` has the
-    same form. An existing entry is never touched.
-    """
-    _reject_unsupported(
-        params, rpc_request_fields("filesystem.create_directory"), "filesystem.create_directory"
-    )
+
+async def _create_filesystem_file(_state: Any, params: JsonObject) -> JsonObject:
+    return await _create_filesystem_entry(params, "file")
+
+
+async def _create_filesystem_entry(params: JsonObject, kind: EntryKind) -> JsonObject:
+    method = f"filesystem.create_{kind}"
+    _reject_unsupported(params, rpc_request_fields(method), method)
     path = params.get("path")
     if not isinstance(path, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.path must be a string")
     name = _required_string(params, "name")
     root = _optional_string(params, "root")
     try:
-        created = await create_directory(path, name, root=root)
+        created = await create_entry(path, name, kind=kind, root=root)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"path": created}
@@ -86,6 +87,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return server filesystem browsing RPC handlers."""
 
     return {
+        "filesystem.create_file": _create_filesystem_file,
         "filesystem.list": _list_filesystem,
         "filesystem.create_directory": _create_filesystem_directory,
     }

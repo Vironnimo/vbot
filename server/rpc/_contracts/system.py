@@ -607,6 +607,13 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "Create one directory without modifying an existing entry.",
     ),
     service(
+        "filesystem.create_file",
+        "execute",
+        params({"path": _STRING, "name": _ID, "root": _ID}, ("path", "name")),
+        (),
+        "Create one empty file without modifying an existing entry.",
+    ),
+    service(
         "files.list",
         "query",
         params(

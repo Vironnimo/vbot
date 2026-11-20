@@ -175,12 +175,11 @@
   let folderError = $state('');
   let folderAdding = $state(false);
 
-  async function addFolder() {
-    const path = folderDraft.trim();
-    if (!path || folderAdding) return;
+  async function addFolders(paths) {
+    if (!paths.length || folderAdding) return;
     folderAdding = true;
     folderError = '';
-    const result = await projectsController.addSkillFolder(path);
+    const result = await projectsController.addSkillFolders(paths);
     folderAdding = false;
     if (result.ok) folderDraft = '';
     else folderError = result.error;
@@ -210,6 +209,9 @@
             mode="directory"
             startPath={projectsController.selectedProject()?.cwd ?? ''}
             projectShortcuts
+            rememberLocation={`project-skill-folders.${projectsState.selectedProjectId}`}
+            onSelectMany={addFolders}
+            disabled={folderAdding}
             value={folderDraft}
             invalid={folderError !== ''}
             placeholder={t('projects.sources.folderPlaceholder')}
@@ -221,7 +223,7 @@
             onkeydown={(event) => {
               if (event.key === 'Enter' && !isImeComposing(event)) {
                 event.preventDefault();
-                void addFolder();
+                void addFolders([folderDraft]);
               }
             }}
           />
@@ -230,7 +232,7 @@
             data-testid="project-skill-folder-add"
             loading={folderAdding}
             disabled={folderDraft.trim().length === 0}
-            onClick={addFolder}
+            onClick={() => addFolders([folderDraft])}
           >
             {t('projects.sources.addFolder')}
           </Button>

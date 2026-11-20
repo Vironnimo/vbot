@@ -16,6 +16,9 @@
   // `projectShortcuts` adds the configured Projects to the dialog's places.
   // `onSelect` reports a confirmed browser choice or a completed file
   // suggestion, after onInput; typing and completing folders do not select.
+  // onSelectMany receives a collection's browser selection together;
+  // rememberLocation scopes its remembered folder and createFile opts into
+  // creating an empty file. Completions still use the scalar callback.
   // `browseLabel` gives Browse... a visible text label instead of an icon.
   // `startPath` is where an empty field starts: Browse… opens at its nearest
   // folder that lists, and ArrowDown offers that folder to complete from,
@@ -63,6 +66,9 @@
     startPath = '',
     listDirectory = null,
     createDirectory = null,
+    createFile = null,
+    onSelectMany = null,
+    rememberLocation = '',
     projectShortcuts = false,
     id = '',
     variant = 'default',
@@ -102,7 +108,17 @@
   let browserContext = null;
 
   function pickerContext(text = value) {
-    return [text, root, mode, startPath, listDirectory, createDirectory];
+    return [
+      text,
+      root,
+      mode,
+      startPath,
+      listDirectory,
+      createDirectory,
+      createFile,
+      rememberLocation,
+      Boolean(onSelectMany),
+    ];
   }
 
   function matchesContext(previous, current = pickerContext()) {
@@ -431,10 +447,14 @@
     browsing = true;
   }
 
-  function chooseFromBrowser(path) {
+  function chooseFromBrowser(paths) {
     if (disabled || !matchesContext(browserContext)) return;
     browsing = false;
-    const next = trimTrailingSeparator(path);
+    if (onSelectMany) {
+      onSelectMany(paths);
+      return;
+    }
+    const next = trimTrailingSeparator(paths[0]);
     onInput(next);
     onSelect(next);
   }
@@ -605,6 +625,9 @@
     {root}
     {value}
     {startPath}
+    multiple={Boolean(onSelectMany)}
+    {rememberLocation}
+    {createFile}
     listDirectory={readDirectory}
     createDirectory={createDirectory ??
       (listDirectory ? null : host?.createDirectory)}

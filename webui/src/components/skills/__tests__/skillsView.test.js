@@ -265,22 +265,13 @@ describe('Skills manager', () => {
       const pendingReads = [];
       await render();
       collection('Main');
-      await addMenuItem('Install from link or file…');
+      await addMenuItem('Install skills…');
       input(
         document.querySelector('#skill-install-source'),
         'https://example.test/demo.skill',
       );
       rpcMock.mockImplementation(async (method, params) => {
         if (method === 'skill.install') {
-          if (params.dry_run)
-            return {
-              operation: 'preview',
-              name: 'demo',
-              package_path: '.',
-              files: 2,
-              sha256: 'a'.repeat(64),
-              candidates: [{ exists: false }],
-            };
           inventory = [...inventory, entry('installed-private', 'demo')];
           return { operation: 'installed', scope: 'agent:main', name: 'demo' };
         }
@@ -290,8 +281,6 @@ describe('Skills manager', () => {
           return { id: params.id, content: 'installed-instructions-sentinel' };
         return defaultRpc(method, params);
       });
-      click(button(t('skills.install.check')));
-      await settle();
       notifySkillsChanged();
       await settle();
       expect(document.querySelector('#skill-install-source').value).toBe(
@@ -311,7 +300,7 @@ describe('Skills manager', () => {
       await settle();
       expect(rpcMock).toHaveBeenCalledWith(
         'skill.install',
-        expect.objectContaining({ scope: 'agent:main', dry_run: false }),
+        expect.objectContaining({ scope: 'agent:main', return_choices: true }),
       );
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(document.querySelector('.skills-content').textContent).toContain(
@@ -560,13 +549,11 @@ describe('Skills manager', () => {
     const menu = await openAddMenu();
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(texts('[role="menuitem"]', menu)).toEqual([
-      'Install from link or file…',
+      'Install skills…',
       'Create skill…',
       'Manage skill folders…',
     ]);
-    expect(document.activeElement.textContent).toBe(
-      'Install from link or file…',
-    );
+    expect(document.activeElement.textContent).toBe('Install skills…');
     key(document.activeElement, 'ArrowDown');
     expect(document.activeElement.textContent).toBe('Create skill…');
     key(document.activeElement, 'End');

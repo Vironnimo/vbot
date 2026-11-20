@@ -1254,6 +1254,10 @@ describe('ProjectsView auto-load files', () => {
             .querySelector('.projects-file-add .path-field__browse')
             .click();
           await settle();
+          const filter = document.querySelector('.path-browser__filter');
+          filter.value = '.';
+          filter.dispatchEvent(new Event('input', { bubbles: true }));
+          flushSync();
           const folder = document.querySelector('.path-browser__row');
           expect(folder.textContent.trim()).toBe('.context');
           folder.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));

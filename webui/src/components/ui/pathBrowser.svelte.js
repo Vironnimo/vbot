@@ -31,6 +31,14 @@ export function createPathBrowser(
   const startPath = $derived(options.startPath);
   const listDirectory = $derived(options.listDirectory);
   const createDirectory = $derived(options.createDirectory);
+  const createFile = $derived(options.createFile);
+  const multiple = $derived(options.multiple);
+  const locationKey = $derived(
+    options.rememberLocation
+      ? 'vbot.path-browser.' +
+          JSON.stringify([options.rememberLocation, root, mode])
+      : '',
+  );
   const loadShortcuts = $derived(options.loadShortcuts);
   const onSelect = $derived(options.onSelect);
   // 'places' | 'folder'
@@ -46,15 +54,17 @@ export function createPathBrowser(
   let shortcuts = $state.raw([]);
   let separator = $state('/');
   let filter = $state('');
-  let showHidden = $state(true);
+  let showHidden = $state(false);
+  let selectedKeys = $state.raw([]);
+  let rangeAnchor = '';
+
   let activeKey = $state('');
   // The trail as a path field: its text and why the last path did not open.
   let editingPath = $state(false);
   let pathText = $state('');
   let pathFailure = $state('');
-  // The new folder row: its name, why it was not created, and a pending
-  // request.
-  let creating = $state(false);
+  // The inline creation row. A blank kind closes it.
+  let creating = $state('');
   let newName = $state('');
   let createFailure = $state('');
   let createBusy = $state(false);
@@ -94,7 +104,18 @@ export function createPathBrowser(
         : toNativePath(chosenPath, separator),
   );
   let canGoUp = $derived(view === 'folder' && (root ? target !== '' : true));
-  let canCreate = $derived(Boolean(createDirectory) && mode !== 'file');
+  let canCreate = $derived(
+    Boolean(createDirectory) && (mode !== 'file' || Boolean(createFile)),
+  );
+  const selectedRows = $derived(
+    rows.filter((row) => selectedKeys.includes(row.key)),
+  );
+  const selectedPaths = $derived(
+    selectedRows.map((row) => {
+      const path = joinPath(target, row.entry.name);
+      return root ? path : toNativePath(path, separator);
+    }),
+  );
   let rootText = $derived(
     root && toNativePath(normalizeServerPath(root), separator),
   );
@@ -102,9 +123,11 @@ export function createPathBrowser(
     folderReady && rows.length === 0
       ? filter.trim()
         ? t('pathPicker.noMatches')
-        : mode === 'directory'
-          ? t('pathPicker.noFolders')
-          : t('pathPicker.empty')
+        : listing?.entries?.some((entry) => entry.hidden) && !showHidden
+          ? t('pathPicker.noVisible')
+          : mode === 'directory'
+            ? t('pathPicker.noFolders')
+            : t('pathPicker.empty')
       : '',
   );
 
@@ -144,6 +167,7 @@ export function createPathBrowser(
   function choicePath() {
     if (!folderReady) return null;
     const folder = listing.path;
+    if (multiple && (selectedPaths.length || activeKey)) return null;
     const entry = activeEntry;
     const highlighted = entry ? joinPath(folder, entry.name) : null;
     if (mode === 'file') return entry?.kind === 'file' ? highlighted : null;
@@ -165,7 +189,10 @@ export function createPathBrowser(
   // `listingErrorReason`, or 'superseded' once a newer navigation started. A
   // quiet attempt (a start candidate) changes nothing when it fails.
   // A double click or Enter: folders open, files are chosen.
-  async function openFolder(path, { highlight = '', quiet = false } = {}) {
+  async function openFolder(
+    path,
+    { highlight = '', quiet = false, restore = null } = {},
+  ) {
     const token = ++loadToken;
     if (!quiet) {
       view = 'folder';
@@ -173,24 +200,63 @@ export function createPathBrowser(
       target = path;
       filter = '';
       activeKey = '';
-      closeNewFolder();
+      closeCreate();
       focusList();
     }
     try {
-      const result = await listDirectory(listingParams(path));
+      let result = await listDirectory(listingParams(path));
       if (token !== loadToken) return 'superseded';
-      closeNewFolder();
+      if (
+        highlight &&
+        result.truncated &&
+        !result.entries.some((entry) => entry.name === highlight)
+      ) {
+        const match = await listDirectory({
+          ...listingParams(path),
+          prefix: highlight,
+        });
+        const entry = match.entries.find((item) => item.name === highlight);
+        if (entry) result = { ...result, entries: [...result.entries, entry] };
+      }
+      if (token !== loadToken) return 'superseded';
+      closeCreate();
       listing = result;
       separator = result?.separator === '\\' ? '\\' : '/';
       view = 'folder';
       target = typeof result?.path === 'string' ? result.path : path;
       status = 'ready';
-      filter = '';
+      filter = restore?.filter ?? '';
+      rangeAnchor = '';
+      selectedKeys = [];
       activeKey = highlight ? `entry:${highlight}` : '';
       if (highlight) {
         showHidden ||= Boolean(
           result?.entries?.find((entry) => entry.name === highlight)?.hidden,
         );
+      }
+      if (
+        highlight &&
+        visibleEntries.findIndex((entry) => entry.name === highlight) >=
+          MAX_ROWS
+      )
+        filter = highlight;
+      if (restore && multiple) {
+        selectedKeys = rows
+          .filter(
+            (row) => restore.keys.includes(row.key) && selectable(row.entry),
+          )
+          .map((row) => row.key);
+        rangeAnchor = restore.anchor;
+      } else if (multiple && selectable(activeEntry)) {
+        selectedKeys = [activeKey];
+        rangeAnchor = activeKey;
+      }
+      if (locationKey) {
+        try {
+          localStorage.setItem(locationKey, target);
+        } catch {
+          /* Storage may be unavailable. */
+        }
       }
       await revealActive();
       return null;
@@ -202,15 +268,16 @@ export function createPathBrowser(
     }
   }
 
-  // A double click or Enter: folders open, files are chosen.
   async function openPlaces() {
     const token = ++loadToken;
+    selectedKeys = [];
+    rangeAnchor = '';
     view = 'places';
     status = 'loading';
     target = '';
     filter = '';
     activeKey = '';
-    closeNewFolder();
+    closeCreate();
     focusList();
     try {
       const [result, found] = await Promise.all([
@@ -250,9 +317,17 @@ export function createPathBrowser(
 
   async function start() {
     const fromValue = browseStartPaths(value, { root });
+    let lastFolder = '';
+    if (locationKey && !fromValue.length) {
+      try {
+        lastFolder = localStorage.getItem(locationKey) || '';
+      } catch {
+        /* Use the field's start path. */
+      }
+    }
     const candidates = fromValue.length
       ? fromValue
-      : browseStartPaths(startPath, { root });
+      : browseStartPaths(lastFolder || startPath, { root });
     for (const { path, highlight } of candidates) {
       const failure = await openFolder(path, { highlight, quiet: true });
       if (failure === null || failure === 'superseded') return;
@@ -266,7 +341,10 @@ export function createPathBrowser(
     if (view === 'places') {
       void openPlaces();
     } else {
-      void openFolder(target, { highlight: activeEntry?.name ?? '' });
+      void openFolder(target, {
+        highlight: activeEntry?.name ?? '',
+        restore: { keys: selectedKeys, anchor: rangeAnchor, filter },
+      });
     }
   }
 
@@ -327,37 +405,51 @@ export function createPathBrowser(
     }
   }
 
-  function startNewFolder() {
-    if (!canCreate || !folderReady) return;
-    newName = unusedFolderName(
-      t('pathPicker.newFolderDefault'),
-      listing?.entries,
-    );
+  function startCreate(kind) {
+    if (
+      !folderReady ||
+      createBusy ||
+      (kind === 'file' ? !createFile : !canCreate)
+    )
+      return;
+    newName =
+      kind === 'file'
+        ? ''
+        : unusedFolderName(t('pathPicker.newFolderDefault'), listing?.entries);
     createFailure = '';
-    creating = true;
+    creating = kind;
     onEditNewName();
   }
 
-  function closeNewFolder() {
-    creating = false;
+  function closeCreate() {
+    creating = '';
     createFailure = '';
   }
 
-  function cancelNewFolder() {
-    closeNewFolder();
+  function cancelCreate() {
+    closeCreate();
     focusList();
   }
 
-  async function createFolder() {
+  async function create() {
     const name = newName.trim();
-    if (!name || createBusy || !folderReady) return;
+    if (!creating || !name || createBusy || !folderReady) return;
     const folder = listing.path;
     const token = loadToken;
     createBusy = true;
     createFailure = '';
     try {
-      await createDirectory({ path: folder, name, ...(root ? { root } : {}) });
-      if (token === loadToken) await openFolder(folder, { highlight: name });
+      const kind = creating;
+      const write = kind === 'file' ? createFile : createDirectory;
+      const result = await write({
+        path: folder,
+        name,
+        ...(root ? { root } : {}),
+      });
+      if (token !== loadToken) return;
+      if (kind === 'directory' && mode === 'file')
+        await openFolder(result.path);
+      else await openFolder(folder, { highlight: name });
     } catch (error) {
       if (token === loadToken) {
         createFailure = creationFailureText(error, { root: rootText });
@@ -379,13 +471,57 @@ export function createPathBrowser(
     }
   }
 
-  // A click: places open at once, entries are highlighted.
-  function pick(row) {
-    if (row.path !== undefined) {
-      void openFolder(row.path);
+  function selectable(entry) {
+    return Boolean(entry && (mode === 'any' || entry.kind === mode));
+  }
+
+  function mark(row, { extend = false, toggle = false } = {}) {
+    activeKey = row.key;
+    if (!multiple) return;
+    const index = rows.indexOf(row);
+    const anchor = rows.findIndex((item) => item.key === rangeAnchor);
+    if (extend && anchor >= 0) {
+      const range = rows
+        .slice(Math.min(anchor, index), Math.max(anchor, index) + 1)
+        .filter((item) => selectable(item.entry))
+        .map((item) => item.key);
+      selectedKeys = toggle
+        ? [
+            ...selectedKeys,
+            ...range.filter((key) => !selectedKeys.includes(key)),
+          ]
+        : range;
     } else {
-      activeKey = row.key;
+      rangeAnchor = row.key;
+      if (!selectable(row.entry)) {
+        if (!toggle) selectedKeys = [];
+      } else if (toggle) {
+        selectedKeys = selectedKeys.includes(row.key)
+          ? selectedKeys.filter((key) => key !== row.key)
+          : [...selectedKeys, row.key];
+      } else selectedKeys = [row.key];
     }
+  }
+
+  function pick(row, { extend, toggle, enterFolder } = {}) {
+    if (
+      row.path !== undefined ||
+      (row.entry.kind === 'directory' &&
+        !extend &&
+        !toggle &&
+        (enterFolder || !multiple || mode === 'file'))
+    ) {
+      open(row);
+    } else {
+      mark(row, { extend, toggle });
+    }
+  }
+
+  function selectAll() {
+    if (multiple)
+      selectedKeys = rows
+        .filter((row) => selectable(row.entry))
+        .map((row) => row.key);
   }
 
   function open(row) {
@@ -394,24 +530,31 @@ export function createPathBrowser(
     } else if (row.entry.kind === 'directory') {
       void openFolder(joinPath(listing.path, row.entry.name));
     } else if (mode !== 'directory') {
-      activeKey = row.key;
+      if (!multiple || !selectedKeys.includes(row.key)) mark(row);
       choose();
     }
   }
 
   function choose() {
-    if (chosenPath === null) return;
-    onSelect(chosenValue);
+    if (multiple && selectedPaths.length) onSelect(selectedPaths);
+    else if (chosenPath !== null) onSelect([chosenValue]);
   }
 
   // A filtered list highlights its first match; an empty filter, nothing.
   function highlightFirstMatch() {
-    activeKey = filter.trim() ? (rows[0]?.key ?? '') : '';
+    activeKey = '';
+    selectedKeys = [];
+    rangeAnchor = '';
+    if (filter.trim() && rows[0]) mark(rows[0]);
     void revealActive();
   }
 
-  function moveActive(step, { edge = false } = {}) {
+  function moveActive(
+    step,
+    { edge = false, extend = false, focusOnly = false } = {},
+  ) {
     if (!rows.length) return;
+    if (extend && !rangeAnchor) rangeAnchor = activeKey || rows[0].key;
     const current = rows.findIndex((row) => row.key === activeKey);
     let next;
     if (edge) {
@@ -421,7 +564,8 @@ export function createPathBrowser(
     } else {
       next = Math.min(rows.length - 1, Math.max(0, current + step));
     }
-    activeKey = rows[next].key;
+    if (focusOnly) activeKey = rows[next].key;
+    else mark(rows[next], { extend });
     void revealActive();
   }
 
@@ -531,6 +675,17 @@ export function createPathBrowser(
     get canGoUp() {
       return canGoUp;
     },
+    get selectedKeys() {
+      return selectedKeys;
+    },
+    get chosenKind() {
+      return selectedRows[0]?.entry.kind ?? activeEntry?.kind;
+    },
+    get selectedPaths() {
+      return selectedPaths;
+    },
+    mark,
+    selectAll,
     get canCreate() {
       return canCreate;
     },
@@ -547,9 +702,9 @@ export function createPathBrowser(
     startPathEdit,
     endPathEdit,
     goToTypedPath,
-    startNewFolder,
-    cancelNewFolder,
-    createFolder,
+    startCreate,
+    cancelCreate,
+    create,
     goUp,
     pick,
     open,
