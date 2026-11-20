@@ -92,6 +92,7 @@ _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
 # Conversations whose last read page the handler remembers (Site paths below).
 _REMEMBERED_CONVERSATIONS = 1024
+_MAX_FIND_TERMS = 12
 # The name of a page that stands in for a missing one: not-found and login pages
 # (``page-not-found``, ``seite-nicht-gefunden``, ``404``, ``sign_in``).
 _STAND_IN_PAGE = re.compile(
@@ -120,10 +121,13 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "find": {
-            "type": "string",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": _MAX_FIND_TERMS,
             "description": (
-                "Text to find (literal, case-insensitive); returns the matching passages "
-                "instead of the page start. Works with url or ref."
+                "Find literal, case-insensitive terms on url or ref. Multiple terms share "
+                "matching passages, with shown and total counts for each term."
             ),
         },
     },
@@ -487,15 +491,18 @@ def _parse_request(arguments: JsonObject) -> _Request:
             raise ValueError(f"{key} must be a non-empty string")
         if len(value) > 8192:
             raise ValueError("url is limited to 8192 characters.")
-    for key in ("ref", "find"):
-        if key in arguments and (not isinstance(arguments[key], str) or not arguments[key].strip()):
-            raise ValueError(f"{key} must be a non-empty string")
-    find = arguments.get("find")
-    if isinstance(find, str) and len(find) > 200:
-        raise ValueError(
-            f"find is limited to 200 characters; received {len(find)}. Search for a shorter, "
-            "distinctive phrase."
-        )
+    if ref is not None and (not isinstance(ref, str) or not ref.strip()):
+        raise ValueError("ref must be a non-empty string")
+    find = arguments.get("find", [])
+    terms = [find] if isinstance(find, str) else find
+    for term in terms:
+        if not isinstance(term, str) or not term.strip():
+            raise ValueError("Each find term must be a non-empty string.")
+        if len(term) > 200:
+            raise ValueError(
+                f"find is limited to 200 characters; received {len(term)}. Search for a shorter, "
+                "distinctive phrase."
+            )
     if ref is not None and "output" in arguments:
         raise ValueError(
             "output applies only when fetching a url; a saved page keeps the output it was "
@@ -504,9 +511,9 @@ def _parse_request(arguments: JsonObject) -> _Request:
     offset = arguments.get("offset", 0)
     if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 2_000_000:
         raise ValueError("offset must be an integer between 0 and 2000000")
-    view: dict[str, Any] = {
-        key: arguments[key] for key in ("find", "scope", "offset") if key in arguments
-    }
+    view: dict[str, Any] = {key: arguments[key] for key in ("scope", "offset") if key in arguments}
+    if terms:
+        view["find"] = terms[0] if len(terms) == 1 else terms
     if "max_chars" in arguments:
         view["max_chars"] = min(MAX_CHARS, max(MIN_CHARS, arguments["max_chars"]))
     if ref is not None:
@@ -938,6 +945,7 @@ def make_web_fetch_handler(
         if (
             result["ok"]
             and "more" in result["data"]
+            and not isinstance(request.view.get("find"), list)
             and request.view.get("max_chars", DEFAULT_MAX_CHARS) > len(result["data"]["content"])
         ):
             notes.append(_SIZE_NOTE)
@@ -963,8 +971,10 @@ def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
     elif isinstance(normalized.get("ref"), str) and normalized["ref"].strip():
         parts.append(ToolDisplayPart(normalized["ref"].strip(), kind="identifier"))
     find = normalized.get("find")
-    if isinstance(find, str) and find.strip():
-        parts.append(ToolDisplayPart(find.strip(), kind="query", quote=True))
+    if isinstance(find, list):
+        query = ", ".join(term.strip() for term in find if isinstance(term, str) and term.strip())
+        if query:
+            parts.append(ToolDisplayPart(query, kind="query", quote=True))
     return parts
 
 
@@ -983,11 +993,15 @@ def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[J
         find = _normalize_web_fetch_arguments(arguments).get("find")
     except ValueError:
         find = None
-    found = isinstance(find, str) and bool(find.strip())
-    blocks = [
-        display_text("results" if found else "page", source="result", path=("data", "content"))
-    ]
+    found = bool(find)
     shown = data.get("shown")
+    blocks = []
+    label = "results" if found else "page"
+    if isinstance(find, list) and len(find) > 1 and shown:
+        blocks.append(display_text("results", source="result", path=("data", "shown")))
+        label = "content"
+    if data["content"]:
+        blocks.append(display_text(label, source="result", path=("data", "content")))
     if "more" in data and found:
         blocks.append(display_notice("info", "More matches follow on the page."))
     elif "more" in data and isinstance(shown, str) and shown:
@@ -1026,6 +1040,7 @@ def register_web_fetch_tool(
         open_input_schema=True,
         unadvertised_parameters=_UNADVERTISED_PARAMETERS,
         argument_normalizer=_normalize_web_fetch_arguments,
+        announce_changes=("parameters.find",),
     )
 
 

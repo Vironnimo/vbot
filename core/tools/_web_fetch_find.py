@@ -28,7 +28,9 @@ each alternative is searched, and the result names them.
 
 from __future__ import annotations
 
+import heapq
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from urllib.parse import urlsplit, urlunsplit
@@ -273,14 +275,11 @@ def _fold(text: str, replacements: list[_Replacement]) -> SearchText:
     return fold_for_search(text, merged)
 
 
-def _search(readable: SearchText, query: str) -> list[tuple[int, int]]:
+def _search(readable: SearchText, query: str) -> Iterator[tuple[int, int]]:
     """Return the matches of ``query`` in the readable text, as readable positions."""
-    if not query:
-        return []
-    return [
-        (found.start(), found.end())
-        for found in re.finditer(re.escape(query), readable.text, re.IGNORECASE)
-    ]
+    if query:
+        for found in re.finditer(re.escape(query), readable.text, re.IGNORECASE):
+            yield found.span()
 
 
 def _names(passage: str, address: str) -> bool:
@@ -295,17 +294,23 @@ def _names(passage: str, address: str) -> bool:
 
 def _matches(
     text: str, readable: SearchText, find: str, *, markdown: bool, offset: int
-) -> list[_Match]:
-    """Return the matches of one query in ``text`` from ``offset`` on."""
-    matches = [
+) -> Iterator[_Match]:
+    """Yield literal and readable-text matches together in page order."""
+    literal = (
         _match(text, found.span(), text, found.span(), find)
         for found in re.finditer(re.escape(find), text, re.IGNORECASE)
-    ]
+    )
     plain = _fold(find, []).text.strip()
-    for found in _search(readable, plain):
-        matches.append(_match(text, readable.original(*found), readable.text, found, plain))
-    matches = [match for match in matches if match.start >= offset]
-    if markdown and not matches:
+    folded = (
+        _match(text, readable.original(*found), readable.text, found, plain)
+        for found in _search(readable, plain)
+    )
+    matched = False
+    for match in heapq.merge(literal, folded, key=lambda match: match.start):
+        if match.start >= offset:
+            matched = True
+            yield match
+    if markdown and not matched:
         replacements, addresses = _presentation(find)
         query = _fold(find, replacements).text.strip()
         if query != plain:
@@ -315,8 +320,24 @@ def _matches(
                 # the next readable character starts.
                 passage = text[start : readable.resume(found[1])]
                 if start >= offset and all(_names(passage, address) for address in addresses):
-                    matches.append(_match(text, (start, end), readable.text, found, query))
-    return matches
+                    yield _match(text, (start, end), readable.text, found, query)
+
+
+def literal_spans(
+    text: str, find: str, *, markdown: bool, offset: int
+) -> Iterator[tuple[int, int]]:
+    """Yield distinct source occurrences without retaining a large page's matches."""
+    matches = _matches(text, _readable(text, markdown), find, markdown=markdown, offset=offset)
+    pending: tuple[int, int] | None = None
+    for match in matches:
+        if pending and match.start < pending[1]:
+            pending = (pending[0], max(pending[1], match.end))
+        else:
+            if pending:
+                yield pending
+            pending = (match.start, match.end)
+    if pending:
+        yield pending
 
 
 def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> FoundText:
@@ -328,10 +349,10 @@ def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> Foun
     range.
     """
     readable = _readable(text, markdown)
-    matches = _matches(text, readable, find, markdown=markdown, offset=offset)
+    matches = list(_matches(text, readable, find, markdown=markdown, offset=offset))
     alternatives = () if matches else _alternatives(find)
     for alternative in alternatives:
-        matches += _matches(text, readable, alternative, markdown=markdown, offset=offset)
+        matches.extend(_matches(text, readable, alternative, markdown=markdown, offset=offset))
     matches.sort(key=lambda match: (match.start, match.end))
     merged: list[tuple[int, int]] = []
     for match in matches:

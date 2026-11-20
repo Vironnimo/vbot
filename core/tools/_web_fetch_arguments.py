@@ -63,6 +63,8 @@ FIELD_ALIASES = SpellingAliases(
             "search_for",
             "look_for",
             "keyword",
+            "keywords",
+            "search_terms",
             "text_to_find",
         ),
         "prompt": ("question", "query", "instruction", "instructions", "task", "objective"),
@@ -86,6 +88,19 @@ FIELD_ALIASES = SpellingAliases(
         "offset": ("start", "start_index", "start_char", "position"),
     }
 )
+
+
+def _find_input(value: Any) -> Any:
+    # An old scalar can itself be literal JSON source text to find.
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and (
+        not value or any(not isinstance(term, str) or not term.strip() for term in value)
+    ):
+        raise ToolContractError(
+            "Pass one or more non-empty search terms, or omit find to read the page."
+        )
+    return value
 
 
 def clean_url(value: Any) -> Any:
@@ -260,6 +275,7 @@ def normalize_web_fetch_arguments(contract: ToolContract, arguments: Any) -> Any
             "url": _clean_urls,
             "urls": _clean_urls,
             "ref": _clean_ref,
+            "find": _find_input,
             "output": _output_value,
         },
     )

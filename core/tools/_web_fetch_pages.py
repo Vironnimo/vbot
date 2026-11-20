@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from bisect import bisect_right
+from itertools import chain
+from operator import itemgetter
 from typing import Any
 
 from core.storage.temp_files import (
@@ -12,7 +15,7 @@ from core.storage.temp_files import (
     TemporaryFileManager,
     artifact_owner,
 )
-from core.tools._web_fetch_find import find_spans, looks_like_pattern
+from core.tools._web_fetch_find import find_spans, literal_spans, looks_like_pattern
 from core.tools.tools import ToolContext, tool_failure, tool_success
 from core.utils.edit_distance import edit_distance
 from core.utils.tokens import estimate_tokens
@@ -39,6 +42,7 @@ _CODE_PASSAGE = (300, 900)
 # Passages this close together are shown as one, so no text appears twice.
 _ADJACENT_CHARS = 120
 _MAX_PASSAGES = 12
+_PASSAGE_SEPARATOR = "\n\n…\n\n"
 # Snapshot sources whose text is not a Markdown rendering: plain text and code
 # fetched as is, and text extracted from documents.
 _PLAIN_SOURCES = frozenset({"direct", "document"})
@@ -303,6 +307,126 @@ def _passage_window(
     return first, last
 
 
+def _search_scope(snapshot: dict[str, Any], text: str, scope: str, offset: int) -> str:
+    if _is_cut(snapshot, text):
+        return (
+            f"after character {offset} of the saved part"
+            if offset
+            else f"in {_SAVED_PART_NAMES[scope]}"
+        )
+    return f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
+
+
+def _covers(windows: list[tuple[int, int]], span: tuple[int, int]) -> bool:
+    index = bisect_right(windows, span[0], key=itemgetter(0)) - 1
+    return index >= 0 and windows[index][1] >= span[1]
+
+
+def _include_window(
+    text: str,
+    windows: list[tuple[int, int]],
+    window: tuple[int, int],
+    max_chars: int,
+    max_tokens: float,
+) -> bool:
+    """Add the passage only if the merged excerpts still fit both output limits."""
+    merged: list[tuple[int, int]] = []
+    for first, last in sorted([*windows, window]):
+        if merged and first <= merged[-1][1] + len(_PASSAGE_SEPARATOR):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    length = sum(last - first for first, last in merged) + (len(merged) - 1) * len(
+        _PASSAGE_SEPARATOR
+    )
+    if length > max_chars:
+        return False
+    if estimate_tokens(_passages_text(text, merged))[0] > max_tokens:
+        return False
+    windows[:] = merged
+    return True
+
+
+def _passages_text(text: str, windows: list[tuple[int, int]]) -> str:
+    return _PASSAGE_SEPARATOR.join(text[first:last] for first, last in windows)
+
+
+def _find_terms(
+    snapshot: dict[str, Any],
+    text: str,
+    scope: str,
+    offset: int,
+    terms: list[str],
+    max_chars: int,
+    max_tokens: float,
+) -> dict[str, Any]:
+    markdown = snapshot.get("source") not in _PLAIN_SOURCES
+    streams = {
+        term: literal_spans(text, term, markdown=markdown, offset=offset)
+        for term in dict.fromkeys(terms)
+    }
+    # Allocate one occurrence per term each round. Shorter lists finish naturally
+    # and leave their share to the others. Fully visible occurrences cost no space.
+    windows: list[tuple[int, int]] = []
+    shown = dict.fromkeys(streams, 0)
+    pending: dict[str, tuple[int, int]] = {}
+    active = streams.copy()
+    share = max_chars // len(active)
+    token_share = max_tokens / len(active)
+    before, after = _CODE_PASSAGE if snapshot.get("source") == "direct" else _PROSE_PASSAGE
+    size = (min(before, share // 5), min(after, share // 2))
+    while active:
+        for term, matches in tuple(active.items()):
+            span = next(matches, None)
+            if span is None:
+                del active[term]
+                continue
+            if not _covers(windows, span):
+                first, last = _passage_window(text, offset, *span, size)
+                end = first + len(_bounded(text[first:last], share, token_share))
+                if end < span[1]:
+                    first = span[0]
+                    end = max(span[1], first + len(_bounded(text[first:last], share, token_share)))
+                window = (first, end)
+                fits = _include_window(text, windows, window, max_chars, max_tokens)
+                if not fits and not shown[term]:
+                    # Keep a rare term's first hit when its text fits without context.
+                    fits = _include_window(text, windows, span, max_chars, max_tokens)
+                if not fits:
+                    pending[term] = span
+                    del active[term]
+                    continue
+            shown[term] += 1
+
+    # A passage accepted for a later term can also reveal hits of a term that
+    # already ran out of space. Count the actual excerpts and resume at the first gap.
+    counts = []
+    more = []
+    for term, matches in streams.items():
+        omitted = 0
+        if term in pending:
+            for span in chain((pending[term],), matches):
+                if _covers(windows, span):
+                    shown[term] += 1
+                else:
+                    if omitted == 0:
+                        ref = _continuation(snapshot["ref"], scope, span[0])
+                        more.append(_call({"ref": ref, "find": term}))
+                    omitted += 1
+        total = shown[term] + omitted
+        count = f"{shown[term]} of {total} shown" if total else "no match"
+        counts.append(f"{_call(term)}: {count}")
+
+    searched = _search_scope(snapshot, text, scope, offset)
+    if not windows and not more:
+        return {"content": f"No match {searched} for any of {', '.join(map(_call, streams))}."}
+    data = {"shown": f"Matches {searched}:\n" + "\n".join(counts)}
+    if more:
+        data["more"] = "Continue each search from its first unshown match:\n" + "\n".join(more)
+    data["content"] = _passages_text(text, windows)
+    return data
+
+
 def _find_text(
     snapshot: dict[str, Any],
     text: str,
@@ -350,14 +474,7 @@ def _find_text(
         spans = trial
     # A view cut at a size limit was searched only as far as it was saved; a 2,000,000-
     # character JSON file read "No ... match ... in the whole page" (2026-10-20).
-    if _is_cut(snapshot, text):
-        searched = (
-            f"after character {offset} of the saved part"
-            if offset
-            else f"in {_SAVED_PART_NAMES[scope]}"
-        )
-    else:
-        searched = f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
+    searched = _search_scope(snapshot, text, scope, offset)
     # "a|b" not found as written was searched as alternatives; the result names them.
     queries = found.alternatives or (find,)
     searched_for = (
@@ -465,7 +582,9 @@ def read_page(
         if isinstance(snapshot.get(key), str) and snapshot[key]
     }
     data["ref"] = snapshot["ref"]
-    if find:
+    if isinstance(find, list):
+        data.update(_find_terms(snapshot, text, scope, offset, find, max_chars, max_tokens))
+    elif find:
         data.update(_find_text(snapshot, text, scope, offset, find, max_chars, max_tokens))
     else:
         data.update(_read_text(snapshot, text, scope, offset, max_chars, max_tokens))

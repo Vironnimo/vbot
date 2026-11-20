@@ -70,6 +70,8 @@ def test_registration_advertises_only_the_reading_actions() -> None:
     assert not parameters.get("required")
     assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"url", "ref", "find"}
+    assert parameters["properties"]["find"]["type"] == "array"
+    assert parameters["properties"]["find"]["items"] == {"type": "string"}
 
     [openai] = render_tool_definitions([definition], profile="explicit_non_strict")
     assert openai["strict"] is False
@@ -87,6 +89,7 @@ def test_row_shows_the_address_whatever_the_argument_name() -> None:
             {"link": "example.com/a"},
             {"urls": ["https://a.example/", "https://b.example/"]},
             {"ref": "tmp_0123456789ab.m.100", "find": "price"},
+            {"ref": "tmp_0123456789ab", "find": ["price", "tax"]},
         )
     ]
 
@@ -94,6 +97,7 @@ def test_row_shows_the_address_whatever_the_argument_name() -> None:
         ["https://example.com/a"],
         ["https://a.example/, https://b.example/"],
         ["tmp_0123456789ab.m.100", "price"],
+        ["tmp_0123456789ab", "price, tax"],
     ]
 
 
@@ -194,15 +198,19 @@ async def test_conflicting_output_switches_are_refused_before_fetching(
             {"ref": "tmp_0123456789ab", "offset": -1},
             'web_fetch was not run: "offset" must be at least 0; received -1.',
         ),
+        ({"url": PAGE, "find": []}, None),
+        ({"url": PAGE, "find": ["price", ""]}, None),
+        ({"url": PAGE, "find": [f"term{i}" for i in range(13)]}, None),
     ],
 )
 async def test_calls_outside_the_contract_are_refused_before_fetching(
-    tmp_path: Path, fetched: list[str], arguments: dict[str, Any], message: str
+    tmp_path: Path, fetched: list[str], arguments: dict[str, Any], message: str | None
 ) -> None:
     with pytest.raises(ToolContractError) as error:
         await fetch(tmp_path, arguments)
 
-    assert str(error.value) == message
+    if message is not None:
+        assert str(error.value) == message
     assert fetched == []
 
 

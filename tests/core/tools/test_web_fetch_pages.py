@@ -150,6 +150,99 @@ async def test_find_in_code_shows_nearby_matches_once_and_reads_on_after_each_pa
     assert "navigation" not in missing["data"]["content"]
 
 
+@pytest.mark.asyncio
+async def test_find_terms_shares_overlapping_excerpts_and_resumes_at_first_omission(
+    tmp_path, monkeypatch
+):
+    html = (
+        "<main><p>Cost <b>per</b> day and sales tax.</p>"
+        + "".join(f"<p>Sales tax on service {i}.</p>" for i in range(120))
+        + '<p>Literal ["cost","tax"]</p></main><footer>Rare footer clause.</footer>'
+    )
+    install_http_get(monkeypatch, lambda url: make_result(text=html, url=url))
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    args = {
+        "url": "https://example.com/",
+        "find": ["rare footer", "COST per day", "sales tax", "missing"],
+        "max_chars": 200,
+    }
+    result = await tool.dispatch(context, args)
+    data = result["data"]
+    assert result["ok"] and len(data["content"]) <= 200
+    assert data["content"].count("Cost **per** day and sales tax.") == 1
+    assert "Rare footer clause." in data["content"]
+    assert '"missing": no match' in data["shown"]
+
+    monkeypatch.setattr(
+        "core.tools._public_http._http_get",
+        AsyncMock(side_effect=AssertionError("unexpected fetch")),
+    )
+    assert '"COST per day": 1 of 1' in data["shown"]
+    assert '"rare footer": 1 of 1' in data["shown"]
+    visible = data["content"].lower().count("sales tax")
+    assert 0 < visible < 121
+    assert f'"sales tax": {visible} of 121' in data["shown"]
+    [resume] = [json.loads(line) for line in data["more"].splitlines() if line.startswith("{")]
+    assert resume["find"] == "sales tax"
+    read = await tool.dispatch(context, {"ref": resume["ref"]})
+    assert read["data"]["content"].startswith(f"Sales tax on service {visible - 1}.")
+    remaining = await tool.dispatch(context, resume)
+    assert f"Sales tax on service {visible - 1}." in remaining["data"]["content"]
+
+    # An offset applies to every term, so a term before that position is absent.
+    tail = await tool.dispatch(
+        context, {"ref": data["ref"] + ".p.100", "find": ["cost per day", "rare footer"]}
+    )
+    assert '"cost per day": no match' in tail["data"]["shown"]
+    assert "Rare footer clause." in tail["data"]["content"]
+
+    # JSON-looking source sent as the old scalar still searches for the literal.
+    literal = await tool.dispatch(context, {"ref": data["ref"], "find": '["cost","tax"]'})
+    assert 'Literal ["cost","tax"]' in literal["data"]["content"]
+    misses = ["no such phrase", "also absent"]
+    absent = await tool.dispatch(context, {"ref": data["ref"], "find": misses})
+    assert absent["ok"] and all(term in absent["data"]["content"] for term in misses)
+    assert "no match" in absent["data"]["content"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("common", "factor"), [(2, 1), (20, 1), (20, 4)])
+async def test_multi_term_budget_keeps_matches_fairly_and_reports_every_omission(
+    tmp_path, monkeypatch, common, factor
+):
+    counts = {"Tara": common, "Vera": common, "Mira": 2, "Nova": 2}
+    gap = " filler" * 260
+    body = gap.join(f"{term}{i:02}" for term, count in counts.items() for i in range(count))
+    network = AsyncMock(return_value=make_result(text=body, headers={"content-type": "text/plain"}))
+    monkeypatch.setattr("core.tools._public_http._http_get", network)
+    tool = web_fetch_registry(input_estimate_factor=lambda _: factor)
+    context = replace(make_context(tmp_path), agent_model="p/model")
+    result = await tool.dispatch(context, {"url": "https://example.com/", "find": list(counts)})
+    data = result["data"]
+
+    assert len(data["content"]) <= pages.DEFAULT_MAX_CHARS
+    assert estimate_tokens(data["content"])[0] <= pages.MAX_CONTENT_TOKENS / factor
+    calls = [json.loads(line) for line in data.get("more", "").splitlines() if line.startswith("{")]
+    follow_ups = {call["find"]: call for call in calls}
+    visible = {}
+    for term, count in counts.items():
+        markers = re.findall(term + r"\d\d", data["content"])
+        visible[term] = len(markers)
+        assert markers == [f"{term}{i:02}" for i in range(len(markers))]
+        assert f'"{term}": {len(markers)} of {count}' in data["shown"]
+        assert (term in follow_ups) == (len(markers) < count)
+        if term in follow_ups:
+            remaining = await tool.dispatch(context, follow_ups[term])
+            assert f"{term}{len(markers):02}" in remaining["data"]["content"]
+    if common == 2:
+        assert visible == counts and "more" not in data
+    else:
+        assert follow_ups and min(visible.values()) > 0
+        assert abs(visible["Tara"] - visible["Vera"]) <= 1
+        assert min(visible["Mira"], visible["Nova"]) >= min(2, max(visible.values()) - 1)
+    network.assert_awaited_once()
+
+
 _ELEMENT_PAGE = """<main>
 <p><b>Iron</b> is a <a href="/wiki/Element">chemical element</a>; it has symbol Fe.</p>
 <table>
@@ -564,4 +657,11 @@ async def test_the_user_sees_the_page_text_or_the_passages_and_whether_more_rema
     assert tool.display_for_call("web_fetch", found, result=passages)["details"] == [
         {**content, "label": "results"},
         {"type": "notice", "level": "info", "text": "More matches follow on the page."},
+    ]
+    multi = {"ref": page["data"]["ref"], "find": ["Needle01", "Needle29"]}
+    result = await tool.dispatch(context, multi)
+    details = tool.display_for_call("web_fetch", multi, result=result)["details"]
+    assert [(block["label"], block["source"]["path"]) for block in details] == [
+        ("results", ["data", "shown"]),
+        ("content", ["data", "content"]),
     ]
