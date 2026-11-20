@@ -1,12 +1,10 @@
 <script>
-  import { toolRowMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
   import { tooltip } from '$lib/tooltip.js';
   import MediaLightbox from '../MediaLightbox.svelte';
 
-  let { tool, result } = $props();
-  let items = $derived(toolRowMedia(tool, result));
+  let { items } = $props();
   const visibleLimit = 3;
   let visible = $derived(items.slice(0, visibleLimit));
   let remaining = $derived(items.length - visible.length);
