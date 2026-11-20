@@ -6,6 +6,7 @@ export {
   toolStatusLabel,
   toolStatusDetails,
   toolRowPresentation,
+  toolCategory,
 } from './chatTimelinePresentation/toolRows.js';
 export {
   subAgentAction,

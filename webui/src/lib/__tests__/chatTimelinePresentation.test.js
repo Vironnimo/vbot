@@ -18,6 +18,7 @@ import {
   toolStatus,
   toolStatusDetails,
   toolStatusLabel,
+  toolCategory,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
 import { formatMoment } from '../timeText.js';
@@ -450,6 +451,24 @@ describe('groupTransientCards', () => {
 });
 
 describe('Tool row presentation', () => {
+  it.each([
+    ['read', 'read'],
+    ['analyze_image', 'read'],
+    ['edit', 'change'],
+    ['write', 'change'],
+    ['apply_patch', 'change'],
+    ['bash', 'run'],
+    ['powershell', 'run'],
+    ['execute_code', 'run'],
+    ['session_search', 'search'],
+    ['web_fetch', 'web'],
+    ['subagent', 'agent'],
+    ['mcp__github__list_issues', 'other'],
+    [undefined, 'other'],
+  ])('puts %s in the %s icon category', (name, category) => {
+    expect(toolCategory(name)).toBe(category);
+  });
+
   it.each([
     [
       'a file search through the shell',

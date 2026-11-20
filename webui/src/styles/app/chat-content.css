@@ -303,21 +303,6 @@ button.msg-timestamp {
   align-self: flex-start;
 }
 
-.reasoning-header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 0;
-  color: var(--text-med);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  user-select: none;
-}
-
-.reasoning-header:hover {
-  color: var(--text-hi);
-}
-
 .r-chevron {
   margin-left: 4px;
   opacity: 0.4;
@@ -410,6 +395,23 @@ button.msg-timestamp {
 .te-arg,
 .teb-code {
   font-family: var(--font-mono);
+}
+
+/* The category icon column (chat/ToolCategoryIcon.svelte): one grey glyph
+   per kind of Tool, so long Runs can be scanned by shape. It never carries
+   status; colour stays reserved for problems at the row end. */
+.te-icon {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  color: var(--text-lo);
+}
+
+.tool-event-line:hover .te-icon {
+  color: var(--text-med);
 }
 
 .te-fn {

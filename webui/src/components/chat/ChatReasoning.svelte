@@ -47,12 +47,7 @@
     class="reasoning-header"
     aria-label={title ? `${label}: ${title}` : label}
   >
-    <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-      />
-      <path d="M6 13h4" />
-    </svg>
+    <span class="reasoning-spacer" aria-hidden="true"></span>
     <span class="reasoning-summary__label">{label}</span>
     {#if title}<span class="reasoning-summary__title">{title}</span>{/if}
     {#if isSummary && sections.length > 1}
