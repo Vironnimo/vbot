@@ -278,7 +278,7 @@ def _flag(key: str, value: Any) -> bool:
 def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
     # Each field that asks for the background (True) or the foreground, as sent.
     requests: list[tuple[str, bool]] = []
-    no_effect: dict[str, str] = dict(arguments.pop(NO_EFFECT_FIELDS, None) or {})
+    no_effect: dict[str, str] = {}
     for key in list(arguments):
         word = spelling(key)
         if key == "run_in_background":
@@ -332,7 +332,11 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
     if requests:
         arguments["run_in_background"] = _background_request(requests)
     if no_effect:
-        arguments[NO_EFFECT_FIELDS] = no_effect
+        # Nested calls can already carry these notes. Leave a malformed value
+        # intact so the Tool contract can refuse it before the command starts.
+        existing = arguments.setdefault(NO_EFFECT_FIELDS, {})
+        if isinstance(existing, dict):
+            existing.update(no_effect)
 
 
 def _mode_request(mode: Any) -> bool:

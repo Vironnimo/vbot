@@ -1373,6 +1373,17 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
             False,
         ),
         (
+    for malformed_notes in (True, [["stdin", "input"]]):
+        invalid_notes = await shell.call(
+            {
+                "command": "ls",
+                "no_effect_fields": malformed_notes,
+                "tty": True,
+                "run_in_background": True,
+            }
+        )
+        assert invalid_notes["error"]["code"] == "invalid_arguments"
+        assert "no_effect_fields" in invalid_notes["error"]["message"]
             OSError(errno.ENOSPC, "Datenträger voll"),
             False,
             "Tell the user that the disk is full.",
