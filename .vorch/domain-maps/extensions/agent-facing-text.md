@@ -163,6 +163,10 @@ The following rows cover the API 30 additions and revised sentences in the three
 | Home Assistant: `The token stays in the Secret Store...a saved token alone does not verify connectivity.` | Names live readiness without misreporting credential storage as a successful connection test. |
 | Home Assistant: `The CLI configures the connection; entity and service work uses the Agent Tools...` / `An Agent also needs access to those Tools.` | Prevents inventing management operations or assuming that setup bypasses Tool policy. |
 | Home Assistant: `Use an entity or service id returned by the discovery Tools...` | Prevents guessing targets or repeating a service mutation after an unknown outcome. |
+| Home Assistant: `For Desktop wakeword commands, save a phrase...` | Locates the editor and identifies its fixed arguments for a user configuring spoken commands. |
+| Home Assistant: `Include the intended action and target...` | The Decision Model sees phrases and aliases, so targets described only in the Tool arguments cannot disambiguate similar commands. |
+| Home Assistant: `Exact phrases work without a Decision Model.` | Lets the user configure literal commands on an installation without a Decision binding. |
+| Home Assistant: `Home Assistant's settings independently control...` | Explains both initial settings without suggesting an Agent Run or applying them to ordinary Chat messages. |
 | Shell Review: `The shell_review Extension reviews prepared shell commands...` / `It uses the normal permission approval UI...` | States the feature and its relation to existing Permission Rules without promising a second permission system. |
 | Shell Review: `Inspect the selected Model and the Extension settings` and CLI examples. | Gives the read paths for the two independent prerequisites. |
 | Shell Review: `The enabled setting activates review...` | The Extension can be loaded while execution review is off; avoids treating load status as activation. |

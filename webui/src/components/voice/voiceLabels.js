@@ -133,6 +133,7 @@ function knownErrorMessage(code) {
     pipeline_failed: t('settings.voice.error.pipeline'),
     session_resolution_failed: t('settings.voice.error.session'),
     send_failed: t('settings.voice.error.send'),
+    wakeword_result_unknown: t('settings.voice.error.wakewordResultUnknown'),
     voice_config_invalid: t('settings.voice.error.configInvalid'),
     voice_stack_unavailable: t('settings.voice.error.stackUnavailable'),
     microphone_config_invalid: t('settings.microphone.error.configInvalid'),

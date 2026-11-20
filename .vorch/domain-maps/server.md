@@ -71,6 +71,6 @@ Read when the task matches.
 - `session.*`, `agent.*`, `tool.list` or `learning.*` RPCs -> `server/session-agent-rpcs.md`
 - `filesystem.*`, `files.list` or `core/utils/directory_listing.py` -> `server/path-pickers.md`
 - background activity (`activity.*`, `server/activity.py`), `data_store.*`, `recall.*`, statistics RPCs or the update check (`application.update_status`, `server/update_availability.py`) -> `server/operator-surfaces.md`
-- Live voice RPCs, the `/ws/live/{call_id}` owner socket, or the `server/live/` call registry and host -> `model_tasks/live.md`; the Live Tools (app operations), Run feed, or exact completed-Run projection (`chat.run_result`) -> `model_tasks/live-operator.md`
+- Live RPCs, socket and call registry -> `model_tasks/live.md`; Live Tools, Run feed and `chat.run_result` -> `model_tasks/live-operator.md`; Desktop wakeword RPC -> `desktop/voice.md`
 
 - External history reads, imports and continuation -> `external-history.md`

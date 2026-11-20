@@ -24,9 +24,10 @@ The WAV uses the capture's recording rate (the echo stage output).
 
 :class:`CommandPipeline` processes finished recordings on up to three daemon
 workers (``vbot-voice-command-N``): transcribe, drop reserved cancel phrases,
-then resolve the Session and send in submission order per Agent. A ready
-transcript waiting for an earlier command occupies no worker. It never blocks
-the listener, and stops (without publishing) once its stop event is set.
+then check wakeword commands and send misses to the resolved Session. Commands
+run in submission order per Agent. A ready transcript waiting for an earlier
+command occupies no worker. The pipeline never blocks the listener, and stops
+without publishing once its stop event is set.
 """
 
 from __future__ import annotations
@@ -53,7 +54,8 @@ from desktop.wakeword._speech_detection import (
     SpeechDetector,
     frame_is_speech,
 )
-from desktop.wakeword.server_client import VoiceServerClient
+from desktop.wakeword.contracts import EVENT_WAKEWORD_COMPLETED, EVENT_WAKEWORD_FAILED
+from desktop.wakeword.server_client import VoiceServerClient, WakewordResult
 
 logger = logging.getLogger("vbot.desktop.wakeword.commands")
 
@@ -351,6 +353,7 @@ class CommandOutcome:
     agent_id: str | None = None
     session_id: str | None = None
     error_code: str | None = None
+    wakeword_result: WakewordResult | None = None
 
 
 @dataclass(eq=False)
@@ -497,12 +500,27 @@ class CommandPipeline:
                 return transcript
             self._on_stage(command.command_id, STAGE_SENDING)
             target = self._client.resolve_session(command.agent_id, command.session_behavior)
+            result = self._client.try_wakeword_command(command.agent_id, target, transcript)
+            if result is not None:
+                logger.log(
+                    logging.INFO
+                    if result.ok and not result.notification_failed
+                    else logging.WARNING,
+                    "Wakeword command finished (ok=%s, notification_failed=%s)",
+                    result.ok,
+                    result.notification_failed,
+                )
+                return outcome(
+                    EVENT_WAKEWORD_COMPLETED if result.ok else EVENT_WAKEWORD_FAILED,
+                    agent_id=command.agent_id,
+                    wakeword_result=result,
+                )
             session_id = self._client.send_command(command.agent_id, target, transcript)
         except SpeechRequestCancelled:
             logger.debug("Voice command stopped with its listener")
             return None
         except SpeechServerError as exc:
-            logger.warning("Voice command failed (%s): %s", exc.error_code, exc)
+            logger.warning("Voice command failed (%s)", exc.error_code)
             return outcome(
                 EVENT_COMMAND_FAILED, agent_id=command.agent_id, error_code=exc.error_code
             )

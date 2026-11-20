@@ -2,7 +2,29 @@
   "name": "Home Assistant",
   "description": "Control and inspect a Home Assistant instance via its REST API.",
   "version": "1.0.0",
-  "api_version": 29,
+  "api_version": 30,
+  "config_documents": {
+    "wakeword-commands.json": "_wakeword_store:validate_commands_file"
+  },
+  "pages": [
+    {
+      "page_id": "wakeword",
+      "title": "Home Assistant wakeword commands",
+      "entry": "web/page.html",
+      "navigation": false
+    }
+  ],
+  "contributions": [
+    {
+      "id": "wakeword",
+      "surface": "settings.sections",
+      "kind": "view",
+      "title": "Home Assistant wakeword commands",
+      "page": "wakeword",
+      "height": 240,
+      "when": {"settings_section": "extensions"}
+    }
+  ],
   "documentation": [
     {
       "path": "docs/usage.md",

@@ -379,6 +379,7 @@ class FakeClient:
         self.transcribing = 0
         self.uploads: list[bytes] = []
         self.resolved: list[str] = []
+        self.checked: list[tuple[str, str | None, str]] = []
         self.sending: list[str] = []
         self.sent: list[tuple[str, str | None, str]] = []
 
@@ -407,6 +408,10 @@ class FakeClient:
         if self.resolve_error is not None:
             raise self.resolve_error
         return f"s-{agent_id}-{session_behavior}"
+
+    def try_wakeword_command(self, agent_id: str, session_id: str | None, text: str) -> None:
+        with self.lock:
+            self.checked.append((agent_id, session_id, text))
 
     def send_command(self, agent_id: str, session_id: str | None, text: str) -> str:
         with self.lock:
@@ -477,6 +482,7 @@ def test_a_command_is_transcribed_and_sent_to_its_session(
     assert rig.stages == [("c1", "transcribing"), ("c1", "sending")]
     assert rig.client.uploads == [b"RIFF-audio"]
     assert rig.client.sent == [("main", "s-main-continue", "turn on the lights")]
+    assert rig.client.checked == rig.client.sent
     assert rig.outcomes == [
         CommandOutcome(
             "c1", "builtin/okay_nabu", "sent", agent_id="main", session_id="s-main-continue"

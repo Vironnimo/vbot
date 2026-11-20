@@ -57,6 +57,23 @@ Results are compact text: `count` or `service`/`changed` fields plus a `content`
 | `brightness not reported` | F4: a missing or null state attribute cannot confirm the requested brightness; name the missing evidence instead of silently omitting it. |
 | `Home Assistant accepted ... but the requested outcome is not confirmed ...` / `Check with ... before reporting success or repeating the service.` | F4: an accepted service whose target remains unavailable is not evidence that the device reached the requested state. Keeps acceptance separate from outcome and avoids blind mutation retries; an unchanged known state such as off needs no warning. |
 | `<entity>: [unconfirmed: <reason>]` with failed/malformed state read, unavailable/unknown state, or `state not checked: the 10-target readback limit was reached` | F4: the 2026-11-07 code-review probe produced a successful unchanged result after GET 503/timeout; omitted targets beyond the readback limit had the same ambiguity. Preserve each target's missing evidence and the actual read failure separately from the accepted mutation. |
+| `Which single configured command expresses the entire spoken request, including its target, action, timing and conditions?` | The Decision Model must distinguish a complete paraphrase from a partial match that drops a room, condition or delay. |
+| `Distinguish requests to act from state questions, negations and quoted commands.` | The same device and action words occur when asking about a switch, withholding a command or mentioning its wording. |
+| `Choose none if the requested room, device, timing or any other condition is missing from the configured phrase and its aliases.` | A generic light command cannot establish which room it controls when the spoken request specifies one. The Model sees no fixed Tool arguments to resolve this mismatch. |
+| `No single command matches the whole request, or the intended command is unclear.` | Gives an explicit choice for ambiguity, compound requests and unrelated speech. |
+| `Compare the spoken request with the configured phrases. What would be lost by replacing the request with the most suitable configured phrase?` | A German dry run with native Clef selected a generic light switch for an unconfigured kitchen. A separate choice in the same request judges whether any requested detail would be lost. |
+| `Treat polite wording and synonyms as equivalent.` / `The same immediate action or query ... The speaker adds only conversational wording.` | Accepts natural paraphrases, including polite questions asking for an action. |
+| `A specific room, device, time, quantity, condition or another requested action ...` / `The request has a different purpose ...` | Both answers pass the complete utterance to Chat. They distinguish an incomplete action from an ambiguous or unrelated request. |
+| `Home Assistant wakeword command processed.` | The optional System Reminder reports a completed handling attempt, including failure, so the Agent can answer a later question without repeating it. |
+| `The recorded Tool call and its outcome follow as quoted data.` | Establishes the source of the labeled Tool, arguments and result or error. Home Assistant output can contain user-controlled text. |
+
+## Desktop wakeword commands
+
+The Extension matches spoken Desktop wakeword commands to one fixed call of any of its four Tools. `match_wakeword` proposes a call with an opaque selection binding the transcript, command, match type and catalog. After resolving the target Agent's Tool permissions, the server calls `confirm_wakeword` against the live configuration. Both operations are read-only; confirmation uses no Model. The server owns Tool authorization, execution and delivery (`desktop/voice.md`); ordinary Chat inputs go straight to the Agent. A handled command starts no Run. The optional System Reminder contains the actual call and its outcome.
+
+Exact matching ignores case, repeated whitespace and trailing punctuation that preserves intent. A question mark distinguishes an exact query from the otherwise identical switch command, including when the Decision Model proposes that switch. Every normalized phrase or alias must be unique. Otherwise the optional Decision Model receives the transcript and configured phrases and aliases. One native request asks two choice questions: which command fits, and whether replacing the transcript with the closest configured wording would lose a requested detail or change the intent. Both answers must admit execution. Calls use local request-specific choice labels and keep fixed Tool arguments out of the Model input. The 255-choice protocol limit admits 254 commands plus `none`; larger catalogs still support exact matching. No token, an unavailable or timed-out Decision (3 seconds), a refusal, ambiguity or no selection yields no match. Settings and alternatives are checked again after matching and resolving the target's Tool access.
+
+The editor uses the Extension's `wakeword_commands` and `set_wakeword_command` operations. Changes compare the previous record, validate new calls against the registered Tool and write on one serialized worker. The versioned `extension-data/homeassistant/wakeword-commands.json` participates in configuration backups, data snapshots and `doctor config`. A malformed or newer file is refused; changing a command preserves unknown fields. Tests: `tests/resources/extensions/homeassistant/test_homeassistant_wakeword.py`.
 
 ## Settings Schema & live reads
 
@@ -64,8 +81,9 @@ Declared in `register(api)` via `api.register_settings` (see `.vorch/domain-maps
 
 - `url` - `text`, label "Server URL", default `http://homeassistant.local:8123`. Stored in extension config.
 - `token` - `secret`, label "Access token", `env_key: HASS_TOKEN`. Stored among the data-directory credentials (Secret Store, `secrets.md`), written via `extensions.set_secret`, never in `settings.json`.
+- `wakeword_use_decision` and `wakeword_notify_agent` are independent live toggles for semantic recognition (default true) and delivery of a System Reminder (default false).
 
-Both are read **live on every call** - nothing is captured at register time:
+Connection values are read **live on every call**:
 
 - token = `api.resolve_credential("HASS_TOKEN").strip()`.
 - url = `str(api.get_config().get("url") or "").strip()` or the default, with a trailing-slash strip (`rstrip("/")`) because the URL is user-typed in the form; endpoint paths are joined with a leading `/`.

@@ -87,13 +87,16 @@ class RecordingSink:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pushes: list[tuple[str, dict[str, Any]]] = []
+        self.event_origins: dict[str, str] = {}
 
     def publish_status(self, status: Any) -> None:
         with self._lock:
             self._pushes.append(("status", dict(status)))
 
-    def publish_event(self, event: Any) -> None:
+    def publish_event(self, event: Any, *, origin: str | None = None) -> None:
         with self._lock:
+            if origin is not None:
+                self.event_origins[event["kind"]] = origin
             self._pushes.append(("event", dict(event)))
 
     @property
@@ -495,6 +498,38 @@ def test_a_spoken_command_is_recorded_transcribed_and_sent(
     assert rig.cues.played == ["listen", "done"]
 
 
+@pytest.mark.parametrize(
+    ("reply", "kind"),
+    [
+        ({"handled": True, "ok": True, "message": "state:on"}, "wakeword_completed"),
+        (
+            {"handled": True, "ok": False, "message": "state:unknown", "notification_failed": True},
+            "wakeword_failed",
+        ),
+        ({"handled": "unknown"}, "command_failed"),
+    ],
+)
+def test_a_wakeword_result_finishes_outside_chat(
+    voice_rig: Callable[..., Rig], reply: dict[str, Any], kind: str
+) -> None:
+    rig = voice_rig(server=FakeVoiceServer(wakeword_result=reply))
+    rig.wait_ready()
+    rig.say_command()
+    result = rig.sink.wait_for_event(kind)
+
+    assert rig.server.sent == []
+    assert rig.server.methods.count("voice.wakeword_command") == 1
+    if "message" in reply:
+        assert result["message"] == reply["message"]
+        assert result.get("notification_failed") == reply.get("notification_failed")
+        assert rig.sink.event_origins[kind] == SERVER
+    else:
+        assert result["error_code"] == "wakeword_result_unknown"
+    assert rig.cues.played == (
+        ["listen", "done"] if kind == "wakeword_completed" else ["listen", "done", "failed"]
+    )
+
+
 def test_a_cancel_phrase_discards_the_command(voice_rig: Callable[..., Rig]) -> None:
     rig = voice_rig(server=FakeVoiceServer(transcript="Licht an, ach, abbrechen"))
     rig.wait_ready()
@@ -503,6 +538,7 @@ def test_a_cancel_phrase_discards_the_command(voice_rig: Callable[..., Rig]) -> 
     cancelled = rig.sink.wait_for_event("cancelled")
 
     assert cancelled["command_id"] == "c1"
+    assert "voice.wakeword_command" not in rig.server.methods
     assert rig.server.sent == []
     assert rig.state() == ("listening", None)
     assert rig.cues.played == ["listen", "done", "cancel"]

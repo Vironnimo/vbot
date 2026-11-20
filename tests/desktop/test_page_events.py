@@ -31,9 +31,13 @@ class FakeWindow:
         self.result = result
         self.block = block
         self.scripts: list[str] = []
+        self.direct_scripts: list[str] = []
         self.threads: list[threading.Thread] = []
         self.started = threading.Event()
         self.delivered = threading.Event()
+
+    def run_js(self, script: str) -> None:
+        self.direct_scripts.append(script)
 
     def evaluate_js(self, script: str) -> Any:
         self.threads.append(threading.current_thread())
@@ -120,6 +124,10 @@ def test_voice_script_dispatches_the_detail_as_json() -> None:
 
     assert script.startswith('window.dispatchEvent(new CustomEvent("vbot-desktop-voice", ')
     assert _voice_detail(script) == detail
+    # A delayed command result is visible only on its server's origin.
+    assert voice_push_script(detail, origin="https://one.test") == (
+        'window.location.origin === "https://one.test" && ' + script
+    )
 
 
 # -- Live voice requests ---------------------------------------------------------
@@ -278,8 +286,13 @@ def test_voice_pushes_keep_their_order(dispatchers: Any) -> None:
     dispatcher.publish_event({"sequence": 1, "kind": "detected"})
     dispatcher.publish_status({"sequence": 2, "state": "listening"})
     dispatcher.publish_event({"sequence": 3, "kind": "recording_started"})
+    dispatcher.publish_event(
+        {"sequence": 4, "kind": "wakeword_completed", "message": "state:on"},
+        origin="https://home.test",
+    )
 
-    _wait_until(lambda: len(window.scripts) == 3)
+    _wait_until(lambda: len(window.direct_scripts) == 1)
+    assert window.direct_scripts[0].startswith('window.location.origin === "https://home.test" && ')
     assert [_voice_detail(script) for script in window.scripts] == [
         {"type": "event", "event": {"sequence": 1, "kind": "detected"}},
         {"type": "status", "status": {"sequence": 2, "state": "listening"}},

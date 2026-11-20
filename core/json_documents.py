@@ -84,6 +84,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "terminal_groups": "terminals/groups.json",
         "secrets": "secrets.json",
         "mcp_connections": "extension-data/mcp/connections.json",
+        "homeassistant_wakeword_commands": "extension-data/homeassistant/wakeword-commands.json",
         "attachment_metadata": "artifacts/attachments/*.json",
         "speech_artifact_metadata": "artifacts/speech/*.json",
         "access_devices": "access/devices.json",

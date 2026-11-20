@@ -1146,7 +1146,7 @@ class RecordingDispatcher:
     def publish_status(self, _status: Any) -> None:
         pass
 
-    def publish_event(self, _event: Any) -> None:
+    def publish_event(self, _event: Any, *, origin: str | None = None) -> None:
         pass
 
     def publish_computer_sharing(self, _status: Any) -> None:

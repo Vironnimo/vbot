@@ -85,12 +85,14 @@ def live_request_script(action: str, source: str) -> str:
     )
 
 
-def voice_push_script(detail: Mapping[str, Any]) -> str:
+def voice_push_script(detail: Mapping[str, Any], *, origin: str | None = None) -> str:
     """Return JavaScript that dispatches one Voice push with ``detail``."""
-    return (
+    script = (
         f"window.dispatchEvent(new CustomEvent({json.dumps(VOICE_PUSH_EVENT)}, "
         f"{{detail: {json.dumps(detail)}}}))"
     )
+    # A result can still be queued when the user switches to another server.
+    return f"window.location.origin === {json.dumps(origin)} && {script}" if origin else script
 
 
 def open_session_script(agent: str, session: str) -> str:
@@ -176,6 +178,7 @@ class _RestartRequest:
 @dataclass
 class _VoicePush:
     detail: dict[str, Any]
+    origin: str | None = None
 
     @property
     def is_status(self) -> bool:
@@ -319,13 +322,13 @@ class PageEventDispatcher:
             self._pending_status = push
             self._enqueue_locked(push)
 
-    def publish_event(self, event: Mapping[str, Any]) -> None:
+    def publish_event(self, event: Mapping[str, Any], *, origin: str | None = None) -> None:
         """Queue a Voice event; the oldest waiting event is dropped beyond the bound."""
         with self._condition:
             if self._closed:
                 return
             self._event_count += 1
-            self._enqueue_locked(_VoicePush({"type": "event", "event": dict(event)}))
+            self._enqueue_locked(_VoicePush({"type": "event", "event": dict(event)}, origin))
             if self._event_count > MAX_PENDING_VOICE_EVENTS:
                 oldest = next(
                     item
@@ -387,7 +390,6 @@ class PageEventDispatcher:
                     self._pending_status = None
                 else:
                     self._event_count -= 1
-                detail = dict(item.detail) if isinstance(item, _VoicePush) else None
                 status = (
                     dict(item.status)
                     if isinstance(item, _UpdatePush | _ComputerSharingPush)
@@ -409,8 +411,8 @@ class PageEventDispatcher:
                     self._evaluate(window, computer_sharing_push_script(status))
             elif isinstance(item, _RestartRequest):
                 self._deliver_restart(window, item)
-            elif detail is not None:
-                self._deliver_voice(window, detail)
+            elif isinstance(item, _VoicePush):
+                self._deliver_voice(window, item)
 
     def _deliver_live(self, window: Any, request: _LiveRequest) -> None:
         if self._clock() - request.requested_at > MAX_LIVE_REQUEST_AGE_SECONDS:
@@ -454,23 +456,25 @@ class PageEventDispatcher:
         except Exception:
             logger.exception("The restart request answer could not be handled")
 
-    def _deliver_voice(self, window: Any, detail: dict[str, Any]) -> None:
+    def _deliver_voice(self, window: Any, push: _VoicePush) -> None:
         if window is None:
             return
         try:
-            script = voice_push_script(detail)
+            script = voice_push_script(push.detail, origin=push.origin)
         except TypeError, ValueError:
             logger.exception("Voice push is not serializable; dropping it")
             return
-        self._evaluate(window, script)
+        self._evaluate(window, script, scoped=push.origin is not None)
 
-    def _evaluate(self, window: Any, script: str) -> Any:
+    def _evaluate(self, window: Any, script: str, *, scoped: bool = False) -> Any:
         try:
-            result = window.evaluate_js(script)
+            # run_js applies the origin guard directly in the destination document.
+            # evaluate_js passes the whole script to that page's eval first.
+            result = window.run_js(script) if scoped else window.evaluate_js(script)
         except Exception:
             # One warning per failure streak: a closing window fails every push.
             if not self._failing:
-                logger.warning("A Desktop push could not reach the page", exc_info=True)
+                logger.warning("A Desktop push could not reach the page", exc_info=not scoped)
             self._failing = True
             return None
         self._failing = False

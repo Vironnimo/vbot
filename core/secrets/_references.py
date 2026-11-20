@@ -224,6 +224,20 @@ class SecretMasker:
     def contains(self, text: str) -> bool:
         return self._pattern is not None and self._pattern.search(text) is not None
 
+    def mask_unbound[T](self, value: T) -> T:
+        """Mask data leaving an operator action that has no Session to grant Secrets to."""
+        from core.secrets.detection import detect_api_keys
+
+        known_masked = self.mask_value(value, include_keys=True)
+        found = {
+            key.value: "[redacted API key]"
+            for text in iter_strings(known_masked, include_keys=True)
+            for key in detect_api_keys(text)
+        }
+        if not found:
+            return known_masked
+        return SecretMasker(found).mask_value(known_masked, include_keys=True)
+
     def matches_exactly(self, text: str) -> bool:
         """Whether the entire text is a known value or one of its masking variants."""
         return text in self._variants

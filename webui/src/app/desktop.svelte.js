@@ -376,6 +376,27 @@ export function createAppDesktop(context) {
           variant: 'success',
         });
         break;
+      case 'wakeword_completed':
+      case 'wakeword_failed': {
+        const failed = event.kind === 'wakeword_failed';
+        showToast({
+          title: failed
+            ? t('voice.toast.wakewordFailedTitle')
+            : t('voice.toast.wakewordResultTitle'),
+          message: [
+            event.message,
+            event.notification_failed && t('voice.toast.notificationFailed'),
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          variant: failed
+            ? 'error'
+            : event.notification_failed
+              ? 'warn'
+              : 'success',
+        });
+        break;
+      }
       case 'no_speech':
         showToast({
           title: t('voice.toast.noSpeechTitle'),

@@ -1061,6 +1061,7 @@ SERVICE_EXCLUSIONS = {
         "Starts an Accessor-owned media session whose stream requires a live owner socket."
     ),
     "live.stop": "Controls an Accessor-owned media session; use its owner transport.",
+    "voice.wakeword_command": "Dispatches a spoken Desktop wakeword command on the user's behalf.",
     "live.ui_result": (
         "Answers a specific Accessor's live UI request and must remain bound to that owner."
     ),
