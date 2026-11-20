@@ -25,7 +25,7 @@
     createTimelineViewState,
     provideTimelineViewState,
   } from './chat/timelineViewState.svelte.js';
-  import ImageLightbox from './ImageLightbox.svelte';
+  import MediaLightbox from './MediaLightbox.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
@@ -492,11 +492,7 @@
   });
 
   function handleTimelineClick(event) {
-    const preview =
-      event.target instanceof Element
-        ? event.target.closest('.tool-image-preview')
-        : null;
-    const image = preview?.querySelector('img') ?? event.target;
+    const image = event.target;
     if (!(image instanceof HTMLImageElement)) {
       return;
     }
@@ -505,8 +501,7 @@
     // open the raw image in a new tab.
     if (
       !image.closest('.msg-markdown') &&
-      !image.closest('.inline-attachment') &&
-      !preview
+      !image.closest('.inline-attachment')
     ) {
       return;
     }
@@ -514,7 +509,11 @@
       return;
     }
     event.preventDefault();
-    lightboxImage = { src: image.currentSrc || image.src, alt: image.alt };
+    lightboxImage = {
+      kind: 'image',
+      src: image.currentSrc || image.src,
+      filename: image.alt,
+    };
   }
 
   function closeLightbox() {
@@ -761,9 +760,5 @@
 {/snippet}
 
 {#if lightboxImage}
-  <ImageLightbox
-    src={lightboxImage.src}
-    alt={lightboxImage.alt}
-    onClose={closeLightbox}
-  />
+  <MediaLightbox items={[lightboxImage]} onClose={closeLightbox} />
 {/if}

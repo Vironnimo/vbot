@@ -1,7 +1,7 @@
 <script>
   import ContributionSurface from '../extensions/ContributionSurface.svelte';
   // The expanded body of a Tool row. Ordinary Run rows and standalone Tool
-  // events share it. It opens with the call's images, videos and audio.
+  // events share it.
   //
   // A Tool whose display declares detail blocks shows those to the user
   // (texts such as its command and output, the files it changed, what it
@@ -14,16 +14,11 @@
   // A row may carry only previews of a long call (`tool.rawTruncated`); the
   // whole call loads through `loadRaw` once a section showing it opens.
   import { untrack } from 'svelte';
-  import {
-    toolDetailBlocks,
-    toolDetailMedia,
-    toolOutputPreview,
-  } from '$lib/chatToolDetails.js';
+  import { toolDetailBlocks, toolOutputPreview } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import CollapseRail from './CollapseRail.svelte';
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
-  import ToolMedia from './ToolMedia.svelte';
   import ToolMemoryChanges from './ToolMemoryChanges.svelte';
   import ToolNotice from './ToolNotice.svelte';
   import ToolResults from './ToolResults.svelte';
@@ -48,8 +43,8 @@
   } = $props();
 
   const viewState = timelineViewState();
-  // First open pays for formatting and media. Keep that mounted afterwards so
-  // collapsing a Tool cannot reset playback, selection or internal scroll.
+  // First open pays for formatting. Keep that mounted afterwards so
+  // collapsing a Tool cannot reset selection or internal scroll.
   let revealed = $state(false);
   $effect(() => {
     if (open) revealed = true;
@@ -74,7 +69,6 @@
   const CLAMPED_TEXT_LINES = { command: 2 };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
-  let media = $derived(toolDetailMedia(tool, result));
   let output = $derived(toolOutputPreview(tool));
   let streamsReplaceOutput = $derived(
     output &&
@@ -96,11 +90,9 @@
     !streamsReplaceOutput && isCommandBlock(blocks?.at(-1)),
   );
   let rawKey = $derived(`${viewKey}:raw-call`);
-  // Blocks or media take the place of the call, which waits behind the
+  // Detail blocks take the place of the call, which waits behind the
   // raw-call disclosure; otherwise the details show it directly.
-  let rawDisclosure = $derived(
-    Boolean(blocks) && (blocks.length > 0 || media.length > 0),
-  );
+  let rawDisclosure = $derived(Boolean(blocks?.length));
   let callShown = $derived(
     rawDisclosure ? viewState.isOpen(rawKey) : open || revealed,
   );
@@ -199,7 +191,6 @@
 {/snippet}
 
 {#snippet toolResultContribution()}
-  <ToolMedia items={media} />
   {#if blocks}
     {#each blocks as block, index (index)}
       {#if block.type === 'text'}

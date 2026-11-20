@@ -1,92 +1,124 @@
 <script>
-  // The media of expanded Tool details, from `toolDetailMedia`: the files a
-  // call started from under Sources, the ones it read, looked at or produced
-  // under Media. Images are thumbnails that open the timeline lightbox (a
-  // modifier click opens the file) and show a placeholder when the file is
-  // gone; videos play in the browser's player, audio in the shared one.
+  import { toolRowMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
-  import AudioPlayer from '../ui/AudioPlayer.svelte';
+  import { mountHold } from '$lib/mountHold.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import MediaLightbox from '../MediaLightbox.svelte';
 
-  let { items } = $props();
+  let { tool, result } = $props();
+  let items = $derived(toolRowMedia(tool, result));
+  const visibleLimit = 3;
+  let visible = $derived(items.slice(0, visibleLimit));
+  let remaining = $derived(items.length - visible.length);
+  let strip = $state();
+  let bounds = $state();
+  let gallery = $state.raw(null);
+  const holdMounted = mountHold();
 
-  let groups = $derived(
-    [
-      {
-        label: t('chat.toolMediaSources'),
-        items: items.filter((item) => item.source),
-      },
-      {
-        label: t('chat.toolMedia'),
-        items: items.filter((item) => !item.source),
-      },
-    ].filter((group) => group.items.length > 0),
-  );
+  $effect(() => {
+    if (gallery && strip) return holdMounted(strip);
+  });
+
+  function open(event, index) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    gallery = { items, index };
+  }
 </script>
 
-{#each groups as group (group.label)}
-  {@const images = group.items.filter((item) => item.kind === 'image')}
-  {@const players = group.items.filter((item) => item.kind !== 'image')}
-  <div class="teb-row teb-section tool-media">
-    <div class="teb-section-header">
-      <span class="teb-label">{group.label}</span>
-    </div>
-    {#if images.length > 0}
-      <div class="tool-image-previews">
-        {#each images as image (image.src)}
-          <a
-            class="tool-image-preview"
-            href={image.src}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={image.filename}
-          >
+{#if visible.length}
+  <span
+    class="tool-media-previews"
+    bind:this={strip}
+    bind:contentRect={bounds}
+    style:--tool-media-height={bounds && `${bounds.height}px`}
+  >
+    {#each visible as item, index (item.src)}
+      {@const label = item.source
+        ? t('chat.toolMedia.openSource', { filename: item.filename })
+        : t('chat.toolMedia.open', { filename: item.filename })}
+      <a
+        class="tool-media-preview"
+        href={item.src}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={label}
+        aria-haspopup="dialog"
+        use:tooltip={label}
+        onclick={(event) => open(event, index)}
+      >
+        <span class="tool-media-preview__frame">
+          {#if item.kind === 'image'}
             <img
-              src={image.src}
-              alt={image.filename}
+              src={item.src}
+              alt=""
               loading="lazy"
               onerror={(event) => {
                 event.currentTarget.hidden = true;
               }}
             />
-            <span
-              class="image-unavailable"
+            <svg
+              class="tool-media-preview__missing"
               role="img"
               aria-label={t('chat.image.unavailable')}
+              viewBox="0 0 24 24"
             >
-              <svg viewBox="0 0 32 24" aria-hidden="true"
-                ><rect x="1" y="1" width="30" height="22" rx="2" /><circle
-                  cx="10"
-                  cy="8"
-                  r="2"
-                /><path d="m3 20 8-8 6 6 4-4 8 6M3 2l26 20" /></svg
-              >
-              <span>{t('chat.image.unavailable')}</span>
-            </span>
-            <span>{image.filename}</span>
-          </a>
-        {/each}
-      </div>
-    {/if}
-    {#each players as item (item.src)}
-      <figure class="tool-media__player">
-        {#if item.kind === 'video'}
-          <!-- Tool videos carry no captions to offer. -->
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video
-            class="tool-media__video"
-            src={item.src}
-            controls
-            preload="metadata"
-            aria-label={item.filename}
-          ></video>
-        {:else}
-          <AudioPlayer src={item.src} ariaLabel={item.filename} />
-        {/if}
-        <figcaption>
-          <a href={item.src} target="_blank" rel="noreferrer">{item.filename}</a
-          >
-        </figcaption>
-      </figure>
+              <rect x="2" y="4" width="20" height="16" rx="2" /><path
+                d="m3 18 7-7 6 6 3-3 3 3M3 3l18 18"
+              />
+            </svg>
+          {:else if item.kind === 'video'}
+            <!-- A paused first frame; playback controls live in the viewer. -->
+            <video
+              src={item.src + '#t=0.001'}
+              preload="metadata"
+              muted
+              playsinline
+              aria-hidden="true"
+              tabindex="-1"
+            ></video>
+            <svg
+              class="tool-media-preview__play"
+              viewBox="0 0 16 16"
+              aria-hidden="true"><path d="M5 3v10l8-5z" /></svg
+            >
+          {:else}
+            <svg viewBox="0 0 24 24" aria-hidden="true"
+              ><path d="M3 10v4m4-7v10m5-14v18m5-14v10m4-7v4" /></svg
+            >
+          {/if}
+        </span>
+      </a>
     {/each}
-  </div>
-{/each}
+    {#if remaining}
+      {@const label = t('chat.toolMedia.openMore', { count: remaining })}
+      <a
+        class="tool-media-more"
+        href={items[visibleLimit].src}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={label}
+        aria-haspopup="dialog"
+        use:tooltip={label}
+        onclick={(event) => open(event, visibleLimit)}
+      >
+        <span aria-hidden="true">+{remaining}</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true"
+          ><path d="m4.5 2.5 3.5 3.5-3.5 3.5" /></svg
+        >
+      </a>
+    {/if}
+  </span>
+  {#if gallery}
+    <MediaLightbox
+      items={gallery.items}
+      index={gallery.index}
+      showCaption
+      onClose={() => {
+        gallery = null;
+      }}
+    />
+  {/if}
+{/if}
