@@ -152,7 +152,8 @@ def test_one_listener_serves_https_and_plain_http_and_reloads_its_certificate(
             served.append(await _get(port, _trusting(str(renewed))))
             return served
 
-    served = asyncio.run(scenario())
+    loop_factory = uvicorn.Config(_scheme_app).get_loop_factory()
+    served = asyncio.run(asyncio.wait_for(scenario(), 3), loop_factory=loop_factory)
 
     # The guard sees the transport through the scheme: http only for plain connections.
     assert served == [("http", None), ("https", 1), ("https", 2), ("https", 2)]

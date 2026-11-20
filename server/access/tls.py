@@ -23,7 +23,7 @@ import asyncio
 import os
 import ssl
 from asyncio.sslproto import SSLProtocol
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 from core.access.config import AccessConfigError, load_tls_context
 from core.utils.log_conditions import LoggedConditions
@@ -111,11 +111,12 @@ def http_protocol_class(holder: TlsContextHolder | None) -> type[asyncio.Protoco
     class _DeviceHttpProtocol(HttpProtocol):
         @override
         def connection_made(self, transport: asyncio.BaseTransport) -> None:
-            assert isinstance(transport, asyncio.Transport)
-            super().connection_made(transport)
+            # uvloop's TCP transport supports this interface without inheriting it.
+            tcp_transport = cast(asyncio.Transport, transport)
+            super().connection_made(tcp_transport)
             # Uvicorn shares lifespan state across connections and copies this
             # dict per request. Only requests on this transport may abort it.
-            self.app_state = {**self.app_state, ABORT_HTTP_CONNECTION: transport.abort}
+            self.app_state = {**self.app_state, ABORT_HTTP_CONNECTION: tcp_transport.abort}
 
     if holder is None:
         return _DeviceHttpProtocol
@@ -156,8 +157,7 @@ class TlsSniffingProtocol(asyncio.Protocol):
 
     @override
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        assert isinstance(transport, asyncio.Transport)
-        self._transport = transport
+        self._transport = cast(asyncio.Transport, transport)
         self._server_state.connections.add(self)
         self._timeout = self._loop.call_later(FIRST_BYTE_TIMEOUT_SECONDS, self._abort)
 
@@ -252,10 +252,9 @@ class _ServerTlsProtocol(SSLProtocol):
 
     @override
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        assert isinstance(transport, asyncio.Transport)
-        self._socket = transport
+        self._socket = cast(asyncio.Transport, transport)
         self._server_state.connections.add(self)
-        super().connection_made(transport)
+        super().connection_made(self._socket)
 
     @override
     def connection_lost(self, exc: BaseException | None) -> None:
