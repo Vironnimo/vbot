@@ -683,6 +683,16 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
     assert result["output"] == "pg_ctl: kein Server läuft"
     assert len(result["notes"]) == 2  # timeout interpretation and inferred encoding
     encoding_note = next(note for note in result["notes"] if "cp1252" in note)
+    display = shell.registry.display_for_call(
+        SHELL_TOOL_NAME,
+        {"command": "program", "description": "Check output"},
+        result=tool_success(result),
+    )
+    assert "description" in display["hidden_argument_keys"]
+    assert all(
+        note in [block["text"] for block in display["details"] if block["type"] == "notice"]
+        for note in result["notes"]
+    )
     if ended:
         return
     command_id = result["command_id"]
@@ -1053,6 +1063,10 @@ async def test_processes_left_running_are_named_with_the_call_that_stops_them(
         command_id = result["command_id"]
         assert (result["status"], result["exit_code"]) == ("exited", 0)
         assert result["still_running"] == ["server.exe (pid 42)"]
+        assert any(
+            "server.exe (pid 42)" in block.get("text", "")
+            for block in shell_detail_blocks({"command": "start-server"}, tool_success(result))
+        )
         assert stop_calls(result["next"]) == [{"action": "stop", "id": command_id}]
         # The result showed the end: nothing more is delivered.
         assert shell.sink.submissions == []

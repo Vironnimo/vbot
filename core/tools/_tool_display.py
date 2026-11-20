@@ -490,6 +490,7 @@ def display_text(
         raise ValueError("Tool display text must be a non-empty string")
     if len(text) > MAX_TOOL_DISPLAY_TEXT_LENGTH:
         text = f"{text[: MAX_TOOL_DISPLAY_TEXT_LENGTH - 1]}…"
+        block["truncated"] = True
     block["text"] = text
     return block
 

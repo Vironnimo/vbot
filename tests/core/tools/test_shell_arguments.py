@@ -12,6 +12,7 @@ from core.tools._shell_arguments import (
     split_env_object,
 )
 from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.shell import shell_detail_blocks
 
 NOT_RUN = f"{SHELL_MODEL_NAME} was not run: "
 
@@ -325,13 +326,38 @@ def test_env_object_refuses_written_credentials_and_reserved_names(env, granted,
         ({"cmd": "git status"}, "command", "git status", None),
         ({"command": "ls", "explanation": "List files"}, "description", "List files", "ls"),
         ({"action": {"command": ["ls"]}}, "command", "ls", None),
+        ({"command": "ls", "cmd": "pwd", "title": "Inspect"}, "description", "Inspect", None),
         # A call that fails validation still shows what it tried to run.
-        ({"command": "ls", "user": "root"}, "command", "ls", None),
+        ({"script": "ls", "user": "root"}, "command", "ls", None),
+        (
+            {"commands": ["pwd", "ls"], "title": "List here", "mode": "invalid"},
+            "description",
+            "List here",
+            "pwd\nls",
+        ),
+        (
+            {
+                "action": {
+                    "type": "exec",
+                    "argv": ["git", "show", "a b"],
+                    "require_user_approval": True,
+                }
+            },
+            "command",
+            "git show 'a b'",
+            None,
+        ),
     ],
 )
 def test_activity_row_shows_the_command_in_any_shape(arguments, kind, value, detail) -> None:
     (part,) = shell_display_parts(arguments)
     assert (part.kind, part.value) == (kind, value)
     # The command stays copyable, also behind a description standing in for it.
-    assert part.copyable is True
-    assert (part.detail, part.detail_kind) == (detail, "command" if detail else "text")
+    command = value if kind == "command" else detail
+    assert part.copyable is (command is not None)
+    assert part.detail == detail
+    if detail:
+        assert part.detail_kind == "command"
+    assert shell_detail_blocks(arguments, None) == (
+        [{"type": "text", "label": "command", "text": command}] if command else []
+    )

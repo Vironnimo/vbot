@@ -118,6 +118,10 @@ def test_tool_detail_reads_its_blocks_and_keeps_hidden_arguments_out() -> None:
     assert "  sent a logo" in detail
     assert "Warning: Skipped one conversation." in detail
 
+    progress = {"output": "latest live lines"}
+    assert "latest live lines" in tool_detail(progress)
+    assert "latest live lines" not in tool_detail(item | progress | {"finished": True})
+
 
 type JsonObject = dict[str, Any]
 

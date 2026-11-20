@@ -412,8 +412,10 @@ async def test_a_command_the_shell_ran_nothing_of_says_why_in_list_and_status(
     assert "123456789" not in status["not_run_because"]
     # The status said why: the delivery that says it is withdrawn.
     assert tasks.commands.sink.cancellations == [f"command:{command_id}"]
-    assert {"type": "notice", "level": "warning", "text": "The command did not run."} in (
-        tasks.shown({"action": "status", "id": command_id}, result)
+    shown = tasks.shown({"action": "status", "id": command_id}, result)
+    assert any(
+        block.get("level") == "warning" and status["not_run_because"] in block["text"]
+        for block in shown
     )
 
 
@@ -568,7 +570,9 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
     command_id, process = await tasks.background(owner=owner)
     process.write("serving\n")
 
-    stopped = data(await tasks.call({"action": "stop", "id": command_id}))
+    args = {"action": "stop", "id": command_id}
+    result = await tasks.call(args)
+    stopped = data(result)
     report = await tasks.commands.finish(command_id)
 
     assert (stopped["status"], stopped["stopped_because"], stopped["output"]) == (
@@ -578,6 +582,9 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
     )
     # Its exit code is vBot's kill, not the command's.
     assert "exit_code" not in stopped
+    notices = [block["text"] for block in tasks.shown(args, result) if block["type"] == "notice"]
+    assert any(stopped["stopped_because"] in notice for notice in notices)
+    assert all(note in notices for note in stopped.get("notes", []))
     output_file(stopped["next"])
     assert process.tree.terminations == 1
     if owner == OWNER:

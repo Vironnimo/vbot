@@ -525,7 +525,6 @@
               open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
-              output={child.output}
               result={child.result}
               resultFailed={toolStatus(child) === 'failed'}
               live={toolStatus(child) === 'running'}
@@ -624,7 +623,6 @@
               open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
-              output={child.output}
               result={child.result}
               resultFailed={sendStatus === 'failed'}
               live={sendStatus === 'running'}
@@ -777,7 +775,6 @@
               open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
-              output={child.output}
               result={child.result}
               resultFailed={rowDotStatus === 'failed'}
               live={toolStatus(child) === 'running'}

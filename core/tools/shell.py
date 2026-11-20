@@ -31,6 +31,7 @@ from core.tools._shell_arguments import (
     shell_display_parts,
     validate_workdir,
 )
+from core.tools._shell_display import shell_detail_blocks
 from core.tools._shell_results import (
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
@@ -46,7 +47,6 @@ from core.tools._shell_results import (
     delivery_names,
     duration,
     ended_result,
-    exit_code_text,
     format_command_delivery,
     holding_stage,
     named_tools,
@@ -58,7 +58,6 @@ from core.tools._shell_results import (
     stop_action,
 )
 from core.tools._tool_context import ToolApprovalCancelledError
-from core.tools._tool_display import display_notice, display_text
 from core.tools._tool_workers import run_tool_worker, run_tool_worker_guarded
 from core.tools.command_manager import (
     CommandCheckpointError,
@@ -905,45 +904,6 @@ def _running_next(
     return f"{opening} and continues in the background as {command_id}.{silence}{log} {tail}"
 
 
-# Display
-
-
-def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
-    """Show the user the command, its output and what its outcome means."""
-    try:
-        normalized = normalize_shell_arguments(arguments)
-    except ValueError:
-        normalized = arguments
-    blocks: list[JsonObject] = []
-    command = normalized.get("command") if isinstance(normalized, dict) else None
-    if isinstance(command, str) and command.strip():
-        blocks.append(display_text("command", text=command))
-    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
-    if not isinstance(data, dict):
-        return blocks
-    blocks.append(display_text("output", source="result", path=("data", "output")))
-    if data.get("status") == "stopped" and isinstance(data.get("stopped_because"), str):
-        blocks.append(display_notice("warning", f"Stopped: {data['stopped_because']}"))
-    exit_code = data.get("exit_code")
-    if (
-        data.get("status") == "exited"
-        and isinstance(exit_code, int)
-        and not isinstance(exit_code, bool)
-        and exit_code != 0
-    ):
-        blocks.append(
-            display_notice("warning", f"The command exited with code {exit_code_text(exit_code)}.")
-        )
-    failed = data.get("failed_programs")
-    if isinstance(failed, list) and failed:
-        blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))
-    if isinstance(data.get("hint"), str):
-        blocks.append(display_notice("info", f"Hint: {data['hint']}"))
-    if data.get("status") == "running":
-        blocks.append(display_notice("info", "The command continues in the background."))
-    return blocks
-
-
 def register_shell_tool(
     registry: ToolRegistry,
     command_manager: CommandManager,
@@ -997,7 +957,11 @@ def register_shell_tool(
         unadvertised_parameters=SHELL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_shell_arguments,
         result_schema={"type": "object", "required": ["status"]},
-        display=ToolDisplay(parts_builder=shell_display_parts, detail_builder=shell_detail_blocks),
+        display=ToolDisplay(
+            parts_builder=shell_display_parts,
+            detail_builder=shell_detail_blocks,
+            hidden_argument_keys=("description",),
+        ),
     )
     if prompt_blocks is not None:
         prompt_blocks.register(SHELL_TOOL_NAME, render=_render_env_prompt_block)
