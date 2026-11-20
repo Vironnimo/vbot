@@ -287,7 +287,13 @@ class WireProfile:
     def source_of(self, path: str) -> str | None: ...
 
 type Protocol = Literal[
-    "chat_completions", "messages", "responses", "gemini", "ollama_chat", "claude_agent"
+    "chat_completions",
+    "messages",
+    "responses",
+    "gemini",
+    "ollama_chat",
+    "claude_agent",
+    "antigravity",
 ]
 type ProfileStatus = Literal["verified", "configured", "inferred"]
 type AdmissionState = Literal["available", "restricted", "retired"]
