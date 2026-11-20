@@ -8,8 +8,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._claude_agent_sdk import SDK_POOL
-from core.providers._claude_agent_sessions import ClaudeAgentSessions, Conversation
-from core.providers._native_agent_wire import JsonObject, NativeAgentAdapter, history, system_prompt
+from core.providers._claude_agent_sessions import ClaudeAgentSessions
+from core.providers._native_agent_wire import (
+    Conversation,
+    JsonObject,
+    NativeAgentAdapter,
+    history,
+    system_prompt,
+)
 from core.providers.adapter import ModelLookup
 from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig

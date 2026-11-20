@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat import (
@@ -517,13 +516,12 @@ class CompactionService:
                         request_kind="compaction",
                     )
                 )
-                masker = self._secret_masker()
                 model_messages, model_tools = await COMPACTION_WORKERS.run(
                     _prepare_compaction_model_request,
                     plan,
                     active_tools,
                     strip_reasoning=not same_target,
-                    masker=masker,
+                    masker=self._secret_masker(),
                 )
                 model_messages, effort_options = route_effort(
                     active_effort if same_target else None,
@@ -562,12 +560,6 @@ class CompactionService:
                             usage_recorder=self._usage_recorder,
                             model_reference=reference,
                             input_estimate=model_input.estimated,
-                            intermediate_summary_note=(
-                                partial(_intermediate_summary_note, masker=masker)
-                                if prepared.strategy_id
-                                in (STRATEGY_SUMMARY_TAIL, STRATEGY_CONTINUATION)
-                                else None
-                            ),
                             estimate_factor=(
                                 estimate_factor
                                 if same_target
@@ -671,16 +663,6 @@ def _prepare_compaction_model_request(
     if strip_reasoning:
         _strip_assistant_reasoning_fields(model_messages)
     return model_facing_request(model_messages, list(tools or []), masker)
-
-
-def _intermediate_summary_note(response: JsonObject, *, masker: SecretMasker) -> JsonObject:
-    """Carry a completed prefix forward using the normal checkpoint Note."""
-    summary = _summary_body(_extract_summary_text(response))
-    if not summary:
-        raise CompactionError("Summary response contained no summary text")
-    note = system_reminder_request_message(f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}")
-    messages, _tools = model_facing_request([note], [], masker)
-    return messages[0]
 
 
 def _finalize_compaction(

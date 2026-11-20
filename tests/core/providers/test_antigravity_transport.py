@@ -10,6 +10,7 @@ from contextlib import aclosing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -34,6 +35,9 @@ class _Input(bytearray):
         self.extend(data)
 
     async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
         pass
 
 
@@ -354,6 +358,149 @@ async def test_stream_delivers_model_usage_before_the_native_turn_total(
                 "last_request_usage": model_counts,
             }
         assert [event async for event in stream] == [{"type": "finish", "reason": "stop"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "",
+        "wrong_conversation",
+        "spent_tokens",
+        "old_ack",
+        "missing_guard",
+        "ran_model",
+        "missing_baseline",
+    ],
+)
+async def test_native_continuation_restores_packets_without_spending_or_reusing_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child: _Child, fault: str
+) -> None:
+    native_id = str(uuid4())
+    starts: list[Path] = []
+    counts = {
+        "input_tokens": 10,
+        "cache_read_tokens": 4,
+        "output_tokens": 5,
+        "thinking_tokens": 3,
+        "total_tokens": 15,
+    }
+
+    async def launch(*args: str, cwd: Path, **_: Any) -> _Child:
+        turn = len(starts)
+        state = Path(args[args.index("--settings") + 1]).parent
+        assert state.parent == cwd.parent and not (state / "invocation").exists()
+        assert not any(path.exists() for path in starts)
+        starts.append(state)
+        assert ("--conversation" in args) == (turn > 0)
+        if turn:
+            assert args[args.index("--conversation") + 1] == native_id
+        identifier = str(uuid4()) if turn == 1 and fault == "wrong_conversation" else native_id
+        child.stdout.feed_data(
+            json.dumps(
+                {
+                    "event": "init",
+                    "conversation_id": identifier,
+                    "init": {
+                        "agent": "vbot",
+                        "permission_mode": "strict",
+                        "cwd": str(cwd),
+                        "model": _MODEL,
+                    },
+                }
+            ).encode()
+            + b"\n"
+        )
+        child.returncode = 0
+        hooks = json.loads((cwd / ".agents/hooks.json").read_text())["vbot"]
+        assert state.name in hooks["PreInvocation"][0]["command"]
+        assert state.name in hooks["PreToolUse"][0]["hooks"][0]["command"]
+        offset = [0, 2, 6][turn]
+        if turn:
+            child.event("step_update", step_type="system_message", step_index=offset, state="DONE")
+            offset += 1
+        child.event("step_update", step_type="user_input", step_index=offset, state="DONE")
+        if turn == 1 and fault != "missing_baseline":
+            if fault != "missing_guard":
+                assert bridge._guard("seed", state, replay=True) == {
+                    "injectSteps": [{"userMessage": "history-A"}, {"userMessage": "history-B"}],
+                    "terminationBehavior": "terminate",
+                }
+            child.event("step_update", step_type="user_input", step_index=offset + 1, state="DONE")
+            child.event(
+                "step_update",
+                step_type="user_input",
+                step_index=1 if fault == "old_ack" else offset + 2,
+                state="DONE",
+            )
+            if fault == "ran_model":
+                child.event(
+                    "step_update", step_type="agent_response", step_index=offset + 3, state="ACTIVE"
+                )
+        else:
+            assert bridge._guard("before", state) == {}
+            child.event(
+                "step_update",
+                step_type="agent_response",
+                step_index=offset + 1,
+                state="DONE",
+                usage=counts,
+            )
+        total = {k: v * (2 if turn == 2 else 1) for k, v in counts.items()}
+        if fault == "missing_baseline":
+            total = {} if turn == 0 else {k: v * 2 for k, v in counts.items()}
+        if turn == 1 and fault == "spent_tokens":
+            total["input_tokens"] += 1
+        child.event(
+            "result", status="SUCCESS", conversation_id=identifier, response="", usage=total
+        )
+        return child
+
+    monkeypatch.setattr(transport, "create_subprocess_exec", launch)
+    manager = TemporaryFileManager(tmp_path)
+    with manager.provider_directory() as root:
+        # Markers from a previous subprocess cannot authorize a new one.
+        (root / "invocation").touch()
+        conversation = transport.NativeConversation(root)
+
+        async def request(*batch: tuple[str, ...]) -> list[dict[str, Any]]:
+            return [
+                event
+                async for event in transport.stream_turn(
+                    "/agy",
+                    model=_MODEL,
+                    system_prompt="test",
+                    prompt="next",
+                    tools=[],
+                    temporary_files=manager,
+                    conversation=conversation,
+                    seed_batches=batch,
+                )
+            ]
+
+        expected = [
+            {
+                "type": "usage",
+                "reported_cost_usd": 0.0,
+                "input_tokens": 14,
+                "cache_read_tokens": 4,
+                "output_tokens": 5,
+                "reasoning_tokens": 3,
+            },
+            {"type": "finish", "reason": "stop"},
+        ]
+        assert await request() == expected
+        assert conversation.conversation_id == native_id
+        if fault == "missing_baseline":
+            assert await request() == expected
+        elif fault:
+            with pytest.raises(ProviderError):
+                await request(("history-A", "history-B"))
+            assert len(starts) == 2
+        else:
+            assert await request(("history-A", "history-B")) == expected
+            assert len(starts) == 3
+        assert not any(path.exists() for path in starts)
 
 
 @pytest.mark.asyncio

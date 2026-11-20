@@ -26,11 +26,7 @@ from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, COMPACTION_SUMMARY_END_MARKER
 from core.providers.adapter import is_request_context_message, resolve_request_input_budget
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.errors import (
-    NetworkError,
-    ProviderContextOverflowError,
-    ProviderReplayLimitError,
-)
+from core.providers.errors import NetworkError, ProviderContextOverflowError
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import RequestInput
@@ -226,61 +222,6 @@ async def test_compaction_attempt_records_usage_before_checkpoint_acceptance(rej
         assert checkpoint.usage is not None
         assert set(checkpoint.usage) == {"compacted_token_count", "model_call"}
         assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == call["id"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
-@pytest.mark.parametrize("indivisible", [False, True], ids=["partitioned", "oversized-tool-cycle"])
-async def test_replay_limited_compaction_reads_all_evidence_before_committing(
-    strategy, indivisible
-):
-    accepted: list[list[dict[str, Any]]] = []
-    recorder = RecordingUsageRecorder()
-
-    class ReplayLimitedAdapter(StubAdapter):
-        @override
-        async def stream(self, messages, **kwargs):
-            self.requests.append({"messages": messages, **kwargs})
-            records = [m for m in messages[1:-1] if m.get("id")]
-            if len(records) > 2 or (indivisible and any(m["role"] == "tool" for m in records)):
-                raise ProviderReplayLimitError("native replay too large")
-            if accepted:
-                assert f"OUTCOME {len(accepted)}" in messages[1]["content"]
-            assert messages[0] == self.requests[0]["messages"][0]
-            assert messages[-1] == self.requests[0]["messages"][-1]
-            accepted.append(records)
-            yield {"type": "content_delta", "text": f"OUTCOME {len(accepted)}"}
-            yield {"type": "finish", "reason": "stop"}
-
-    adapter = ReplayLimitedAdapter()
-    messages = [
-        user("u1", "old question"),
-        assistant("a1", "observations"),
-        *tool_step("file", "COMPLETE RAW TOOL RESULT"),
-        assistant("a2", "what the tool returned"),
-        user("u2", "use these findings"),
-    ]
-    operation = compact(
-        messages,
-        service=CompactionService(usage_recorder=cast(Any, recorder)),
-        summary_adapter=adapter,
-        active_adapter=adapter,
-        active_model_id="model",
-        summary_model_id="model",
-        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
-        request_messages=provider_request(messages),
-    )
-    if indivisible:
-        with pytest.raises(CompactionError, match="smallest complete Compaction input"):
-            await operation
-        return
-    checkpoint = await operation
-    assert f"OUTCOME {len(accepted)}" in str(checkpoint.content)
-    assert [m for part in accepted for m in part] == adapter.requests[0]["messages"][1:-1]
-    assert any([m["role"] for m in part] == ["assistant", "tool"] for part in accepted)
-    assert len(accepted) > 1
-    assert len(recorder.calls) == len(adapter.requests)
-    assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == recorder.calls[-1]["id"]
 
 
 class _BudgetAdapter(StubAdapter):

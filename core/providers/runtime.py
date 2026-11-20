@@ -357,7 +357,10 @@ class ProviderRuntime:
         await self._responses_transports.close_conversations(
             {responses_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
         )
-        await self._claude_sessions.close_sessions(set(sessions))
+        await asyncio.gather(
+            self._claude_sessions.close_sessions(set(sessions)),
+            self._antigravity.conversations.close_sessions(set(sessions)),
+        )
 
     async def close_connection_transports(
         self, provider_id: str, connection_id: str | None = None
@@ -483,6 +486,7 @@ class ProviderRuntime:
             extra_kwargs["connection_id"] = connection_config.id
         if adapter_class is AntigravityAdapter:
             extra_kwargs["native"] = self._antigravity
+            extra_kwargs["connection_id"] = connection_config.id
         if adapter_class in (OllamaAdapter, LMStudioAdapter):
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
         if adapter_class is LMStudioAdapter:

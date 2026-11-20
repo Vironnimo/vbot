@@ -28,7 +28,7 @@ from core.providers._claude_agent_wire import (
     prompt_content,
     record,
 )
-from core.providers._native_agent_wire import history
+from core.providers._native_agent_wire import Conversation, history
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.storage import TemporaryFileLease, TemporaryFileManager
 from core.utils.logging import get_logger
@@ -56,15 +56,6 @@ class ClaudeAgentBusyError(ProviderError):
         super().__init__(
             "All Claude Agent process slots are busy. Try again shortly.", retryable=True
         )
-
-
-@dataclass(frozen=True)
-class Conversation:
-    project_id: str | None
-    agent_id: str
-    session_id: str
-    generation_id: str | None
-    connection_id: str
 
 
 class NativeSession:
