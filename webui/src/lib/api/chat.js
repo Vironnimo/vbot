@@ -283,7 +283,7 @@ export function listSessionActivity(agentIds, options = {}) {
   return rpc('session.activity_list', { agent_ids: agentIds }, options);
 }
 
-export function markSessionRead(agentId, sessionId, runId, options = {}) {
+export function markSessionRead(agentId, sessionId, through, options = {}) {
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
@@ -294,20 +294,17 @@ export function markSessionRead(agentId, sessionId, runId, options = {}) {
     'Session id must be a non-empty string',
     'session.mark_read',
   );
-  const ids = Array.isArray(runId) ? runId : [runId];
-  for (const id of ids) {
-    requireNonEmptyString(
-      id,
-      'Run id must be a non-empty string',
-      'session.mark_read',
-    );
-  }
+  requireNonEmptyString(
+    through,
+    'Run id must be a non-empty string',
+    'session.mark_read',
+  );
   return rpc(
     'session.mark_read',
     {
       agent_id: agentId,
       session_id: sessionId,
-      ...(Array.isArray(runId) ? { run_ids: runId } : { run_id: runId }),
+      through,
     },
     options,
   );

@@ -87,6 +87,7 @@ def _completion_activity_from_state(state: Any) -> JsonObject:
             "notification_policy",
             "has_chat_results",
             "has_schedule_runs",
+            "notification_generation_id",
             "notification_revision",
             "notification_count",
             "notification_run_id",

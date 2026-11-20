@@ -355,6 +355,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
     )
     source_address = _address("coder", "source")
     settle_run(manager, source_address, "run-1")
+    assert manager.summary(source_address)["unread_run_id"] == "run-1"
     streaming = source.start_run("run-one")
     asyncio.run(
         streaming.append_stream_draft_async(model="test", reasoning_delta="", content_delta="half")
@@ -370,7 +371,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
     assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}
     assert manager.mark_terminal_run_read(forked.address, "run-1")["marked_read"] is False
     source_activity = manager.list_completion_activity([(None, "coder")])[(None, "coder")]
-    assert [row["unread_run_id"] for row in source_activity] == ["run-1"]
+    assert [row["unread_run_id"] for row in source_activity] == [None]
     metadata = manager.get_metadata(forked.address)
     assert metadata[FORK_SOURCE_META_KEY] == {
         "agent_id": "coder",

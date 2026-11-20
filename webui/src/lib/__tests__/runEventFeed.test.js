@@ -55,9 +55,23 @@ describe('Run event feed', () => {
   it('knows which terminal events it still holds', () => {
     const feed = createRunEventFeed({ capacity: 2 });
 
-    feed.append(lifecycle('run_completed', 'done'));
+    const done = lifecycle('run_completed', 'done');
+    done.payload.notification_activity = {
+      notification_generation_id: 'generation',
+      notification_revision: 2,
+    };
+    feed.append(done);
     expect(feed.retainsTerminal('done')).toBe(true);
     expect(feed.retainsTerminal('other')).toBe(false);
+    const session = {
+      notificationGeneration: 'generation',
+      notificationRevision: 1,
+    };
+    expect(feed.retainsTerminal('done', session)).toBe(false);
+    session.notificationRevision = 2;
+    expect(feed.retainsTerminal('done', session)).toBe(true);
+    session.notificationGeneration = 'other';
+    expect(feed.retainsTerminal('done', session)).toBe(false);
 
     feed.append(lifecycle('run_output', 'next'));
     feed.append(lifecycle('run_failed', 'next'));

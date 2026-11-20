@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from core.utils.logging import get_logger
 
+_ACTIVITY_WRITE_PATIENCE_S = 0.5
+
 if TYPE_CHECKING:
     from core.sessions._types import JsonObject, SessionAddress
     from core.sessions.store import SessionStore
@@ -46,22 +48,31 @@ class SessionNotifications:
                 policy,
             )
 
-    def mark_read(self, address: SessionAddress, run_ids: Sequence[str]) -> JsonObject:
+    def mark_read(
+        self, address: SessionAddress, run_ids: Sequence[str] = (), *, through: str | None = None
+    ) -> JsonObject:
+        """Acknowledge exact Run ids or all completions through one Run."""
         from core.sessions import _store_notifications, _store_runs, _store_values
+        from core.sessions._metadata import _completion_activity_from_state
 
         def write(db: sqlite3.Connection) -> tuple[list[str], JsonObject]:
-            changed = _store_notifications.mark_runs_read(db, address, run_ids)
+            changed = (
+                _store_notifications.mark_runs_read_through(db, address, through)
+                if through is not None
+                else _store_notifications.mark_runs_read(db, address, run_ids)
+            )
             activity = _store_runs._completion_activity(
                 db, int(_store_values._require_live(db, address)["session_key"])
             )
-            from core.sessions._metadata import _completion_activity_from_state
-
             return changed, _completion_activity_from_state(activity)
 
-        changed, activity = self._store._execute_write(write)
+        changed, activity = self._store._execute_write(write, patience_s=_ACTIVITY_WRITE_PATIENCE_S)
         for run_id in changed:
             self._read(address, run_id)
-        return activity | {"marked_read": bool(changed), "read_run_ids": list(run_ids)}
+        activity["marked_read"] = bool(changed)
+        if through is None:
+            activity["read_run_ids"] = list(run_ids)
+        return activity
 
     def schedule_activity(self, busy: Sequence[SessionAddress] = ()) -> dict[str, JsonObject]:
         from core.sessions import _store_notifications

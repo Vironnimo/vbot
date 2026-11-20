@@ -41,28 +41,64 @@ def mark_runs_read(
     connection: sqlite3.Connection, address: SessionAddress, run_ids: Sequence[str]
 ) -> list[str]:
     key = int(_store_values._require_live(connection, address)["session_key"])
-    changed = []
-    for run_id in dict.fromkeys(run_ids):
-        row = connection.execute(
-            "UPDATE run_notifications SET is_read = 1 WHERE session_key = ? "
-            "AND is_read = 0 AND run_key = (SELECT run_key FROM runs "
-            "WHERE session_key = ? AND run_id = ? AND inherited = 0 "
-            "AND completed_at IS NOT NULL) RETURNING run_key",
-            (key, key, run_id),
-        ).fetchone()
-        if row is not None:
-            changed.append(run_id)
-        # Keep the existing latest-completion projection consistent too.
-        connection.execute(
-            "UPDATE sessions SET read_completion_run_key = latest_completion_run_key "
-            "WHERE session_key = ? AND read_completion_run_key IS NOT latest_completion_run_key "
-            "AND latest_completion_run_key = "
-            "(SELECT run_key FROM runs WHERE session_key = ? AND run_id = ?)",
-            (key, key, run_id),
-        )
+    changed = _mark_read(
+        connection,
+        key,
+        "r.run_id IN (SELECT value FROM json_each(?))",
+        (_store_values._json_list(run_ids),),
+    )
     if changed:
         _store_values._touch_state(connection, key)
     return changed
+
+
+def mark_runs_read_through(
+    connection: sqlite3.Connection, address: SessionAddress, run_id: str
+) -> list[str]:
+    key = int(_store_values._require_live(connection, address)["session_key"])
+    boundary = connection.execute(
+        "SELECT e.seq FROM runs AS r JOIN entries AS e ON e.entry_key = r.end_entry_key "
+        "WHERE r.session_key = ? AND r.run_id = ? AND r.inherited = 0 "
+        "AND e.superseded_at_seq IS NULL",
+        (key, run_id),
+    ).fetchone()
+    if boundary is None:
+        return []
+    changed = mark_through_sequence(connection, key, boundary["seq"])
+    if changed:
+        _store_values._touch_state(connection, key)
+    return changed
+
+
+def mark_through_sequence(
+    connection: sqlite3.Connection, session_key: int, through: int
+) -> list[str]:
+    return _mark_read(connection, session_key, "e.seq <= ?", (through,))
+
+
+def _mark_read(
+    connection: sqlite3.Connection, session_key: int, predicate: str, params: tuple[str | int, ...]
+) -> list[str]:
+    rows = connection.execute(
+        "UPDATE run_notifications SET is_read = 1 WHERE session_key = ? AND is_read = 0 "
+        "AND EXISTS (SELECT 1 FROM runs AS r "
+        "JOIN entries AS e ON e.entry_key = r.end_entry_key "
+        "WHERE r.run_key = run_notifications.run_key "
+        "AND r.session_key = run_notifications.session_key "
+        "AND r.inherited = 0 AND e.superseded_at_seq IS NULL "
+        f"AND {predicate}) "
+        "RETURNING (SELECT run_id FROM runs WHERE runs.run_key = run_notifications.run_key)",
+        (session_key, *params),
+    ).fetchall()
+    if rows:
+        # Maintain the Generation 1 legacy read field for older writers and readers.
+        connection.execute(
+            "UPDATE sessions SET read_completion_run_key = latest_completion_run_key "
+            "WHERE session_key = ? AND EXISTS (SELECT 1 FROM run_notifications AS n "
+            "WHERE n.run_key = latest_completion_run_key AND n.is_read = 1)",
+            (session_key,),
+        )
+    return [row[0] for row in rows]
 
 
 def schedule_activity(

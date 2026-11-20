@@ -82,7 +82,14 @@ describe('turn usage from Run events', () => {
         type,
         run_id: 'run-one',
         sequence: 2,
-        payload,
+        payload: {
+          ...payload,
+          notification_activity: {
+            notification_revision: 1,
+            notification_count: 1,
+            local_unread_count: 1,
+          },
+        },
       });
 
       expect(sessionState.usage).toEqual(usage);

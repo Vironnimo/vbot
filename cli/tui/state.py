@@ -109,7 +109,7 @@ class Conversation:
     next_before: str | None = None
     parent: JsonObject | None = None
     refresh_revision: int = 0
-    completion_run_id: str | None = None
+    local_unread_count: int = 0
     completion_read: str | None = None
     completion_read_pending: str | None = None
     completion_read_failed: str | None = None

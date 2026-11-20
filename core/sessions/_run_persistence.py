@@ -76,7 +76,11 @@ class SessionRunPersistence:
                 run.completion_activity and run.completion_activity(RunStatus.INTERRUPTED, None)
             ),
         )
-        await self._store.run_async(self._store.execution.admit_run, address, admission)
+        await self._store.run_async(self._admit, address, admission)
+
+    def _admit(self, address: SessionAddress, admission: SessionRunAdmission) -> None:
+        for run_id in self._store.execution.admit_run(address, admission):
+            self._completion_read(address, run_id)
 
     async def finish_run(
         self, run: Run, status: str, payload: JsonObject, *, completion_reason: str | None
@@ -94,13 +98,16 @@ class SessionRunPersistence:
             completion_reason=completion_reason,
             notification_policy=run.notification_policy() if run.notification_policy else None,
             contributes_to_activity=run.contributes_to_agent_activity,
+            cancelled_by_user=(
+                status == RunStatus.CANCELLED
+                and completion_reason not in {"shutdown", "update", "process_restart"}
+                and (
+                    run.cancel_initiator == "rpc"
+                    or (
+                        completion_reason == "user"
+                        and not (run.cancel_initiator or "").startswith("extension")
+                    )
+                )
+            ),
         )
         return await self._store.run_async(self._store.execution.finish_run, address, completion)
-
-    def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
-        activity, marked = self._store.execution.mark_terminal_run_read(address, run_id)
-        result = dict(activity)
-        result["marked_read"] = marked
-        if marked:
-            self._completion_read(address, run_id)
-        return result

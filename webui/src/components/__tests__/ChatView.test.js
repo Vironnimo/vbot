@@ -155,7 +155,7 @@ describe('ChatView', () => {
 
       expect(backgroundSession()).toMatchObject({
         status: 'completed',
-        unreadRunId: 'run-background',
+        notificationCount: 1,
       });
       expect(subscribeRunEventsMock).toHaveBeenCalledOnce();
     });

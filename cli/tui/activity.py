@@ -120,7 +120,7 @@ def session_mark(row: JsonObject) -> str:
         state = "working"
     if isinstance(state, str) and state in _MARKS:
         return _MARKS[state]
-    return _UNREAD_MARK if row.get("has_unread_completion") is True else ""
+    return _UNREAD_MARK if (row.get("local_unread_count") or 0) > 0 else ""
 
 
 def _session_key(payload: JsonObject) -> tuple[str, str] | None:

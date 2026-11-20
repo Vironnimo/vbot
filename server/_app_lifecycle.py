@@ -268,8 +268,7 @@ def _unregister_session_title_bridge(state: Any) -> None:
 
 
 def _register_session_completion_read_bridge(state: Any) -> Any:
-    # The acknowledged Run id lets other windows clear their unread marker
-    # without re-reading activity when they already know that completion.
+    # The tray uses each acknowledged Run id to suppress or dismiss its toast.
     return state.runtime.chat_sessions.add_completion_read_callback(
         lambda address, run_id: publish_session_changed(
             state,

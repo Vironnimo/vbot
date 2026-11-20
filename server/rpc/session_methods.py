@@ -860,23 +860,27 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
-    """Acknowledge the exact terminal Run rendered in one Session."""
+    """Acknowledge displayed Runs, optionally including all earlier results."""
     _reject_unsupported(params, rpc_request_fields("session.mark_read"), "session.mark_read")
     address = _required_session_address(params)
-    run_ids = (
-        _validate_string_list("run_ids", params["run_ids"])
-        if "run_ids" in params
-        else [_required_string(params, "run_id")]
-    )
-    if not 1 <= len(run_ids) <= 200 or ("run_id" in params and "run_ids" in params):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Send run_id or 1-200 run_ids")
+    if sum(field in params for field in ("run_id", "run_ids", "through")) != 1:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Send run_id, 1-200 run_ids, or through")
     try:
         sessions = state.runtime.chat_sessions
-        activity = (
-            await sessions.mark_terminal_run_read_async(address, run_ids[0])
-            if "run_ids" not in params
-            else await sessions.run_async(sessions.notifications.mark_read, address, run_ids)
-        )
+        if "through" in params:
+            through = _required_string(params, "through")
+            activity = await sessions.run_async(
+                sessions.notifications.mark_read, address, through=through
+            )
+        elif "run_ids" in params:
+            run_ids = _validate_string_list("run_ids", params["run_ids"])
+            if not 1 <= len(run_ids) <= 200:
+                raise RpcError(RPC_ERROR_INVALID_REQUEST, "Send 1-200 run_ids")
+            activity = await sessions.run_async(sessions.notifications.mark_read, address, run_ids)
+        else:
+            activity = await sessions.mark_terminal_run_read_async(
+                address, _required_string(params, "run_id")
+            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

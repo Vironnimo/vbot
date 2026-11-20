@@ -111,9 +111,10 @@ export function createChatViewActivity(context) {
     Object.values(chatState.sessions).map((sessionState) => ({
       agent_address: sessionState.agentId,
       session_id: sessionState.sessionId,
-      has_unread_completion: sessionState.hasUnreadCompletion === true,
+      local_unread_count: sessionState.localUnreadCount,
+      notification_generation_id: sessionState.notificationGeneration,
+      notification_revision: sessionState.notificationRevision,
       latest_completion_run_id: sessionState.latestCompletionRunId || null,
-      unread_run_id: sessionState.unreadRunId || null,
       unread_run_status: sessionState.unreadRunStatus || null,
       unread_run_at: sessionState.unreadRunAt || null,
     })),

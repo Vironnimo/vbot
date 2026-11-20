@@ -56,11 +56,11 @@ vi.mock('$lib/api.js', () =>
     listSessions: (...args) => listSessionsMock(...args),
     listSessionActivity: (...args) => listSessionActivityMock(...args),
     getSession: (...args) => getSessionMock(...args),
-    markSessionRead: (agentId, sessionId, runId) =>
+    markSessionRead: (agentId, sessionId, through) =>
       rpcMock('session.mark_read', {
         agent_id: agentId,
         session_id: sessionId,
-        run_id: runId,
+        through,
       }),
     listQueue: (...args) => listQueueMock(...args),
     removeFromQueue: (...args) => removeFromQueueMock(...args),
@@ -271,6 +271,7 @@ export function createChatRpcMock({
             .map((entry) => ({
               run_id: entry.run_id,
               status: entry.status,
+              terminal_sequence: messages.indexOf(entry) + 1,
               complete: true,
             })),
           // Plain, independent message rows have no reconstruction semantics.
@@ -372,11 +373,7 @@ export function createChatRpcMock({
       return {
         agent_id: params.agent_id,
         session_id: params.session_id,
-        latest_completion_run_id: params.run_id,
-        has_unread_completion: false,
-        unread_run_id: null,
-        unread_run_status: null,
-        unread_run_at: null,
+        ...completionActivity(params.through, 0, 2),
         marked_read: true,
       };
     }
@@ -483,15 +480,21 @@ export function serveSessionActivity(sessionsByAddress) {
   }));
 }
 
-export function unread(sessionId, runId) {
+export function completionActivity(runId, count = 1, revision = 1) {
+  const at = '2026-07-20T10:00:00+00:00';
   return {
-    id: sessionId,
     latest_completion_run_id: runId,
-    has_unread_completion: true,
-    unread_run_id: runId,
-    unread_run_status: 'completed',
-    unread_run_at: '2026-07-20T10:00:00+00:00',
+    notification_revision: revision,
+    notification_count: count,
+    notification_run_at: count ? at : null,
+    local_unread_count: count,
+    unread_run_status: count ? 'completed' : null,
+    unread_run_at: count ? at : null,
   };
+}
+
+export function unread(sessionId, runId) {
+  return { id: sessionId, ...completionActivity(runId) };
 }
 
 // The scan `serveProject` last served; the Project list carries it as the
@@ -594,7 +597,7 @@ export function markedRead(agentId, sessionId, runId) {
     (params) =>
       params.agent_id === agentId &&
       params.session_id === sessionId &&
-      params.run_id === runId,
+      params.through === runId,
   );
 }
 
@@ -633,6 +636,23 @@ export function runServerEvent(type, { sequence, ...payload }) {
       run_event_type: type,
       run_event_sequence: sequence,
       run_event_timestamp: '2026-07-20T10:00:00+00:00',
+      ...([
+        'run_completed',
+        'run_failed',
+        'run_interrupted',
+        'run_cancelled',
+      ].includes(type)
+        ? {
+            notification_activity: completionActivity(
+              payload.run_id,
+              payload.completion_read ||
+                payload.contributes_to_agent_activity === false
+                ? 0
+                : 1,
+            ),
+            terminal_sequence: sequence,
+          }
+        : {}),
       ...payload,
     },
   };

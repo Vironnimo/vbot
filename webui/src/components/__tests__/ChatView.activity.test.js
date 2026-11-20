@@ -5,6 +5,7 @@ import { t } from '../../lib/i18n.js';
 import {
   agentPill,
   agentShowsUnread,
+  completionActivity,
   createAgent,
   createChatRpcMock,
   flushSync,
@@ -175,7 +176,8 @@ describe('ChatView Agent activity', () => {
         {
           'session-beta': [runSummary('summary-beta', 'run-beta')],
         },
-        [unread('session-beta', 'run-beta')],
+        [{ id: 'session-beta', ...completionActivity('run-beta', 2) }],
+        2,
       ],
       [
         'another Session',
@@ -192,15 +194,21 @@ describe('ChatView Agent activity', () => {
         [
           {
             id: 'beta-current',
-            latest_completion_run_id: 'run-beta-current',
-            has_unread_completion: false,
+            ...completionActivity('run-beta-current', 0),
           },
           unread('session-beta', 'run-beta'),
         ],
+        1,
       ],
     ])(
       'keeps an inactive Agent unread until its result in %s is opened',
-      async (_case, currentSessionId, sessionMessages, activity) => {
+      async (
+        _case,
+        currentSessionId,
+        sessionMessages,
+        activity,
+        unreadCount,
+      ) => {
         const agents = [createAgent(), beta(currentSessionId)];
         rpcMock.mockImplementation(
           createChatRpcMock({ agents, sessionMessages }),
@@ -212,16 +220,15 @@ describe('ChatView Agent activity', () => {
         await waitForCondition(() => agentShowsUnread('Beta'));
         // The Main menu's Chat entry counts the unread result.
         expect(onNavigationIndicator).toHaveBeenLastCalledWith({
-          count: 1,
+          count: unreadCount,
           tone: 'unread',
-          label: t('chat.agentActivity.stateUnreadOne'),
+          label:
+            unreadCount === 1
+              ? t('chat.agentActivity.stateUnreadOne')
+              : expect.stringContaining(String(unreadCount)),
         });
         const betaPill = agentPill('Beta');
-        expect(betaPill.getAttribute('aria-label')).toBe(
-          t('chat.agentActivity.unreadOne', {
-            name: 'Beta',
-          }),
-        );
+        expect(betaPill.getAttribute('aria-label')).toContain('Beta');
         await waitForCondition(() => betaPill.disabled === false);
         betaPill.click();
 
@@ -241,6 +248,9 @@ describe('ChatView Agent activity', () => {
         expect(historyReads('beta-current')).toBe(0);
         expect(agentShowsUnread('Beta')).toBe(false);
         expect(onNavigationIndicator).toHaveBeenLastCalledWith(null);
+        expect(
+          testChatStateRefs[0].sessions['beta::session-beta'].localUnreadCount,
+        ).toBe(0);
       },
     );
 
@@ -251,11 +261,7 @@ describe('ChatView Agent activity', () => {
         beta: [
           {
             id: 'session-beta',
-            latest_completion_run_id: 'run-beta',
-            has_unread_completion: false,
-            unread_run_id: null,
-            unread_run_status: null,
-            unread_run_at: null,
+            ...completionActivity('run-beta', 0, 2),
           },
         ],
       });
@@ -273,12 +279,10 @@ describe('ChatView Agent activity', () => {
 
       const betaSession = () =>
         testChatStateRefs[0].sessions['beta::session-beta'];
-      await waitForCondition(
-        () => betaSession()?.latestCompletionRunId === 'run-beta',
-      );
+      await waitForCondition(() => betaSession()?.notificationRevision === 2);
       flushSync();
 
-      expect(betaSession().hasUnreadCompletion).toBe(false);
+      expect(betaSession().notificationCount).toBe(0);
       expect(agentShowsUnread('Beta')).toBe(false);
     });
 
@@ -307,14 +311,12 @@ describe('ChatView Agent activity', () => {
           ? [
               {
                 id: 'beta-user-session',
-                latest_completion_run_id: null,
-                has_unread_completion: false,
+                ...completionActivity(null, 0),
               },
               childDelivered
                 ? {
                     id: 'beta-child-session',
-                    latest_completion_run_id: 'beta-child-run',
-                    has_unread_completion: false,
+                    ...completionActivity('beta-child-run', 0, 2),
                   }
                 : unread('beta-child-session', 'beta-child-run'),
             ]
@@ -339,20 +341,31 @@ describe('ChatView Agent activity', () => {
       expect(historyReads('beta-child-session')).toBe(0);
     });
 
-    it('keeps a displayed terminal result idle before read acknowledgement returns', async () => {
+    it('waits for the terminal result to render before acknowledging it', async () => {
       let resolveMarkRead;
-      const defaultRpc = createChatRpcMock();
-      rpcMock.mockImplementation((method, params) =>
-        method === 'session.mark_read'
-          ? new Promise((resolve) => {
-              resolveMarkRead = () => resolve(defaultRpc(method, params));
-            })
-          : defaultRpc(method, params),
-      );
-      await chat.mountChat({
-        sharedAgents: [createAgent()],
-        sharedSelectedAgentId: 'alpha',
+      let resolveHistory;
+      let terminalReceived = false;
+      const messages = [message('assistant-one', 'Earlier result')];
+      const defaultRpc = createChatRpcMock({
+        sessionMessages: { 'session-1': messages },
       });
+      rpcMock.mockImplementation((method, params) => {
+        if (method === 'session.mark_read') {
+          return new Promise((resolve) => {
+            resolveMarkRead = () => resolve(defaultRpc(method, params));
+          });
+        }
+        if (terminalReceived && method === 'chat.timeline') {
+          return new Promise((resolve) => {
+            resolveHistory = () => resolve(defaultRpc(method, params));
+          });
+        }
+        return defaultRpc(method, params);
+      });
+      await chat.mountChat(
+        { sharedAgents: [createAgent()], sharedSelectedAgentId: 'alpha' },
+        { ready: 'Earlier result' },
+      );
 
       const run = {
         run_id: 'run-visible',
@@ -366,6 +379,7 @@ describe('ChatView Agent activity', () => {
           output: { status: 'running' },
         }),
       );
+      terminalReceived = true;
       testRunStreamRefs[0].handleServerEvent(
         runServerEvent('run_completed', {
           ...run,
@@ -374,6 +388,14 @@ describe('ChatView Agent activity', () => {
         }),
       );
       flushSync();
+      await waitForCondition(() => Boolean(resolveHistory));
+      expect(markedRead('alpha', 'session-1', 'run-visible')).toBe(false);
+      messages.push(
+        message('new-answer', 'Newest result'),
+        runSummary('visible-summary', 'run-visible'),
+      );
+      resolveHistory();
+      await waitForText('Newest result');
       await waitForCondition(() =>
         markedRead('alpha', 'session-1', 'run-visible'),
       );
@@ -435,9 +457,7 @@ describe('ChatView Agent activity', () => {
         );
         const sessionState = () =>
           testChatStateRefs[0].sessions['alpha::session-1'];
-        await waitForCondition(
-          () => sessionState()?.unreadRunId === 'run-unseen',
-        );
+        await waitForCondition(() => sessionState()?.notificationCount === 1);
 
         expect(markedRead('alpha', 'session-1', 'run-unseen')).toBe(false);
         // Nobody is reading the displayed Session: its result counts as unread.
@@ -490,7 +510,7 @@ describe('ChatView Agent activity', () => {
         },
       });
       rpcMock.mockImplementation(async (method, params) => {
-        if (method === 'session.mark_read') readRunIds.add(params.run_id);
+        if (method === 'session.mark_read') readRunIds.add(params.through);
         return baseRpc(method, params);
       });
       listSessionsMock.mockImplementation(async (address) => ({
@@ -505,8 +525,7 @@ describe('ChatView Agent activity', () => {
           ? [
               {
                 id: result.sessionId,
-                latest_completion_run_id: result.runId,
-                has_unread_completion: false,
+                ...completionActivity(result.runId, 0, 2),
               },
             ]
           : [unread(result.sessionId, result.runId)];

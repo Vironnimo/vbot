@@ -1,7 +1,7 @@
 import { defaultChatOperations } from '$lib/api/chatOperations.js';
-import { SvelteSet } from 'svelte/reactivity';
 import {
   createChatController,
+  newestDisplayedCompletion,
   selectAgent,
   setAgents,
 } from '$lib/chatState.js';
@@ -179,41 +179,21 @@ export function createChatViewLifecycle(context) {
   $effect(() => {
     void pageAttentionRevision;
     const sessionState = target.activeSessionState;
-    const known = sessionState?.readRunIds ?? [];
-    const runIds = [
-      ...new SvelteSet([
-        ...Object.entries(sessionState?.historyRuns ?? {})
-          .filter(([, run]) => run.complete)
-          .map(([id]) => id),
-        ...(sessionState?.runEvents ?? [])
-          .filter((event) =>
-            [
-              'run_completed',
-              'run_failed',
-              'run_interrupted',
-              'run_cancelled',
-            ].includes(event.type),
-          )
-          .map((event) => event.run_id),
-      ]),
-    ]
-      .filter((id) => id && !known.includes(id))
-      .slice(0, 200);
-    const unreadRunId = runIds.join(',');
+    const through = newestDisplayedCompletion(sessionState);
     if (
       !context.active ||
-      !unreadRunId ||
-      sessionState.markReadFailedRunId === unreadRunId ||
+      !through ||
+      sessionState.markReadFailedRunId === through ||
       !target.isDisplayedSession(
         sessionState.agentId,
         sessionState.sessionId,
       ) ||
-      sessionState?.localUnreadCount === 0 ||
+      !sessionState.localUnreadCount ||
       !pageAttended()
     ) {
       return;
     }
-    void chatController.markSessionCompletionRead(sessionState, runIds);
+    void chatController.markSessionCompletionRead(sessionState, through);
   });
 
   // Re-sync a held session's queue when another window mutates it. App forwards

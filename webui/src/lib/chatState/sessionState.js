@@ -274,29 +274,30 @@ export function ensureSessionState(state, agentId, sessionId) {
       hasOlderHistory: false,
       historyBefore: '',
       loadingOlderHistory: false,
-      hasUnreadCompletion: false,
+      notificationGeneration: '',
+      notificationEpoch: 0,
+      notificationRevision: -1,
+      notificationCount: 0,
+      localUnreadCount: 0,
       latestCompletionRunId: '',
-      unreadRunId: '',
       unreadRunStatus: '',
       unreadRunAt: '',
-      lastActiveAt: '',
       markReadPendingRunId: '',
       markReadFailedRunId: '',
+      readThroughRunId: '',
     });
   }
   return state.sessions[key];
 }
 
 // Apply one Agent's completion activity rows. The server lists only Sessions
-// with a completion, so a held Session it omits has none. With
-// `seenCompletions` (Session key -> completion Run id when the read started),
-// an omitted Session whose completion changed during the read keeps it: that
-// completion is newer than the server snapshot.
+// with a completion, so a held Session it omits has none.
+// `seenRevisions` protects completions received while the read was in flight.
 export function syncAgentSessionActivity(
   state,
   agentId,
   sessions,
-  seenCompletions = null,
+  seenRevisions = null,
 ) {
   const rows = (Array.isArray(sessions) ? sessions : []).filter(
     (session) => typeof session?.id === 'string' && session.id.length > 0,
@@ -309,80 +310,59 @@ export function syncAgentSessionActivity(
     ) {
       continue;
     }
+    const seen = seenRevisions?.get(sessionState.key);
     if (
-      seenCompletions &&
-      sessionCompletionRunId(sessionState) !==
-        (seenCompletions.get(sessionState.key) ?? '')
+      seenRevisions &&
+      (!seen ||
+        sessionState.notificationRevision !== seen.revision ||
+        sessionState.notificationEpoch !== seen.epoch)
     ) {
       continue;
     }
-    clearSessionCompletionActivity(sessionState);
+    if (sessionState.latestCompletionRunId) {
+      resetSessionCompletionActivity(sessionState);
+    } else {
+      clearSessionCompletionActivity(sessionState);
+    }
   }
   for (const row of rows) {
     const sessionState = ensureSessionState(state, agentId, row.id);
-    applySessionCompletionActivity(sessionState, row);
+    const seen = seenRevisions?.get(sessionState.key);
+    applySessionCompletionActivity(
+      sessionState,
+      row,
+      seen?.epoch === sessionState.notificationEpoch,
+    );
   }
   return state;
 }
 
-export function applySessionCompletionActivity(sessionState, source) {
-  if (!sessionState) {
+export function applySessionCompletionActivity(
+  sessionState,
+  source,
+  replaceGeneration = false,
+) {
+  if (!sessionState || !Number.isInteger(source?.notification_revision)) {
     return sessionState;
   }
-  const ordered = Number.isInteger(source?.notification_revision);
-  if (ordered) {
-    if (
-      source.notification_revision < (sessionState.notificationRevision ?? -1)
-    )
+  const generation = source.notification_generation_id;
+  if (generation && generation !== sessionState.notificationGeneration) {
+    if (!replaceGeneration && sessionState.notificationEpoch !== 0) {
       return sessionState;
-    sessionState.notificationRevision = source.notification_revision;
-    sessionState.notificationCount = source.notification_count;
-    sessionState.notificationRunId = source.notification_run_id ?? '';
-    sessionState.notificationRunAt = source.notification_run_at ?? '';
-    sessionState.notificationPolicy = source.notification_policy;
-    sessionState.localUnreadCount = source.local_unread_count;
+    }
+    resetSessionCompletionActivity(sessionState, generation);
   }
-  const lastActiveAt = normalizedActivityText(source?.last_active_at);
-  const incomingUnreadAt = normalizedActivityText(source?.unread_run_at);
-  const incomingHasUnread = source?.has_unread_completion === true;
-  const incomingUnreadRunId = normalizedActivityText(source?.unread_run_id);
-  const incomingLatestRunId =
-    normalizedActivityText(source?.latest_completion_run_id) ||
-    (incomingHasUnread ? incomingUnreadRunId : '');
-  const localLatestRunId =
-    normalizedActivityText(sessionState.latestCompletionRunId) ||
-    (sessionState.hasUnreadCompletion
-      ? normalizedActivityText(sessionState.unreadRunId)
-      : '');
-  if (!ordered && localLatestRunId && !incomingLatestRunId) {
+  if (source.notification_revision < sessionState.notificationRevision) {
     return sessionState;
   }
-  if (!ordered && localLatestRunId && incomingLatestRunId) {
-    if (localLatestRunId === incomingLatestRunId) {
-      if (incomingHasUnread && !sessionState.hasUnreadCompletion) {
-        return sessionState;
-      }
-    } else {
-      const localCompletionAt = sessionState.hasUnreadCompletion
-        ? sessionState.unreadRunAt
-        : sessionState.lastActiveAt;
-      const incomingCompletionAt = incomingUnreadAt || lastActiveAt;
-      if (
-        isAtLeastAsNewActivityTimestamp(localCompletionAt, incomingCompletionAt)
-      ) {
-        return sessionState;
-      }
-    }
-  }
-
-  sessionState.lastActiveAt = lastActiveAt || sessionState.lastActiveAt;
-  sessionState.latestCompletionRunId = incomingLatestRunId;
-  sessionState.hasUnreadCompletion = incomingHasUnread;
-  sessionState.unreadRunId = incomingHasUnread ? incomingUnreadRunId : '';
-  sessionState.unreadRunStatus = incomingHasUnread
-    ? normalizedActivityText(source?.unread_run_status)
-    : '';
-  sessionState.unreadRunAt = incomingHasUnread ? incomingUnreadAt : '';
+  sessionState.notificationRevision = source.notification_revision;
+  sessionState.notificationCount = source.notification_count;
+  sessionState.notificationRunAt = source.notification_run_at ?? '';
+  sessionState.notificationPolicy = source.notification_policy;
+  sessionState.localUnreadCount = source.local_unread_count;
+  sessionState.latestCompletionRunId = source.latest_completion_run_id ?? '';
+  sessionState.unreadRunStatus = source.unread_run_status ?? '';
+  sessionState.unreadRunAt = source.unread_run_at ?? '';
   return sessionState;
 }
 
@@ -403,7 +383,7 @@ export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
       (sessionState) =>
         sessionState.agentId === agentId &&
         sessionState.key !== displayedSessionKey &&
-        hasAttention(sessionState) &&
+        sessionState.notificationCount > 0 &&
         isSessionIdle(state, sessionState),
     )
   ) {
@@ -438,7 +418,7 @@ export function agentUnreadResults(state, agentId, displayedSessionKey = '') {
   );
   return {
     count: sessions.reduce(
-      (total, session) => total + (session.notificationCount ?? 1),
+      (total, session) => total + session.notificationCount,
       0,
     ),
     latestAt: sessions.reduce(
@@ -453,70 +433,75 @@ function unreadResultSessions(state, agentId) {
   return Object.values(state?.sessions ?? {}).filter(
     (sessionState) =>
       sessionState.agentId === agentId &&
-      hasAttention(sessionState, true) &&
+      sessionState.notificationCount > 0 &&
       isSessionIdle(state, sessionState),
   );
 }
 
-function hasAttention(sessionState, requireRunId = false) {
-  return Number.isInteger(sessionState.notificationCount)
-    ? sessionState.notificationCount > 0
-    : sessionState.hasUnreadCompletion &&
-        (!requireRunId || Boolean(sessionState.unreadRunId));
-}
-
 function unreadResultTimestamp(sessionState) {
-  return activityTimestamp(
-    sessionState.notificationRunAt ||
-      sessionState.unreadRunAt ||
-      sessionState.lastActiveAt,
-  );
+  return activityTimestamp(sessionState.notificationRunAt);
 }
 
-export function sessionHasTerminalRun(sessionState, runId) {
-  if (!sessionState || !runId) {
-    return false;
+// History and live terminal events share the Session's canonical sequence.
+export function newestDisplayedCompletion(sessionState) {
+  if (
+    sessionState?.historyGeneration &&
+    sessionState.notificationGeneration &&
+    sessionState.historyGeneration !== sessionState.notificationGeneration
+  )
+    return '';
+  let id = '';
+  let sequence = -1;
+  for (const [runId, run] of Object.entries(sessionState?.historyRuns ?? {})) {
+    if (run.complete && run.terminal_sequence > sequence) {
+      id = runId;
+      sequence = run.terminal_sequence;
+    }
   }
-  // The loaded History page lists its finished Runs in `historyRuns`; its
-  // windowed `messages` carry no Run summaries.
-  return (
-    sessionState.historyRuns?.[runId]?.complete === true ||
-    (sessionState.runEvents ?? []).some(
-      (event) => event?.run_id === runId && isTerminalRunEvent(event?.type),
-    )
-  );
-}
-
-// The Run id of the completion this client holds for a Session ('' if none).
-export function sessionCompletionRunId(sessionState) {
-  return (
-    sessionState.latestCompletionRunId ||
-    (sessionState.hasUnreadCompletion ? sessionState.unreadRunId : '') ||
-    ''
-  );
+  for (const event of sessionState?.runEvents ?? []) {
+    if (
+      isTerminalRunEvent(event.type) &&
+      event.payload?.terminal_sequence > sequence &&
+      (!sessionState.notificationGeneration ||
+        event.payload?.notification_activity?.notification_generation_id ===
+          sessionState.notificationGeneration) &&
+      sessionState.timelineItems.some(
+        (item) =>
+          item.type === 'assistant_run' &&
+          item.runId === event.run_id &&
+          TERMINAL_RUN_STATUSES.has(item.status),
+      )
+    ) {
+      id = event.run_id;
+      sequence = event.payload.terminal_sequence;
+    }
+  }
+  return id;
 }
 
 export function clearSessionCompletionActivity(sessionState) {
-  if (Number.isInteger(sessionState.notificationCount))
-    sessionState.notificationCount = 0;
-  sessionState.hasUnreadCompletion = false;
+  sessionState.notificationCount = 0;
+  sessionState.localUnreadCount = 0;
+  sessionState.notificationRunAt = '';
   sessionState.latestCompletionRunId = '';
-  sessionState.unreadRunId = '';
   sessionState.unreadRunStatus = '';
   sessionState.unreadRunAt = '';
 }
 
-function normalizedActivityText(value) {
-  return typeof value === 'string' ? value.trim() : '';
+export function resetSessionCompletionActivity(sessionState, generation = '') {
+  clearSessionCompletionActivity(sessionState);
+  sessionState.notificationGeneration = generation;
+  sessionState.notificationRevision = -1;
+  sessionState.notificationEpoch += 1;
+  sessionState.notificationPolicy = 'all';
+  sessionState.markReadPendingRunId = '';
+  sessionState.markReadFailedRunId = '';
+  sessionState.readThroughRunId = '';
 }
 
 function activityTimestamp(value) {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-function isAtLeastAsNewActivityTimestamp(left, right) {
-  return activityTimestamp(left) >= activityTimestamp(right);
 }
 
 export function currentSessionState(state) {

@@ -507,7 +507,9 @@ class ChatSessionManager:
         )
 
     def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
-        return self._runs.mark_terminal_run_read(address, run_id)
+        result = self.notifications.mark_read(address, [run_id])
+        result.pop("read_run_ids")
+        return result
 
     async def mark_terminal_run_read_async(
         self, address: SessionAddress, run_id: str

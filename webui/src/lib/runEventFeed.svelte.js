@@ -86,9 +86,19 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
       }
       return { events, from, end, missed: from > after + 1 };
     },
-    // Whether the feed still holds the terminal event of `runId`.
-    retainsTerminal(runId) {
-      return Boolean(runId) && terminalPositions.has(runId);
+    // With a Session, also check that it already holds the event's revision.
+    retainsTerminal(runId, session) {
+      const position = terminalPositions.get(runId);
+      if (position === undefined) return false;
+      const activity =
+        slots[position % capacity]?.payload?.notification_activity;
+      return (
+        !session ||
+        ((activity?.notification_generation_id ?? '') ===
+          session.notificationGeneration &&
+          (activity?.notification_revision ?? -1) <=
+            session.notificationRevision)
+      );
     },
   };
 }

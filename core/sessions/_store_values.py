@@ -52,14 +52,10 @@ _DERIVED_METADATA_COLUMNS = """
     (SELECT json_group_array(k.run_kind) FROM session_run_kinds AS k
      WHERE k.session_key = s.session_key) AS run_kinds_json
 """
-# Completion activity as ``_completion_activity_from_state`` reads it: the
-# latest completion's public Run id and whether its read mark names it.
+# Latest completion identity is used for Session listing independently of read state.
 _COMPLETION_ACTIVITY_COLUMNS = """
     (SELECT r.run_id FROM runs AS r WHERE r.run_key = s.latest_completion_run_key)
-      AS latest_completion_run_id,
-    s.latest_completion_status,
-    s.latest_completion_at,
-    s.read_completion_run_key = s.latest_completion_run_key AS latest_completion_read
+      AS latest_completion_run_id
 """
 # Counters use the source's policy; local read state remains independent.
 _CHAT_NOTIFICATION_WHERE = """
@@ -74,6 +70,7 @@ _COMPLETION_ACTIVITY_COLUMNS += f""",
       AND n.schedule_id IS NULL AND n.eligible = 1) AS has_chat_results,
     EXISTS (SELECT 1 FROM run_notifications AS n WHERE n.session_key = s.session_key
       AND n.schedule_id IS NOT NULL) AS has_schedule_runs,
+    s.generation_id AS notification_generation_id,
     s.state_revision AS notification_revision,
     (SELECT COUNT(*) FROM run_notifications AS n JOIN runs AS r ON r.run_key = n.run_key
      WHERE {_CHAT_NOTIFICATION_WHERE}) AS notification_count,

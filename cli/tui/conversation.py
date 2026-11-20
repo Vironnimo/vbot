@@ -247,11 +247,7 @@ class ConversationController:
         view.project = session.get("working_project_id")
         view.overrides = session.get("agent_overrides") or {}
         view.parent = session.get("subagent_parent") or view.parent
-        view.completion_run_id = (
-            session.get("latest_completion_run_id")
-            if session.get("has_unread_completion") is True
-            else None
-        )
+        view.local_unread_count = session.get("local_unread_count") or 0
         view.completion_read_failed = None
         self.app.submissions.changed(view)
         if self.app.conversation is not view:
@@ -538,6 +534,7 @@ class ConversationController:
             view is None
             or not view.available
             or not view.session
+            or not view.local_unread_count
             or not self.app.screen_stack
             or isinstance(self.app.screen, ModalScreen)
             or not self.app.app_focus
@@ -548,23 +545,28 @@ class ConversationController:
             or frame[1] is not view.items
         ):
             return
-        completed = view.completion_run_id
-        if not completed or completed in {
-            view.completion_read,
-            view.completion_read_pending,
-            view.completion_read_failed,
-        }:
-            return
         completed_row = next(
             (
                 row
-                for row in view.items
-                if row.get("runId", row.get("run_id")) == completed
+                for row in reversed(view.items)
+                if row.get("type") == "assistant_run"
                 and row.get("status") in {"completed", "failed", "cancelled", "interrupted"}
             ),
             None,
         )
         if view.facts.get("has_newer") or completed_row is None or timeline.view is not view:
+            return
+        completed = completed_row.get("runId", completed_row.get("run_id"))
+        if (
+            not isinstance(completed, str)
+            or not completed
+            or completed
+            in {
+                view.completion_read,
+                view.completion_read_pending,
+                view.completion_read_failed,
+            }
+        ):
             return
         children = completed_row.get("items") or []
         if children and not timeline.displays(str(children[-1]["id"])):
@@ -581,7 +583,7 @@ class ConversationController:
                 or isinstance(self.app.screen, ModalScreen)
             ):
                 return
-            await self.app.client.rpc("session.mark_read", {**view.params(), "run_id": run_id})
+            await self.app.client.rpc("session.mark_read", {**view.params(), "through": run_id})
             if view.key == key:
                 view.completion_read = run_id
         except ClientError:
