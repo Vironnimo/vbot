@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from desktop import settings as desktop_settings
+from desktop.server_address import parse_server_address
 from desktop.speech.cues import (
     CUE_DONE,
     CuePlayer,
@@ -849,13 +850,17 @@ class VoiceController:
                 return
             if self._commands.pop(outcome.command_id, None) is None:
                 return
+            result = outcome.wakeword_result
             self._emit_locked(
                 outcome.kind,
+                origin=parse_server_address(self._server_url, None).origin if result else None,
                 command_id=outcome.command_id,
                 model_id=outcome.model_id,
                 agent_id=outcome.agent_id,
                 session_id=outcome.session_id,
                 error_code=outcome.error_code,
+                message=result.message if result else None,
+                notification_failed=True if result and result.notification_failed else None,
             )
             if outcome.error_code == ERROR_TARGET_AGENT_UNAVAILABLE and outcome.agent_id:
                 self._readiness.agent_problems[outcome.agent_id] = outcome.error_code
@@ -1069,12 +1074,12 @@ class VoiceController:
         if completed and self._cues is not None:
             self._cues.play(CUE_DONE)
 
-    def _emit_locked(self, kind: str, **fields: Any) -> None:
+    def _emit_locked(self, kind: str, *, origin: str | None = None, **fields: Any) -> None:
         self._sequence += 1
         event = {"sequence": self._sequence, "kind": kind}
         event.update({key: value for key, value in fields.items() if value is not None})
         try:
-            self._sink.publish_event(event)
+            self._sink.publish_event(event, origin=origin)
         except Exception:
             logger.exception("Voice event push failed")
         cue = voice._EVENT_CUES.get(kind)

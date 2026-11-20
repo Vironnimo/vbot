@@ -52,7 +52,7 @@ logger = logging.getLogger("vbot.desktop.speech.server_client")
 
 RPC_TIMEOUT_SECONDS = 10.0
 # Keep connection and upload phases bounded apart from a long inference wait.
-TRANSCRIPTION_TIMEOUT = httpx.Timeout(600.0, connect=10.0, write=30.0, pool=10.0)
+INFERENCE_TIMEOUT = httpx.Timeout(600.0, connect=10.0, write=30.0, pool=10.0)
 _CANCELLATION_POLL_SECONDS = 0.05
 _CLOSE_TIMEOUT_SECONDS = 2.0
 MAX_ATTEMPTS = 3
@@ -312,7 +312,7 @@ class SpeechServerClient:
         response = self._post(
             _TRANSCRIBE_PATH,
             attempts=MAX_ATTEMPTS,
-            timeout=TRANSCRIPTION_TIMEOUT,
+            timeout=INFERENCE_TIMEOUT,
             retry_transport_error=lambda exc: not isinstance(exc, httpx.ReadTimeout),
             files={"file": (filename, audio, media_type)},
         )
@@ -399,11 +399,12 @@ class SpeechServerClient:
         *,
         error_code: str,
         attempts: int,
+        timeout: float | httpx.Timeout = RPC_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         response = self._post(
             _RPC_PATH,
             attempts=attempts,
-            timeout=RPC_TIMEOUT_SECONDS,
+            timeout=timeout,
             retry_transport_error=lambda _exc: True,
             json={"method": method, "params": params},
         )

@@ -36,7 +36,16 @@ def test_extension_loads_from_the_bundled_root_with_settings_and_one_tool_family
 
     record = next(r for r in extensions.records() if r.name == EXTENSION_NAME)
     assert record.status == "loaded"
-    assert record.capability_errors == []
+    # Source-only backend test runs have not built the optional frontend entry yet.
+    page_errors = (
+        []
+        if (record.root_path / "web/page.html").is_file()
+        else [
+            "page 'wakeword' unavailable: entry is missing",
+            "contribution 'wakeword' unavailable: page 'wakeword' entry is missing",
+        ]
+    )
+    assert record.capability_errors == page_errors
     assert record.manifest is not None
     assert record.manifest.display_name == "Home Assistant"
     schema = record.declarations.settings_schema
@@ -45,6 +54,8 @@ def test_extension_loads_from_the_bundled_root_with_settings_and_one_tool_family
     assert (fields["url"].type, fields["url"].default) == ("text", HASS_URL)
     assert (fields["token"].type, fields["token"].env_key) == ("secret", "HASS_TOKEN")
     assert fields["token"].default is None
+    assert fields["wakeword_use_decision"].default is True
+    assert fields["wakeword_notify_agent"].default is False
 
     family = tools.get_family(_FAMILY_ID)
     assert (family.label, family.extension) == ("Home Assistant", EXTENSION_NAME)

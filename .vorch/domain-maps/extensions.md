@@ -91,7 +91,7 @@ Read these only when your task matches - not by default.
 - Changing Computer Use, its opt-in Tools, the access mode and app approvals, screenshots and coordinates, the desktop target, or desktop input -> `extensions/computer-use.md`
 - Routing an Extension's native capability to the Session's Computer -> `computers.md`
 - Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
-- Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
+- Changing Home Assistant's Tools, connection, wakeword commands, Decision matching, retries or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled Shell Review Extension, its Decision policy, preview or execution-review integration -> `extensions/shell-review.md`
 - Changing the bundled KeePassXC Secret Source, its settings, unlock, keepassxc-cli calls, entry paths, field mapping, or entry creation -> `extensions/keepassxc.md`
 - Changing the bundled 1Password Secret Source, its service account token handling, op calls, vault and item mapping, error classification, or rate-limit caching -> `extensions/onepassword.md`

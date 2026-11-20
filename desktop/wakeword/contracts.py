@@ -41,6 +41,8 @@ EVENT_CANCELLED = "cancelled"
 EVENT_TRANSCRIPTION_FAILED = "transcription_failed"
 EVENT_COMMAND_FAILED = "command_failed"
 EVENT_SENT = "sent"
+EVENT_WAKEWORD_COMPLETED = "wakeword_completed"
+EVENT_WAKEWORD_FAILED = "wakeword_failed"
 EVENT_LIVE_REQUESTED = "live_requested"
 EVENT_MICROPHONE_DISCONNECTED = "microphone_disconnected"
 EVENT_MICROPHONE_RECONNECTED = "microphone_reconnected"
@@ -52,6 +54,7 @@ _EVENT_CUES = {
     EVENT_NO_SPEECH: CUE_NO_SPEECH,
     EVENT_TRANSCRIPTION_FAILED: CUE_FAILED,
     EVENT_COMMAND_FAILED: CUE_FAILED,
+    EVENT_WAKEWORD_FAILED: CUE_FAILED,
     EVENT_ERROR: CUE_ERROR,
 }
 
@@ -68,7 +71,7 @@ class VoiceEventSink(Protocol):
 
     def publish_status(self, status: Mapping[str, Any]) -> None: ...
 
-    def publish_event(self, event: Mapping[str, Any]) -> None: ...
+    def publish_event(self, event: Mapping[str, Any], *, origin: str | None = None) -> None: ...
 
 
 class VoiceControlError(RuntimeError):

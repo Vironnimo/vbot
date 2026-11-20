@@ -107,6 +107,7 @@ class FakeVoiceServer:
     """An ``httpx.MockTransport`` handler answering the Voice RPC and upload calls."""
 
     transcript: str = "turn on the lights"
+    wakeword_result: dict[str, Any] = field(default_factory=lambda: {"handled": False})
     speech: dict[str, Any] = field(default_factory=lambda: {"configured": True, "usable": True})
     agents: dict[str, dict[str, Any]] = field(
         default_factory=lambda: {"main": {"id": "main", "current_session_id": "s-main"}}
@@ -149,6 +150,8 @@ class FakeVoiceServer:
             return _ok(agent)
         if method == "session.list":
             return _ok({"sessions": []})
+        if method == "voice.wakeword_command":
+            return _ok(self.wakeword_result)
         if method == "settings.get_path":
             if self.upload_limit is None:
                 return _rpc_error("not_found")

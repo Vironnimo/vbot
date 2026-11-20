@@ -174,6 +174,7 @@ async def _create_session(
     initial_messages: Sequence[ChatMessage] = (),
     initial_metadata: JsonObject | None = None,
     include_generation: bool = False,
+    expected_agent_created_at: str | None = None,
 ) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
@@ -220,7 +221,13 @@ async def _create_session(
                 project_id,
                 agent_id,
                 **({"new_session_overrides": AgentOverrides(**overrides)} if overrides else {}),
+                **({"require_model": False} if expected_agent_created_at is not None else {}),
             )
+            if (
+                expected_agent_created_at is not None
+                and agent.created_at != expected_agent_created_at
+            ):
+                raise RpcError(RPC_ERROR_INPUT_CONFLICT, "The intended Agent has been replaced.")
             # The Session works in this Project for its whole life: the requested
             # one (it must exist), the Workspace (null), or the Agent's default
             # Project; a Team Agent's Session in its Team's Project.

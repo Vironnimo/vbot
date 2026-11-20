@@ -206,6 +206,27 @@ describe('App Desktop Voice feedback', () => {
 
   it.each([
     [
+      'wakeword_completed',
+      { message: 'state:on' },
+      'success',
+      toast(t('voice.toast.wakewordResultTitle'), 'state:on'),
+    ],
+    [
+      'wakeword_completed',
+      { message: 'state:on', notification_failed: true },
+      'warn',
+      toast(
+        t('voice.toast.wakewordResultTitle'),
+        'state:on\n' + t('voice.toast.notificationFailed'),
+      ),
+    ],
+    [
+      'wakeword_failed',
+      { message: 'state:unknown' },
+      'error',
+      toast(t('voice.toast.wakewordFailedTitle'), 'state:unknown'),
+    ],
+    [
       'no_speech',
       {},
       'warn',

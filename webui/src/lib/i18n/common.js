@@ -257,6 +257,10 @@ export default Object.freeze({
   'voice.mic.tooltip.error': 'Voice error',
   'voice.mic.openSettingsHint': 'Click to open the Voice settings.',
   'voice.toast.sentTitle': 'Voice command sent',
+  'voice.toast.wakewordResultTitle': 'Wakeword command result',
+  'voice.toast.wakewordFailedTitle': 'Wakeword command failed',
+  'voice.toast.notificationFailed':
+    'The Agent notification could not be delivered.',
   'voice.toast.noSpeechTitle': 'No speech heard',
   'voice.toast.noSpeechMessage':
     'No command followed the wake phrase. Try again and speak after the cue.',
@@ -264,7 +268,7 @@ export default Object.freeze({
     'Voice command could not be transcribed',
   'voice.toast.transcriptionFailedMessage':
     'Check the Speech-to-text Model and the Desktop log, then try again.',
-  'voice.toast.commandFailedTitle': 'Voice command not sent',
+  'voice.toast.commandFailedTitle': 'Voice command failed',
   'voice.toast.commandFailedMessage':
     'The voice command could not be sent. The failure was written to the Desktop log.',
   'voice.toast.microphoneDisconnectedTitle': 'Microphone disconnected',

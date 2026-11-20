@@ -587,6 +587,12 @@ function normalizeVoiceEvent(raw) {
     agent_id: text(raw.agent_id),
     session_id: text(raw.session_id),
     error_code: text(raw.error_code),
+    ...(raw.kind === 'wakeword_completed' || raw.kind === 'wakeword_failed'
+      ? {
+          message: text(raw.message),
+          notification_failed: raw.notification_failed === true,
+        }
+      : {}),
   };
 }
 

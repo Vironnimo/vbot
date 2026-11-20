@@ -49,6 +49,7 @@ from ._listing import (
     service_line,
     states,
 )
+from ._wakeword import WakewordCommands
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -768,8 +769,28 @@ def register(api: Any) -> None:
                 "description": "Home Assistant long-lived access token.",
                 "env_key": _HASS_TOKEN_ENV_KEY,
             },
+            {
+                "key": "wakeword_use_decision",
+                "type": "toggle",
+                "label": "Recognize rephrased wakeword commands",
+                "description": (
+                    "Use the configured Decision Model when speech differs from a saved "
+                    "phrase or alias. Exact matches work even without a Decision Model."
+                ),
+                "default": True,
+            },
+            {
+                "key": "wakeword_notify_agent",
+                "type": "toggle",
+                "label": "Inform the Agent about wakeword commands",
+                "description": (
+                    "Send the wakeword target a System Reminder with the Tool call and its result."
+                ),
+                "default": False,
+            },
         ]
     )
+    WakewordCommands(api).register()
 
     def _is_ready() -> bool:
         return bool(api.resolve_credential(_HASS_TOKEN_ENV_KEY).strip())

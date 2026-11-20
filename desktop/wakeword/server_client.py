@@ -2,43 +2,59 @@
 
 :class:`VoiceServerClient` extends :class:`desktop.speech.server_client.SpeechServerClient`
 (readiness, preparation, transcription, upload budget) with the operations a
-spoken command needs after transcription: Agent lookup, Session resolution and
-sending the command text. Failures raise the speech client's typed errors with
+spoken command needs after transcription: Agent lookup, Session resolution,
+wakeword command execution and Chat submission. Failures raise typed errors with
 these codes:
 
 - ``target_agent_unavailable``: an unknown Agent or any other ``agent.get``
   refusal; any RPC refusal with ``agent_not_found`` maps to it as well.
 - ``session_resolution_failed``: ``session.list`` failed.
 - ``send_failed``: ``chat.stream`` refused the command.
+- ``wakeword_result_unknown``: a wakeword command received no usable outcome.
 
 A command for a new Session is sent with ``new_session``: the server creates
 the Session together with the command's Run, so a refused command leaves no
 empty Session behind.
 
 Retries: ``agent.get`` and ``session.list`` are idempotent reads and make up to
-:data:`MAX_ATTEMPTS` attempts. ``chat.stream`` makes exactly one attempt: after
-a lost response the server may already have committed a Session or Run.
+:data:`MAX_ATTEMPTS` attempts. Both mutation calls make one attempt: after a lost
+response a wakeword action or Chat submission may already have happened.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, override
 
+import httpx
+
 from desktop.speech.server_client import (
+    INFERENCE_TIMEOUT,
     MAX_ATTEMPTS,
+    RPC_TIMEOUT_SECONDS,
     SpeechServerClient,
+    SpeechServerError,
     SpeechServerInvalidResponse,
     SpeechServerRejected,
+    SpeechServerUnreachable,
 )
 from desktop.wakeword.config import SESSION_BEHAVIOR_NEW, SESSION_BEHAVIORS
 
 ERROR_TARGET_AGENT_UNAVAILABLE = "target_agent_unavailable"
 ERROR_SESSION_RESOLUTION_FAILED = "session_resolution_failed"
 ERROR_SEND_FAILED = "send_failed"
+ERROR_WAKEWORD_RESULT_UNKNOWN = "wakeword_result_unknown"
 
 _RPC_AGENT_NOT_FOUND = "agent_not_found"
 _SPEECH_INPUT_ORIGIN = "speech_transcription"
+
+
+@dataclass(frozen=True)
+class WakewordResult:
+    ok: bool
+    message: str
+    notification_failed: bool = False
 
 
 class VoiceServerClient(SpeechServerClient):
@@ -94,6 +110,40 @@ class VoiceServerClient(SpeechServerClient):
             )
         return _newest_session_id(sessions)
 
+    def try_wakeword_command(
+        self, agent_id: str, session_id: str | None, text: str
+    ) -> WakewordResult | None:
+        """Execute a matching configured command. Only a definite miss goes to Chat."""
+        try:
+            result = self._rpc(
+                "voice.wakeword_command",
+                {"agent_id": agent_id, "session_id": session_id, "content": text},
+                error_code=ERROR_WAKEWORD_RESULT_UNKNOWN,
+                attempts=1,
+                timeout=INFERENCE_TIMEOUT,
+            )
+        except SpeechServerRejected as exc:
+            if exc.rpc_code == "method_not_found":
+                return None  # An older server cannot have executed the command.
+            raise
+        except SpeechServerUnreachable as exc:
+            raise SpeechServerError(ERROR_WAKEWORD_RESULT_UNKNOWN, "No wakeword result") from exc
+        if result.get("handled") is False:
+            return None
+        ok = result.get("ok")
+        message = _non_empty_string(result.get("message"))
+        notification_failed = result.get("notification_failed", False)
+        if (
+            result.get("handled") is not True
+            or not isinstance(ok, bool)
+            or message is None
+            or not isinstance(notification_failed, bool)
+        ):
+            raise SpeechServerInvalidResponse(
+                ERROR_WAKEWORD_RESULT_UNKNOWN, "Invalid wakeword result"
+            )
+        return WakewordResult(ok, message, notification_failed)
+
     def send_command(self, agent_id: str, session_id: str | None, text: str) -> str:
         """Send the command text as a spoken Chat message (one attempt); return its Session.
 
@@ -129,9 +179,12 @@ class VoiceServerClient(SpeechServerClient):
         *,
         error_code: str,
         attempts: int,
+        timeout: float | httpx.Timeout = RPC_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         try:
-            return super()._rpc(method, params, error_code=error_code, attempts=attempts)
+            return super()._rpc(
+                method, params, error_code=error_code, attempts=attempts, timeout=timeout
+            )
         except SpeechServerRejected as exc:
             if exc.rpc_code != _RPC_AGENT_NOT_FOUND:
                 raise

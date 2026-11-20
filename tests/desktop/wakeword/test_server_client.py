@@ -12,6 +12,7 @@ import pytest
 from desktop.speech import server_client as server_client_module
 from desktop.speech.server_client import (
     MAX_ATTEMPTS,
+    SpeechServerError,
     SpeechServerInvalidResponse,
     SpeechServerRejected,
     SpeechServerUnreachable,
@@ -168,6 +169,36 @@ def test_reads_report_an_unreachable_server_when_retries_run_out(
 
 
 # -- Sending ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reply", [rpc_ok({"handled": False}), rpc_error("method_not_found")])
+def test_wakeword_misses_include_older_servers(
+    make_client: Callable[..., Any], reply: Reply
+) -> None:
+    server = ScriptedServer(reply)
+    assert make_client(server).try_wakeword_command("main", None, "hello") is None
+    assert server.rpc_calls == [
+        ("voice.wakeword_command", {"agent_id": "main", "session_id": None, "content": "hello"})
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        httpx.ReadTimeout("response lost"),
+        httpx.Response(503),
+        rpc_error("internal_error", status_code=500),
+        rpc_ok({"handled": True, "ok": "yes", "message": "state:on"}),
+    ],
+)
+def test_unsupported_or_lost_wakeword_outcomes_are_never_replayed(
+    make_client: Callable[..., Any], reply: Reply
+) -> None:
+    server = ScriptedServer(reply)
+    with pytest.raises(SpeechServerError) as exc:
+        make_client(server).try_wakeword_command("main", "current", "hello")
+    assert exc.value.error_code == "wakeword_result_unknown"
+    assert len(server.requests) == 1
 
 
 @pytest.mark.parametrize(

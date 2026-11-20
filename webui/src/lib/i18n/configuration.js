@@ -1667,6 +1667,8 @@ export default Object.freeze({
     'Wakeword detection stopped unexpectedly. Retry listening.',
   'settings.voice.error.send':
     'The spoken command could not be sent. Check the server connection and retry.',
+  'settings.voice.error.wakewordResultUnknown':
+    'The Desktop received no result. Check the device state before repeating the command.',
   'settings.voice.error.stackUnavailable':
     'The Desktop Voice components are unavailable. Install the desktop Voice dependencies and restart vBot.',
   'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
