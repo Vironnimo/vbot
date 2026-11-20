@@ -1150,7 +1150,7 @@ describe('App Run events', () => {
     await mountChat(createRunningSubAgentRpcMock(ALPHA));
     await waitForCondition(() => {
       expect(
-        document.querySelector('.subagent-tool-event .te-dot.running'),
+        document.querySelector('.subagent-tool-event [data-status=running]'),
       ).toBeTruthy();
     });
 
@@ -1158,6 +1158,7 @@ describe('App Run events', () => {
       runServerEvent('run_completed', 'sub-run-running', 1, {
         session_id: 'sub-session-running',
         run_event_type: 'run_completed',
+        timing: { duration_ms: 2400 },
         status: 'completed',
       }),
     );
@@ -1165,10 +1166,10 @@ describe('App Run events', () => {
 
     await waitForCondition(() => {
       expect(
-        document.querySelector('.subagent-tool-event .te-dot.done'),
+        document.querySelector('.subagent-tool-event [data-status=success]'),
       ).toBeTruthy();
       expect(
-        document.querySelector('.subagent-tool-event .te-dot.running'),
+        document.querySelector('.subagent-tool-event [data-status=running]'),
       ).toBeFalsy();
     });
   });
