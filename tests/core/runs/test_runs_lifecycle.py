@@ -37,13 +37,24 @@ from tests.core.runs.runs_test_support import SESSION, RunTimelines, held
 pytestmark = pytest.mark.asyncio
 
 
-async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_runs() -> None:
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_runs(
+    cancel_caller: bool,
+) -> None:
     manager = ChatRunManager()
     started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
 
     async def blocking_executor(_run: Run) -> str:
         started.set()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            cleanup_finished.set()
         return "unreachable"
 
     active = await manager.start(
@@ -57,8 +68,18 @@ async def test_manager_aclose_cancels_active_and_queued_work_and_rejects_new_run
         display_content="queued",
     )
 
-    await manager.aclose()
+    closing = asyncio.create_task(manager.aclose())
+    await cleanup_started.wait()
+    if cancel_caller:
+        closing.cancel()
+    release_cleanup.set()
+    if cancel_caller:
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    else:
+        await closing
 
+    assert cleanup_finished.is_set()
     assert active.status == RunStatus.CANCELLED
     assert manager.active_runs() == []
     with pytest.raises(asyncio.CancelledError):

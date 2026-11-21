@@ -932,6 +932,9 @@ class ChatRunManager:
 
     async def aclose(self) -> None:
         """Reject new work, cancel queued items, and drain every active Run."""
+        await settle_before_cancelling(self._close_and_drain())
+
+    async def _close_and_drain(self) -> None:
         async with self._lock:
             if self._closed:
                 active_runs = list(self._active_by_session.values())
