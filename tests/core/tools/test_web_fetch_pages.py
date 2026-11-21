@@ -151,6 +151,36 @@ async def test_find_in_code_shows_nearby_matches_once_and_reads_on_after_each_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repeated", [False, True], ids=["single-match", "next-match-is-cut"])
+async def test_tight_find_budget_keeps_the_match_and_the_read_on_call(
+    tmp_path, monkeypatch, repeated
+):
+    needle = "identifier" * 18
+    body = "prefix " * 12 + needle + " suffix" * 50
+    if repeated:
+        body = body.replace(needle, needle + " " + needle)
+    install_http_get(
+        monkeypatch,
+        lambda url: make_result(text=body, headers={"content-type": "text/plain"}, url=url),
+    )
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+
+    found = await tool.dispatch(
+        context, {"url": "https://example.com/", "find": needle, "max_chars": 200}
+    )
+
+    assert found["ok"]
+    passage = found["data"]["content"]
+    assert needle in passage and len(passage) <= 200
+    (read_on,) = read_on_calls(found["data"]["more"])
+    following = await tool.dispatch(context, read_on)
+    assert passage + following["data"]["content"] == body[body.index(passage) :]
+    if repeated:
+        resumed = await tool.dispatch(context, continuation(found["data"]))
+        assert resumed["data"]["content"].startswith(needle)
+
+
+@pytest.mark.asyncio
 async def test_find_terms_shares_overlapping_excerpts_and_resumes_at_first_omission(
     tmp_path, monkeypatch
 ):
