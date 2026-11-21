@@ -260,6 +260,7 @@ async def test_restricted_shell_keeps_cli_grant_through_review_and_releases_it_a
     analyzer.result = replace(
         analyzer.result,
         commands=(replace(analyzer.result.commands[0], instance_cli=True),),
+        literal_cli_syntax=True,
     )
     cli = Mock(allows=AsyncMock(return_value=True))
     grant = cli.issue.return_value
@@ -289,6 +290,14 @@ async def test_restricted_shell_keeps_cli_grant_through_review_and_releases_it_a
         await shell.commands.advance(1)
         grant.release.assert_called_once()
         grant.release.reset_mock()
+        analyzer.result = replace(
+            analyzer.result, commands=(*analyzer.result.commands, *plan("other").commands)
+        )
+        mixed = await shell.call({"command": "vbot server status | other"})
+        assert mixed["error"]["code"] == "permission_denied"
+        assert len(shell.launcher.processes) == 1
+        cli.issue.assert_called_once()
+        analyzer.result = replace(analyzer.result, commands=analyzer.result.commands[:1])
         cli.allows.return_value = False
         refused = await shell.call({"command": "vbot server status"})
         assert refused["error"]["code"] == "permission_denied"

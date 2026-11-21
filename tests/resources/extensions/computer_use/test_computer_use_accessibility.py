@@ -58,7 +58,7 @@ async def test_inspection_and_element_actions_keep_their_computer_and_session(
         await link.connect()
     target = link.target if link else computer.target
     target.accessibility[1] = [{**field(), "truncated_fields": ["selected_text"]}]
-    context = remote_context(computer) if remote else computer.context_for("computer")
+    context = remote_context(computer, link) if link else computer.context_for("computer")
 
     async def call(**arguments):
         context.result_media.clear()

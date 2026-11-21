@@ -72,6 +72,7 @@ class Socket:
     def __init__(self, server_instance: str = "server-one", *, welcome: bool = True) -> None:
         self.server_instance = server_instance
         self.welcome = welcome
+        self.registered_id: str | None = None
         self.capability_updates = True
         self.incoming: asyncio.Queue[Any] = asyncio.Queue()
         self.outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -86,6 +87,7 @@ class Socket:
                     "type": "welcome",
                     "protocol": 1,
                     "computer_id": message["computer_id"],
+                    **({"registered_id": self.registered_id} if self.registered_id else {}),
                     "instance_id": message["instance_id"],
                     "server_instance": self.server_instance,
                     "capability_updates": 1 if self.capability_updates else 0,
@@ -166,6 +168,9 @@ def test_grants_and_private_identity_belong_to_one_server(tmp_path: Path) -> Non
     first_url = "https://one.example/"
     sharing.set_server_url(first_url)
     assert sharing.status()["capabilities"] == {"terminal": False}
+    with pytest.raises(SharingError) as reserved:
+        sharing.update({"name": " SERVER "}, expected_server=first_url)
+    assert reserved.value.error_code == "computer_name_reserved"
     first = sharing.update({"terminal": True, "name": "My laptop"}, expected_server=first_url)
     assert first["computer_id"].startswith("pc_")
     assert "key" not in first
@@ -228,6 +233,7 @@ async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
     sharing.set_server_url(url)
     sharing.update({"terminal": True}, expected_server=url)
     socket = await connections.add()
+    socket.registered_id = "pc_serverassigned"
     running = asyncio.create_task(sharing.run())
     try:
         hello = await asyncio.wait_for(socket.outgoing.get(), timeout=2)
@@ -235,6 +241,7 @@ async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
         assert hello["key"]
         result = await socket.call("call-one", "start")
         assert result["ok"] is True
+        assert sharing.status()["computer_id"] == socket.registered_id != hello["computer_id"]
         assert sharing.active_terminals == 1
         refused = await socket.call("call-two", "click", "computer_use")
         assert refused["error"]["code"] == "computer_capability_not_shared"
@@ -735,6 +742,22 @@ async def test_disabling_terminal_fences_mutations_until_confirmation_and_save(
         assert (await socket.call("during-start", "start"))["error"]["code"] == "computer_closing"
         assert sharing.prepare_restart() is False
         assert sharing.status()["active_terminals"] == 1
+        enable_again = None
+        if outcome == "accepted":
+            submitted = asyncio.Event()
+
+            def refuse_grant(server: str, grants: list[str], renamed_to: str | None) -> None:
+                assert (server, grants, renamed_to) == (url, ["terminal"], None)
+                raise SharingError("declined", "Grant declined")
+
+            def enable() -> dict[str, Any]:
+                loop.call_soon_threadsafe(submitted.set)
+                return sharing.update(
+                    {"terminal": True}, expected_server=url, authorize=refuse_grant
+                )
+
+            enable_again = asyncio.create_task(asyncio.to_thread(enable))
+            await asyncio.wait_for(submitted.wait(), timeout=2)
         if outcome == "closed":
             sharing.close()
         answer.set()
@@ -751,6 +774,11 @@ async def test_disabling_terminal_fences_mutations_until_confirmation_and_save(
             assert closed.value.error_code == "computer_server_changed"
         else:
             await asyncio.wait_for(disabling, timeout=2)
+            assert enable_again is not None
+            with pytest.raises(SharingError) as refused:
+                await asyncio.wait_for(enable_again, timeout=2)
+            assert refused.value.error_code == "declined"
+            assert sharing.status()["capabilities"]["terminal"] is False
             await asyncio.wait_for(handlers[0].release.wait(), timeout=2)
             assert handlers[0].closed
         if outcome in {"declined", "settings_failed"}:

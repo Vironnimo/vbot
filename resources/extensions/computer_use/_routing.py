@@ -13,7 +13,8 @@ from core.utils.workers import settle_before_cancelling
 from ._remote_target import RemoteDesktopTarget, RemoteHotkey
 
 if TYPE_CHECKING:
-    from core.computers import ComputerInfo, ComputerRegistry
+    from core.computers import ComputerInfo
+    from core.computers.computers import ExtensionComputers
     from core.extensions.operations import ExtensionHost
     from core.tools import ToolContext
 
@@ -31,7 +32,7 @@ class ComputerRouting:
     def __init__(self, local: ComputerUseService, host: ExtensionHost) -> None:
         self.local = local
         self.host = host
-        self.computers: ComputerRegistry | None = getattr(host, "computers", None)
+        self.computers: ExtensionComputers | None = getattr(host, "computers", None)
         self._remotes: dict[str, _Remote] = {}
         self._closing: set[asyncio.Task[None]] = set()
         self._locks: dict[str, asyncio.Lock] = {}

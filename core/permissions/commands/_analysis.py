@@ -125,6 +125,7 @@ class Analysis:
         self.environment_dynamic: set[str] = set()
         self._powershell = powershell
         self._commands: list[SimpleCommand] = []
+        self._literal_cli_syntax = False
         self._paths: dict[tuple[object, ...], PlannedPathAccess] = {}
         self._mentions: dict[tuple[object, ...], PlannedPathAccess] = {}
         self._unresolved: dict[tuple[str, str, str], UnresolvedElement] = {}
@@ -144,6 +145,7 @@ class Analysis:
             tuple(self._urls),
             tuple(self._hosts),
             tuple(self._mentions.values()),
+            self._literal_cli_syntax,
         )
 
     # Scripts ----------------------------------------------------------------
@@ -180,6 +182,8 @@ class Analysis:
             start=start,
             functions=script.functions,
         )
+        if depth == 0:
+            self._literal_cli_syntax = script.literal_cli_syntax
         self._prepare(context, script)
         for command in script.commands:
             self._command(context, command)

@@ -139,6 +139,25 @@ class DeviceTokenStore:
             self._write(document)
             return StoredComputerIdentity(computer_id, key)
 
+    def assign_computer_id(
+        self, origin: str, identity: StoredComputerIdentity, computer_id: str
+    ) -> StoredComputerIdentity:
+        if not is_safe_id(computer_id) or not computer_id.startswith("pc_"):
+            raise ValueError("Invalid registered computer identity")
+
+        def change(record: dict[str, Any]) -> None:
+            computer = record.get("computer")
+            if (
+                not isinstance(computer, dict)
+                or computer.get("id") != identity.computer_id
+                or _unprotect(computer, f"computer:{origin}") != identity.key
+            ):
+                raise CredentialStoreError("The computer registration changed")
+            computer["id"] = computer_id
+
+        self._update(origin, change)
+        return StoredComputerIdentity(computer_id, identity.key)
+
     def save_device(self, origin: str, token: str, device_id: str) -> None:
         """Store a newly paired device token for ``origin`` (replacing an earlier one)."""
         match = DEVICE_TOKEN_PATTERN.fullmatch(token)

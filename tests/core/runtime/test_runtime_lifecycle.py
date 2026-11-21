@@ -1102,8 +1102,17 @@ async def test_extension_sampling_records_usage_before_returning(
     shutdown = SimpleNamespace(begins_mid_call=False, fails_after_usage=False)
     tool_delta: dict[str, Any] = {}
     try:
+        private_value = "test-owned-sampling-value"
+        runtime.agent_secrets.create(
+            name="SAMPLING",
+            kind="token",
+            values={"value": private_value},
+            actor="user",
+            agents=["agent"],
+        )
 
         async def stream(*_args: object, **_kwargs: object) -> AsyncIterator[dict[str, object]]:
+            assert private_value not in repr((_args, _kwargs))
             if shutdown.begins_mid_call:
                 runtime._started = False  # noqa: SLF001 - shutdown begins mid-call.
             yield {"type": "content_delta", "text": "sample"}
@@ -1152,7 +1161,12 @@ async def test_extension_sampling_records_usage_before_returning(
         tool_delta.update(
             type="tool_call_delta", name_delta="sample_tool", id="t", arguments_delta="{}"
         )
-        sample_request = {"messages": [], "max_tokens": 100, "tools": [{"name": "sample_tool"}]}
+        sample_request = {
+            "messages": [{"role": "user", "content": private_value}],
+            "max_tokens": 100,
+            "tools": [{"name": "sample_tool", "description": private_value}],
+            "stop_sequences": [private_value],
+        }
         # External sampling clients can execute every returned call, even a
         # native proposal whose name coincides with an advertised sampling Tool.
         tool_delta["rejection"] = {

@@ -212,6 +212,16 @@ class AgentSecret:
     def granted_to(self, address: SessionAddress, *, passed_only: bool = False) -> bool:
         return self.grant_for(address, passed_only=passed_only) is not None
 
+    def without_grants_through(self, address: SessionAddress) -> AgentSecret:
+        grants = tuple(grant for grant in self.session_grants if address not in grant.path)
+        if grants == self.session_grants:
+            return self
+        return replace(
+            self,
+            session_grants=grants,
+            sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+        )
+
 
 def normalize_secret_name(raw: str) -> str:
     """``api-key`` -> ``API_KEY``; raises :class:`SecretRecordError` when unusable."""

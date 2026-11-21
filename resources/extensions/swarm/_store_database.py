@@ -12,11 +12,15 @@ import hmac
 import json
 import secrets
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.extensions.databases import Database
+from vbot_extension_sdk import write_profile_assignment
+
+if TYPE_CHECKING:
+    from vbot_extension_sdk import Database as SDKDatabase
 
 from ._store_values import (
     SwarmStoreError,
@@ -80,8 +84,15 @@ class SwarmDatabase:
     def _close(self) -> None:
         self._cursor_key = None
 
-    def _write(self, function: Callable[[sqlite3.Connection], Any]) -> Any:
+    def _write(
+        self, function: Callable[[sqlite3.Connection], Any], *, profile_names: Sequence[str] = ()
+    ) -> Any:
         self._require_open()
+        if profile_names:
+            # The standalone SDK declaration and the host Database are the same runtime class.
+            return write_profile_assignment(
+                cast("SDKDatabase", self._database), profile_names, function
+            )
         return self._database.write(function)
 
     def _read(self) -> AbstractContextManager[sqlite3.Connection]:

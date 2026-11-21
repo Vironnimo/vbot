@@ -452,7 +452,7 @@ class ShellTool:
             if self._shell_cli
             else None,
         )
-        return plan is not None and any(command.instance_cli for command in plan.commands)
+        return plan is not None and plan.instance_cli_only
 
     async def _secret_environment(
         self, context: ToolContext, call: _ShellCall

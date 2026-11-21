@@ -71,6 +71,7 @@ class QuotedMessageFacts:
     user_id: str | None
     user_display_name: str | None
     content: list[ContentBlock] | None
+    message_id: str | None = None
 
 @dataclass(frozen=True)
 class RouteFacts:
@@ -195,6 +196,7 @@ class ChannelConversationEngine:
         conversation_pointers: Any,
         pending_replies: Any,
         observation_inbox: Any,
+        attachment_store: AttachmentStore | None = None,
         previous_observations: tuple[asyncio.Task[None], ...] = (),
         run_button_binding_registry: Any | None = None,
         access_registry: Any | None = None,
@@ -227,6 +229,8 @@ class ChannelConversationEngine:
         raw_messages: tuple[Any, ...],
         *,
         companion_text: str | None = None,
+        companion_message_id: str | None = None,
+        message_ids: tuple[str | None, ...] | None = None,
         observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool: ...
     async def trigger_internal_reply(

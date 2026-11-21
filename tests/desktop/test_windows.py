@@ -611,9 +611,10 @@ def test_connected_server_microphone_is_allowed_for_this_request_only(monkeypatc
     window, control = _permission_window(monkeypatch)
     origin = ["http://192.168.1.20:8420"]
     handler = _attach_permission_hook(window, control, lambda: origin[0])
+    sender = SimpleNamespace(Source=origin[0])
 
     allowed = _permission_args()
-    handler(None, allowed)
+    handler(sender, allowed)
     assert (allowed.State, allowed.SavesInProfile) == ("allow", False)
 
     for args in (
@@ -621,8 +622,12 @@ def test_connected_server_microphone_is_allowed_for_this_request_only(monkeypatc
         _permission_args(uri="http://192.168.1.21:8420/"),
         _permission_args(uri="about:blank"),
     ):
-        handler(None, args)
+        handler(sender, args)
         assert (args.State, args.SavesInProfile) == ("default", True)
+
+    framed = _permission_args()
+    handler(SimpleNamespace(Source="https://other.example"), framed)
+    assert (framed.State, framed.SavesInProfile) == ("default", True)
 
     origin[0] = None
     other = _permission_args()
@@ -646,7 +651,7 @@ def test_permission_hook_tolerates_older_sdks_and_logs_failures_once(monkeypatch
             object.__setattr__(self, name, value)
 
     old = OldArgs()
-    handler(None, old)
+    handler(SimpleNamespace(Source=old.Uri), old)
     assert old.State == "allow"
 
     broken = SimpleNamespace(PermissionKind="mic")  # no Uri

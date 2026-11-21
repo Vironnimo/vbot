@@ -6,12 +6,14 @@ import asyncio
 import base64
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import mcp.types as types
 import pytest
 from mcp.server import Server
 
 from core.attachments import AttachmentTooLargeError
+from core.secrets.agent_secrets import AgentSecrets
 from core.tools.availability import ToolAccess
 from resources.extensions.mcp._transport import ConnectionTransport
 from resources.extensions.mcp.content import (
@@ -24,6 +26,7 @@ from resources.extensions.mcp.content import (
     ContentStore,
 )
 from resources.extensions.mcp.extension import MCP_MESSAGES, remote_tool_name
+from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.resources.extensions.mcp.mcp_test_support import (
     context,
     dispatch,
@@ -73,6 +76,57 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     assert document["payload"]["_meta"] == payload["_meta"]
     assert list(payloads(host).rows) == [receipt["result_id"]]
     assert not (host.data_dir / "mcp").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_saved_mcp_output_masks_short_values_before_preview_and_later_reads(
+    context_service, host, monkeypatch, tmp_path, is_error
+):
+    _, registry, runner, _ = context_service
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)),
+        clock=lambda: datetime.fromtimestamp(59, UTC),
+    )
+    registry.set_secrets(secrets)
+    secrets.create(
+        name="LOGIN",
+        kind="login",
+        values={"username": "user", "password": "Q7!", "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"},
+        actor="user",
+        agents=["alice"],
+        sinks=["external_tools"],
+    )
+    references = "{{secret:LOGIN.password}} {{secret:LOGIN.totp}}"
+    start = "x" * (995 if is_error else RESULT_TEXT_CHARACTERS - 5)
+
+    async def answer(operation, arguments, invocation_context=None):
+        expanded = arguments["arguments"]["value"]
+        assert expanded == "Q7! 287082"
+        return {
+            "isError": is_error,
+            "content": [{"type": "text", "text": start + expanded + "x" * 7000 + expanded}],
+        }
+
+    target = await tool_target(registry, host)
+    monkeypatch.setattr(runner, "invoke", answer)
+    result = await dispatch(
+        registry, host, {"action": "call", "target": target, "arguments": {"value": references}}
+    )
+    identifier = payload_id(result["error"]["message"]) if is_error else result["data"]["result_id"]
+    assert "Q7!" not in repr(result) and "287082" not in repr(result)
+    saved = await dispatch(
+        registry,
+        host,
+        {
+            "action": "read",
+            "result_id": identifier,
+            "pointer": "/content/0/text",
+            "offset": len(start),
+            "limit": len(references),
+        },
+    )
+    assert saved["data"]["content"] == references
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,10 @@ def changes_agent_access(args: argparse.Namespace, instance: ServerInstance) -> 
         return _restore_changes_agent_access(args)
     if args.area == "permission-profiles":
         return args.command in {"save", "delete"}
+    if args.area == "extensions":
+        if args.command == "run":
+            return "--help" not in args.rest[1:] and args.rest != ["operations"]
+        return args.command in {"enable", "disable", "reload", "set"}
     if args.area == "config":
         from cli.config_management import PERMISSION_RULES_DEFAULT_PATH
         from core.settings.paths import resolve_setting
@@ -70,9 +74,15 @@ def changes_agent_access(args: argparse.Namespace, instance: ServerInstance) -> 
         elif args.command == "patch":
             paths.extend(path for path, _ in args.set_values)
             paths.extend(args.unset_paths)
-        return any(
-            resolve_setting(path).canonical_path == PERMISSION_RULES_DEFAULT_PATH for path in paths
-        )
+        for path in paths:
+            setting = resolve_setting(path)
+            if setting.path.values[0] == "extensions" or setting.canonical_path in {
+                PERMISSION_RULES_DEFAULT_PATH,
+                "skills.directories",
+                "providers.claude_agent.executable_path",
+            }:
+                return True
+        return False
     if args.area == "skill":
         return args.command in {"share", "unshare", "enable", "disable"}
     return False
@@ -229,12 +239,16 @@ def main() -> int:
 
     def review_document_files(sources: dict[str, str]) -> dict[str, str]:
         paths = {key: str(Path(source).absolute()) for key, source in sources.items()}
-        if marker and paths:
-            raise VBotAccessReviewRequiredError(False, [(path, False) for path in paths.values()])
+        if marker:
+            raise VBotAccessReviewRequiredError(True, [(path, False) for path in paths.values()])
         confirmed = checked_files(list(paths.values()), reviewed_files)
         return {key: confirmed[path] for key, path in paths.items()}
 
     def check_access(args: argparse.Namespace) -> None:
+        if args.area == "extensions" and args.command == "run":
+            # The live operation schema discovers file operands. Review them and
+            # the operation together before opening a file or invoking its handler.
+            return
         rights = changes_agent_access(args, target)
         reads = file_reads(list(file_operands(args)))
         if rights or reads:

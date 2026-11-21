@@ -310,6 +310,11 @@ def _is_integer(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _telegram_message_id(message: Any) -> str | None:
+    value = getattr(message, "message_id", None)
+    return str(value) if _is_integer(value) else None
+
+
 def _parse_message_id(value: str | None) -> int | None:
     if value is None:
         return None

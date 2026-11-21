@@ -209,6 +209,7 @@ def make_media_update(
             text=None,
             caption=caption,
             media_group_id=media_group_id,
+            chat_id=chat_id,
             message_id=message_id,
             message_thread_id=None,
             forward_origin=forward_origin,

@@ -163,7 +163,7 @@ MCP_OPERATION_DESCRIPTIONS = {
     "completion/complete": "Complete a prompt or resource argument.",
     "resources/subscribe": "Subscribe to resource changes.",
     "resources/unsubscribe": "Stop a resource subscription.",
-    "events": "Read progress, logs, and change events.",
+    "events": "Read events from this Session's calls and shared resource and catalog changes.",
     "ping": "Check connection responsiveness.",
     "logging/setLevel": "Set the requested log level.",
     "tasks/get": "Read task status.",

@@ -58,6 +58,9 @@ async def test_computer_registration_is_private_and_survives_pairing_changes(
     }
     try:
         connected = await registry.connect(hello, actor="open")
+        identity = store.assign_computer_id(ORIGIN, identity, connected.info.id)
+        assert _store(tmp_path).computer_identity(ORIGIN) == identity
+        hello["computer_id"] = identity.computer_id
         for device_id, token in (
             (DEVICE_ID, TOKEN),
             (OTHER_DEVICE_ID, f"vbt_{OTHER_DEVICE_ID}_{'N' * 43}"),

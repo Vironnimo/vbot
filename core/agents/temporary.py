@@ -339,13 +339,20 @@ class TemporaryAgentRegistry:
             if bindings:
                 binding_config["delegation_bindings"] = bindings
         try:
-            return self._sessions.create_bound_temporary_session(
-                address,
-                owner_name=owner_name,
-                group_id=group_id,
-                participant_id=participant_id,
-                config=binding_config,
-            )
+            from core.storage.storage import permission_profile_assignment
+
+            with permission_profile_assignment(
+                self._sessions.data_dir,
+                (config.permission_profile, config.permission_ceiling_profile),
+                resolve=self._profile_rules,
+            ):
+                return self._sessions.create_bound_temporary_session(
+                    address,
+                    owner_name=owner_name,
+                    group_id=group_id,
+                    participant_id=participant_id,
+                    config=binding_config,
+                )
         except ChatSessionError:
             # The first committed snapshot wins even if targets or the repo changed.
             existing = self._sessions.temporary_binding_by_participant(

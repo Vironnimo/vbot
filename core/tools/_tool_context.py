@@ -516,18 +516,29 @@ class ToolContext:
             separators=(",", ":"),
         )
 
-    def mask_prepared_secrets[T](self, value: T) -> T:
+    def mask_prepared_secrets[T](self, value: T, *, include_keys: bool = False) -> T:
         """Mask exact values prepared for this call, including short values and TOTP."""
+        literals = self.prepared_secret_literals
+        if not literals:
+            return value
+        # Preserve references already present in a result or display, even if
+        # their names contain a short value. Never re-mask a replacement.
+        replacements = {ref: ref for ref in literals.values()}
+        for literal, reference in literals.items():
+            if not literal:
+                continue
+            replacements[literal] = reference
+            if "\n" in literal:
+                # File changes can preserve or normalize the target's line endings.
+                normalized = literal.replace("\r\n", "\n")
+                replacements.setdefault(normalized, reference)
+                replacements.setdefault(normalized.replace("\n", "\r\n"), reference)
+        pattern = re.compile("|".join(map(re.escape, sorted(replacements, key=len, reverse=True))))
 
         def hide(text: str) -> str:
-            for literal, reference in sorted(
-                self.prepared_secret_literals.items(), key=lambda item: len(item[0]), reverse=True
-            ):
-                if literal:
-                    text = text.replace(literal, reference)
-            return text
+            return pattern.sub(lambda match: replacements[match[0]], text)
 
-        return cast(T, map_strings(value, hide))
+        return cast(T, map_strings(value, hide, include_keys=include_keys))
 
     async def commit_prepared_secrets(self) -> None:
         """Atomically consume deferred Secret grants immediately before their effect."""
@@ -772,6 +783,7 @@ class ToolContext:
             after,
             destination=destination,
             line_budget=max(0, MAX_DISPLAY_DIFF_LINES - shown),
+            mask=self.mask_prepared_secrets if self.prepared_secret_literals else None,
         )
         block["files"].append(recorded)
         return recorded

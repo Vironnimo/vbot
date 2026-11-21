@@ -176,6 +176,32 @@ async def test_inbound_media_reaches_the_agent_as_a_stored_attachment(
 
 
 @pytest.mark.asyncio
+async def test_a_group_text_upload_with_a_key_is_refused_before_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, _sessions, trigger, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        response_mode="all",
+        attachment_store=AttachmentStore(tmp_path),
+    )
+    key = b"ghp_" + (b"AbCdEf0123456789" * 3)[:36]
+    bot.get_file.return_value = telegram_file(b"TOKEN=" + key)
+    bot.delete_message = AsyncMock(return_value=True)
+    await adapter._handle_inbound_media(
+        make_media_update(chat_id=-10001, message_id=701, document=_media(file_name="config.env")),
+        None,
+    )
+    await drain_chat_queue(adapter, -10001)
+    trigger.assert_not_awaited()
+    bot.delete_message.assert_awaited_once_with(chat_id=-10001, message_id=701)
+    assert not list((tmp_path / "artifacts" / "attachments").glob("*"))
+    assert any("Rotate" in reply for reply in sent_texts(bot))
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("row", "media", "get_file_count", "reply"),
     [

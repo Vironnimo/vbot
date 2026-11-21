@@ -12,7 +12,7 @@ For new temporary Sessions outside a Project, Runtime injects `AgentStore.captur
 
 `TemporaryAgentConfig.permission_rules` (the Agent's own rules, normalized like `agent.json`) and `permission_ceiling` (a strict `PermissionCeiling` dict, `source` `extension`) round-trip through the snapshot; an invalid one makes the config invalid. They resolve onto `RuntimeAgent.permission_rules` / `.permission_ceiling` (`../projects/resolution.md` -> Permission Rules). Test: `test_temporary_agent_permission_rules_and_ceiling_round_trip`.
 
-API 40 adds `permission_ceiling_profile`. The binding retains the name. Each resolution looks up its current rules, and the Run expands them in its own path context as an Extension layer alongside the stored ceiling. A missing profile stops execution. The profile deletion guard checks Identity Agent and Project assignments. An Extension-only reference can therefore become unavailable. A plain temporary participant can select a live `permission_profile` or opt into the global Agent rules with `inherit_permission_defaults`. Older bindings retain their original configuration.
+API 40 adds `permission_ceiling_profile`. The binding retains the name. Each resolution looks up its current rules, and the Run expands them in its own path context as an Extension layer alongside the stored ceiling. A missing profile stops execution. A plain temporary participant can select a live `permission_profile` or opt into the global Agent rules with `inherit_permission_defaults`. Live selections prevent deletion (`archive/operations.md` -> Permission Profile references). Older bindings retain their original configuration.
 
 ## Group deletion
 

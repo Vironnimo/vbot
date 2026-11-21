@@ -514,9 +514,15 @@ async def test_rotation_refuses_old_proofs_still_waiting_for_admission(
     service, _trigger = make_service(tmp_path)
     service.set_webhook_secrets(secret_store(tmp_path))
     job_id, secret = await _webhook_job(service)
-    checked, finish_check = asyncio.Event(), asyncio.Event()
+    checked, finish_check, issued = asyncio.Event(), asyncio.Event(), asyncio.Event()
     worker_run = cron_webhooks._WEBHOOK_WORKERS.run
     read_state = service._webhooks._state
+    issue_secret = service._webhooks.issue_secret
+
+    async def mark_issued(target: str) -> str:
+        rotated = await issue_secret(target)
+        issued.set()
+        return rotated
 
     async def delayed_check(function: Any, *args: Any, **kwargs: Any) -> Any:
         result = await worker_run(function, *args, **kwargs)
@@ -527,7 +533,7 @@ async def test_rotation_refuses_old_proofs_still_waiting_for_admission(
 
     async def delayed_state(target: str) -> WebhookState:
         result = await read_state(target)
-        if stage in {"state", "state-error"}:
+        if stage in {"state", "state-error"} and not finish_check.is_set():
             checked.set()
             await finish_check.wait()
             if stage == "state-error":
@@ -536,12 +542,15 @@ async def test_rotation_refuses_old_proofs_still_waiting_for_admission(
 
     monkeypatch.setattr(cron_webhooks._WEBHOOK_WORKERS, "run", delayed_check)
     monkeypatch.setattr(service._webhooks, "_state", delayed_state)
+    monkeypatch.setattr(service._webhooks, "issue_secret", mark_issued)
     headers = _bearer(secret, **({"x-github-event": "ping"} if ping else {}))
     receiving = asyncio.create_task(service.receive_webhook(job_id, headers, b"payload"))
     try:
         await checked.wait()
-        await service.rotate_webhook_secret(job_id)
+        rotation = asyncio.create_task(service.rotate_webhook_secret(job_id))
+        await issued.wait()
         finish_check.set()
+        await rotation
         assert await receiving == "refused"
         status = service.webhook_status(service.get_job(job_id))
         assert status is not None and status.waiting == 0
@@ -698,6 +707,11 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
     assert secret not in jobs_text and '"schedule_type": "webhook"' in jobs_text
     body = b"sample event"
     assert await service.receive_webhook(job_id, _signed(secret, body), body) == "accepted"
+    more = b"second event"
+    assert await service.receive_webhook(job_id, _signed(secret, more), more) == "accepted"
+    inbox_path = state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id)
+    receipts = inbox_path.with_suffix(".receipts")
+    assert receipts.is_dir()
 
     # A cache-miss read that started before rotation must not restore the old secret.
     service.set_webhook_secrets(store)
@@ -722,13 +736,14 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
         assert await reading == rotated
     assert await service.webhook_secret(job_id) == rotated
     assert rotated != secret
+    assert not receipts.exists()
+    assert "latest_receipt" not in _state(service, job_id)
     assert await service.receive_webhook(job_id, _signed(secret, body), body) == "refused"
     assert await service.receive_webhook(job_id, _signed(rotated, body), body) == "accepted"
+    assert await service.receive_webhook(job_id, _signed(rotated, more), more) == "accepted"
     assert await service.receive_webhook(job_id, _bearer(secret), b"x") == "refused"
     assert await service.receive_webhook(job_id, _bearer(rotated), b"x") == "accepted"
-    assert len(_state(service, job_id)["requests"]) == 3
-    inbox_path = state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id)
-    receipts = inbox_path.with_suffix(".receipts")
+    assert len(_state(service, job_id)["requests"]) == 5
     assert receipts.is_dir()
 
     # Leaving the webhook schedule drops the secret and the waiting requests.

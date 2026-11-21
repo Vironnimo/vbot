@@ -12,8 +12,11 @@ from typing import Any
 import pytest
 
 from core.agents import AgentPlacement
+from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.permissions import PermissionRulesError, resolve_permission_profile
 from core.sessions import SessionAddress
 from core.storage import StorageManager
+from core.tools.availability import ToolAccess
 from core.utils.timestamps import format_canonical_timestamp
 from server.access import bound_principal
 from server.access._principal import HOST
@@ -70,6 +73,27 @@ async def test_profile_deletion_preserves_live_private_and_archived_assignments(
     runtime.storage = StorageManager(runtime.agents.data_dir)
     name = "Local only"
     runtime.storage.update_permission_profiles({name: {"read": "work_area"}})
+    participants = TemporaryAgentRegistry(
+        runtime.sessions,
+        profile_rules=lambda selected: resolve_permission_profile(
+            selected, runtime.storage.load_settings().get("permission_profiles", {})
+        ),
+    )
+    config = TemporaryAgentConfig(
+        model="example/model",
+        cwd=tmp_path,
+        tool_access=ToolAccess(mode="none"),
+        allowed_skills=[],
+        tools={},
+        name="Worker",
+        permission_ceiling_profile=name,
+    )
+    binding = participants.create(
+        owner_name="team",
+        group_id="work",
+        participant_id="worker",
+        config=config,
+    )
     runtime.agents.create("owner", permission_profile=name)
     runtime.agents.create(
         "helper", placement=AgentPlacement("private", "owner"), permission_profile=name
@@ -86,8 +110,13 @@ async def test_profile_deletion_preserves_live_private_and_archived_assignments(
             f"owner ({group})",
             f"helper ({group})",
             f"builder@project ({project})",
+            f"team Session {binding.address.session_id}",
         }
 
+        # Archived owner groups cannot resume. Their snapshots remain readable as history.
+        await runtime.sessions.archive_temporary_group(
+            owner_name="team", group_id="work", reason="finished"
+        )
         await runtime.archive.restore(group, target_id="renamed")
         await runtime.archive.purge(entry_ids=[project])
         refused = await rpc_error(state, "permissions.delete_profile", name=name)
@@ -103,6 +132,114 @@ async def test_profile_deletion_preserves_live_private_and_archived_assignments(
         assert refused["data"]["locations"] == [str(path)]
         path.write_bytes(saved)
         await rpc_result(state, "permissions.delete_profile", name=name)
+        with pytest.raises(PermissionRulesError):
+            participants.create(
+                owner_name="team", group_id="next", participant_id="worker", config=config
+            )
+
+
+@pytest.mark.asyncio
+async def test_profile_deletion_checks_persisted_extension_selections_after_disable(
+    tmp_path: Path,
+) -> None:
+    from core.database import open_database
+    from core.extensions.databases import extension_database_spec
+    from resources.extensions.factory import store as factory_store
+    from resources.extensions.swarm import store as swarm_store
+    from tests.resources.extensions.swarm.swarm_test_support import _profile
+
+    state = _make_state(tmp_path)
+    data_dir = state.runtime.agents.data_dir
+    storage = state.runtime.storage = StorageManager(data_dir)
+    name, ceiling = "Participant", "Ceiling"
+    storage.update_permission_profiles({name: {"read": "work_area"}, ceiling: {"write": "scratch"}})
+    swarm_spec = extension_database_spec(data_dir, "swarm", "swarm", swarm_store.SCHEMA_SQL)
+    factory_spec = extension_database_spec(
+        data_dir,
+        "factory",
+        "factory",
+        factory_store.SCHEMA_SQL,
+        migrations=factory_store.MIGRATIONS,
+    )
+    db = open_database(swarm_spec)
+    try:
+        swarm = swarm_store.SwarmStore(db)
+        await swarm.open()
+        with pytest.raises(PermissionRulesError):
+            await swarm.save_profile(
+                {**_profile(), "permission_ceiling_profile": "Removed"}, expected_revision=None
+            )
+        profile = await swarm.save_profile(
+            {
+                **_profile(),
+                "permission_ceiling_profile": ceiling,
+                "participants": [{"model": "model-a", "count": 1, "permission_profile": name}],
+            },
+            expected_revision=None,
+        )
+        run = await swarm.create_swarm(
+            profile["id"],
+            "goal",
+            {"cwd": str(tmp_path)},
+            request_id="start",
+            expected_profile_revision=profile["revision"],
+        )
+        # The run keeps its participant selection even after editing the template.
+        await swarm.save_profile(
+            {**profile, "participants": [{"model": "model-a", "count": 1}]},
+            expected_revision=profile["revision"],
+        )
+    finally:
+        db.close()
+    # A disabled Factory from before native teams has no configurable group ceiling.
+    legacy = extension_database_spec(
+        data_dir,
+        "factory",
+        "factory",
+        factory_store.SCHEMA_SQL.removesuffix(factory_store.NATIVE_SCHEMA_SQL),
+        migrations=tuple(
+            migration
+            for migration in factory_store.MIGRATIONS
+            if migration.name
+            not in {"native_factory_teams", "factory_budget_changes", "agent_profile_models"}
+        ),
+    )
+    open_database(legacy).close()
+    storage.update_permission_profiles({"Unused": {}})
+    with bound_principal(HOST):
+        await rpc_result(state, "permissions.delete_profile", name="Unused")
+    db = open_database(factory_spec)
+    try:
+        factories = factory_store.FactoryStore(db).native
+        factory = await factories.create_factory(
+            "project", leader_agent_id="leader", config={"permission_ceiling_profile": name}
+        )
+        with pytest.raises(PermissionRulesError):
+            await factories.update_factory(
+                factory["id"], {"config": {"permission_ceiling_profile": "Removed"}}
+            )
+    finally:
+        db.close()
+    with bound_principal(HOST):
+        refused = await rpc_error(state, "permissions.delete_profile", name=name)
+        assert refused["code"] == "permission_profile_in_use"
+        assert set(refused["data"]["agents"]) == {
+            f"Swarm {run['swarm_id']}",
+            f"Factory {factory['id']}",
+        }
+        refused = await rpc_error(state, "permissions.delete_profile", name=ceiling)
+        assert set(refused["data"]["agents"]) == {
+            f"Swarm {run['swarm_id']}",
+            f"Swarm profile {profile['id']}",
+        }
+        # A missing registered file is unavailable; only unconfigured stores are absent.
+        factory_spec.path.rename(factory_spec.path.with_suffix(".removed"))
+        storage.update_permission_profiles({"Other": {}})
+        refused = await rpc_error(state, "permissions.delete_profile", name="Other")
+        assert (refused["code"], refused["data"]["locations"]) == (
+            "permission_profile_references_unavailable",
+            ["ext.factory.factory"],
+        )
 
 
 @pytest.mark.asyncio

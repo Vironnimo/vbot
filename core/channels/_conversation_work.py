@@ -114,6 +114,7 @@ class _QueuedInboundMedia:
     # Raw platform messages; conversion to content blocks happens in the per-conversation
     # worker via the transport so the adapter's update pipeline never blocks.
     messages: tuple[Any, ...]
+    message_ids: tuple[str | None, ...]
     # Some platforms deliver a user's comment and the media it introduces as separate
     # transport messages. Adapters may reunite that comment with the media before queueing.
     companion_text: str | None = None

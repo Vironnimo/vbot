@@ -1,30 +1,8 @@
 """What the page in the Desktop window may do through the bridge beyond a web page.
 
-Every server the Desktop connects to serves the page in its one window, and
-that page reaches the bridge (:mod:`desktop.bridge`). A server's page is
-trusted only as far as the user chose it:
-
-- The page of the installation's own server (the one the Desktop signs in to
-  with the local access token) is trusted like the Desktop itself: that server
-  already runs with the user's rights on this computer.
-- Any other server's page needs the user's native confirmation to add or
-  remove a remembered server (selecting one that is not remembered adds it),
-  to read the clipboard (asked once per server origin while the Desktop runs),
-  to write the clipboard, to start Voice listening and to install a wake word model.
-
-Connecting, pairing and forgetting a sign-in are no page's business at all:
-only the Desktop's own connection screen may call them
-(:attr:`desktop.connection.ConnectionController.screen_key`). The microphone
-is granted without a prompt only to the window's server, which the user added
-(on the connection screen, on the command line, or through one of these
-confirmations).
-
-The page's origin is the window's top-level origin, read at the call. It
-counts only while it is also the origin of the page that last finished loading
-(:meth:`PagePermissions.page_loaded`): a page that calls the bridge and at once
-navigates the window to the own server is not taken for that server's page,
-since the window's URL changes when the next document commits, well before it
-has loaded. A page in between is named "A page" and is asked for.
+The installation's own server may use native operations. Other selected
+servers need a native confirmation for protected operations. During a real
+bridge call the document credential binds this policy to the invoking page.
 """
 
 from __future__ import annotations
@@ -32,7 +10,9 @@ from __future__ import annotations
 import logging
 import threading
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from desktop._windows import url_origin
@@ -76,6 +56,90 @@ class PagePermissions:
         self._lock = threading.Lock()
         self._loaded_origin: str | None = None
         self._clipboard_origins: set[str] = set()
+        self._server_list_origins: set[str] = set()
+        self._sharing_status_origins: set[str] = set()
+        self._document: ContextVar[tuple[str | None, Callable[[], bool]] | None] = ContextVar(
+            "desktop_document", default=None
+        )
+
+    @contextmanager
+    def document(self, origin: str | None, current: Callable[[], bool]) -> Iterator[None]:
+        token = self._document.set((origin, current))
+        try:
+            yield
+        finally:
+            self._document.reset(token)
+
+    @property
+    def origin(self) -> str | None:
+        return self._page_origin()
+
+    def list_servers(self) -> None:
+        self._ask_once(
+            self._server_list_origins,
+            "Show remembered servers",
+            "{page} asks to read the addresses and sign-in status of the servers saved "
+            "on this Desktop. Allow this until vBot Desktop closes?",
+        )
+
+    def read_sharing_status(self, server_url: str) -> None:
+        if not server_url:
+            raise PageActionDeclined("No selected server", error_code="computer_server_changed")
+        self.computer_sharing(server_url, [])
+        self._ask_once(
+            self._sharing_status_origins,
+            "Show computer sharing settings",
+            "{page} asks to read this computer's name, installed native Extensions, "
+            "available capabilities and sharing status. Allow this until vBot Desktop closes?",
+        )
+
+    def may_publish_sharing(self, server_url: str) -> bool:
+        origin = url_origin(server_url)
+        with self._lock:
+            return origin is not None and origin in self._sharing_status_origins
+
+    def select_server(self, server: str) -> None:
+        self._ask(
+            "Connect to a server",
+            "{page} asks to switch vBot Desktop to {server}. Remember it and connect?",
+            server=server,
+        )
+
+    def configure_dictation(self) -> None:
+        self._ask(
+            "Change Desktop dictation",
+            "{page} asks to change the system-wide dictation "
+            "shortcut or its settings. Dictation sends recordings to this server and "
+            "pastes its transcript into the focused app. Allow this change?",
+        )
+
+    def configure_voice(self) -> None:
+        self._ask(
+            "Change Voice settings",
+            "{page} asks to change wake phrase listening "
+            "or how voice recordings and commands are handled. Allow this change?",
+        )
+
+    def configure_microphone(self) -> None:
+        self._ask(
+            "Change Desktop microphone",
+            "{page} asks to change the microphone or "
+            "echo settings used by Voice and dictation. Allow this change?",
+        )
+
+    def configure_hotkey(self) -> None:
+        self._ask(
+            "Change Live voice shortcut",
+            "{page} asks to change the global Live voice keyboard shortcut. Allow this change?",
+        )
+
+    def delete_model(self, model: Any) -> None:
+        self._ask(
+            "Delete a wake word model",
+            "{page} asks to delete the installed wake word "
+            "model named {server} from this computer. Delete it?",
+            server=_shown(model),
+        )
 
     def page_loaded(self) -> None:
         """Note the origin of the page that finished loading (pywebview ``loaded``)."""
@@ -88,8 +152,7 @@ class PagePermissions:
         self._ask(
             "Add a server",
             "{page} asks to add {server} to vBot Desktop's servers. vBot Desktop then "
-            "connects to it when you or a page select it, and lets its pages use the "
-            "microphone. Add it?",
+            "can connect to it when selected. Add it?",
             server=server,
         )
 
@@ -104,32 +167,34 @@ class PagePermissions:
 
     def read_clipboard(self) -> None:
         """Let the page read the clipboard; asked once per origin while the Desktop runs."""
-        origin = self._page_origin()
-        if origin is not None and self._own_server(origin):
-            return
-        with self._lock:
-            if origin is not None and origin in self._clipboard_origins:
-                return
-        self._ask(
+        self._ask_once(
+            self._clipboard_origins,
             "Paste from the clipboard",
             "{page} asks to read the clipboard to paste it. Allow its pages to read the "
             "clipboard until vBot Desktop closes?",
-            origin=origin,
         )
-        if origin is not None:
-            with self._lock:
-                self._clipboard_origins.add(origin)
+
+    def _ask_once(self, grants: set[str], title: str, message: str) -> None:
+        origin = self._page_origin()
+        if origin is None:
+            raise PageActionDeclined(f"{title}: no loaded server page")
+        with self._lock:
+            if origin in grants:
+                return
+        self._ask(title, message, origin=origin)
+        with self._lock:
+            grants.add(origin)
 
     def write_clipboard(self) -> None:
         """Approve replacement of the host clipboard for this loaded page."""
-        self._ask_loaded_page(
+        self._ask(
             "Copy to the clipboard",
             "{page} asks to replace the text on your clipboard. Allow this copy?",
         )
 
     def enable_voice(self) -> None:
         """Approve starting native Voice listening for this loaded page."""
-        self._ask_loaded_page(
+        self._ask(
             "Start Voice listening",
             "{page} asks to start vBot Desktop's microphone listening. "
             "Voice recordings go to the connected server. Allow listening?",
@@ -144,7 +209,9 @@ class PagePermissions:
             server=_shown(filename),
         )
 
-    def computer_sharing(self, server_url: str, capabilities: list[str]) -> None:
+    def computer_sharing(
+        self, server_url: str, capabilities: list[str], renamed_to: str | None = None
+    ) -> None:
         """Approve this server's native capabilities, never an intervening page's."""
         expected = parse_server_address(server_url.rstrip("/"), None).origin
         if self._page_origin() != expected:
@@ -159,6 +226,15 @@ class PagePermissions:
                 "Allow this?",
                 server=names,
                 origin=expected,
+                changed_code="computer_server_changed",
+            )
+        if renamed_to is not None:
+            self._ask(
+                "Rename this computer",
+                "{page} asks to name this computer “{server}” for all its servers. Allow this?",
+                server=_shown(renamed_to),
+                origin=expected,
+                changed_code="computer_server_changed",
             )
         if self._page_origin() != expected:
             raise PageActionDeclined(
@@ -175,33 +251,46 @@ class PagePermissions:
             "keep their existing sharing permissions. Changed Extensions stop their current "
             "work; new Extensions still need sharing permission. Reload them?",
             origin=origin,
+            changed_code="computer_server_changed",
         )
         self.computer_sharing(server_url, [])
 
     def _page_origin(self) -> str | None:
         """The calling page's origin; ``None`` when the window is between two pages."""
         origin = url_origin(self._page_url())
+        document = self._document.get()
+        if document is not None:
+            expected, current = document
+            return origin if origin == expected and current() else None
         with self._lock:
             return origin if origin == self._loaded_origin else None
 
-    def _ask_loaded_page(self, title: str, message: str) -> None:
-        origin = self._page_origin()
-        if origin is None:
-            raise PageActionDeclined(f"{title}: no loaded server page")
-        self._ask(title, message, origin=origin)
-        if self._page_origin() != origin:
-            raise PageActionDeclined(f"{title}: the server page changed")
-
-    def _ask(self, title: str, message: str, *, server: str = "", **known: Any) -> None:
-        origin = known["origin"] if "origin" in known else self._page_origin()
-        if origin is not None and self._own_server(origin):
+    def _ask(
+        self,
+        title: str,
+        message: str,
+        *,
+        server: str = "",
+        origin: str | None = None,
+        changed_code: str = PAGE_ACTION_DECLINED,
+    ) -> None:
+        current = self._page_origin()
+        if current is None or origin is not None and current != origin:
+            raise PageActionDeclined(f"{title}: no loaded server page", error_code=changed_code)
+        origin = current
+        if self._own_server(origin) and self._page_origin() == origin:
             return
-        page = f"The page of {origin}" if origin is not None else "A page"
+        page = f"The page of {origin}"
         try:
             allowed = self._confirm(title, message.format(page=page, server=server))
         except Exception:
             logger.warning("The Desktop could not ask before a page action", exc_info=True)
             allowed = False
+        if self._page_origin() != origin:
+            raise PageActionDeclined(
+                f"{title}: the server page changed",
+                error_code=changed_code,
+            )
         if not allowed:
             logger.info("A page action was declined (%s, origin=%s)", title, origin)
             raise PageActionDeclined(f"{title}: declined")

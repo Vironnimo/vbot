@@ -89,7 +89,7 @@ class RecordingSink:
         self._pushes: list[tuple[str, dict[str, Any]]] = []
         self.event_origins: dict[str, str] = {}
 
-    def publish_status(self, status: Any) -> None:
+    def publish_status(self, status: Any, *, origin: str | None) -> None:
         with self._lock:
             self._pushes.append(("status", dict(status)))
 
@@ -406,11 +406,12 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             microphone=microphone,
             server_url=server_url,
             sink=sink,
-            live_requests=lambda action, source: live.append((action, source)),
+            live_requests=lambda action, source, origin: live.append((action, source)),
             mock=mock,
             stack_available=stack_available or (lambda: True),
             cues=cues,  # type: ignore[arg-type]
             runtime=runtime,
+            own_server=lambda origin: origin == SERVER,
             clock=(lambda: now[0]) if frozen_clock else time.monotonic,
         )
         rig = Rig(
@@ -1053,17 +1054,26 @@ def test_a_routing_change_applies_without_reopening_the_microphone(
     assert len(rig.engines) == 1
 
 
+@pytest.mark.parametrize("phase", ["recording", "transcribing"])
 def test_a_server_switch_mid_command_rebuilds_the_listener_and_drops_the_old_command(
     voice_rig: Callable[..., Rig],
+    phase: str,
 ) -> None:
     gate = threading.Event()
     rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
     rig.wait_ready()
-    rig.say_command()
-    wait_until(rig.server.transcribing.is_set)
+    if phase == "recording":
+        rig.say_wake_phrase()
+    else:
+        rig.say_command()
+        wait_until(rig.server.transcribing.is_set)
 
     rig.voice.set_server_url("http://other.lan:9000/")
     gate.set()
+    assert rig.sink.event_origins["recording_ended"] == SERVER
+    assert rig.wait_state("off")["enabled"] is False
+    assert rig.voice.retry()["enabled"] is False
+    assert rig.voice.set_enabled(True)["enabled"]
     wait_until(lambda: len(rig.engines) == 2)
     status = rig.wait_state("listening")
 
@@ -1152,7 +1162,7 @@ def test_voice_waits_for_start_and_needs_a_server(voice_rig: Callable[..., Rig])
     assert (rig.sd.streams, rig.engines) == ([], [])
     rig.voice.start()
 
-    rig.wait_state("error", "no_server")
+    rig.wait_state("off")
     rig.voice.set_server_url(SERVER)
     rig.wait_state("listening")
 

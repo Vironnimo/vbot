@@ -21,6 +21,9 @@ async def sample_extension(
     from core.chat.model_resolution import resolve_agent_model_target
 
     agent = await runtime._extension_tool_agent_async(context)
+    # Sampling can originate from any Extension. Protect the complete request,
+    # including schema strings and stop sequences, before any Provider trace.
+    request = runtime.agent_secrets.masker.mask_value(request, include_keys=True)
     adapter: ProviderAdapter | None = None
 
     def prepare() -> tuple[str, str, str]:

@@ -34,12 +34,12 @@ Source: `desktop/access.py` (`ServerAccess`: credentials and every sign-in HTTP 
 - A launch connect, a lost sign-in reconnect and the connection screen's own connect show the offer. A connect a server's page starts (`selectServer`) never pairs: it returns `url: "about:blank"` with status `pairing_required`, and when that page has loaded (within `SIGN_IN_LANDING_SECONDS`, `_Offer.screen_due`) the controller shows the connection screen with the offer. An approved pairing then opens the Session and place the offered connect was for.
 - A background worker (`vbot-desktop-pairing`) polls every `poll_interval` (clamped to 1-60 s); a 429 waits its full `Retry-After`, bounded only by the pairing deadline; a poll without an answer (network error, a proxy's error page without the error envelope) is repeated until the code expires; another error envelope fails the pairing with that code. The deadline is `expires_in` from the start.
 - Approved: the token is stored before anything else (also when the wait was ended meanwhile), then the Desktop signs in without pairing again and the window opens the ticket. Denied or expired: the connection screen shows "Sign-in denied" / "Code expired".
-- `cancelPairing()`, a connect the user starts, a lost sign-in reconnect, and `close()` end a pending pairing; a late outcome never replaces the window's content.
+- `cancelPairing(screen)`, a connect the user starts, a lost sign-in reconnect, and `close()` end a pending pairing; a late outcome never replaces the window's content.
 
 ## Who may call the sign-in bridge methods
 
-- `connect`, `startPairing` and `forgetSignIn` take the connection screen's key as their last argument (`ConnectionController.screen_key`: `secrets.token_urlsafe(32)` per process, compared with `compare_digest`). Only the connection screen's HTML carries it, so a server's page that calls them is refused with `connection_screen_only`: no page can start a pairing, choose its name or drop a sign-in.
-- `selectServer`, `addServer` and `removeServer` stay open to the WebUI: `selectServer` never pairs (see above), and the bridge's page policy asks the user before another server's page adds, selects an unknown or removes a server (`desktop/bridge.md` -> Page policy). `cancelPairing()` stays open: it only ends a waiting pairing.
+- `connect`, `startPairing`, `cancelPairing` and `forgetSignIn` take the connection screen's key as their last argument (`ConnectionController.screen_key`: `secrets.token_urlsafe(32)` per process, compared with `compare_digest`). Only the connection screen's HTML carries it, so a server's page that calls them is refused with `connection_screen_only`: no page can start a pairing, choose its name or drop a sign-in.
+- `selectServer`, `addServer` and `removeServer` stay open to the WebUI: `selectServer` never pairs (see above), and the bridge's page policy asks the user before another server's page adds, selects or removes a server (`desktop/bridge.md` -> Page policy). `cancelPairing(screen)` requires the Connection screen key.
 
 ## Native requests and lost sign-ins
 

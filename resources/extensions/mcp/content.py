@@ -21,7 +21,7 @@ from typing import Any
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.extensions.operations import ExtensionHost
-from core.tools.tools import ToolContext, read_media_artifact, run_tool_worker
+from core.tools.tools import ToolContext, ToolRegistry, read_media_artifact, run_tool_worker
 from core.utils.ids import is_safe_id, new_id
 
 from ._views import Part, body_parts, compact, error_text, join_parts, payload_view, view_size
@@ -72,11 +72,25 @@ class _PointerError(ValueError):
 
 
 class ContentStore:
-    def __init__(self, host: ExtensionHost) -> None:
+    def __init__(self, host: ExtensionHost, registry: ToolRegistry | None = None) -> None:
         self.host = host
+        self.registry = registry
+
+    async def protect(self, payload: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Protect the complete text before pagination can split a credential."""
+        safe = context.mask_prepared_secrets(payload, include_keys=True)
+        registry = self.registry
+        if registry is None:
+            return safe
+        if not context.result_payloads_available and context.session_generation_id is None:
+            return registry.secret_masker.mask_unbound(safe)
+        local_masker = await registry.capture_output_secrets(context, safe)
+        return registry.secret_masker.mask_value(
+            local_masker.mask_value(safe, include_keys=True), include_keys=True
+        )
 
     async def preserve(
-        self, payload: dict[str, Any]
+        self, payload: dict[str, Any], *, context: ToolContext | None = None
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         artifacts: list[dict[str, Any]] = []
         result = copy.deepcopy(payload)
@@ -90,6 +104,8 @@ class ContentStore:
             content = message.get("content", [])
             for block in content if isinstance(content, list) else [content]:
                 await self._visit(block, artifacts)
+        if context is not None:
+            result = await self.protect(result, context)
         return result, artifacts
 
     async def _visit(
@@ -149,7 +165,7 @@ class ContentStore:
         source: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Project a payload for the Model, a program, or an outside-Session caller."""
-        preserved, artifacts = await self.preserve(payload)
+        preserved, artifacts = await self.preserve(payload, context=context)
         if context.programmatic:
             return preserved, artifacts
         if not context.result_payloads_available:
@@ -177,7 +193,7 @@ class ContentStore:
         source: str | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Return a failed call's own report; a long report's middle is left to ``read``."""
-        preserved, artifacts = await self.preserve(payload)
+        preserved, artifacts = await self.preserve(payload, context=context)
         text = error_text(payload_view(preserved))
         shown = ERROR_HEAD_CHARACTERS + ERROR_TAIL_CHARACTERS
         if (

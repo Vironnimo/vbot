@@ -205,6 +205,24 @@ def test_native_reload_ignores_dependency_and_generated_cache_files(tmp_path: Pa
     )
 
 
+@pytest.mark.parametrize("module", ["ignored_package", "bytecode"])
+def test_native_package_imports_require_fingerprinted_files(tmp_path: Path, module: str) -> None:
+    import py_compile
+
+    declaration = "def register(api): pass"
+    if module == "ignored_package":
+        package = _extension(tmp_path, "example", "from .venv.helper import VALUE\n" + declaration)
+        (package / "venv").mkdir()
+        (package / "venv" / "helper.py").write_text("VALUE = 1")
+    else:
+        package = _extension(tmp_path, "example", "from .helper import VALUE\n" + declaration)
+        source = package / "helper.py"
+        source.write_text("VALUE = 1")
+        py_compile.compile(str(source), str(package / "helper.pyc"), doraise=True)
+        source.unlink()
+    assert load_desktop_extensions([tmp_path]).records[0]["status"] == "failed"
+
+
 @pytest.mark.parametrize(
     "failure",
     ["entries", "bytes", "depth", "scan", "read", "link", "directory_swap", "registration_change"],
@@ -289,9 +307,14 @@ def test_only_shipped_native_packages_keep_legacy_capability_ids(tmp_path: Path)
     assert "extension:terminal:terminal" in local.capabilities
 
 
-@pytest.mark.parametrize("entry", ["../outside.py", "/outside.py", "C:/outside.py", "native.js"])
+@pytest.mark.parametrize(
+    "entry", ["../outside.py", "/outside.py", "C:/outside.py", "native.js", "venv/entry.py"]
+)
 def test_native_manifest_entry_cannot_escape_its_package(tmp_path: Path, entry: str) -> None:
-    _extension(tmp_path, "invalid", "raise AssertionError('entry was imported')", entry=entry)
+    package = _extension(tmp_path, "invalid", "def register(api): pass", entry=entry)
+    if entry == "venv/entry.py":
+        (package / "venv").mkdir()
+        (package / "desktop.py").rename(package / entry)
     catalog = load_desktop_extensions([tmp_path])
     assert catalog.records[0]["status"] == "failed"
     assert not catalog.capabilities

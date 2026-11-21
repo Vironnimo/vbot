@@ -264,7 +264,8 @@ class PermissionGrant:
             candidate.resolved or candidate.target, root_access.resolved or root_access.target
         ):
             return False
-        return self.boundary.check_path(path, "write", base=base, deny_only=True) is None
+        refusal = self.boundary.check_path(path, "write", base=base)
+        return refusal is None or refusal.reason == "not_permitted"
 
     def listing_read_allowed(
         self, path: str | Path, root: str | Path, *, base: str | Path | None = None
@@ -286,7 +287,8 @@ class PermissionGrant:
             candidate.resolved or candidate.target, root_access.resolved or root_access.target
         ):
             return False
-        return self.boundary.check_path(path, "read", base=base, deny_only=True) is None
+        refusal = self.boundary.check_path(path, "read", base=base)
+        return refusal is None or refusal.reason == "not_permitted"
 
     def search_read_allowed(
         self, path: str | Path, root: str | Path, *, base: str | Path | None = None
@@ -313,7 +315,8 @@ class PermissionGrant:
             )
         ):
             return False
-        return self.boundary.check_path(path, "read", base=base, deny_only=True) is None
+        refusal = self.boundary.check_path(path, "read", base=base)
+        return refusal is None or refusal.reason == "not_permitted"
 
     def check_url(self, url: str, *, by_program: bool = False) -> PermissionRefusal | None:
         refusal = self.boundary.check_url(url, by_program=by_program)

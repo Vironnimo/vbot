@@ -26,14 +26,14 @@ async def test_only_an_operator_removes_an_offline_computer(tmp_path: Path) -> N
     connection = await registry.connect(hello(), actor="host")
     unsubscribe = _register_computer_change_bridge(state)
 
-    refused = await rpc_error(state, "computers.remove", id="pc_laptop")
+    refused = await rpc_error(state, "computers.remove", id=connection.info.id)
     assert refused["code"] == "access_denied"
     with bound_principal(HOST):
-        online = await rpc_error(state, "computers.remove", id="pc_laptop")
+        online = await rpc_error(state, "computers.remove", id=connection.info.id)
         assert online["code"] == "computer_online"
         registry.disconnect(connection)
-        assert await rpc_result(state, "computers.remove", id="pc_laptop") == {
-            "removed": "pc_laptop"
+        assert await rpc_result(state, "computers.remove", id=connection.info.id) == {
+            "removed": connection.info.id
         }
     listed = await rpc_result(state, "computers.list")
     assert [item["id"] for item in listed["computers"]] == ["server"]
@@ -71,7 +71,7 @@ async def test_cancelled_remove_publishes_the_completed_removal(
 
     async def remove() -> None:
         with bound_principal(HOST):
-            await rpc_result(state, "computers.remove", id="pc_laptop")
+            await rpc_result(state, "computers.remove", id=connection.info.id)
 
     task = asyncio.create_task(remove())
     try:

@@ -32,7 +32,8 @@ from .target import (
 )
 
 if TYPE_CHECKING:
-    from core.computers import ComputerInfo, ComputerRegistry
+    from core.computers import ComputerInfo
+    from core.computers.computers import ExtensionComputers
 
 _LOGGER = logging.getLogger("vbot.extensions.computer_use")
 
@@ -45,7 +46,7 @@ class RemoteDesktopTarget:
     One lock preserves their order with the worker's subsequent requests.
     """
 
-    def __init__(self, computers: ComputerRegistry, computer: ComputerInfo) -> None:
+    def __init__(self, computers: ExtensionComputers, computer: ComputerInfo) -> None:
         self.computers = computers
         self.computer_id = computer.id
         self.instance_id = computer.instance_id

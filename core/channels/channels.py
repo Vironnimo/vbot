@@ -756,6 +756,7 @@ class ChannelService:
             conversation_pointers=self._state,
             pending_replies=self._state,
             observation_inbox=self._observations,
+            attachment_store=self._attachment_store,
             previous_observations=tuple(self._observation_tasks),
             run_button_binding_registry=self._state if config.platform == "telegram" else None,
             access_registry=self._state,

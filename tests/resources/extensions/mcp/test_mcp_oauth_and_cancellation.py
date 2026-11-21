@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -20,6 +21,7 @@ from mcp.client.auth import OAuthFlowError
 from core.extensions.oauth_redirects import OAuthRedirects
 from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import client as mcp_client
+from resources.extensions.mcp._events import STDERR_CHUNK_SIZE
 from resources.extensions.mcp._oauth import (
     PASTE_REDIRECT_URI,
     ConnectionOAuth,
@@ -749,6 +751,41 @@ def test_event_redaction_handles_json_escaping_without_corrupting_events(host, s
     payload = runner.events()["events"][0]["payload"]
     assert payload["[redacted]"] == ["[redacted]"]
     assert payload["payload"]["text"] == "\n[redacted]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoded", [True, False])
+async def test_stderr_redacts_keys_and_encoded_credentials_across_reads(host, tmp_path, encoded):
+    secret = "test-only/quoted:credential"
+    host.set_credential("TEST_CREDENTIAL", secret)
+    runner = ConnectionRunner(
+        validate_connection(
+            {
+                "id": "example",
+                "transport": "stdio",
+                "command": "unused",
+                "credential_environment": {"TOKEN": "TEST_CREDENTIAL"},
+            }
+        ),
+        host,
+        InputRequests(),
+        lambda *args: None,
+    )
+    value = (
+        base64.b64encode(secret.encode()).decode()
+        if encoded
+        else "ghp_" + "0123456789abcdefghijklmnopqrstuvwxyz"
+    )
+    path = tmp_path / "stderr.txt"
+    path.write_bytes(
+        (" " * (STDERR_CHUNK_SIZE - 6) + "\n" + value + "\n" + " " * STDERR_CHUNK_SIZE).encode()
+    )
+    with path.open("rb") as stream:
+        runner._events.drain_stderr(os.dup(stream.fileno()), asyncio.get_running_loop())
+    await asyncio.sleep(0)
+    chunks = [event["payload"]["text"] for event in runner.events()["events"]]
+    assert "".join(chunks).strip() == "[redacted]"
+    assert runner._events.stderr_tail() == ["[redacted]"]
 
 
 @pytest.mark.asyncio

@@ -961,7 +961,12 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
 
     monkeypatch.setattr(desktop_main, "_real_wakeword_available", unavailable_after_window_created)
 
-    _launch(tmp_path, webview=fake_webview, settings={"wakeword": {"enabled": True}})
+    _launch(
+        tmp_path,
+        ["--host", "pi.lan", "--port", "9000"],
+        webview=fake_webview,
+        settings={"wakeword": {"enabled_servers": {"http://pi.lan:9000": True}}},
+    )
 
     assert probed.is_set()
     assert _bridge(fake_webview).getVoiceStatus()["mode"] == "unavailable"
@@ -1082,21 +1087,29 @@ def test_launch_makes_every_known_server_a_secure_origin_before_webview_starts(
     assert launch_seams.secure_origin_targets == [[("a.lan", 8420), ("pi.lan", 9000)]]
     assert launch_seams.browser_origins == [("http://a.lan:8420", "http://pi.lan:9000")]
     assert launch_seams.events[:2] == ["apply_browser_arguments", "webview.start"]
-    assert _bridge(fake_webview).getDesktopCapabilities()["secureOrigins"] == [
-        "http://a.lan:8420",
-        "http://pi.lan:9000",
-    ]
+    fake_webview.window.current_url = "http://pi.lan:9000/"
+    fake_webview.window.events.loaded.emit()
+    assert _bridge(fake_webview).getDesktopCapabilities()["secureOrigins"] == ["http://pi.lan:9000"]
 
 
 @pytest.mark.parametrize(
     ("argv", "origin"),
-    [(["--host", "pi.lan", "--port", "9000"], "http://pi.lan:9000"), ([], None)],
-    ids=["connected", "connection-screen"],
+    [
+        (["--host", "pi.lan", "--port", "9000"], None),
+        (["--host", "127.0.0.1", "--port", "9000"], "http://127.0.0.1:9000"),
+        ([], None),
+    ],
+    ids=["remote", "installation-server", "connection-screen"],
 )
-def test_microphone_permission_follows_the_connected_server(
+def test_only_the_connected_installation_server_gets_automatic_microphone_permission(
     tmp_path: Path, launch_seams: LaunchSeams, argv: list[str], origin: str | None
 ) -> None:
-    _launch(tmp_path, argv)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "local-access-9000.token").write_text(
+        json.dumps({"token": "vbl_" + "a" * 43, "loopback": ["127.0.0.1"]}), encoding="ascii"
+    )
+    _launch(tmp_path, [*argv, "--server-data-dir", str(tmp_path)])
 
     assert launch_seams.microphone_origin is not None
     assert launch_seams.microphone_origin() == origin
@@ -1137,13 +1150,13 @@ class RecordingDispatcher:
     def attach_window(self, window: Any) -> None:
         self.window = window
 
-    def request_live(self, action: str, source: str) -> None:
+    def request_live(self, action: str, source: str, origin: str | None) -> None:
         self.requests.append((action, source))
 
-    def request_open_session(self, agent: str, session: str) -> None:
+    def request_open_session(self, agent: str, session: str, origin: str | None) -> None:
         self.opened_sessions.append((agent, session))
 
-    def publish_status(self, _status: Any) -> None:
+    def publish_status(self, _status: Any, *, origin: str | None) -> None:
         pass
 
     def publish_event(self, _event: Any, *, origin: str | None = None) -> None:

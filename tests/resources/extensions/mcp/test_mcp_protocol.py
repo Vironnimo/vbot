@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -15,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import override
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import url2pathname
 
 import httpcore2
@@ -619,6 +620,8 @@ async def test_a_failed_connection_reports_its_cause(host, tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch):
     responses = []
+    credential = "test-question-credential"
+    host.set_credential("TEST_CREDENTIAL", credential)
 
     async def call(server_context, params):
         if params.input_responses:
@@ -641,7 +644,7 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
                     "input": {
                         "method": "elicitation/create",
                         "params": {
-                            "message": "test-owned-question",
+                            "message": f"test-owned-question {credential}",
                             "requestedSchema": {
                                 "type": "object",
                                 "properties": {"name": {"type": "string"}},
@@ -659,7 +662,14 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
         )
 
     server = Server("callbacks", on_call_tool=call, on_list_tools=list_tools)
-    runner = runner_for(host, server, monkeypatch, sampling="allow", roots="workspace")
+    runner = runner_for(
+        host,
+        server,
+        monkeypatch,
+        sampling="allow",
+        roots="workspace",
+        credential_environment={"TOKEN": "TEST_CREDENTIAL"},
+    )
     task = asyncio.create_task(runner.invoke("tools/call", {"name": "callbacks"}, context(host)))
     try:
         async with asyncio.timeout(10):
@@ -668,6 +678,7 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
                     await task
                 await asyncio.sleep(0)
             pending = runner.inputs.list()[0]
+            assert pending["payload"]["message"] == "test-owned-question [redacted]"
             runner.inputs.respond(
                 pending["id"], {"action": "accept", "content": {"name": "user-sentinel"}}
             )
@@ -698,6 +709,8 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
     host, monkeypatch, policy, samples, answer, outcome, sent_count
 ):
     sent = []
+    credential = "test-sampling-credential"
+    host.set_credential("TEST_CREDENTIAL", credential)
 
     async def sample(invocation, request):
         sent.append(request)
@@ -706,7 +719,12 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
     request = {
         "method": "sampling/createMessage",
         "params": {
-            "messages": [{"role": "user", "content": {"type": "text", "text": "prompt-sentinel"}}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": {"type": "text", "text": f"prompt-sentinel {credential}"},
+                }
+            ],
             "maxTokens": 100000,
         },
     }
@@ -734,7 +752,13 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
 
     server = Server("callbacks", on_call_tool=call, on_list_tools=list_tools)
     config = {} if policy is None else {"sampling": policy}
-    runner = runner_for(replace(host, sample=sample), server, monkeypatch, **config)
+    runner = runner_for(
+        replace(host, sample=sample),
+        server,
+        monkeypatch,
+        credential_environment={"TOKEN": "TEST_CREDENTIAL"},
+        **config,
+    )
     task = asyncio.create_task(runner.invoke("tools/call", {"name": "callbacks"}, context(host)))
     try:
         async with asyncio.timeout(10):
@@ -746,6 +770,7 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
                 assert pending["session_id"] == "session"
                 # The user sees the prompt and the capped reply size before deciding.
                 assert "prompt-sentinel" in pending["payload"]["message"]
+                assert credential not in pending["payload"]["message"]
                 assert "up to 4096 tokens" in pending["payload"]["message"]
                 runner.inputs.respond(pending["id"], {"action": answer})
             try:
@@ -756,6 +781,7 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
         assert outcome in observed
         # The reply is capped whatever the server asks for.
         assert [request["max_tokens"] for request in sent] == [4096] * sent_count
+        assert credential not in repr(sent)
         events = runner.events()["events"]
         assert "prompt-sentinel" not in json.dumps(events)
         if policy is not None:
@@ -924,6 +950,10 @@ async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatc
             await runner.invoke("tools/call", {"name": "levels"}, context(host))
             while len(_notified(runner)) < 3:
                 await asyncio.sleep(0)
+            own = await runner.invoke("events", {}, context(host))
+            other = await runner.invoke("events", {}, context(host, session="other"))
+            assert [event["kind"] for event in own["events"]].count("progress") == 2
+            assert not any(event["kind"] in {"progress", "log"} for event in other["events"])
     finally:
         await runner.close()
 
@@ -962,7 +992,13 @@ async def test_inspector_redacts_substituted_argument_values_in_live_and_retaine
                 warnings.simplefilter("ignore", MCPDeprecationWarning)
                 await server_context.session.send_log_message(
                     "info",
-                    {phrase.removeprefix("prefix:"): [{"text": f"prefix:{short}"}, credential]},
+                    {
+                        quote(phrase.removeprefix("prefix:"), safe=""): [
+                            {"text": f"prefix:{base64.b64encode(short.encode()).decode()}"},
+                            credential,
+                            "ghp_" + "0123456789abcdefghijklmnopqrstuvwxyz",
+                        ]
+                    },
                 )
         else:
             calls.append(params.arguments)
@@ -1032,8 +1068,11 @@ async def test_inspector_redacts_substituted_argument_values_in_live_and_retaine
         [event] = [event for event in live["events"] if event["kind"] == "log"]
         assert event in retained["events"]
         assert event["payload"]["data"] == {
-            "[redacted]": [{"text": "prefix:[redacted]"}, "[redacted]"]
+            "[redacted]": [{"text": "prefix:[redacted]"}, "[redacted]", "[redacted]"]
         }
+        # A notification without a protocol-bound caller stays in operator diagnostics.
+        session_events = await runner.invoke("events", {"after": cursor}, context(host))
+        assert event not in session_events["events"]
         for events in (live, retained):
             assert all(value not in repr(events) for value in (long_value, short_value, credential))
     finally:
@@ -1378,6 +1417,11 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(
             "prefixItems": [{"type": "string"}]
         }
         assert _notified(runner) == ["catalog_changed"] * 3
+        shared = await runner.invoke("events", {}, context(host, session="other"))
+        catalog_changes = [
+            event["payload"] for event in shared["events"] if event["kind"] == "catalog_changed"
+        ]
+        assert catalog_changes == [{}] * 3
         # The left-out Tool is reported once, when it starts being left out.
         events = runner.events()["events"]
         skipped = [event["payload"] for event in events if event["kind"] == "tool_skipped"]
@@ -1496,6 +1540,11 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             await runner.invoke("resources/subscribe", {"uri": "test://other"})
         assert stream.connections == 3
         assert _notified(runner) == ["resource_changed"] * 2
+        shared = await runner.invoke("events", {}, context(host, session="other"))
+        resource_changes = [
+            event["payload"] for event in shared["events"] if event["kind"] == "resource_changed"
+        ]
+        assert resource_changes == [{"uri": "test://watched"}] * 2
         assert requests == [
             ("subscribe", "test://watched"),
             *([] if legacy else [("unsubscribe", "test://watched")]),

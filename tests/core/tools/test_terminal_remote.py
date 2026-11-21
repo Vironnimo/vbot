@@ -127,10 +127,13 @@ async def remote(
         await link.close()
 
 
-def _context(path: Path) -> Any:
+def _context(path: Path, link: Link) -> Any:
     return replace(
         make_context(path),
-        execution={"computer_id": "pc_laptop", "allowed_computer_ids": ["pc_laptop"]},
+        execution={
+            "computer_id": link.connection.info.id,
+            "allowed_computer_ids": [link.connection.info.id],
+        },
     )
 
 
@@ -143,7 +146,7 @@ async def test_remote_terminal_keeps_its_computer_and_enforces_session_grants(
     launch: str,
 ) -> None:
     manager, link, factory = remote
-    context = _context(tmp_path)
+    context = _context(tmp_path, link)
     for invalid in (
         {"command": "editor", "key": "space"},
         {"command": "editor", "key": 5},
@@ -173,21 +176,27 @@ async def test_remote_terminal_keeps_its_computer_and_enforces_session_grants(
     terminal_id = started["data"]["terminal_id"]
     assert factory.calls[0][0] == [command]
     assert factory.calls[0][1] == directory
-    assert started["data"]["computer_id"] == "pc_laptop"
+    assert started["data"]["computer_id"] == link.connection.info.id
     duplicate = await call(manager, context, {"action": "start", "terminal_id": terminal_id})
     assert duplicate["error"]["code"] == "invalid_arguments"
     assert terminal_id in duplicate["error"]["message"]
     assert len(factory.calls) == 1
     listed = await call(manager, context, {"action": "list"})
-    assert listed["data"]["terminals"][0]["computer_id"] == "pc_laptop"
-    assert listed["data"]["computers"][0]["computer_id"] == "pc_laptop"
+    assert listed["data"]["terminals"][0]["computer_id"] == link.connection.info.id
+    assert listed["data"]["computers"][0]["computer_id"] == link.connection.info.id
     assert manager.list_for_operator()[0]["computer_name"] == "Laptop"
     context = replace(
         context,
-        execution={"computer_id": "server", "allowed_computer_ids": ["server", "pc_laptop"]},
+        execution={
+            "computer_id": "server",
+            "allowed_computer_ids": ["server", link.connection.info.id],
+        },
     )
     listed = await call(manager, context, {"action": "list"})
-    assert {item["computer_id"] for item in listed["data"]["computers"]} == {"server", "pc_laptop"}
+    assert {item["computer_id"] for item in listed["data"]["computers"]} == {
+        "server",
+        link.connection.info.id,
+    }
     sent = await call(
         manager, context, {"action": "input", "terminal_id": terminal_id, "data": "hello"}
     )
@@ -209,7 +218,7 @@ async def test_remote_terminal_replays_disconnected_output_and_never_restarts_un
     tmp_path: Path,
 ) -> None:
     manager, link, factory = remote
-    context = _context(tmp_path)
+    context = _context(tmp_path, link)
     link.drop_start_reply = True
     started = await call(manager, context, {"action": "start", "command": "editor"})
     assert started["ok"], started
@@ -240,8 +249,8 @@ async def test_remote_terminal_refuses_server_permission_rules_before_start(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     tmp_path: Path,
 ) -> None:
-    manager, _link, factory = remote
-    context = _context(tmp_path)
+    manager, link, factory = remote
+    context = _context(tmp_path, link)
     context = replace(context, permissions=restricted(tmp_path))
     result = await call(manager, context, {"action": "start", "command": "editor"})
     assert result["error"]["code"] == "permission_denied", result
@@ -265,7 +274,7 @@ async def test_pending_native_spawn_is_owned_during_reconnect_and_close(
 
     monkeypatch.setattr(link.native, "_start", delayed_start)
     launching = asyncio.create_task(
-        call(manager, _context(tmp_path), {"action": "start", "command": "editor"})
+        call(manager, _context(tmp_path, link), {"action": "start", "command": "editor"})
     )
     assert await asyncio.to_thread(entered.wait, 2)
     link.registry.disconnect(link.connection)
@@ -303,7 +312,7 @@ async def test_remote_io_recovers_safe_reads_and_does_not_replay_unconfirmed_inp
 ) -> None:
     manager, link, factory = remote
     listeners = len(link.registry._listeners)
-    context = _context(tmp_path)
+    context = _context(tmp_path, link)
     started = await call(manager, context, {"action": "start", "command": "editor"})
     terminal_id = started["data"]["terminal_id"]
     link.fail_next["read"] = transient
@@ -331,7 +340,7 @@ async def test_remote_io_recovers_safe_reads_and_does_not_replay_unconfirmed_inp
     assert link.native._processes  # the failed release did not abort the server's exit state
     if remove:
         link.registry.disconnect(link.connection)
-        await link.registry.forget("pc_laptop")
+        await link.registry.forget(link.connection.info.id)
     else:
         await link.connect()
         await eventually(lambda: not link.native._processes)
@@ -344,7 +353,7 @@ async def test_replacement_desktop_cannot_receive_an_old_terminal_input(
     tmp_path: Path,
 ) -> None:
     manager, link, factory = remote
-    context = _context(tmp_path)
+    context = _context(tmp_path, link)
     started = await call(manager, context, {"action": "start", "command": "editor"})
     terminal_id = started["data"]["terminal_id"]
     link.registry.disconnect(link.connection)
@@ -373,7 +382,7 @@ async def test_terminal_ends_when_its_desktop_stops_sharing_terminals(
     unshared_by: str,
 ) -> None:
     manager, link, factory = remote
-    context = _context(tmp_path)
+    context = _context(tmp_path, link)
     started = await call(manager, context, {"action": "start", "command": "editor"})
     assert started["ok"], started
     # The fake PTY keeps running: only the answer may end the Terminal Session.
@@ -416,7 +425,10 @@ async def test_a_session_that_loses_the_computer_is_told_once_and_sees_no_more_o
 ) -> None:
     _, link, factory = remote
     sink = _Delivered()
-    granted = {"computer_id": "pc_laptop", "allowed_computer_ids": ["pc_laptop"]}
+    granted = {
+        "computer_id": link.connection.info.id,
+        "allowed_computer_ids": [link.connection.info.id],
+    }
     execution = dict(granted)
     manager = TerminalManager(
         sink,
@@ -428,7 +440,9 @@ async def test_a_session_that_loses_the_computer_is_told_once_and_sees_no_more_o
         session_execution=lambda _address: execution,
     )
     try:
-        started = await call(manager, _context(tmp_path), {"action": "start", "command": "editor"})
+        started = await call(
+            manager, _context(tmp_path, link), {"action": "start", "command": "editor"}
+        )
         assert started["ok"], started
         adapter = factory.adapters[0]
 
@@ -443,7 +457,7 @@ async def test_a_session_that_loses_the_computer_is_told_once_and_sees_no_more_o
         await next_attention("first screen\r\n")
         await eventually(lambda: len(sink.bodies) >= 1)
         assert not notices()
-        execution.update(computer_id="pc_laptop", allowed_computer_ids=["server"])
+        execution.update(computer_id=link.connection.info.id, allowed_computer_ids=["server"])
         await next_attention("secret one\r\n")
         await eventually(lambda: len(notices()) == 1)
         await next_attention("secret two\r\n")
@@ -492,13 +506,13 @@ async def test_a_refused_native_spawn_is_a_definite_start_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager, _link, _factory = remote
+    manager, link, _factory = remote
 
     def refused(*_args: Any, **_kwargs: Any) -> Any:
         raise PermissionError("Access is denied")
 
     monkeypatch.setattr(terminal_execution, "spawn_terminal_adapter", refused)
-    result = await call(manager, _context(tmp_path), {"action": "start", "command": "editor"})
+    result = await call(manager, _context(tmp_path, link), {"action": "start", "command": "editor"})
     assert result["error"]["code"] == "terminal_start_failed", result
     assert manager.list_for_operator() == []
 

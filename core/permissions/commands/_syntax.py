@@ -189,3 +189,4 @@ class Script:
     error: str | None = None
     assignments: list[Assignment] = field(default_factory=list)
     functions: frozenset[str] = frozenset()
+    literal_cli_syntax: bool = False

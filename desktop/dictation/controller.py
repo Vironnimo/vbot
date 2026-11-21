@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from desktop import settings as desktop_settings
+from desktop._windows import url_origin
 from desktop.dictation.insertion import (
     INSERT_CANCELLED,
     INSERT_CLIPBOARD,
@@ -73,6 +74,7 @@ from desktop.speech.cues import (
     LISTEN_LOUD_SECONDS,
     CuePlayer,
 )
+from desktop.speech.destination import SpeechDestination
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import (
     DEFAULT_WAV_UPLOAD_BUDGET_BYTES,
@@ -206,6 +208,7 @@ class DictationController:
         inserter: TextInserter | None = None,
         client_factory: SpeechClientFactory | None = None,
         authorization: ServerAuthorization | None = None,
+        own_server: Callable[[str], bool] = lambda _url: False,
         hotkey_supported: bool | None = None,
         hotkey_api_factory: Callable[[], HotkeyApi] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -224,8 +227,10 @@ class DictationController:
         self._clock = clock
         self._piece_target_seconds = piece_target_seconds
         self._piece_search_seconds = piece_search_seconds
+        self._destination = SpeechDestination(server_url, own_server)
         self._hotkey = HotkeyController(
             preference=DICTATION_HOTKEY,
+            destination=self._destination,
             settings_path=settings_path,
             handlers=HotkeyHandlers(
                 on_press=self._on_press,
@@ -238,6 +243,7 @@ class DictationController:
         self._lock = threading.Lock()
         self._mutation_lock = threading.Lock()
         self._server_url = server_url.strip()
+        self._switching = False
         self._running = False
         self._stopped = False
         self._take: _Take | None = None
@@ -273,8 +279,19 @@ class DictationController:
 
     def set_server_url(self, server_url: str) -> None:
         """Follow the window's server; the next take transcribes there."""
-        with self._lock:
-            self._server_url = server_url.strip()
+        with self._mutation_lock:
+            with self._lock:
+                if url_origin(self._server_url) == url_origin(server_url):
+                    return
+                self._switching = True
+                if self._take is not None:
+                    self._take.cancel()
+            try:
+                self._hotkey.set_destination(url_origin(server_url))
+            finally:
+                with self._lock:
+                    self._server_url = server_url.strip()
+                    self._switching = False
 
     def is_busy(self) -> bool:
         """Whether a take records or transcribes right now."""
@@ -306,6 +323,10 @@ class DictationController:
             )
             if hotkey_status["error_code"] == HOTKEY_ERROR_INVALID:
                 return self._compose(hotkey_status)
+            if hotkey_changes.get("enabled") is False:
+                with self._lock:
+                    if self._take is not None:
+                        self._take.cancel()
             if _MODE_KEY in changes:
                 mode = changes[_MODE_KEY]
                 desktop_settings.update_section(
@@ -316,8 +337,11 @@ class DictationController:
                 logger.info("Dictation mode set to %s", mode)
         return self._compose(hotkey_status)
 
-    def _read_mode(self) -> str:
-        section = desktop_settings.read_section(desktop_settings.DICTATION_KEY, self._settings_path)
+    def _settings(self) -> dict[str, Any]:
+        return desktop_settings.read_section(desktop_settings.DICTATION_KEY, self._settings_path)
+
+    @staticmethod
+    def _mode(section: Mapping[str, Any]) -> str:
         mode = section.get(_MODE_KEY)
         return mode if isinstance(mode, str) and mode in MODES else MODE_TOGGLE
 
@@ -329,7 +353,7 @@ class DictationController:
             last_failure = dict(self._last_failure) if self._last_failure else None
         return {
             **hotkey_status,
-            "mode": self._read_mode(),
+            "mode": self._mode(self._settings()),
             "error_code": error_code or hotkey_status["error_code"],
             "state": state,
             "last_failure": last_failure,
@@ -339,7 +363,7 @@ class DictationController:
 
     def _on_press(self) -> None:
         with self._lock:
-            if not self._running:
+            if not self._running or self._switching:
                 return
             take = self._take
             if take is None:
@@ -362,7 +386,11 @@ class DictationController:
             self._play(CUE_CANCEL)
 
     def _begin_locked(self) -> None:
-        mode = self._read_mode()
+        section = self._settings()
+        hotkey = section.get("hotkey")
+        if not isinstance(hotkey, dict) or not self._destination.enabled(hotkey):
+            return
+        mode = self._mode(section)
         take = _Take(mode, self._inserter().foreground_window(), self._server_url)
         take.thread = threading.Thread(
             target=self._run_take, args=(take,), name="vbot-dictation", daemon=True

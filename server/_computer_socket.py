@@ -26,7 +26,9 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
         if not isinstance(hello, dict):
             raise ComputerError("computer_protocol", "Computer registration must be an object.")
         connection = await computers.connect(hello, actor=principal.actor)
-        link = asyncio.create_task(_exchange(websocket, computers, connection))
+        link = asyncio.create_task(
+            _exchange(websocket, computers, connection, hello["computer_id"])
+        )
         ended = asyncio.create_task(connection.ended.wait())
         try:
             done, _ = await asyncio.wait((link, ended), return_when=asyncio.FIRST_COMPLETED)
@@ -52,13 +54,17 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
 
 
 async def _exchange(
-    websocket: Any, computers: ComputerRegistry, connection: ComputerConnection
+    websocket: Any,
+    computers: ComputerRegistry,
+    connection: ComputerConnection,
+    registration_id: str,
 ) -> None:
     await websocket.send_json(
         {
             "type": "welcome",
             "protocol": 1,
-            "computer_id": connection.info.id,
+            "computer_id": registration_id,
+            "registered_id": connection.info.id,
             "instance_id": connection.info.instance_id,
             "server_instance": computers.server_instance,
             "capability_updates": 1,

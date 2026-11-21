@@ -573,6 +573,12 @@ async def test_cached_owner_host_stops_admitting_service_calls(
     services["sample"].reset_mock()
     # Constructing a coroutine while active cannot reserve permission after retirement.
     pending_sample = host.sample(context, {})
+    assert host.computers is not None
+    assert host.computers.resolve(context, None, "terminal").id == "server"
+    assert not hasattr(host.computers, "connect")
+    native_calls = Mock()
+    unsubscribe = host.computers.subscribe(native_calls)
+    pending_native = host.computers.call("server", "terminal", "status", {})
     assert host.services is not None
     host.services.describe()
     pending_query = host.services.query("agent.list")
@@ -584,6 +590,15 @@ async def test_cached_owner_host_stops_admitting_service_calls(
     else:
         await runtime.aclose()
 
+    with pytest.raises(ValueError):
+        await pending_native
+    with pytest.raises(ValueError):
+        host.computers.list()
+    with pytest.raises(ValueError):
+        host.computers.call_sync("server", "terminal", "status", {})
+    factory._computers._emit("server", "changed", {})  # noqa: SLF001
+    native_calls.assert_not_called()
+    unsubscribe()
     with pytest.raises(ValueError):
         await pending_sample
     with pytest.raises(ValueError):
@@ -952,7 +967,11 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     )
     host = _owner_host(runtime, "mcp")
     other = _owner_host(runtime, "swarm")
-    session = runtime.chat_sessions.create("main", "recovery-origin")
+    session = runtime.chat_sessions.create(
+        "main",
+        "recovery-origin",
+        metadata={"subagent_parent": {"agent_id": "main", "session_id": "parent"}},
+    )
     session = await runtime.chat_sessions.get_async(session.address)
     # A restored call keeps the Session's inherited ceiling.
     private = tmp_path / "private"
@@ -1047,7 +1066,7 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     )
     moved = await runtime.chat_sessions.get_async(moved.address)
     restored = await host.restore_tool_call(receipt)
-    assert restored is not None and restored.session_id == moved.id
+    assert restored is not None and restored.session_id == moved.id and restored.subagent_session
     assert restored.session_generation_id == session.generation_id == moved.generation_id
     assert restored.permissions.check_path(private / "notes.txt", "read") is not None
     if deferred:
@@ -1065,7 +1084,11 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
             runtime.chat_sessions, "prepare_tool_outcome_async", fail_acknowledgement
         )
     key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
-    content = f"recovered-outcome-sentinel {key}"
+    private_key = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+    runtime.agent_secrets.create(
+        name="PRIVATE", kind="token", values={"value": private_key}, agents=["main"], actor="user"
+    )
+    content = f"recovered-outcome-sentinel {key} {private_key}"
     if deferred:
         with pytest.raises(OSError, match="acknowledgement interrupted"):
             await host.deliver_tool_outcome(receipt, content)
@@ -1076,6 +1099,8 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     note = notes[0]
     assert isinstance(note, str) and "recovered-outcome-sentinel" in note
     assert key not in note and "{{secret:GITHUB_TOKEN}}" in note
+    assert private_key not in note and "PRIVATE" not in note
+    assert runtime.agent_secrets.lookup(moved.address, "PRIVATE", passed_only=True) is None
     environment = runtime.agent_secrets.environment(moved.address, "GITHUB_TOKEN")
     assert environment is not None and environment[0]["GITHUB_TOKEN"] == key
     for path in runtime.storage.data_dir.glob("sessions.db*"):
@@ -1100,6 +1125,8 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     replacement = runtime.chat_sessions.create("main", moved.id)
     assert await host.restore_tool_call(receipt) is None
     assert not await host.deliver_tool_outcome(receipt, "wrong-generation-sentinel")
+    with pytest.raises(SessionNotFoundError):
+        await runtime.tools.capture_output_secrets(restored, key)
     assert replacement.load() == []
 
 

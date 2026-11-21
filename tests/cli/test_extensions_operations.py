@@ -222,7 +222,9 @@ def test_document_argument_is_read_from_a_file_or_standard_input(
         monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("VBOT_SERVER_PORT", "22000")
         monkeypatch.setenv("VBOT_APP_CLI_LISTEN_HOST", "127.0.0.1")
-        monkeypatch.setenv(REVIEW_ENV, "marker")
+        monkeypatch.setenv(REVIEWED_INPUTS_ENV, "1")
+        frame = json.dumps({"profile": None, "files": {}})
+        monkeypatch.setattr(sys, "stdin", io.StringIO(frame + "\n" + text))
         code = app_agent.main()
     else:
         code, _out, _err = run_cli(*command)
@@ -276,7 +278,7 @@ def test_bound_tool_reviews_all_document_files_before_opening_any(
     marker, packet = capsys.readouterr().out.strip().splitlines()
     assert marker == "marker"
     assert json.loads(packet) == {
-        "rights": False,
+        "rights": True,
         "reads": [[str(first), False], [str(second), False]],
     }
     assert _operation_calls(rpc) == ["describe"]

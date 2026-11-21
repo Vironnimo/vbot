@@ -401,6 +401,9 @@ def test_extensions_show_suggests_a_close_name(rpc: FakeRpc, run_cli: RunCli) ->
 
     assert code == 1
     assert "homeassistan" in out and "did you mean: homeassistant" in out
+    rpc.reply("extensions.list", _schema_payload())
+    code, _out, _err = run_cli("extensions", "show", "reload")
+    assert code == 1 and rpc.methods == ["extensions.list", "extensions.list"]
 
 
 @pytest.mark.parametrize("value", ["secret-xyz", ""])

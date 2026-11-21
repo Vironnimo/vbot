@@ -9,6 +9,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from difflib import SequenceMatcher
+from functools import partial
 from typing import Any, cast
 
 from core.secrets._references import iter_strings
@@ -332,10 +333,17 @@ class ToolRegistry:
         self._definition_profiles: dict[str, dict[str, tuple[str, ToolContract]]] = {}
         # Resolves ``{{secret:NAME}}`` references in declared sink arguments.
         self._secrets: AgentSecrets | None = None
+        self._generation_scope: Callable[[str], tuple[SessionAddress, bool] | None] | None = None
 
-    def set_secrets(self, secrets: AgentSecrets | None) -> None:
+    def set_secrets(
+        self,
+        secrets: AgentSecrets | None,
+        *,
+        generation_scope: Callable[[str], tuple[SessionAddress, bool] | None] | None = None,
+    ) -> None:
         """Use ``secrets`` to substitute references in the sink arguments of every Tool."""
         self._secrets = secrets
+        self._generation_scope = generation_scope
 
     @property
     def secret_masker(self) -> SecretMasker:
@@ -359,6 +367,9 @@ class ToolRegistry:
             candidates,
             source="tool",
             passed_only=context.subagent_session,
+            resolve_scope=partial(self._generation_scope, context.session_generation_id)
+            if self._generation_scope is not None and context.session_generation_id is not None
+            else None,
         )
         return SecretMasker(references)
 
@@ -932,13 +943,7 @@ class ToolRegistry:
             changed = dict(arguments)
             uses: list[SecretUse] = []
             for name, sink in sinks.items():
-                literals = None
-                if sink == "external_tools":
-                    literals = external_literals
-                elif tool.defer_secret_consumption:
-                    literals = context.prepared_secret_literals
-                elif sink == "files":
-                    literals = context.secret_literals
+                literals: dict[str, str] = {}
                 changed[name], found = secrets.substitute(
                     SessionAddress(context.project_id, context.agent_id, context.session_id),
                     arguments[name],
@@ -947,9 +952,15 @@ class ToolRegistry:
                     consume=False,
                     literals=literals,
                 )
+                if sink == "files":
+                    context.secret_literals.update(literals)
+                elif sink == "external_tools":
+                    external_literals.update(literals)
+                for use in found:
+                    field = use.secret.field_named(use.field) if use.secret else None
+                    if field is not None and field.concealed and use.value:
+                        context.prepared_secret_literals[use.value] = literals[use.value]
                 uses.extend(use for use in found if use not in uses)
-            if tool.defer_secret_consumption:
-                context.prepared_secret_literals.update(external_literals)
             # Refused preparation must not spend a one-time grant.
             if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):
                 return changed, [], unavailable

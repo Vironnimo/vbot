@@ -13,6 +13,7 @@ from typing import Any, cast, override
 from unittest.mock import AsyncMock, Mock
 from weakref import WeakValueDictionary
 
+from core.attachments import AttachmentStore
 from core.channels import ChannelConfig
 from core.channels._member_tools import DEFAULT_MEMBER_TOOLS
 from core.channels._observations import ChannelObservationInbox
@@ -422,6 +423,7 @@ def make_channel_engine(
         conversation_pointers=state,
         pending_replies=state,
         observation_inbox=ChannelObservationInbox(state, chat_sessions),
+        attachment_store=AttachmentStore(data_dir),
         run_button_binding_registry=run_button_binding_registry,
         tool_catalog=tool_catalog,
         access_registry=access_registry

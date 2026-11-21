@@ -21,7 +21,8 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from types import EllipsisType
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx2
@@ -29,6 +30,9 @@ from mcp.shared.exceptions import MCPError
 from mcp.types import CONNECTION_CLOSED, METHOD_NOT_FOUND
 
 from core.extensions.operations import ExtensionHost
+from core.secrets._references import EMPTY_MASKER, SecretMasker, map_strings
+from core.secrets.detection import detect_api_keys
+from core.tools.tools import ToolContext
 
 from ._oauth import oauth_secrets
 
@@ -95,12 +99,19 @@ class ConnectionEvents:
         host: ExtensionHost,
         config: Callable[[], dict[str, Any]],
         *,
+        masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
+        invocation: Callable[[], ToolContext | None] = lambda: None,
         on_stderr: Callable[[], None] | None = None,
     ) -> None:
         self._host = host
         self._config = config
         self._argument_secrets: frozenset[str] = frozenset()
-        self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_HISTORY_LIMIT)
+        self._global_masker = masker
+        self._invocation = invocation
+        self._cached_masker: tuple[SecretMasker, frozenset[str], SecretMasker] | None = None
+        self._events: deque[tuple[str | tuple[str | None, str, str] | None, dict[str, Any]]] = (
+            deque(maxlen=EVENT_HISTORY_LIMIT)
+        )
         self._sequence = 0
         self._on_stderr = on_stderr
         # The current local server process's last complete stderr lines and
@@ -116,40 +127,68 @@ class ConnectionEvents:
         # Publish an immutable snapshot for the stderr drain thread as well.
         self._argument_secrets |= values - {""}
 
-    def record(self, kind: str, payload: Any) -> None:
+    def record(
+        self, kind: str, payload: Any, *, context: ToolContext | None | EllipsisType = ...
+    ) -> None:
         """Keep one event; its strings and keys are redacted after JSON decoding."""
-        secrets = sorted(self._secrets(), key=len, reverse=True)
-
-        def redact(value: Any) -> Any:
-            if isinstance(value, str):
-                for secret in secrets:
-                    value = value.replace(secret, REDACTED)
-                return value
-            if isinstance(value, list):
-                return [redact(item) for item in value]
-            if isinstance(value, dict):
-                return {redact(key): redact(item) for key, item in value.items()}
-            return value
-
         # Redact decoded strings: replacing inside serialized JSON misses escaped
         # credentials and can corrupt escape sequences for short credentials.
-        safe_payload = redact(json.loads(json.dumps(payload, ensure_ascii=False, default=dump)))
+        safe_payload = self.redact_payload(
+            json.loads(json.dumps(payload, ensure_ascii=False, default=dump))
+        )
         self._sequence += 1
-        self._events.append({"sequence": self._sequence, "kind": kind, "payload": safe_payload})
+        self._events.append(
+            (
+                _scope(self._invocation() if context is ... else context),
+                {"sequence": self._sequence, "kind": kind, "payload": safe_payload},
+            )
+        )
 
-    def read(self, after: int = 0) -> dict[str, Any]:
+    def read(
+        self, after: int = 0, *, context: ToolContext | None = None, operator: bool = False
+    ) -> dict[str, Any]:
         """The events after cursor *after*, the current cursor, and how many were dropped."""
-        first = self._events[0]["sequence"] if self._events else self._sequence + 1
+        first = self._events[0][1]["sequence"] if self._events else self._sequence + 1
+        scope = _scope(context)
+        visible = []
+        for owner, event in self._events:
+            if event["sequence"] <= after:
+                continue
+            if operator or (scope is not None and owner == scope):
+                visible.append(event)
+            elif event["kind"] == "catalog_changed":
+                visible.append({**event, "payload": {}})
+            elif event["kind"] == "resource_changed":
+                # The subscription and its URI are shared. The rest of an
+                # unsolicited frame may carry arbitrary server data in _meta.
+                visible.append({**event, "payload": {"uri": event["payload"].get("uri")}})
         return {
-            "events": [event for event in self._events if event["sequence"] > after],
+            "events": visible,
             "cursor": self._sequence,
             "missed_events": max(0, first - after - 1),
         }
 
+    def _masker(self) -> SecretMasker:
+        known, literals = self._global_masker(), frozenset(self._secrets())
+        cached = self._cached_masker
+        if cached is not None and cached[0] is known and cached[1] == literals:
+            return cached[2]
+        masker = known.for_diagnostics(literals)
+        self._cached_masker = (known, literals, masker)
+        return masker
+
+    def redact_payload[T](self, value: T) -> T:
+        masker = self._masker()
+
+        def redact(text: str) -> str:
+            for key in reversed(detect_api_keys(text)):
+                text = text[: key.start] + REDACTED + text[key.end :]
+            return masker.mask(text)
+
+        return cast(T, map_strings(value, redact, include_keys=True))
+
     def redact(self, message: str) -> str:
-        for secret in sorted(self._secrets(), key=len, reverse=True):
-            message = message.replace(secret, REDACTED)
-        return message
+        return self.redact_payload(message)
 
     def safe_error(self, error: BaseException) -> str:
         """*error* as one redacted line naming its type; a group joins its members."""
@@ -173,14 +212,13 @@ class ConnectionEvents:
             pending = ""
             while chunk := stream.read(STDERR_CHUNK_SIZE):
                 pending += chunk
-                tail = max((len(secret) for secret in self._secrets()), default=0)
-                if len(pending) <= tail:
+                # A full chunk of lookahead also covers every recognized API-key format.
+                if len(pending) <= STDERR_CHUNK_SIZE:
                     continue
-                boundary = len(pending) - tail
-                for secret in self._secrets():
-                    start = pending.rfind(secret, 0, boundary + len(secret))
-                    if start >= 0 and start < boundary < start + len(secret):
-                        boundary = start
+                boundary = self._masker().stream_boundary(pending, len(pending) - STDERR_CHUNK_SIZE)
+                for key in reversed(detect_api_keys(pending)):
+                    if key.start < boundary < key.end:
+                        boundary = self._masker().stream_boundary(pending, key.start)
                 output, pending = pending[:boundary], pending[boundary:]
                 if output and not loop.is_closed():
                     loop.call_soon_threadsafe(self._stderr, self.redact(output))
@@ -239,6 +277,16 @@ def _bounded(line: str) -> str:
     if len(line) <= STDERR_LINE_CHARACTERS:
         return line
     return line[: STDERR_LINE_CHARACTERS - 1] + "…"
+
+
+def _scope(context: ToolContext | None) -> str | tuple[str | None, str, str] | None:
+    if context is None:
+        return None
+    if context.session_generation_id:
+        return context.session_generation_id
+    if context.result_payloads_available:
+        return (context.project_id, context.agent_id, context.session_id)
+    return None
 
 
 def _leaves(error: BaseException) -> Iterator[BaseException]:

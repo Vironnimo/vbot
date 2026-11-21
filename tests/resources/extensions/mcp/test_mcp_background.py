@@ -16,7 +16,7 @@ from core.database import DatabaseUnavailableError
 from resources.extensions.mcp import _background, _tasks
 from resources.extensions.mcp._background import BackgroundCalls
 from resources.extensions.mcp._recovery import TaskRecovery
-from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
+from tests.resources.extensions.mcp.mcp_test_support import context, run_inline, runner_for
 from tests.resources.extensions.mcp.test_mcp_tasks import _TaskServer
 
 
@@ -42,17 +42,18 @@ async def deferred(context_service, host, monkeypatch):
         with database:
             result = callback(database)
         if database.execute(
-            "SELECT 1 FROM pending_calls WHERE outcome_json IS NOT NULL"
+            "SELECT 1 FROM protected_calls WHERE sealed_outcome IS NOT NULL"
         ).fetchone():
             saved.set()
         return result
 
-    async def open_database(name, schema):
+    async def open_database(name, schema, *, migrations):
+        assert migrations[0].breaks_older
         if not database.execute(
             "SELECT 1 FROM sqlite_master WHERE name='pending_tasks'"
         ).fetchone():
             database.executescript(schema)
-        return SimpleNamespace(write_async=transact, read_async=transact)
+        return SimpleNamespace(run_async=run_inline, write_async=transact, read_async=transact)
 
     async def capture(ctx):
         assert ctx.tool_name == "mcp_example"
@@ -140,7 +141,7 @@ async def test_background_call_returns_once_then_delivers_after_result_commit(de
     assert result["ok"] and result["data"]["state"] == "running"
     receipt = result["data"]["result_id"]
     assert receipt == "etr_background"
-    row = d.database.execute("SELECT arguments_json FROM pending_calls").fetchone()
+    row = d.database.execute("SELECT arguments_json FROM protected_calls").fetchone()
     assert json.loads(row["arguments_json"]) == {"name": "inspect"}
     pending = await d.background.load_result(receipt, d.current, "example")
     assert pending["payload"]["state"] == "running"
@@ -168,6 +169,7 @@ async def test_background_call_returns_once_then_delivers_after_result_commit(de
         assert stored["payload"]["error"]["code"] == "mcp_call_unconfirmed"
     else:
         assert "test-owned-result" in json.dumps(stored)
+        assert "test-owned-result" not in " ".join(d.database.iterdump())
     assert len(d.calls) == 1
     read = await d.dispatch({"action": "read", "result_id": receipt})
     assert read["ok"]
@@ -209,7 +211,7 @@ async def test_cancelled_foreground_wait_does_not_leave_background_work(deferred
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not d.receipts and not d.background._pending and not d.delivered
-    assert not d.database.execute("SELECT * FROM pending_calls").fetchall()
+    assert not d.database.execute("SELECT * FROM protected_calls").fetchall()
 
 
 @pytest.mark.asyncio
@@ -371,11 +373,11 @@ async def test_connection_stop_preserves_outcome_during_delivery_and_transient_r
     restarted.host = replace(d.host, deliver_tool_outcome=deliver)
     await restarted.resume(d.service.runners)
     await first_delivery.wait()
-    before = d.database.execute("SELECT outcome_json FROM pending_calls").fetchone()[0]
+    before = d.database.execute("SELECT sealed_outcome FROM protected_calls").fetchone()[0]
     await restarted.stop_connection("example")
     release_delivery.set()
     await retrying.wait()
-    assert d.database.execute("SELECT outcome_json FROM pending_calls").fetchone()[0] == before
+    assert d.database.execute("SELECT sealed_outcome FROM protected_calls").fetchone()[0] == before
     retry.set()
     await asyncio.gather(*tuple(restarted._workers.values()))
     assert attempts == 2 and len(d.delivered) == 1 and len(d.calls) == 1
@@ -387,7 +389,7 @@ async def test_a_saved_native_result_survives_connection_removal(deferred):
     d = deferred
     await d.dispatch(CALL)
     await d.background.close()
-    row = d.database.execute("SELECT * FROM pending_calls").fetchone()
+    row = d.database.execute("SELECT * FROM protected_calls").fetchone()
     d.database.execute(
         "INSERT INTO pending_tasks(receipt_id,connection_id,configuration_hash,"
         "task_json,arguments_json,outcome_json) VALUES(?,?,?,?,?,?)",
@@ -396,10 +398,16 @@ async def test_a_saved_native_result_survives_connection_removal(deferred):
             row["connection_id"],
             row["configuration_hash"],
             "{}",
-            row["arguments_json"],
+            json.dumps({"name": "inspect", "arguments": {"value": "old-input-sentinel"}}),
             json.dumps({"content": [{"type": "text", "text": "native-saved-result"}]}),
         ),
     )
+    # An earlier version saved the native result without protecting it.
+    await d.recovery.open()
+    dumped = " ".join(d.database.iterdump())
+    assert "native-saved-result" not in dumped
+    assert "old-input-sentinel" not in dumped
+    assert not d.database.execute("SELECT receipt_id FROM pending_tasks").fetchall()
     restarted = d.service.background = BackgroundCalls(d.recovery, d.service._finish_background)
     await restarted.resume({})
     await asyncio.gather(*tuple(restarted._workers.values()))
@@ -420,16 +428,21 @@ async def test_shutdown_preserves_a_reply_during_local_result_preparation(deferr
         await asyncio.Event().wait()
 
     d.background.finish = finish
+    d.current.prepared_secret_literals["owned"] = "{{secret:short}}"
     await d.dispatch(CALL)
     d.release.set()
     await preparing.wait()
     await d.background.close()
+    assert "owned" not in " ".join(d.database.iterdump())
+    d.current.prepared_secret_literals.clear()  # A restored call has a fresh ToolContext.
     restarted = d.service.background = BackgroundCalls(d.recovery, original_finish)
     await restarted.resume({})
     await asyncio.gather(*tuple(restarted._workers.values()))
     stored = await restarted.load_result("etr_background", d.current, "example")
     assert stored["payload"]["ok"]
-    assert "test-owned-result" in json.dumps(stored)
+    assert "test-{{secret:short}}-result" in json.dumps(stored)
+    assert "test-{{secret:short}}-result" in d.delivered[0][1]
+    assert "owned" not in d.delivered[0][1]
     assert len(d.calls) == 1 and len(d.delivered) == 1
 
 

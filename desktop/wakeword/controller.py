@@ -18,11 +18,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from desktop import settings as desktop_settings
-from desktop.server_address import parse_server_address
+from desktop._windows import url_origin
 from desktop.speech.cues import (
     CUE_DONE,
     CuePlayer,
 )
+from desktop.speech.destination import SpeechDestination
 from desktop.speech.server_client import (
     ServerAuthorization,
 )
@@ -88,13 +89,14 @@ class VoiceController:
         microphone: MicrophoneService,
         server_url: str,
         sink: voice.VoiceEventSink,
-        live_requests: Callable[[str, str], None],
+        live_requests: Callable[[str, str, str | None], None],
         mock: bool = False,
         stack_available: Callable[[], bool] = lambda: True,
         cues: CuePlayer | None = None,
         catalog: WakewordModelCatalog | None = None,
         runtime: listener.VoiceRuntime | None = None,
         authorization: ServerAuthorization | None = None,
+        own_server: Callable[[str], bool] = lambda _url: False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings_path = settings_path
@@ -110,7 +112,8 @@ class VoiceController:
         self._catalog_lock = threading.Lock()
         self._lock = threading.Lock()
 
-        self._config = parse_voice_config(
+        self._destination = SpeechDestination(server_url, own_server)
+        self._config = self._parse_config(
             desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, settings_path)
         )
         self._catalog.adopt_existing_models(self._config.selected_model_ids)
@@ -194,7 +197,12 @@ class VoiceController:
             if url == self._server_url:
                 return
             logger.info("Voice follows the server %s", url or "(none)")
+            self._end_recording_locked()
             self._server_url = url
+            self._destination.origin = url_origin(url)
+            self._config = self._parse_config(
+                desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
+            )
             self._transition_locked()
             self._commit_locked()
 
@@ -235,6 +243,9 @@ class VoiceController:
 
     # -- Config --------------------------------------------------------------
 
+    def _parse_config(self, section: dict[str, Any]) -> VoiceConfig:
+        return parse_voice_config({**section, "enabled": self._destination.enabled(section)})
+
     def set_enabled(self, enabled: object) -> dict[str, Any]:
         """Persist and apply the enable switch; returns ``{enabled, error_code}``.
 
@@ -242,12 +253,18 @@ class VoiceController:
         the switch, so ``error_code`` is always ``None``.
         """
         with self._mutation_lock:
+
+            def change(raw: dict[str, Any]) -> dict[str, Any]:
+                validated = set_enabled({}, enabled)["enabled"]
+                self._destination.set_enabled(raw, validated)
+                return raw
+
             section = desktop_settings.update_section(
                 desktop_settings.WAKEWORD_KEY,
-                lambda raw: set_enabled(raw, enabled),
+                change,
                 self._settings_path,
             )
-            config = parse_voice_config(section)
+            config = self._parse_config(section)
             logger.info("Voice %s", "enabled" if config.enabled else "disabled")
             self._apply_config(config)
         return {"enabled": config.enabled, "error_code": None}
@@ -268,7 +285,7 @@ class VoiceController:
                 ),
                 self._settings_path,
             )
-            self._apply_config(parse_voice_config(section))
+            self._apply_config(self._parse_config(section))
         return self.status()
 
     def retry(self) -> dict[str, Any]:
@@ -279,7 +296,7 @@ class VoiceController:
         input changed since then is used.
         """
         with self._mutation_lock:
-            config = parse_voice_config(
+            config = self._parse_config(
                 desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
             )
             with self._lock:
@@ -419,7 +436,7 @@ class VoiceController:
                 desktop_settings.WAKEWORD_KEY, select, self._settings_path
             )
             logger.info("Wakeword selected (model=%s activated=%s)", descriptor.id, activated)
-            self._apply_config(parse_voice_config(section))
+            self._apply_config(self._parse_config(section))
         return {**descriptor.to_dict(), "activated": activated}
 
     def delete_model(self, model_id: object) -> dict[str, bool]:
@@ -444,7 +461,7 @@ class VoiceController:
             )
             logger.info("Wakeword model deleted (model=%s)", model_id)
             self._ensure_labels(force=True)
-            self._apply_config(parse_voice_config(section))
+            self._apply_config(self._parse_config(section))
         return {"deleted": True}
 
     # -- Calibration ---------------------------------------------------------
@@ -540,11 +557,14 @@ class VoiceController:
         self._transition_thread = thread
         thread.start()
 
-    def _reset_runtime_locked(self) -> None:
-        """Forget the runtime state of a stopped session; a recording ends for the page."""
+    def _end_recording_locked(self) -> None:
         if self._recording is not None:
             self._emit_recording_locked(voice.EVENT_RECORDING_ENDED, self._recording)
-        self._recording = None
+            self._recording = None
+
+    def _reset_runtime_locked(self) -> None:
+        """Forget the runtime state of a stopped session; a recording ends for the page."""
+        self._end_recording_locked()
         self._commands = {}
         self._fatal_error = None
         self._capture_state = None
@@ -702,6 +722,7 @@ class VoiceController:
                 self._emit_locked(voice.EVENT_DETECTED, model_id=model_id)
                 self._emit_locked(voice.EVENT_LIVE_REQUESTED, model_id=model_id)
                 live_mode = action.mode
+                live_origin = self._destination.origin
             elif self._recording is not None:
                 logger.info("Wake phrase ignored during a command recording (model=%s)", model_id)
                 return
@@ -734,7 +755,7 @@ class VoiceController:
                 self._emit_recording_locked(voice.EVENT_RECORDING_STARTED, recording)
             self._commit_locked()
         if live_mode is not None:
-            self._live_requests(live_mode, voice.LIVE_REQUEST_SOURCE)
+            self._live_requests(live_mode, voice.LIVE_REQUEST_SOURCE, live_origin)
         elif recording is not None:
             self._start_recording(generation, session, recording, detection)
 
@@ -853,7 +874,6 @@ class VoiceController:
             result = outcome.wakeword_result
             self._emit_locked(
                 outcome.kind,
-                origin=parse_server_address(self._server_url, None).origin if result else None,
                 command_id=outcome.command_id,
                 model_id=outcome.model_id,
                 agent_id=outcome.agent_id,
@@ -1058,7 +1078,7 @@ class VoiceController:
         self._sequence += 1
         status = self._status_locked()
         try:
-            self._sink.publish_status(status)
+            self._sink.publish_status(status, origin=self._destination.origin)
         except Exception:
             logger.exception("Voice status push failed")
 
@@ -1074,12 +1094,12 @@ class VoiceController:
         if completed and self._cues is not None:
             self._cues.play(CUE_DONE)
 
-    def _emit_locked(self, kind: str, *, origin: str | None = None, **fields: Any) -> None:
+    def _emit_locked(self, kind: str, **fields: Any) -> None:
         self._sequence += 1
         event = {"sequence": self._sequence, "kind": kind}
         event.update({key: value for key, value in fields.items() if value is not None})
         try:
-            self._sink.publish_event(event, origin=origin)
+            self._sink.publish_event(event, origin=self._destination.origin)
         except Exception:
             logger.exception("Voice event push failed")
         cue = voice._EVENT_CUES.get(kind)

@@ -286,7 +286,24 @@ async def test_reviewed_instance_cli_only_grants_the_bare_command(
     for line, expected, grant in [
         ("vbot server status", set(), True),
         ("vbot agent delete other", {"deny_rule"}, True),
-        ("vbot server status | other", {"not_permitted"}, True),
+        ("vbot server status | vbot --version", set(), True),
+        ("vbot server status > status.txt", set(), True),
+        ("""vbot config set note '{"sample": "$example"}'""", set(), True),
+        ("vbot config get $example", {"protected_location"}, True),
+        ("vbot config get example > $example", {"protected_location", "unanalyzable"}, True),
+        (
+            ("$example = 'sample'; " if shell == "powershell" else "example=sample; ")
+            + "vbot config get example",
+            {"protected_location"},
+            True,
+        ),
+        (
+            "'sample'; vbot --version" if shell == "powershell" else "(vbot --version)",
+            {"protected_location"},
+            True,
+        ),
+        ("vbot server status | env", {"protected_location"}, True),
+        ("vbot server status | other", {"protected_location", "not_permitted"}, True),
         ("python -m cli agent list", {"protected_location", "not_permitted"}, False),
         ("./vbot agent list", {"protected_location", "not_permitted"}, False),
         ("vbot.exe agent list", {"protected_location", "not_permitted"}, False),

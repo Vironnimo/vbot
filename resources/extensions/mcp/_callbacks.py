@@ -116,12 +116,24 @@ class ServerRequests:
             return self._refuse(
                 record, "rate_limited", "Too many sampling requests; try again later"
             )
-        messages = sampling_messages(request)
+        # Redact server-supplied values before serializing Tool results or
+        # shortening the approval preview, both of which can split a credential.
+        safe = self._events.redact_payload(request)
+        if safe != request:
+            try:
+                types.CreateMessageRequestParams.model_validate(safe)
+            except ValueError:
+                return self._refuse(
+                    record,
+                    "protected_data",
+                    "Sampling request contains protected data in its structure.",
+                )
+        messages = sampling_messages(safe)
         if policy == "ask":
             answer = await self._inputs.request(
                 self._connection,
                 "sampling",
-                {"message": self._approval_message(request, max_tokens)},
+                {"message": self._approval_message(safe, max_tokens)},
                 _session(invocation),
             )
             if answer.get("action") != "accept":
@@ -138,8 +150,8 @@ class ServerRequests:
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": request.get("temperature"),
-                "stop_sequences": request.get("stopSequences"),
-                "tool_choice": request.get("toolChoice", {}).get("mode"),
+                "stop_sequences": safe.get("stopSequences"),
+                "tool_choice": safe.get("toolChoice", {}).get("mode"),
                 # Provider wires render JSON Schema 2020-12: an older draft's
                 # spellings are converted as for the server's listed Tools.
                 "tools": [
@@ -148,7 +160,7 @@ class ServerRequests:
                         "description": tool.get("description", tool["name"]),
                         "parameters": current_dialect_schema(tool["inputSchema"]),
                     }
-                    for tool in request.get("tools", [])
+                    for tool in safe.get("tools", [])
                 ],
             },
         )
@@ -213,8 +225,16 @@ class ServerRequests:
         return types.ListRootsResult(roots=roots)
 
     async def elicit(self, context: Any, params: Any) -> Any:
+        payload = dump(params)
+        safe = self._events.redact_payload(payload)
+        if "message" not in safe or any(
+            safe.get(key) != value for key, value in payload.items() if key != "message"
+        ):
+            # Rewriting a URL, field name or enum value could direct the user's
+            # answer somewhere else or send a value the form never offered.
+            return types.ElicitResult(action="decline")
         response = await self._inputs.request(
-            self._connection, "elicitation", dump(params), _session(self._invocation())
+            self._connection, "elicitation", safe, _session(self._invocation())
         )
         return types.ElicitResult.model_validate(response)
 

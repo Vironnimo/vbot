@@ -135,10 +135,19 @@ async def _list_profiles(state: Any, params: JsonObject) -> JsonObject:
 
 def _refuse_assigned(state: Any, name: str) -> None:
     from core.archive import permission_profile_references
+    from core.database import DatabaseError
+    from core.extensions.profile_references import extension_profile_references
 
     references, unavailable = permission_profile_references(
         state.runtime.storage.data_dir, state.runtime.chat_sessions.archive_ledger, name
     )
+    try:
+        references.extend(state.runtime.chat_sessions.temporary_profile_references(name))
+    except DatabaseError:
+        unavailable.append("sessions.db")
+    selected, failures = extension_profile_references(state.runtime.storage.data_dir, name)
+    references.extend(selected)
+    unavailable.extend(failures)
     if references:
         raise RpcError(
             "permission_profile_in_use",
@@ -150,7 +159,7 @@ def _refuse_assigned(state: Any, name: str) -> None:
             "permission_profile_references_unavailable",
             "Could not verify permission profile assignments in "
             + ", ".join(unavailable)
-            + ". Check the listed configuration or Archive Entry before deleting the profile.",
+            + ". Check the listed locations before deleting the profile.",
             data={"locations": unavailable},
         )
 
@@ -172,9 +181,22 @@ async def _change_profile(
     base = {name: params["base"]} if "base" in params else None
 
     def save() -> JsonObject:
-        if delete:
-            _refuse_assigned(state, name)
-        saved = state.runtime.storage.update_permission_profiles({name: rules}, base=base)
+        from core.database import DatabaseError
+
+        storage = state.runtime.storage
+        try:
+            saved = storage.update_permission_profiles(
+                {name: rules},
+                base=base,
+                before_delete=lambda selected: _refuse_assigned(state, selected),
+            )
+        except DatabaseError as exc:
+            raise RpcError(
+                "permission_profile_references_unavailable",
+                "The data store is busy or unavailable. "
+                "Try deleting the profile again after recovery or maintenance.",
+                data={"locations": [str(storage.data_dir)]},
+            ) from exc
         return _profile_response(saved)
 
     try:

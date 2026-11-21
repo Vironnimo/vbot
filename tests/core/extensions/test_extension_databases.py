@@ -24,6 +24,7 @@ from core.extensions.databases import (
     extension_database_name,
     extension_database_spec,
 )
+from core.secrets.store import SecretStore
 
 SCHEMA = "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL) STRICT;"
 
@@ -88,6 +89,11 @@ def test_release_closes_the_owner_handles_and_a_new_registration_reopens(
     first = asyncio.run(databases.open(first_owner, "notes", SCHEMA))
     other = asyncio.run(databases.open(other_owner, "notes", SCHEMA))
     _insert(first, "kept")
+    store = SecretStore(data_dir)
+    protection = databases.protection(first_owner, store)
+    sealed = protection.seal("row", b"test-owned-result")
+    with pytest.raises(ValueError):
+        databases.protection(other_owner, store).open("row", sealed)
 
     asyncio.run(databases.release(first_owner))
 
@@ -98,6 +104,12 @@ def test_release_closes_the_owner_handles_and_a_new_registration_reopens(
         asyncio.run(databases.open(first_owner, "notes", SCHEMA))
     reloaded = asyncio.run(databases.open(_identity(epoch="epoch-2"), "notes", SCHEMA))
     assert _bodies(reloaded) == ["kept"]
+    with pytest.raises(ExtensionUnavailableError):
+        protection.open("row", sealed)
+    current = databases.protection(_identity(epoch="epoch-2"), store)
+    assert current.open("row", sealed) == b"test-owned-result"
+    with pytest.raises(ValueError):
+        current.open("different-row", sealed)
 
 
 def test_close_closes_every_handle_and_refuses_later_opens(databases) -> None:

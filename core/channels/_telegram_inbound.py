@@ -13,7 +13,7 @@ from core.channels.adapter import (
 )
 from core.utils.logging import get_logger
 
-from ._telegram_messages import _parse_message_id
+from ._telegram_messages import _parse_message_id, _telegram_message_id
 
 _LOGGER = get_logger("channels.telegram")
 _ALBUM_FLUSH_SECONDS = 0.5
@@ -42,7 +42,7 @@ class TelegramInboundBuffer:
         self._media_handler = media_handler
         self._album_buffers: dict[str, list[Any]] = {}
         self._album_conversations: dict[str, ConversationFacts] = {}
-        self._album_companion_texts: dict[str, str] = {}
+        self._album_comments: dict[str, _PendingForwardComment] = {}
         self._album_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_forward_comments: dict[str, _PendingForwardComment] = {}
         self._forward_comment_tasks: dict[str, asyncio.Task[None]] = {}
@@ -56,7 +56,7 @@ class TelegramInboundBuffer:
         conversation: ConversationFacts,
         message: Any,
         *,
-        companion_text: str | None = None,
+        comment: _PendingForwardComment | None = None,
     ) -> None:
         existing_messages = self._album_buffers.get(album_id)
         if existing_messages is not None:
@@ -73,8 +73,8 @@ class TelegramInboundBuffer:
         else:
             self._album_buffers[album_id] = [message]
             self._album_conversations[album_id] = conversation
-        if companion_text is not None:
-            self._album_companion_texts[album_id] = companion_text
+        if comment is not None:
+            self._album_comments[album_id] = comment
         self._restart_album_flush(album_id)
 
     def _restart_album_flush(self, album_id: str) -> None:
@@ -99,14 +99,24 @@ class TelegramInboundBuffer:
 
         messages = self._album_buffers.pop(album_id, [])
         conversation = self._album_conversations.pop(album_id, None)
-        companion_text = self._album_companion_texts.pop(album_id, None)
+        comment = self._album_comments.pop(album_id, None)
         if not messages or conversation is None:
             return
 
+        await self.dispatch_media(conversation, tuple(messages), comment)
+
+    async def dispatch_media(
+        self,
+        conversation: ConversationFacts,
+        messages: tuple[Any, ...],
+        comment: _PendingForwardComment | None,
+    ) -> None:
         await self._media_handler(
             conversation,
-            tuple(messages),
-            companion_text=companion_text,
+            messages,
+            message_ids=tuple(_telegram_message_id(message) for message in messages),
+            companion_text=comment.text if comment else None,
+            companion_message_id=comment.conversation.message_id if comment else None,
         )
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
@@ -164,7 +174,7 @@ class TelegramInboundBuffer:
         self,
         conversation: ConversationFacts,
         message: Any,
-    ) -> tuple[str | None, ConversationFacts]:
+    ) -> tuple[_PendingForwardComment | None, ConversationFacts]:
         pending = self._pending_forward_comments.get(conversation.chat_id)
         if pending is None:
             return None, conversation
@@ -187,7 +197,7 @@ class TelegramInboundBuffer:
             mentioned_bot=(conversation.mentioned_bot or pending.conversation.mentioned_bot),
             is_reply_to_bot=(conversation.is_reply_to_bot or pending.conversation.is_reply_to_bot),
         )
-        return pending.text, merged_conversation
+        return pending, merged_conversation
 
     async def _flush_forward_comment_after_delay(self, chat_id: str) -> None:
         await asyncio.sleep(_FORWARD_COMMENT_SETTLE_SECONDS)
@@ -248,26 +258,22 @@ class TelegramInboundBuffer:
             (
                 self._album_conversations.pop(album_id, None),
                 messages,
-                self._album_companion_texts.pop(album_id, None),
+                self._album_comments.pop(album_id, None),
             )
             for album_id, messages in self._album_buffers.items()
         ]
         self._album_buffers.clear()
         self._album_conversations.clear()
-        self._album_companion_texts.clear()
+        self._album_comments.clear()
         for pending in comments:
             await self._dispatch(
                 self._text_handler(
                     pending.conversation, pending.text, raw_message=pending.raw_message
                 )
             )
-        for conversation, messages, companion_text in albums:
+        for conversation, messages, comment in albums:
             if conversation is not None and messages:
-                await self._dispatch(
-                    self._media_handler(
-                        conversation, tuple(messages), companion_text=companion_text
-                    )
-                )
+                await self._dispatch(self.dispatch_media(conversation, tuple(messages), comment))
 
     async def _dispatch(self, handling: Awaitable[object]) -> None:
         try:

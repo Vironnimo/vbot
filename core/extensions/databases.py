@@ -23,7 +23,7 @@ import threading
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.database import (
     APPLICATION_IDS,
@@ -43,11 +43,16 @@ from core.utils.ids import is_safe_id
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
+if TYPE_CHECKING:
+    from core.secrets.store import SecretStore
+
 __all__ = [
     "FORMAT_GENERATION",
     "Database",
     "DatabaseError",
     "ExtensionDatabaseOpener",
+    "ExtensionDataProtection",
+    "OwnerDataProtection",
     "ExtensionDatabases",
     "Migration",
     "extension_database_name",
@@ -113,6 +118,29 @@ class _OpenDatabase:
     database: Database
 
 
+class ExtensionDataProtection(Protocol):
+    def seal(self, identity: str, content: bytes) -> str: ...
+    def open(self, identity: str, ciphertext: str) -> bytes: ...
+
+
+class OwnerDataProtection:
+    """Authenticated encryption bound to an Extension and its caller-chosen record id."""
+
+    def __init__(self, store: SecretStore, owner: str, require_current: Callable[[], None]) -> None:
+        self._store = store
+        self._purpose = f"extension-state/1/{owner}"
+        self._require_current = require_current
+
+    def seal(self, identity: str, content: bytes) -> str:
+        """Blocking. Seal before entering the database transaction that publishes it."""
+        self._require_current()
+        return self._store.seal_data(content, purpose=self._purpose, identity=identity)
+
+    def open(self, identity: str, ciphertext: str) -> bytes:
+        self._require_current()
+        return self._store.open_data(ciphertext, purpose=self._purpose, identity=identity)
+
+
 class ExtensionDatabases:
     """Open Extension databases per owner registration and close them on release.
 
@@ -130,6 +158,15 @@ class ExtensionDatabases:
         self._released: set[Any] = set()
         self._closed = False
         self._workers = BoundedWorkerPool(name="extension-databases", max_workers=2)
+
+    def protection(self, owner: Any, store: SecretStore) -> ExtensionDataProtection:
+        """Share the database lifetime so a shutdown handler can save its final result."""
+
+        def require_current() -> None:
+            with self._changed:
+                self._require_admission(owner)
+
+        return OwnerDataProtection(store, owner.name, require_current)
 
     def opener(self, owner: Any) -> ExtensionDatabaseOpener:
         """The ``host.open_database`` capability of one owner registration."""

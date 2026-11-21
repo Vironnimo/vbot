@@ -14,7 +14,8 @@ import copy
 import json
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -106,6 +107,40 @@ class ConfigProtocol(Protocol):
 
     def get(self, key: str, default: Any = None) -> Any:
         """Return a config value."""
+
+
+@contextmanager
+def permission_profile_assignment(
+    data_dir: Path,
+    names: Iterable[str | None],
+    *,
+    resolve: Callable[[str], object] | None = None,
+) -> Iterator[None]:
+    """Validate live names and order their durable assignment against profile deletion.
+
+    Enter on the writer's worker before its database transaction. Built-in profiles
+    always exist and introducing no custom name needs no coordination.
+    """
+    from core.database.marker import operation_lock, require_no_maintenance
+    from core.permissions import BUILTIN_PERMISSION_PROFILES, resolve_permission_profile
+
+    custom = {
+        name for name in names if name is not None and name not in BUILTIN_PERMISSION_PROFILES
+    }
+    if not custom:
+        yield
+        return
+    path = DataDirectoryLayout(data_dir).settings_file
+    with operation_lock(data_dir):
+        require_no_maintenance(data_dir)
+        if resolve is None:
+            profiles = load_validated_settings_json(path).get("permission_profiles", {})
+            for name in custom:
+                resolve_permission_profile(name, profiles)
+        else:
+            for name in custom:
+                resolve(name)
+        yield
 
 
 class StorageManager:
@@ -434,6 +469,7 @@ class StorageManager:
         changes: Mapping[str, Any],
         *,
         base: Mapping[str, Any] | None = None,
+        before_delete: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Set or delete named profiles atomically, preserving other profiles and Settings.
 
@@ -453,7 +489,20 @@ class StorageManager:
                 settings.pop("permission_profiles", None)
             return profiles
 
-        return self.update_settings(apply)
+        deleted = [name for name, value in changes.items() if value is None]
+        if not deleted:
+            return self.update_settings(apply)
+
+        from core.database.marker import operation_lock, require_no_maintenance
+
+        # Snapshot and restore take this lock before the Settings freeze. Reference
+        # scans may take time, so keep the ordinary Settings reader lock free.
+        with operation_lock(self.data_dir):
+            require_no_maintenance(self.data_dir)
+            if before_delete:
+                for name in deleted:
+                    before_delete(name)
+            return self.update_settings(apply)
 
     def supported_appearance_languages(self) -> list[str]:
         """Return language codes supported by the persisted Settings surface."""

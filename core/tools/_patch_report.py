@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -170,6 +171,7 @@ def file_report(
     after: str | None,
     *,
     destination: str | None = None,
+    mask: Callable[[str], str],
 ) -> _FileReport:
     """Describe one file's net effect; ``None`` text means absent or not text."""
     report = _FileReport(label, kind, destination)
@@ -185,7 +187,7 @@ def file_report(
         return report
     if before is None or after is None or before == after:
         return report
-    report.preview = _after_preview(before, after)
+    report.preview = _after_preview(mask(before), mask(after))
     report.places, report.removed = _changed_places(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
     old_lines, new_lines = split_text_lines(before), split_text_lines(after)

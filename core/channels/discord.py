@@ -13,6 +13,7 @@ from itertools import batched
 from typing import Any, override
 
 from core.attachments import AttachmentStore
+from core.channels._group_attachments import store_inbound_attachment
 from core.channels._message_chunks import split_message
 from core.channels.adapter import (
     ChannelAdapter,
@@ -236,7 +237,7 @@ class DiscordChannelAdapter(ChannelAdapter):
 
         attachments = _message_attachments(raw_message)
         for attachment in attachments:
-            record = await self._store_inbound_attachment(attachment)
+            record = await self._store_inbound_attachment(attachment, raw_message)
             blocks.extend(content_blocks_for_attachment(record))
         return blocks
 
@@ -296,6 +297,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             user_id=user_id,
             user_display_name=_user_display_name(getattr(replied_message, "author", None)),
             content=blocks,
+            message_id=_snowflake_string(getattr(replied_message, "id", None)),
         )
 
     # -- Inbound handling -------------------------------------------------------------
@@ -673,7 +675,7 @@ class DiscordChannelAdapter(ChannelAdapter):
                     "Discord typing indicator close failed (channel=%s): %s", self._config.id, error
                 )
 
-    async def _store_inbound_attachment(self, attachment: Any) -> Any:
+    async def _store_inbound_attachment(self, attachment: Any, message: Any) -> Any:
         attachment_store = self._attachment_store
         if attachment_store is None:
             raise ChannelError("Attachment store is not configured for Discord channels")
@@ -691,7 +693,13 @@ class DiscordChannelAdapter(ChannelAdapter):
         )
 
         payload = await attachment.read()
-        return await attachment_store.store_async(filename.strip(), payload)
+        return await store_inbound_attachment(
+            attachment_store,
+            filename.strip(),
+            payload,
+            group=getattr(message, "guild", None) is not None,
+            message_id=_snowflake_string(getattr(message, "id", None)),
+        )
 
     # -- State helpers ----------------------------------------------------------------
 

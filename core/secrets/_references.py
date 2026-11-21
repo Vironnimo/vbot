@@ -175,8 +175,12 @@ class SecretMasker:
             for variant in _variants(value):
                 if len(variant) >= MIN_MASKED_LENGTH:
                     variants.setdefault(variant, reference)
+        self._compile(variants)
+
+    def _compile(self, variants: dict[str, str]) -> None:
         self._variants = variants
         self._ordered = sorted(variants)
+        self._longest = max(map(len, variants), default=0)
         self._pattern = (
             re.compile(
                 "|".join(re.escape(item) for item in sorted(variants, key=len, reverse=True))
@@ -187,6 +191,29 @@ class SecretMasker:
 
     def __bool__(self) -> bool:
         return self._pattern is not None
+
+    def for_diagnostics(self, literals: Iterable[str]) -> SecretMasker:
+        """Mask known values anonymously, including short credentials actually sent."""
+        variants = dict.fromkeys(self._variants, "[redacted]")
+        for value in literals:
+            if value:
+                for variant in _variants(value):
+                    variants[variant] = "[redacted]"
+        masker = SecretMasker.__new__(SecretMasker)
+        masker._compile(variants)
+        return masker
+
+    def stream_boundary(self, text: str, end: int) -> int:
+        """A raw chunk boundary with enough lookahead to keep any match whole."""
+        if self._pattern is None:
+            return end
+        end = max(0, min(end, len(text) - self._longest))
+        for match in self._pattern.finditer(text):
+            if match.start() >= end:
+                break
+            if end < match.end():
+                return match.start()
+        return end
 
     def mask(self, text: str) -> str:
         if self._pattern is None or not text:
@@ -267,9 +294,11 @@ def _variants(value: str) -> set[str]:
         found.add(_PERCENT_ESCAPE.sub(lambda match: match.group(0).lower(), encoded))
     raw = value.encode("utf-8")
     for encode in (base64.b64encode, base64.urlsafe_b64encode):
+        encoded = encode(raw).decode("ascii")
+        found.update((encoded, encoded.rstrip("=")))
         for offset in range(3):
             fragment = _base64_fragment(encode, raw, offset)
-            if fragment:
+            if len(fragment) >= MIN_MASKED_LENGTH:
                 found.add(fragment)
     # GNU ``base64`` wraps its output at 76 characters: each line on its own.
     encoded_value = base64.b64encode(raw).decode("ascii")

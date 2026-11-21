@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 import weakref
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -15,32 +15,13 @@ from core.extensions.databases import Database
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 
+from ._recovery_storage import MIGRATIONS, TASK_SCHEMA, payload_identity, protect_prior_records
 from .content import ContentStore
 
 if TYPE_CHECKING:
     from ._tasks import TaskRun
     from .client import ConnectionRunner
 
-TASK_SCHEMA = """
-CREATE TABLE pending_tasks(
-    receipt_id TEXT PRIMARY KEY,
-    connection_id TEXT NOT NULL,
-    configuration_hash TEXT NOT NULL,
-    task_json TEXT NOT NULL CHECK(json_valid(task_json)),
-    arguments_json TEXT NOT NULL CHECK(json_valid(arguments_json)),
-    outcome_json TEXT CHECK(outcome_json IS NULL OR json_valid(outcome_json)),
-    delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
-) STRICT;
-CREATE TABLE pending_calls(
-    receipt_id TEXT PRIMARY KEY,
-    connection_id TEXT NOT NULL,
-    configuration_hash TEXT NOT NULL,
-    arguments_json TEXT NOT NULL CHECK(json_valid(arguments_json)),
-    received_json TEXT CHECK(received_json IS NULL OR json_valid(received_json)),
-    outcome_json TEXT CHECK(outcome_json IS NULL OR json_valid(outcome_json)),
-    delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1))
-) STRICT;
-"""
 _sleep = asyncio.sleep
 _RETRY_SECONDS = 30.0
 
@@ -55,11 +36,13 @@ def configuration_hash(config: dict[str, Any]) -> str:
 
 
 class TaskRecovery:
-    def __init__(self, host: ExtensionHost, logger: Any) -> None:
+    def __init__(
+        self, host: ExtensionHost, logger: Any, *, content: ContentStore | None = None
+    ) -> None:
         self.host = host
         self.logger = logger
         self.database: Database | None = None
-        self.content = ContentStore(host)
+        self.content = content if content is not None else ContentStore(host)
         self._acknowledgments: set[asyncio.Task[None]] = set()
         self._workers: dict[str, asyncio.Task[None]] = {}
         self._runs: dict[str, TaskRun] = {}
@@ -74,7 +57,37 @@ class TaskRecovery:
 
     async def open(self) -> None:
         if self.host.open_database is not None and self.host.capture_tool_call is not None:
-            self.database = await self.host.open_database("tasks", TASK_SCHEMA)
+            if self.host.protected_data is None:
+                raise RuntimeError("MCP recovery requires protected Extension storage.")
+            database = await self.host.open_database("tasks", TASK_SCHEMA, migrations=MIGRATIONS)
+            await protect_prior_records(database, self.host.protected_data)
+            self.database = database
+
+    async def seal(self, receipt: str, field: str, value: dict[str, Any]) -> str:
+        assert self.database is not None and self.host.protected_data is not None
+        protection = self.host.protected_data
+        return await self.database.run_async(
+            lambda: protection.seal(payload_identity(receipt, field), json.dumps(value).encode())
+        )
+
+    async def unseal(self, receipt: str, field: str, value: str) -> dict[str, Any]:
+        assert self.database is not None and self.host.protected_data is not None
+        protection = self.host.protected_data
+        return await self.database.run_async(
+            lambda: json.loads(protection.open(payload_identity(receipt, field), value))
+        )
+
+    async def seal_literals(self, receipt: str, owner: str, context: ToolContext) -> str | None:
+        literals = context.prepared_secret_literals
+        return await self.seal(receipt, f"{owner}.literals", literals) if literals else None
+
+    async def restore_context(
+        self, receipt: str, owner: str, context: ToolContext, sealed: str | None
+    ) -> ToolContext:
+        if sealed is None:
+            return context
+        literals = await self.unseal(receipt, f"{owner}.literals", sealed)
+        return replace(context, prepared_secret_literals=literals)
 
     async def remember(
         self,
@@ -95,11 +108,12 @@ class TaskRecovery:
                 return
             run.receipt_id = receipt
             self._live_receipts.add(receipt)
-            payload = _encode(run)
+            payload = await self.seal(receipt, "protected_tasks.task", _encode(run))
+            literals = await self.seal_literals(receipt, "protected_tasks", context)
             await database.write_async(
                 lambda connection: connection.execute(
-                    "INSERT INTO pending_tasks(receipt_id,connection_id,configuration_hash,"
-                    "task_json,arguments_json) VALUES(?,?,?,?,?) "
+                    "INSERT INTO protected_tasks(receipt_id,connection_id,configuration_hash,"
+                    "sealed_task,arguments_json,sealed_literals) VALUES(?,?,?,?,?,?) "
                     "ON CONFLICT(receipt_id) DO NOTHING",
                     (
                         receipt,
@@ -107,6 +121,7 @@ class TaskRecovery:
                         configuration_hash(runner.config),
                         payload,
                         json.dumps({"name": arguments["name"]}),
+                        literals,
                     ),
                 )
             )
@@ -115,20 +130,21 @@ class TaskRecovery:
 
     async def checkpoint(self, run: TaskRun) -> None:
         if self.database is not None and run.receipt_id is not None:
-            payload = _encode(run)
+            payload = await self.seal(run.receipt_id, "protected_tasks.task", _encode(run))
             await self.database.write_async(
                 lambda connection: connection.execute(
-                    "UPDATE pending_tasks SET task_json=? WHERE receipt_id=?",
+                    "UPDATE protected_tasks SET sealed_task=? WHERE receipt_id=?",
                     (payload, run.receipt_id),
                 )
             )
 
     async def finish(self, run: TaskRun, outcome: dict[str, Any]) -> None:
         if self.database is not None and run.receipt_id is not None:
+            payload = await self.seal(run.receipt_id, "protected_tasks.outcome", outcome)
             await self.database.write_async(
                 lambda connection: connection.execute(
-                    "UPDATE pending_tasks SET outcome_json=? WHERE receipt_id=?",
-                    (json.dumps(outcome), run.receipt_id),
+                    "UPDATE protected_tasks SET sealed_outcome=? WHERE receipt_id=?",
+                    (payload, run.receipt_id),
                 )
             )
 
@@ -136,7 +152,7 @@ class TaskRecovery:
         if self.database is not None:
             await self.database.write_async(
                 lambda connection: connection.execute(
-                    "DELETE FROM pending_tasks WHERE receipt_id=?",
+                    "DELETE FROM protected_tasks WHERE receipt_id=?",
                     (receipt,),
                 )
             )
@@ -151,9 +167,7 @@ class TaskRecovery:
 
     def _finished(self, task: asyncio.Task[None]) -> None:
         if not task.cancelled() and (error := task.exception()) is not None:
-            self.logger.error(
-                "MCP task recovery failed (error_type=%s)", type(error).__name__, exc_info=error
-            )
+            self.logger.error("MCP task recovery failed (error_type=%s)", type(error).__name__)
 
     async def resume(self, runners: dict[str, ConnectionRunner]) -> None:
         if self.database is None or self._closed:
@@ -163,8 +177,8 @@ class TaskRecovery:
             lambda connection: [
                 dict(row)
                 for row in connection.execute(
-                    "SELECT receipt_id,connection_id,configuration_hash,task_json,"
-                    "arguments_json,outcome_json,delivered FROM pending_tasks"
+                    "SELECT receipt_id,connection_id,configuration_hash,sealed_task,"
+                    "arguments_json,sealed_outcome,sealed_literals,delivered FROM protected_tasks"
                 )
             ]
         )
@@ -210,7 +224,9 @@ class TaskRecovery:
         assert self.host.restore_tool_call is not None
         assert self.host.deliver_tool_outcome is not None
         receipt = row["receipt_id"]
-        run = _decode(row["task_json"], receipt)
+        run = _decode(
+            await self.unseal(receipt, "protected_tasks.task", row["sealed_task"]), receipt
+        )
         self._runs[receipt] = run
         try:
             while not self._closed:
@@ -218,10 +234,13 @@ class TaskRecovery:
                 if context is None:
                     await self.forget(receipt)
                     return
+                context = await self.restore_context(
+                    receipt, "protected_tasks", context, row["sealed_literals"]
+                )
                 try:
                     outcome = (
-                        json.loads(row["outcome_json"])
-                        if row["outcome_json"]
+                        await self.unseal(receipt, "protected_tasks.outcome", row["sealed_outcome"])
+                        if row["sealed_outcome"]
                         else await runner.recover_task(
                             run, context, json.loads(row["arguments_json"])
                         )
@@ -233,15 +252,15 @@ class TaskRecovery:
                     # keep the same handle for a later read; they never resend tools/call.
                     await _sleep(_RETRY_SECONDS)
                     continue
-                outcome, _artifacts = await self.content.preserve(outcome)
+                outcome, _artifacts = await self.content.preserve(outcome, context=context)
                 await self.finish(run, outcome)
-                row["outcome_json"] = json.dumps(outcome)
                 text = _outcome_note(context.tool_name, runner.id, receipt, outcome)
                 await self.host.deliver_tool_outcome(receipt, text)
                 assert self.database is not None
                 await self.database.write_async(
                     lambda connection: connection.execute(
-                        "UPDATE pending_tasks SET delivered=1 WHERE receipt_id=?",
+                        "UPDATE protected_tasks SET delivered=1, sealed_task=NULL, "
+                        "sealed_literals=NULL WHERE receipt_id=?",
                         (receipt,),
                     )
                 )
@@ -264,7 +283,7 @@ class TaskRecovery:
             return None
         row = await self.database.read_async(
             lambda connection: connection.execute(
-                "SELECT outcome_json,arguments_json FROM pending_tasks WHERE receipt_id=? AND "
+                "SELECT sealed_outcome,arguments_json FROM protected_tasks WHERE receipt_id=? AND "
                 "connection_id=? AND delivered=1",
                 (receipt, connection_id),
             ).fetchone()
@@ -274,7 +293,7 @@ class TaskRecovery:
         return {
             "connection": connection_id,
             "source": json.loads(row["arguments_json"]).get("name"),
-            "payload": json.loads(row["outcome_json"]),
+            "payload": await self.unseal(receipt, "protected_tasks.outcome", row["sealed_outcome"]),
         }
 
     async def stop_connection(
@@ -301,7 +320,7 @@ class TaskRecovery:
         if remove and self.database is not None:
             await self.database.write_async(
                 lambda connection: connection.execute(
-                    "DELETE FROM pending_tasks WHERE connection_id=?",
+                    "DELETE FROM protected_tasks WHERE connection_id=?",
                     (connection_id,),
                 )
             )
@@ -319,24 +338,21 @@ class TaskRecovery:
             await asyncio.gather(*tuple(self._acknowledgments), return_exceptions=True)
 
 
-def _encode(run: TaskRun) -> str:
-    return json.dumps(
-        {
-            "state": asdict(run.state),
-            "legacy": run.legacy,
-            "received_at": run.received_at,
-            "answers": {
-                key: value.model_dump(mode="json", by_alias=True, exclude_none=True)
-                for key, value in run.answers.items()
-            },
-        }
-    )
+def _encode(run: TaskRun) -> dict[str, Any]:
+    return {
+        "state": asdict(run.state),
+        "legacy": run.legacy,
+        "received_at": run.received_at,
+        "answers": {
+            key: value.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for key, value in run.answers.items()
+        },
+    }
 
 
-def _decode(payload: str, receipt: str) -> TaskRun:
+def _decode(value: dict[str, Any], receipt: str) -> TaskRun:
     from ._tasks import _INPUT_RESPONSE, TaskRun, TaskState
 
-    value = json.loads(payload)
     age = max(0.0, time.time() - value["received_at"])
     return TaskRun(
         TaskState(**value["state"]),

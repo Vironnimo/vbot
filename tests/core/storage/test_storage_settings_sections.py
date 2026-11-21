@@ -806,6 +806,47 @@ def test_profile_edits_preserve_other_profiles_and_conflict_on_the_whole_definit
     }
 
 
+def test_a_concurrent_profile_assignment_cannot_commit_after_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from threading import Event
+
+    from core.database import marker
+    from core.permissions import PermissionRulesError
+    from core.storage.storage import permission_profile_assignment
+
+    storage = StorageManager(tmp_path)
+    storage.update_permission_profiles({"Review": {}})
+    contended = Event()
+    acquire = marker.acquire_file_lock
+
+    def observe_contention(descriptor: int) -> None:
+        try:
+            acquire(descriptor)
+        except OSError:
+            contended.set()
+            raise
+
+    monkeypatch.setattr(marker, "acquire_file_lock", observe_contention)
+
+    def assign() -> None:
+        with permission_profile_assignment(tmp_path, ["Review"]):
+            pytest.fail("the removed profile was assigned")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assignment: Future[None]
+
+        def check_references(_name: str) -> None:
+            nonlocal assignment
+            assignment = pool.submit(assign)
+            assert contended.wait(timeout=2)
+
+        storage.update_permission_profiles({"Review": None}, before_delete=check_references)
+        with pytest.raises(PermissionRulesError):
+            assignment.result(timeout=2)
+
+
 def test_task_fallbacks_round_trip_sparse_updates_paths_and_unknown_fields(tmp_path):
     from core.settings import SettingsValidationError, parse_settings_update
     from core.settings.paths import parse_patch_operations

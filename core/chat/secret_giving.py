@@ -92,7 +92,7 @@ async def give_secret(
     passed_only = sessions is not None and await asyncio.to_thread(
         is_subagent_session, sessions, address
     )
-    existing = secrets.lookup(address, secret_name, passed_only=passed_only)
+    existing = secrets.replacement_target(address, secret_name, passed_only=passed_only)
     if existing is not None and existing.source is None:
         secret = await asyncio.to_thread(
             secrets.update,
@@ -100,7 +100,8 @@ async def give_secret(
             actor=actor,
             values=_with_value(values, value, existing, kind),
             lifetime=lifetime,
-            given_to=address if lifetime is not None else None,
+            given_to=address,
+            passed_only=passed_only,
             expires_at=expires_at,
         )
         given = GivenSecret(
@@ -121,6 +122,7 @@ async def give_secret(
             expires_at=expires_at,
             agents=[format_agent_address(address.agent_id, address.project_id)],
             description=description,
+            passed_only=passed_only,
         )
         given = GivenSecret(secret, replaced=False, answered_request=False)
     await _tell_agent(sessions, address, given, passed_only=passed_only)

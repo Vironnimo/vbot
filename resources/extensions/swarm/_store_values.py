@@ -91,6 +91,18 @@ _DELIVERY_DEFAULTS: Json = {
 DeliveryReceiptLookup = Callable[[SessionAddress, str, str, str], Awaitable[DeliveryReceipt | None]]
 
 
+def _permission_selections(profile: Json) -> list[tuple[str, Any]]:
+    selections = [("permission_ceiling_profile", profile.get("permission_ceiling_profile"))]
+    rows = profile.get("participants")
+    if isinstance(rows, list):
+        selections.extend(
+            ("permission_profile", row.get("permission_profile"))
+            for row in rows
+            if isinstance(row, dict)
+        )
+    return [(field, name) for field, name in selections if name is not None]
+
+
 class SwarmStoreError(Exception):
     """A stable structured persistence error with no runtime guidance text.
 

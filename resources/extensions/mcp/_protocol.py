@@ -316,7 +316,7 @@ class ConnectionProtocol:
                     read_timeout_seconds=float("inf")
                     if call is not None and call.retained
                     else None,
-                    progress_callback=self._progress,
+                    progress_callback=functools.partial(self._progress, context),
                     meta=self._request_meta(),
                 )
             )
@@ -383,7 +383,7 @@ class ConnectionProtocol:
                 }
             return dump(await self._legacy("ping", client.send_ping))
         if operation == "events":
-            return self._runner.events(arguments.get("after", 0))
+            return self._runner._events.read(arguments.get("after", 0), context=context)
         if operation.startswith("tasks/"):
             return await self._task_request(operation, arguments)
         raise ValueError(f"Unknown MCP operation: {operation}")
@@ -524,7 +524,9 @@ class ConnectionProtocol:
                 if method == "tools/call" and call is not None and call.retained
                 else self._runner.config["timeout"]
             ),
-            "on_progress": self._progress,
+            "on_progress": functools.partial(
+                self._progress, call.context if call is not None else None
+            ),
         }
         session._stamp({"method": method, "params": arguments}, options)
         return dict(await session._dispatcher.send_raw_request(method, arguments, options))
@@ -626,9 +628,11 @@ class ConnectionProtocol:
                 self._runner._events.record("subscription_failed", {"error": str(error)})
                 return
 
-    async def _progress(self, progress: float, total: float | None, message: str | None) -> None:
+    async def _progress(
+        self, context: ToolContext | None, progress: float, total: float | None, message: str | None
+    ) -> None:
         self._runner._events.record(
-            "progress", {"progress": progress, "total": total, "message": message}
+            "progress", {"progress": progress, "total": total, "message": message}, context=context
         )
 
     async def _watch_catalog(self) -> None:

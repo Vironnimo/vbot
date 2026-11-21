@@ -12,7 +12,7 @@ from core.tools import ToolContext, tool_failure
 from core.tools.availability import normalize_tool_access
 from core.tools.tools import run_tool_worker
 
-from ._store_values import _hash
+from ._store_values import _hash, _permission_selections
 from .agent_text import (
     ERRORS,
     LIMIT_CLAMPED,
@@ -146,18 +146,6 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
         for item in profile["participants"]
     ):
         raise SwarmStoreError("invalid_arguments", field="repository_profile")
-
-
-def _permission_selections(profile: Json) -> list[tuple[str, Any]]:
-    selections = [("permission_ceiling_profile", profile.get("permission_ceiling_profile"))]
-    rows = profile.get("participants")
-    if isinstance(rows, list):
-        selections.extend(
-            ("permission_profile", row.get("permission_profile"))
-            for row in rows
-            if isinstance(row, dict)
-        )
-    return [(field, name) for field, name in selections if name is not None]
 
 
 def _validate_permission_profiles(selections: list[tuple[str, Any]], catalog: Json) -> None:

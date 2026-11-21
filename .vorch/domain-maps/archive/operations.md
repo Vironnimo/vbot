@@ -6,6 +6,8 @@ Task-gated detail for `archive.md`: the order, outcomes and checks of archiving 
 
 Before deleting a named Permission Profile, `core.archive.permission_profile_references` checks the live Agent and Project documents and the recorded Agent, Private Agent and Project payloads. Live discovery reports inaccessible paths. Each document is read with its owner's validator. Project Team assignments include the member's address, and archived assignments also name the Archive Entry. The operator holds the reference lock across the check and deletion, serializing archive and restore with the check. Pending moves or unreadable documents leave the profile in place. Purging entries have relinquished their assignments. A concurrent purge that removes a payload is recognized by rereading its ledger state.
 
+The same deletion also checks live temporary Session bindings, saved Swarm profiles, resumable Swarm snapshots and native Factory configurations. The host reads registered Extension databases even when disabled, verifies their identity and refuses deletion when the files cannot be checked. Swarm, Factory and temporary participant writers validate new selections under the data-store operation lock and hold it until their write commits. Deletion takes the same lock before the Settings transaction, also serializing snapshot, restore and database registration. Non-restorable archived owner groups and the immutable original request for an existing participant do not resolve Permission Profiles.
+
 ## Entry facts
 
 `ephemeral_expiry: true` marks a Session entry created by expiry; it commits with the archived Session states, and the sweep retries its permanent deletion regardless of ordinary retention (`archive/purge-and-retention.md`).

@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import re
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, MutableMapping
 from functools import partial
@@ -35,6 +36,7 @@ from core.tools.portal_registry import PortalRegistry
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.tls import ssl_context_for
+from server._origins import _parse_origin
 from server.access import AccessError, AccessService, Principal, track_device_request
 from server.access._principal import OPEN
 from server.access.tls import TlsContextHolder, http_protocol_class
@@ -55,6 +57,7 @@ PORTAL_COOKIE_PREFIX = "vbot_portal_"
 WEBSOCKET_PRIVATE = 4401
 # Every forwarded request goes to an app on this computer over plain HTTP.
 _UPSTREAM_ORIGIN = "http://localhost"
+_ORIGIN_PREFIX = re.compile(rb"https?://[^/?#]+", re.IGNORECASE)
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _POOL_TIMEOUT_SECONDS = 10.0
 # Keep the pool wait bounded while reads and writes may legitimately stream.
@@ -252,6 +255,20 @@ class _PortalApp:
             access.refused(facts.refusal, facts, f"portal:{self._portal_id}{path}")
             await _deny(scope, receive, send, 403, "Access denied.")
             return
+        if facts.proxied:
+            scope = {**scope, "scheme": "wss" if kind == "websocket" else "https"}
+        if kind == "websocket" or scope.get("method") not in {"GET", "HEAD", "OPTIONS"}:
+            origins = _header_values(scope, b"origin")
+            if origins and (
+                len(origins) != 1
+                or (origin := _parse_origin(origins[0].decode("latin-1"))) is None
+                or origin != self._own_origin(scope)
+            ):
+                if kind == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    await _deny(scope, receive, send, 403, "Cross-origin request forbidden.")
+                return
         query_token, query = _split_query(scope)
         cookie_token = _cookie(scope, self._auth_cookie)
         token = query_token or cookie_token
@@ -355,8 +372,14 @@ class _PortalApp:
         for name in (b"origin", b"referer"):
             for value in _header_values(scope, name):
                 # Only the Portal's own pages speak for the app's origin.
-                if value == own_origin or value.startswith(own_origin + b"/"):
-                    value = target_origin + value[len(own_origin) :]
+                prefix = _ORIGIN_PREFIX.match(value)
+                if (
+                    own_origin is not None
+                    and prefix is not None
+                    and (name == b"referer" or prefix.end() == len(value))
+                    and _parse_origin(prefix[0].decode("latin-1")) == own_origin
+                ):
+                    value = target_origin + value[prefix.end() :]
                 headers.append((name, value))
         cookies = self._app_cookies(scope)
         if cookies:
@@ -370,10 +393,10 @@ class _PortalApp:
             headers.append((b"x-forwarded-for", str(client[0]).encode("latin-1")))
         return headers
 
-    def _own_origin(self, scope: Scope) -> bytes:
+    def _own_origin(self, scope: Scope) -> tuple[str, str, int] | None:
         scheme = "https" if scope.get("scheme") in {"https", "wss"} else "http"
         host = _header_values(scope, b"host")
-        return f"{scheme}://".encode() + (host[0] if host else b"")
+        return _parse_origin(f"{scheme}://{host[0].decode('latin-1')}") if len(host) == 1 else None
 
     def _app_cookies(self, scope: Scope) -> str:
         pairs = []

@@ -388,6 +388,7 @@ class QuotedMessageFacts:
     user_id: str | None
     user_display_name: str | None
     content: list[ContentBlock] | None
+    message_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -368,6 +368,8 @@ async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
     are stored before the call goes on, so its Tool's recheck and every later
     call of the Session see them.
     """
+    if current_principal() is None:
+        raise RpcError("access_denied", "Only the user can resolve an approval request.")
     _reject_unsupported(
         params, {"id", "decision", "remember", "read_folder"}, "permissions.resolve"
     )
@@ -384,8 +386,6 @@ async def _resolve_approval(state: Any, params: JsonObject) -> JsonObject:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST, "Choose one Session grant with decision allow."
             )
-        if current_principal() is None:
-            raise RpcError("access_denied", "Only the user can allow access for a Session.")
         rules: list[str] = []
         if remember is not None:
             try:

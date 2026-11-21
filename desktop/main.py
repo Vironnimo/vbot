@@ -23,7 +23,7 @@ import importlib
 import logging
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -281,7 +281,11 @@ def _run_desktop(
     live_hotkey = HotkeyController(
         preference=LIVE_VOICE_HOTKEY,
         settings_path=settings_file,
-        handlers=HotkeyHandlers(on_press=lambda: page_events.request_live("toggle", "hotkey")),
+        handlers=HotkeyHandlers(
+            on_press=lambda: page_events.request_live(
+                "toggle", "hotkey", _windows.url_origin(controller.active_server_url())
+            )
+        ),
     )
     # One player for every Voice and dictation cue, so they play in order.
     cues = CuePlayer()
@@ -294,6 +298,7 @@ def _run_desktop(
         server_url=server_url,
         page=page_events,
         wake_phrases=voice,
+        own_server=access.is_installation_server,
         cues=cues,
         authorization=access,
     )
@@ -320,6 +325,22 @@ def _run_desktop(
             before_load=before_load,
         )
 
+    def confirm(title: str, message: str) -> bool:
+        # A native dialog the page cannot draw or answer; bridge calls run on their own thread.
+        return bool(window_holder) and bool(
+            window_holder[0].create_confirmation_dialog(title, message)
+        )
+
+    permissions = PagePermissions(
+        page_url=lambda: desktop_window.current_page_url(window_holder),
+        own_server=access.is_installation_server,
+        confirm=confirm,
+    )
+
+    def publish_sharing(status: Mapping[str, Any]) -> None:
+        if permissions.may_publish_sharing(status["server_url"]):
+            page_events.publish_computer_sharing(status)
+
     computer_sharing = ComputerSharing(
         settings_path=settings_file or desktop_config_directory / SETTINGS_FILE_NAME,
         identities=identities,
@@ -327,7 +348,7 @@ def _run_desktop(
         factories=native_extensions.factories,
         extension_catalog=native_extensions,
         reload_extensions=reload_native_extensions,
-        publish=page_events.publish_computer_sharing,
+        publish=publish_sharing,
     )
     desktop_restart = (
         restart.DesktopRestart(
@@ -350,17 +371,6 @@ def _run_desktop(
     taskbar_badge = TaskbarBadge()
     system_actions = DesktopSystemActions()
 
-    def confirm(title: str, message: str) -> bool:
-        # A native dialog the page cannot draw or answer; bridge calls run on their own thread.
-        return bool(window_holder) and bool(
-            window_holder[0].create_confirmation_dialog(title, message)
-        )
-
-    permissions = PagePermissions(
-        page_url=lambda: desktop_window.current_page_url(window_holder),
-        own_server=access.is_installation_server,
-        confirm=confirm,
-    )
     bridge = DesktopBridge(
         voice=voice,
         microphone=microphone,
@@ -380,10 +390,13 @@ def _run_desktop(
     # Voice and dictation follow the window: every successful in-window connect
     # retargets them, so first-run connect and runtime server switches never
     # leave them pointed at the launch-time (or empty) server.
+    microphone_origin: str | None = None
+
     def follow_server(url: str) -> None:
+        nonlocal microphone_origin
+        microphone_origin = _windows.url_origin(url) if access.is_installation_server(url) else None
         computer_sharing.set_server_url(url)
-        voice.set_server_url(url)
-        dictation.set_server_url(url)
+        bridge._follow_speech_server(url)
 
     controller.set_active_server_listener(follow_server)
     controller.set_server_change_guard(lambda url: computer_sharing.changing_server(url, confirm))
@@ -428,9 +441,7 @@ def _run_desktop(
         size=(window_layout.width, window_layout.height),
     )
     _windows.bind_window_dpi(window, (window_layout.minimum_width, window_layout.minimum_height))
-    _windows.allow_server_microphone(
-        window, lambda: _windows.url_origin(controller.active_server_url())
-    )
+    _windows.allow_server_microphone(window, lambda: microphone_origin)
     apply_zoom = _windows.bind_window_zoom(window, zoom.factor)
     if apply_zoom is not None:
         zoom.attach(apply_zoom)
@@ -515,7 +526,13 @@ def _run_desktop(
     # WebView2 reads its browser arguments when webview.start creates it.
     _windows.apply_browser_arguments(secure_origins)
     try:
-        webview.start(**start_kwargs)
+        if webview_module is None:
+            from desktop._webview_bridge import bind_webview_transport
+
+            with bind_webview_transport(window, bridge, permissions, controller.active_server_url):
+                webview.start(**start_kwargs)
+        else:
+            webview.start(**start_kwargs)
     finally:
         # First, so a launch connect still waiting never retargets a closed Voice.
         controller.close()
@@ -637,6 +654,7 @@ def _create_voice(
         microphone=microphone,
         server_url=server_url,
         sink=page_events,
+        own_server=access.is_installation_server if access else lambda _url: False,
         live_requests=page_events.request_live,
         mock=bool(args.mock_wakeword),
         stack_available=_real_wakeword_available,
