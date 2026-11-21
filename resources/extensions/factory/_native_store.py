@@ -9,6 +9,7 @@ from copy import deepcopy
 from typing import Any
 
 from core.utils.timestamps import utc_now_timestamp
+from vbot_extension_sdk import write_profile_assignment
 
 from ._native_records import (
     Json,
@@ -92,7 +93,12 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
             )
             return factory
 
-        return await self.database.write_async(write)
+        return await self.database.run_async(
+            write_profile_assignment,
+            self.database,
+            (settings.get("config", {}).get("permission_ceiling_profile"),),
+            write,
+        )
 
     async def get_factory(self, factory_id: str) -> Json:
         return await self._get("factory", factory_id)
@@ -166,7 +172,12 @@ class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
                     )
             return saved
 
-        return await self.database.write_async(write)
+        return await self.database.run_async(
+            write_profile_assignment,
+            self.database,
+            (patch.get("config", {}).get("permission_ceiling_profile"),),
+            write,
+        )
 
     async def add_member(
         self,

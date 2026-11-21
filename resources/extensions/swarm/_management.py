@@ -19,14 +19,13 @@ from ._extension_values import (
     _page_arguments,
     _pagination_arguments,
     _participant_config,
-    _permission_selections,
     _string,
     _swarm_projection,
     _validate_permission_profiles,
     _validate_profile_catalog,
 )
 from ._registration import session_tool_catalog
-from ._store_values import _validate_profile
+from ._store_values import _permission_selections, _validate_profile
 from ._store_wiki import MUTATIONS
 from .agent_text import (
     DEFAULT_INSTRUCTIONS,

@@ -39,6 +39,7 @@ from ._store_values import (
     _hash,
     _load,
     _page,
+    _permission_selections,
 )
 
 
@@ -88,7 +89,7 @@ def _save_profile(
             raise SwarmStoreError("slug_unavailable", field="slug") from error
         return _copy(profile)
 
-    return db._write(operation)
+    return db._write(operation, profile_names=[name for _, name in _permission_selections(profile)])
 
 
 def _get_profile(db: SwarmDatabase, profile_id: str) -> Json:
