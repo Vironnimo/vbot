@@ -18,6 +18,7 @@ from core.json_documents import document_change
 from core.permissions import normalize_permission_rules
 from core.runs import RunCancelledError, RunKind, RunStatus
 from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools.change_tracker import ChangeTracker
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -106,6 +107,7 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
             raise RuntimeError("callback failed after its durable acknowledgement")
 
     runtime = _runtime(tmp_path, _tools(after_persisted=after_persisted))
+    runtime.change_tracker = ChangeTracker()
     loop = build_chat_loop(runtime)
 
     external = await loop.start_external_run(
@@ -115,6 +117,8 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
         "lookup",
         "relay",
     ]
+    edits = (session_address("coder", external.session_id), external.run.id)
+    runtime.change_tracker.record_write(edits, tmp_path / "notes.txt", "", "updated")
     await external.record_user("What is the weather?")
     looked_up = await external.run_tool("call_1", "lookup", {"q": "weather"})
     # A namespace prefix some Models write still names the offered Tool.
@@ -125,6 +129,7 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
 
     run = external.run
     await asyncio.wait_for(run.wait(), WAIT_SECONDS)
+    assert runtime.change_tracker.peek_run_stats(edits) is None
     assert run.status == RunStatus.COMPLETED
     assert run.run_kind == RunKind.LIVE
     assert looked_up["ok"] is True and looked_up["data"] == {"found": "weather"}

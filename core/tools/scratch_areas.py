@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from threading import Event, Lock, RLock
+from weakref import WeakValueDictionary
 
 from core.runs import RunInterruptedError
 from core.sessions import SessionAddress
@@ -96,7 +97,7 @@ class ScratchAreas:
         self._busy_sessions = busy_sessions
         self._clock = clock
         self._sweep_interval_seconds = sweep_interval_seconds
-        self._locks: dict[str, RLock] = {}
+        self._locks: WeakValueDictionary[str, RLock] = WeakValueDictionary()
         self._locks_guard = Lock()
         self._sweep_lock = Lock()
         self._state_root_lock = Lock()

@@ -218,6 +218,8 @@ class ExternalRun:
                 self._session.address, "execution"
             )
         )
+        if self.ended:
+            return tool_failure("tool_stopped", _STOPPED)
         dispatch_context = self._dispatch_context(run, permissions, execution)
         tool_round = ToolRound(
             dispatch_context,
@@ -243,6 +245,9 @@ class ExternalRun:
             self._running_calls -= 1
             if self._running_calls == 0:
                 self._calls_settled.set()
+                if self._done.is_set():
+                    # A Tool may outlast the bounded wait at the end of a call.
+                    self._dependencies.change_tracker.discard_run((self._session.address, run.id))
         return _result_envelope(tool_messages[0].content if tool_messages else None)
 
     async def finish(self, *, failure: str | None = None) -> None:
@@ -289,6 +294,9 @@ class ExternalRun:
             async with self._write_lock:
                 self._done.set()
             raise
+        finally:
+            if not self._running_calls:
+                self._dependencies.change_tracker.discard_run((self._session.address, run.id))
         if self._failure is not None:
             raise ExternalRunFailedError(self._failure)
 

@@ -137,15 +137,23 @@ class ChangeTracker:
     def take_run_stats(self, run_key: RunKey) -> JsonObject | None:
         """Return the Run's final statistics and forget the Run, like ``peek_run_stats``."""
         with self._lock:
-            run = self._runs.pop(run_key, None)
+            run = self._runs.get(run_key)
             if run is None:
                 return None
             files = _snapshot(run)
-            for segments in run.values():
-                for item in segments:
-                    self._retained -= item.retained
-                    item.base = item.current = None
+            self._discard_locked(run_key)
         return _stats(_count_files(files))
+
+    def discard_run(self, run_key: RunKey) -> None:
+        """Release a finished Run whose caller does not need final line counts."""
+        with self._lock:
+            self._discard_locked(run_key)
+
+    def _discard_locked(self, run_key: RunKey) -> None:
+        for segments in self._runs.pop(run_key, {}).values():
+            for item in segments:
+                self._retained -= item.retained
+                item.base = item.current = None
 
     def _over_budget(self, exclude: list[_Segment]) -> list[_Segment]:
         """Return the oldest retaining segments to count so the rest fit the budget."""
