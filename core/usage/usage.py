@@ -388,6 +388,18 @@ class UsageRecorder:
             raise cancelled
         return identifier
 
+    def capture_duration_ms(self, call_id: str) -> int | None:
+        """Freeze the request duration before local response preparation or settlement retries."""
+        timing = self._dispatched.get(call_id)
+        if timing is None:
+            return None
+        if timing.duration_ms is None:
+            timing = timing._replace(
+                duration_ms=max(0, round((self._clock() - timing.started_at) * 1000))
+            )
+            self._dispatched[call_id] = timing
+        return timing.duration_ms
+
     async def finish(
         self,
         call_id: str,
@@ -395,25 +407,25 @@ class UsageRecorder:
         *,
         status: str = "completed",
         failure: BaseException | FailureClass | None = None,
+        input_estimate: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         """Settle a call with its outcome; a ``failed`` one with what failed it.
 
         ``failure`` is the error that ended the attempt, or its class where no
-        error exists; only its class and HTTP status are kept. The first
-        settlement also records the duration since ``start``.
+        error exists; only its class and HTTP status are kept. The duration ends
+        at the first capture or settlement. With ``input_estimate``, measured
+        input also teaches calibration in this write (see :meth:`update`).
         """
-        timing = self._dispatched.get(call_id)
-        if timing is not None and timing.duration_ms is None:
-            timing = timing._replace(
-                duration_ms=max(0, round((self._clock() - timing.started_at) * 1000))
-            )
-            self._dispatched[call_id] = timing
-        duration_ms = timing.duration_ms if timing is not None else None
+        duration_ms = self.capture_duration_ms(call_id)
         failure_class, http_status = (
             classify_failure(failure) if status == "failed" else (None, None)
         )
         return await self._settle_save(
-            call_id, usage, status, _Settlement(duration_ms, failure_class, http_status)
+            call_id,
+            usage,
+            status,
+            _Settlement(duration_ms, failure_class, http_status),
+            input_estimate,
         )
 
     async def update(

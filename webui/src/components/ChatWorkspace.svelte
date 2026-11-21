@@ -487,7 +487,13 @@
 
   $effect(() => {
     const navigation = chatProps.pendingSessionNavigation;
-    if (!navigation || navigation === lastNavigation) return;
+    if (navigation === lastNavigation) return;
+    if (!navigation) {
+      if (untrack(() => firstNavigation) === lastNavigation)
+        firstNavigation = null;
+      lastNavigation = null;
+      return;
+    }
     lastNavigation = navigation;
     untrack(() => {
       firstNavigation = navigation;
@@ -763,6 +769,7 @@
               onProjectSelected={(value) => (secondProject = value)}
               onProjectAgentSelected={(value) => (secondProjectAgent = value)}
               pendingSessionNavigation={secondNavigation}
+              preloadSession={null}
               navigateToSubAgent={navigateSecond}
               onSessionNavigation={(session) => (secondPlace = session)}
               onNavigationIndicator={() => {}}

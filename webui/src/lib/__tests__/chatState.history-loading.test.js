@@ -21,6 +21,52 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
+  it.each(['linked', 'other'])(
+    'adopts a prepared page only while its Session is current after a change to %s',
+    async (changedSession) => {
+      const loadChatHistory = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [{ id: 'early', role: 'assistant', content: 'Early' }],
+        })
+        .mockResolvedValueOnce({
+          messages: [{ id: 'current', role: 'assistant', content: 'Current' }],
+        });
+      const { chatState, controller } = setupController({
+        operationOverrides: { loadChatHistory },
+      });
+      controller.applySessionInvalidations([]);
+      controller.prepareLinkedHistory({
+        agentId: 'alpha',
+        sessionId: 'linked',
+        preload: true,
+      });
+      controller.applySessionInvalidations([
+        {
+          id: 1,
+          scope: {
+            agent_id: 'alpha',
+            session_id: changedSession,
+            history: 'appended',
+          },
+        },
+      ]);
+      await controller.loadHistoryForSession('alpha', 'linked');
+      const [message] = ensureSessionState(
+        chatState,
+        'alpha',
+        'linked',
+      ).messages;
+      expect(message.id).toBe(
+        changedSession === 'linked' ? 'current' : 'early',
+      );
+      expect(loadChatHistory).toHaveBeenCalledTimes(
+        changedSession === 'linked' ? 2 : 1,
+      );
+      controller.destroy();
+    },
+  );
+
   it('search jumps page contiguously and only reveal the latest target', async () => {
     const page = deferred();
     const hit = (id) => ({
@@ -136,10 +182,13 @@ describe('History reads', () => {
   it('releases a departed History load on a draft and ignores its late completion', async () => {
     const old = deferred();
     const next = deferred();
+    const queue = deferred();
+    const listQueue = vi.fn().mockReturnValue(queue.promise);
     let displayed = 'alpha';
     const { chatState, controller } = setupController({
       isDisplayedSession: (agent) => agent === displayed,
       operationOverrides: {
+        listQueue,
         loadChatHistory: vi
           .fn()
           .mockReturnValueOnce(old.promise)
@@ -151,6 +200,7 @@ describe('History reads', () => {
       { id: 'beta', current_session_id: '' },
     ]);
     const first = controller.loadHistoryForSession('alpha', 'one');
+    expect(listQueue).toHaveBeenCalledWith('alpha', 'one');
     expect(chatState.loadingHistory).toBe(true);
     displayed = 'beta';
     selectAgent(chatState, 'beta');
@@ -164,6 +214,7 @@ describe('History reads', () => {
     next.resolve({ messages: [] });
     await second;
     expect(chatState.loadingHistory).toBe(false);
+    queue.resolve({ items: [] });
   });
   it('keeps Session facts and an in-flight reflection read across an unchanged incremental read', async () => {
     const policy = { enabled: true, trigger: { type: 'context_ratio' } };
@@ -562,52 +613,66 @@ describe('History reads', () => {
     controller.destroy();
   });
 
-  it('reloads a stale active-run snapshot without replacing a newer live Run', async () => {
-    const older = deferred();
-    const loadChatHistory = vi
-      .fn()
-      .mockReturnValueOnce(older.promise)
-      .mockResolvedValueOnce({
-        messages: [{ id: 'new-user', role: 'user', content: 'New question' }],
-        items: [
-          messageItem({
-            id: 'new-user',
-            role: 'user',
-            content: 'New question',
-          }),
-        ],
-        timeline_sequence: 0,
-        active_run: { run_id: 'new-run', status: 'running' },
+  it.each([false, true])(
+    'reloads a stale active-run snapshot without replacing a newer live Run (prepared: %s)',
+    async (prepared) => {
+      const older = deferred();
+      const loadChatHistory = vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockResolvedValueOnce({
+          messages: [{ id: 'new-user', role: 'user', content: 'New question' }],
+          items: [
+            messageItem({
+              id: 'new-user',
+              role: 'user',
+              content: 'New question',
+            }),
+          ],
+          timeline_sequence: 0,
+          active_run: { run_id: 'new-run', status: 'running' },
+        });
+      const { chatState, controller, runStream } = setupController({
+        operationOverrides: { loadChatHistory },
+        isDisplayedSession: () => true,
       });
-    const { chatState, controller, runStream } = setupController({
-      operationOverrides: { loadChatHistory },
-      isDisplayedSession: () => true,
-    });
-    const session = ensureSessionState(chatState, 'alpha', 'session-one');
-    startRun(session, { run_id: 'old-run' });
-    const loading = controller.loadHistoryForSession('alpha', 'session-one');
-    startRun(session, { run_id: 'new-run' });
-    applyOutputSnapshot(session, 'new-run', 1, 'Fresh answer');
-    older.resolve({
-      messages: [],
-      active_run: { run_id: 'old-run', status: 'running' },
-    });
+      const session = ensureSessionState(chatState, 'alpha', 'session-one');
+      startRun(session, { run_id: 'old-run' });
+      if (prepared)
+        controller.prepareLinkedHistory({
+          agentId: 'alpha',
+          sessionId: 'session-one',
+          preload: true,
+        });
+      const startLoading = () =>
+        controller.loadHistoryForSession('alpha', 'session-one');
+      const loading = prepared ? null : startLoading();
+      startRun(session, { run_id: 'new-run' });
+      applyOutputSnapshot(session, 'new-run', 1, 'Fresh answer');
+      older.resolve({
+        messages: [],
+        active_run: { run_id: 'old-run', status: 'running' },
+      });
 
-    await loading;
+      await (loading ?? startLoading());
 
-    expect(loadChatHistory).toHaveBeenCalledTimes(2);
-    expect(runStream.attachRunStream).toHaveBeenCalledExactlyOnceWith(session, {
-      run_id: 'new-run',
-      status: 'running',
-    });
-    expect(
-      countTimelineTextOccurrences(
-        visibleTimelineItemsForRender(session),
-        'Fresh answer',
-      ),
-    ).toBe(1);
-    expect(session.messages[0].id).toBe('new-user');
-  });
+      expect(loadChatHistory).toHaveBeenCalledTimes(2);
+      expect(runStream.attachRunStream).toHaveBeenCalledExactlyOnceWith(
+        session,
+        {
+          run_id: 'new-run',
+          status: 'running',
+        },
+      );
+      expect(
+        countTimelineTextOccurrences(
+          visibleTimelineItemsForRender(session),
+          'Fresh answer',
+        ),
+      ).toBe(1);
+      expect(session.messages[0].id).toBe('new-user');
+    },
+  );
 
   it.each(['session-one', 'session-two'])(
     'releases the displayed load before an older request finishes (%s)',

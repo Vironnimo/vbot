@@ -1065,6 +1065,7 @@ describe('App navigation', () => {
       });
 
     it.each([
+      ['alpha', 'session-alpha'],
       ['beta', ''],
       ['beta', 'session-beta'],
       ['builder@work', ''],
@@ -1085,18 +1086,30 @@ describe('App navigation', () => {
             });
         });
         if (!projectAgent) releaseProjects();
+        let releaseRoster;
+        const roster = new Promise((resolve) => {
+          releaseRoster = () =>
+            resolve({
+              agents: [
+                ALPHA,
+                {
+                  id: 'beta',
+                  name: 'Beta',
+                  current_session_id: 'session-beta',
+                },
+              ],
+            });
+        });
+        if (!sessionId) releaseRoster();
         rpcMock.mockImplementation(
           createAppRpcMock({
-            agents: [
-              ALPHA,
-              { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
-            ],
             history: (params) =>
               assistantHistory(
                 `reply-${params.session_id}`,
                 `Reply in ${params.session_id}`,
               ),
             methods: {
+              'agent.list': () => roster,
               'project.list': () => projectCatalog,
               'project.show': () => ({ project: { project_id: 'work' }, scan }),
             },
@@ -1106,14 +1119,37 @@ describe('App navigation', () => {
         const copiedHash = `#chat/${address}${sessionId ? `/${sessionId}` : ''}`;
         window.history.replaceState(null, '', copiedHash);
         mountApp();
+        if (sessionId) {
+          await waitForCondition(() =>
+            expect(rpcMock).toHaveBeenCalledWith(
+              'chat.timeline',
+              expect.objectContaining({
+                agent_id: address,
+                session_id: sessionId,
+              }),
+            ),
+          );
+          expect(document.body.textContent).not.toContain(
+            `Reply in ${sessionId}`,
+          );
+          releaseRoster();
+        }
         if (projectAgent) {
           await waitForCondition(() =>
             expect(rpcMock).toHaveBeenCalledWith(
               'chat.timeline',
-              expect.objectContaining({ agent_id: 'alpha' }),
+              expect.objectContaining({
+                agent_id: sessionId ? address : 'alpha',
+              }),
             ),
           );
           expect(window.location.hash).toBe(copiedHash);
+          if (sessionId) {
+            expect(document.body.textContent).not.toContain(
+              `Reply in ${sessionId}`,
+            );
+            expect(localStorage.getItem('vbot.selectedProjectId')).toBeNull();
+          }
           releaseProjects();
         }
 
@@ -1128,7 +1164,7 @@ describe('App navigation', () => {
                   projectId: 'work',
                   projectAgentId: 'builder',
                 }
-              : { agentId: 'beta', projectId: '' },
+              : { agentId: address, projectId: '' },
           );
           expect(document.querySelector('.msg-input')).toBeTruthy();
         };
@@ -1139,6 +1175,14 @@ describe('App navigation', () => {
               `Reply in ${sessionId}`,
             ),
           );
+          expect(
+            rpcMock.mock.calls.filter(
+              ([method, params]) =>
+                method === 'chat.timeline' &&
+                params.agent_id === address &&
+                params.session_id === sessionId,
+            ),
+          ).toHaveLength(1);
           labelledButton('chat.newSession').click();
           await waitForCondition(() => expectContext(''));
           window.history.back();
@@ -1147,8 +1191,11 @@ describe('App navigation', () => {
           await waitForCondition(() => expectContext(''));
         }
 
-        await selectPersonalAgent('Alpha');
-        await waitForCondition(() => expect(selectedAgentName()).toBe('Alpha'));
+        const nextAgent = address === 'alpha' ? 'Beta' : 'Alpha';
+        await selectPersonalAgent(nextAgent);
+        await waitForCondition(() =>
+          expect(selectedAgentName()).toBe(nextAgent),
+        );
         window.history.back();
         await waitForCondition(() => expectContext(''));
       },
@@ -1271,6 +1318,10 @@ describe('App navigation', () => {
               ALPHA,
               { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
             ],
+            history: (params) =>
+              params.session_id === 'linked-session'
+                ? assistantHistory('linked', 'Reply from the pending link')
+                : {},
             methods: {
               'project.list': () => ({
                 projects: [{ project_id: 'work', scan }],
@@ -1310,9 +1361,15 @@ describe('App navigation', () => {
           expect(selectedAgentName()).toBe('Beta');
           expect(localStorage.getItem('vbot.selectedProjectId')).toBeNull();
         }
-        expect(rpcMock).not.toHaveBeenCalledWith(
+        expect(rpcMock).toHaveBeenCalledWith(
           'chat.timeline',
-          expect.objectContaining({ agent_id: 'builder@work' }),
+          expect.objectContaining({
+            agent_id: 'builder@work',
+            session_id: 'linked-session',
+          }),
+        );
+        expect(document.body.textContent).not.toContain(
+          'Reply from the pending link',
         );
         if (choice === 'view') {
           window.history.back();

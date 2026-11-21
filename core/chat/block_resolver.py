@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, replace
 from functools import partial
@@ -17,7 +18,7 @@ from core.model_tasks import SpeechError
 from core.tools.read import render_text_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, cancel_and_wait
 
 JsonObject = dict[str, Any]
 
@@ -47,7 +48,7 @@ _UNSUPPORTED_MEDIA_REASON = (
 
 
 class SpeechTranscriber(Protocol):
-    """Speech-to-text hook that transcribes incoming audio attachments."""
+    """Attachment transcription hook; `has_transcription_capacity` opts into overlap."""
 
     async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> Any:
         """Return an object with a ``text`` attribute for the given audio bytes."""
@@ -477,20 +478,45 @@ class ContentBlockResolver:
         """
         if isinstance(content, str):
             return content
-        transcribed: list[ContentBlock] = []
-        for block in content:
+        copies: dict[str, list[tuple[int, MediaBlock]]] = {}
+        for index, block in enumerate(content):
             if (
                 isinstance(block, MediaBlock)
                 and block.media_type.startswith("audio/")
                 and block.transcription is None
             ):
-                text = await self._audio_transcription(block)
+                copies.setdefault(block.attachment_id, []).append((index, block))
+        if not copies:
+            return content
+
+        transcribed = list(content)
+        pending = iter(copies.values())
+        in_flight: set[asyncio.Event] = set()
+
+        async def transcribe_pending() -> None:
+            for occurrences in pending:
+                text = await self._audio_transcription(occurrences[0][1], in_flight)
                 if text is not None:
-                    block = replace(block, transcription=text)
-            transcribed.append(block)
+                    for index, original in occurrences:
+                        transcribed[index] = replace(original, transcription=text)
+
+        if len(copies) == 1:
+            await transcribe_pending()
+        else:
+            # Two workers claim distinct attachments before reading their blobs.
+            # Speech admission and per-engine serialization still apply to each.
+            workers = [asyncio.create_task(transcribe_pending()) for _ in range(2)]
+            try:
+                async for completed in asyncio.as_completed(workers):
+                    completed.result()
+            except BaseException:
+                await cancel_and_wait(*workers)
+                raise
         return transcribed
 
-    async def _audio_transcription(self, block: MediaBlock) -> str | None:
+    async def _audio_transcription(
+        self, block: MediaBlock, in_flight: set[asyncio.Event]
+    ) -> str | None:
         try:
             record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, block.attachment_id)
         except AttachmentResolveError as exc:
@@ -507,6 +533,13 @@ class ContentBlockResolver:
         except AttachmentResolveError as exc:
             _LOGGER.warning("Cannot read audio %s for speech-to-text: %s", block.filename, exc)
             return None
+
+        # With two workers there is at most one sibling in speech admission.
+        # Wait only for this input's own slot; unrelated overload keeps its usual fallback.
+        if in_flight and not getattr(self._transcriber, "has_transcription_capacity", False):
+            await next(iter(in_flight)).wait()
+        done = asyncio.Event()
+        in_flight.add(done)
         try:
             result = await self._transcriber.transcribe(
                 blob_data, filename=block.filename, media_type=block.media_type
@@ -519,6 +552,9 @@ class ContentBlockResolver:
                 exc,
             )
             return None
+        finally:
+            in_flight.remove(done)
+            done.set()
 
         text = getattr(result, "text", None)
         if not isinstance(text, str) or not text.strip():

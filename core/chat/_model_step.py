@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from core.chat._request_history import _prepare_request_context
 from core.chat._run_state import RequestState, refresh_run_permissions
@@ -23,10 +23,9 @@ from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.messages import (
     ChatMessage,
     JsonObject,
-    ToolCall,
 )
 from core.chat.output_files import OutputFileScope
-from core.chat.tool_dispatch import ToolDispatchContext
+from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
 from core.chat.usage import (
     RequestContextEstimate,
 )
@@ -149,6 +148,68 @@ class ModelStepBoundary:
         )
         return messages_for_request, request_estimate
 
+    async def finish_response(
+        self,
+        assistant_message: ChatMessage,
+        call_id: str | None,
+        status: str,
+        failure: Exception | Literal["incomplete"],
+        *,
+        context: _RunExecutionContext,
+        target: _ModelTarget,
+        messages_for_request: list[JsonObject],
+        output_scope: OutputFileScope,
+        request_context_usage: JsonObject,
+        request_estimate: RequestContextEstimate,
+        offered_tool_names: list[str],
+        removed_tool_names: frozenset[str],
+        tool_round: ToolRound | None,
+    ) -> ChatMessage:
+        """Settle the attempt with its completed counters before returning the Assistant."""
+        recorder = self._dependencies.usage_recorder
+        raw_usage = assistant_message.usage
+        if recorder is not None and call_id is not None:
+            recorder.capture_duration_ms(call_id)
+        try:
+            started_tool_calls = tool_round.calls if tool_round is not None else []
+            assistant_message = _with_offered_tool_names(
+                assistant_message,
+                offered_tool_names,
+                self._dependencies.tools,
+                removed=removed_tool_names,
+            )
+            if started_tool_calls:
+                # The turn records its started calls exactly as they run.
+                later_calls = (assistant_message.tool_calls or [])[len(started_tool_calls) :]
+                assistant_message = replace(
+                    assistant_message, tool_calls=[*started_tool_calls, *later_calls]
+                )
+            assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
+                _prepare_completed_assistant,
+                assistant_message,
+                messages_for_request,
+                output_scope,
+                int(request_context_usage["tokens"]),
+                self._dependencies.models.pricing_for(target.model_reference),
+            )
+        except BaseException:
+            # Local preparation or cancellation cannot erase the Provider's outcome.
+            if recorder is not None and call_id is not None:
+                await recorder.finish(call_id, raw_usage, status=status, failure=failure)
+            raise
+        if recorder is not None and call_id is not None:
+            usage = await recorder.finish(
+                call_id,
+                assistant_message.usage,
+                status=status,
+                failure=failure,
+                input_estimate=(request_estimate.model_reference, request_estimate.tokens)
+                if context.context_usage.calibration is recorder
+                else None,
+            )
+            assistant_message = replace(assistant_message, usage=usage)
+        return assistant_message
+
     async def prepare_assistant(
         self,
         context: _RunExecutionContext,
@@ -157,13 +218,8 @@ class ModelStepBoundary:
         *,
         terminal_outcome: TerminalOutcome | None,
         messages_for_request: list[JsonObject],
-        output_scope: OutputFileScope,
-        request_context_usage: JsonObject,
         request_estimate: RequestContextEstimate,
         request_tools: list[JsonObject],
-        offered_tool_names: list[str],
-        removed_tool_names: frozenset[str],
-        started_tool_calls: list[ToolCall],
     ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject, RequestContextEstimate]:
         if (
             not assistant_message.interrupted
@@ -176,45 +232,8 @@ class ModelStepBoundary:
                 context.image_budget.record_delivered, messages_for_request
             )
             await self._requests.persist_image_retirement(context.session, context.image_budget)
-        assistant_message = _with_offered_tool_names(
-            assistant_message,
-            offered_tool_names,
-            self._dependencies.tools,
-            removed=removed_tool_names,
-        )
-        if started_tool_calls:
-            # The turn records its started calls exactly as they run.
-            later_calls = (assistant_message.tool_calls or [])[len(started_tool_calls) :]
-            assistant_message = replace(
-                assistant_message, tool_calls=[*started_tool_calls, *later_calls]
-            )
-        assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
-            _prepare_completed_assistant,
-            assistant_message,
-            messages_for_request,
-            output_scope,
-            int(request_context_usage["tokens"]),
-            self._dependencies.models.pricing_for(target.model_reference),
-        )
         recorder = self._dependencies.usage_recorder
-        call_id = (assistant_message.usage or {}).get("usage_call_id")
-        # The recorder learns the step's measured input together with its
-        # enrichment, in one transaction, when it is this Run's calibration.
-        calibrated = False
-        if recorder is not None and isinstance(call_id, str):
-            calibrated = context.context_usage.calibration is recorder
-            assistant_message = replace(
-                assistant_message,
-                usage=await recorder.update(
-                    call_id,
-                    assistant_message.usage,
-                    input_estimate=(
-                        (request_estimate.model_reference, request_estimate.tokens)
-                        if calibrated
-                        else None
-                    ),
-                ),
-            )
+        calibrated = recorder is not None and context.context_usage.calibration is recorder
         return await _CHAT_TRANSFORM_WORKERS.run(
             _prepare_assistant_context,
             assistant_message,

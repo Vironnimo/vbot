@@ -84,7 +84,10 @@ the same maximum (Provider Wire Behavior below).
 
 `SpeechService` keeps at most four pending STT requests: two executing (including
 preparation) and two waiting. A further request fails with `SpeechBusyError` before
-processing; a cancelled waiter releases its place. This bounds the service queue,
+processing; a cancelled waiter releases its place. Chat checks `has_transcription_capacity`
+immediately before submitting a second attachment. When the queue is full and another
+attachment from the same input is in flight, Chat waits for that attachment to finish.
+A batch with no admitted attachment gets the usual busy fallback. This bounds the service queue,
 not HTTP bodies already received before the call. Provider decode/convert jobs use a separate two-worker
 `BoundedWorkerPool`; cancellation signals frame-boundary checks and joins worker
 cleanup before releasing admission. Local decoding uses the engine's existing

@@ -207,11 +207,19 @@ async def test_a_cancel_while_the_finished_stream_records_usage_keeps_started_ca
     class WaitingUsageRecorder(RecordingUsageRecorder):
         @override
         async def finish(
-            self, call_id: Any, usage: Any = None, *, status: str = "completed", failure: Any = None
+            self,
+            call_id: Any,
+            usage: Any = None,
+            *,
+            status: str = "completed",
+            failure: Any = None,
+            input_estimate: tuple[str, int] | None = None,
         ) -> Any:
             recording.set()
             await release.wait()
-            return await super().finish(call_id, usage, status=status, failure=failure)
+            return await super().finish(
+                call_id, usage, status=status, failure=failure, input_estimate=input_estimate
+            )
 
     async def tool_turn() -> AsyncIterator[JsonObject]:
         yield _call("call_berlin", "Berlin")

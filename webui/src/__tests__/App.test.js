@@ -404,14 +404,17 @@ describe('App', () => {
   it('re-fetches the Agent roster on resource_changed(agents)', async () => {
     rpcMock.mockImplementation(createAppRpcMock({ agents: ALPHA }));
     const handlers = mountApp();
+    await handlers.onEvent({
+      type: 'connection_ready',
+      replay_status: 'fresh',
+      active_runs: [],
+    });
     await waitForCondition(() => {
       expect(selectedAgentName()).toBe('Alpha');
     });
     const agentReads = () =>
       rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length;
-    const readsBefore = agentReads();
-    // Chat and the app shell each read the roster once when they mount.
-    expect(readsBefore).toBe(2);
+    expect(agentReads()).toBe(1);
 
     // The event carries no Agent data.
     await handlers.onEvent({
@@ -420,8 +423,75 @@ describe('App', () => {
       payload: { kind: 'agents' },
     });
 
-    expect(agentReads()).toBeGreaterThan(readsBefore);
+    flushSync();
+    expect(agentReads()).toBe(2);
   });
+
+  it.each(['fresh', 'resumed'])(
+    'recovers a linked Session after its first roster fails around a %s hello',
+    async (replayStatus) => {
+      let rejectSeed;
+      const seed = new Promise((_resolve, reject) => {
+        rejectSeed = reject;
+      });
+      const roster = vi
+        .fn()
+        .mockReturnValueOnce(seed)
+        .mockRejectedValueOnce(new Error('Roster retry unavailable'))
+        .mockResolvedValue({ agents: ALPHA });
+      rpcMock.mockImplementation(
+        createAppRpcMock({
+          methods: { 'agent.list': roster },
+          history: () => assistantHistory('linked', 'Recovered linked reply'),
+        }),
+      );
+      window.history.replaceState(null, '', '#chat/alpha/linked');
+      const connection = mountApp();
+      const hello = () =>
+        connection.onEvent({
+          type: 'connection_ready',
+          replay_status: replayStatus,
+          active_runs: [],
+        });
+      if (replayStatus === 'fresh') {
+        hello();
+        await waitForCondition(() =>
+          expect(rpcMock).toHaveBeenCalledWith('application.update_status'),
+        );
+        expect(roster).toHaveBeenCalledTimes(1);
+        rejectSeed(new Error('Seed unavailable'));
+      } else {
+        rejectSeed(new Error('Seed unavailable'));
+        await waitForCondition(() =>
+          expect(document.body.textContent).toContain('Seed unavailable'),
+        );
+        connection.onClose();
+        connection.onOpen();
+        hello();
+      }
+      await waitForCondition(() =>
+        expect(document.body.textContent).toContain('Roster retry unavailable'),
+      );
+      expect(roster).toHaveBeenCalledTimes(2);
+      expect(window.location.hash).toBe('#chat/alpha/linked');
+      expect(document.body.textContent).not.toContain('Recovered linked reply');
+      expect(document.querySelector('.msg-input')).toBeNull();
+      buttonWithText(
+        '.chat-view__state-banner button',
+        t('common.retry'),
+      ).click();
+      await waitForCondition(() =>
+        expect(document.body.textContent).toContain('Recovered linked reply'),
+      );
+      expect(document.querySelector('.msg-input')).toBeTruthy();
+      expect(window.location.hash).toBe('#chat/alpha/linked');
+      await hello();
+      expect(roster).toHaveBeenCalledTimes(3);
+      expect(
+        rpcMock.mock.calls.filter(([method]) => method === 'chat.timeline'),
+      ).toHaveLength(1);
+    },
+  );
 
   it('refreshes schedule activity for Session changes only while jobs exist', async () => {
     vi.useFakeTimers();
@@ -611,7 +681,7 @@ describe('App', () => {
     expect(document.querySelector('.toast.error')).toBe(toast);
   });
 
-  it('shows one global server notice across tabs and refreshes after reconnect', () => {
+  it('shows one global server notice across tabs and refreshes after reconnect', async () => {
     vi.useFakeTimers();
     const initialConnection = mountApp();
     expect(document.querySelector('.server-availability-notice')).toBeNull();
@@ -676,7 +746,12 @@ describe('App', () => {
     expect(
       document.querySelector('.app-shell__content')?.inert,
     ).toBeUndefined();
-    expect(agentReads()).toBeGreaterThan(agentReadsBeforeRecovery);
+    subscribeServerEventsMock.mock.calls.at(-1)[0].onEvent({
+      type: 'connection_ready',
+      active_runs: [],
+    });
+    await Promise.resolve();
+    expect(agentReads()).toBe(agentReadsBeforeRecovery + 1);
 
     vi.advanceTimersByTime(1400);
     flushSync();

@@ -247,6 +247,8 @@ async def test_settlement_records_duration_and_only_a_failure_keeps_its_class(
         error.status_code = 529
         await owner.finish(failed, status="failed", failure=error)
         await owner.finish(cancelled, status="cancelled", failure=error)
+        owner.capture_duration_ms(completed)
+        now[0] += 10  # Local response preparation takes time after the Provider has finished.
         if retry:
             write = owner.database.write
 

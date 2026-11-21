@@ -7,6 +7,7 @@ import asyncio
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, override
+from unittest.mock import Mock
 
 import pytest
 
@@ -113,9 +114,12 @@ def _hello_tokens() -> int:
 @pytest.mark.asyncio
 async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_record(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path, _adapter(usage=MEASURED))
     recorder = runtime.usage_recorder = UsageRecorder(tmp_path / "model-usage.db")
+    writes = Mock(wraps=recorder.database.write)
+    monkeypatch.setattr(recorder.database, "write", writes)
     try:
         answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -148,7 +152,9 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
 
         # The usage record keeps only the canonical counters and speed, and outlives the Session.
         runtime.chat_sessions.delete(SESSION)
-        _, records = read_ledger(recorder)
+        revision, records = read_ledger(recorder)
+        # Dispatch and final accounting each commit one SQLite transaction.
+        assert writes.call_count == revision == 2
         assert [record.id for record in records] == [answer.usage["usage_call_id"]]
         assert _counters(records[0].usage) == MEASURED
         assert records[0].usage["speed"] == saved.usage["speed"]
@@ -553,16 +559,43 @@ async def test_fatal_request_without_counters_records_unknown_usage(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_local_response_preparation_failure_keeps_the_provider_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path, _adapter("Visible answer", {"input_tokens": 42}))
+    recorder = runtime.usage_recorder = UsageRecorder(tmp_path / "model-usage.db")
+
+    def broken_pricing(_model: str) -> None:
+        raise RuntimeError("local pricing failed")
+
+    monkeypatch.setattr(runtime.models, "pricing_for", broken_pricing)
+    try:
+        with pytest.raises(RuntimeError, match="local pricing failed"):
+            await build_chat_loop(runtime).send("coder", "Work", session_id="session-one")
+        revision, (record,) = read_ledger(recorder)
+        assert revision == 2
+        assert record.status == "completed"
+        assert record.usage["input_tokens"] == 42
+        assert "output_tokens" not in record.usage
+    finally:
+        recorder.close()
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Path) -> None:
     saving = asyncio.Event()
     release = asyncio.Event()
 
     class WaitingUsageRecorder(RecordingUsageRecorder):
         @override
-        async def finish(self, call_id, usage=None, *, status="completed", failure=None):
+        async def finish(
+            self, call_id, usage=None, *, status="completed", failure=None, input_estimate=None
+        ):
             saving.set()
             await release.wait()
-            return await super().finish(call_id, usage, status=status, failure=failure)
+            return await super().finish(
+                call_id, usage, status=status, failure=failure, input_estimate=input_estimate
+            )
 
     runtime = _runtime(
         tmp_path, _adapter("Visible answer", {"input_tokens": 42, "output_tokens": 5})

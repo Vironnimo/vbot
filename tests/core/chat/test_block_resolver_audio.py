@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from core.attachments import AttachmentStore
 from core.chat.block_resolver import AttachmentResolveError, ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.model_tasks import SpeechExecutionError
+from core.model_tasks.speech_types import SpeechBusyError
 from tests.core.chat.block_resolver_test_support import (
     IMAGE_AUDIO_WIRE,
     IMAGE_WIRE,
@@ -100,14 +102,110 @@ def test_incoming_audio_blocks_carry_their_transcription(
         "media", record.id, record.filename, record.media_type, transcription=carried
     )
 
-    content = asyncio.run(resolver.transcribe_audio([text, picture, audio]))
+    alias = replace(audio, filename="voice-again.ogg")
+    content = asyncio.run(resolver.transcribe_audio([audio, text, picture, alias]))
 
-    assert content == [text, picture, MediaBlock(**{**vars(audio), "transcription": expected})]
+    assert content == [
+        replace(audio, transcription=expected),
+        text,
+        picture,
+        replace(alias, transcription=expected),
+    ]
     assert asyncio.run(resolver.transcribe_audio("plain text")) == "plain text"
     if transcriber is not None:
         assert transcriber.calls == ([(record.filename, record.media_type)] if called else [])
     # A new transcription is cached on the attachment, so a re-sent block reuses it.
     assert store.get(record.id).transcription == (cached or (expected if called else None))
+
+
+@pytest.mark.asyncio
+async def test_audio_batch_transcribes_at_most_two_attachments_and_keeps_order(
+    tmp_path: Path,
+) -> None:
+    started: asyncio.Queue[str] = asyncio.Queue()
+    gates = {name: asyncio.Event() for name in ("a.ogg", "b.ogg", "c.ogg", "d.ogg")}
+    active = peak = 0
+
+    class Transcriber:
+        has_transcription_capacity = True
+
+        async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            started.put_nowait(filename)
+            try:
+                await gates[filename].wait()
+                if filename == "c.ogg":
+                    raise SpeechExecutionError("provider unavailable")
+                return SimpleNamespace(text=filename)
+            finally:
+                active -= 1
+
+    store = AttachmentStore(tmp_path)
+    blocks: list[MediaBlock] = []
+    for name in gates:
+        record = store.store(name, OGG_BYTES)
+        blocks.append(MediaBlock("media", record.id, name, record.media_type))
+    resolver = ContentBlockResolver(store, transcriber=Transcriber())
+    batch = asyncio.create_task(resolver.transcribe_audio([*blocks, blocks[2]]))
+    try:
+        assert {await started.get(), await started.get()} == {"a.ogg", "b.ogg"}
+        gates["b.ogg"].set()
+        assert await started.get() == "c.ogg"
+        gates["c.ogg"].set()
+        assert await started.get() == "d.ogg"
+    finally:
+        for gate in gates.values():
+            gate.set()
+        content = await batch
+    assert peak == 2
+    assert started.empty()
+    assert content == [
+        replace(blocks[0], transcription="a.ogg"),
+        replace(blocks[1], transcription="b.ogg"),
+        blocks[2],
+        replace(blocks[3], transcription="d.ogg"),
+        blocks[2],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("occupied", [3, 4], ids=["one-place-left", "full"])
+async def test_audio_batch_shares_remaining_speech_capacity(tmp_path: Path, occupied: int) -> None:
+    full = asyncio.Event()
+    attempts: list[str] = []
+
+    class Transcriber:
+        @property
+        def has_transcription_capacity(self) -> bool:
+            if occupied == 4:
+                full.set()
+                return False
+            return True
+
+        async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+            nonlocal occupied
+            attempts.append(filename)
+            if not self.has_transcription_capacity:
+                raise SpeechBusyError("full")
+            occupied += 1
+            try:
+                await full.wait()
+                return SimpleNamespace(text=filename)
+            finally:
+                occupied -= 1
+
+    store = AttachmentStore(tmp_path)
+    records = [store.store(f"{n}.ogg", OGG_BYTES) for n in range(3)]
+    blocks = [MediaBlock("media", r.id, r.filename, r.media_type) for r in records]
+    resolver = ContentBlockResolver(store, transcriber=Transcriber())
+    content = await resolver.transcribe_audio([*blocks])
+
+    assert sorted(attempts) == [r.filename for r in records]
+    assert content == [
+        replace(block, transcription=block.filename if occupied == 3 else None) for block in blocks
+    ]
 
 
 @pytest.mark.parametrize(

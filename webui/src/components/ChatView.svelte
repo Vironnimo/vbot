@@ -91,6 +91,7 @@
     // included: what is unread while nobody looks at the page.
     onUnattendedResults = () => {},
     sharedAgents = [],
+    sharedRoster = null,
     sharedSelectedAgentId = '',
     // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
     // Phase 3 seeds the persisted value from App; the default keeps the chat
@@ -127,6 +128,7 @@
     onAgentSelected,
     navigateToSubAgent = () => {},
     pendingSessionNavigation = null,
+    preloadSession = null,
     onSessionNavigation = () => {},
     // Workspace coordination between retained Chat areas: this area reports
     // Sessions deleted from its drawer, and releases its own pointer to a
@@ -398,7 +400,9 @@
       if (parseAgentAddress(agentAddress).projectId) {
         return target.refreshProjectTeam();
       }
-      return chatController.loadAgents({ silent: true });
+      return sharedRoster
+        ? sharedRoster.reloadAgentsFromServer()
+        : chatController.loadAgents({ silent: true });
     },
   });
 
@@ -705,6 +709,15 @@
     get sharedAgents() {
       return sharedAgents;
     },
+    get sharedRoster() {
+      return sharedRoster;
+    },
+    get preloadSession() {
+      return preloadSession;
+    },
+    get pendingSessionNavigation() {
+      return pendingSessionNavigation;
+    },
     get sharedSelectedAgentId() {
       return sharedSelectedAgentId;
     },
@@ -977,12 +990,21 @@
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
     </Banner>
+  {:else if !boundSession && chatState.agentsError && (sharedRoster ? !sharedRoster.agentsLoaded : !chatState.agents.length)}
+    <Banner variant="error" class="chat-view__state-banner">
+      {chatState.agentsError}
+      <Button
+        variant="tertiary"
+        onClick={() =>
+          sharedRoster
+            ? sharedRoster.seedAgentsFromServer()
+            : chatController.loadAgents({
+                preferredAgentId: sharedSelectedAgentId,
+              })}>{t('common.retry')}</Button
+      >
+    </Banner>
   {:else if !boundSession && !target.activeAgent && chatState.agents.length === 0 && target.projectGroups.length === 0}
-    <EmptyState
-      fill
-      title={t('chat.noAgents')}
-      description={chatState.agentsError}
-    />
+    <EmptyState fill title={t('chat.noAgents')} />
   {:else if !target.activeAgent}
     <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}

@@ -38,23 +38,23 @@ public address or Run-id reuse never proves historical ownership.
   (`connection_id`, `provider:connection`). Chat passes the Connection serving each
   attempt since 2026-10-30; its earlier requests have none, and `model list`
   ranks routes by it (`statistics.md` -> Interfaces).
-- `finish(id, usage, status=..., failure=...)` stores known canonical counters,
+- `finish(id, usage, status=..., failure=..., input_estimate=None)` stores known canonical counters,
   their per-field estimate provenance and a cost snapshot, returning Usage with
   `usage_call_id`. Missing counters remain absent. Provider-reported cost takes
   precedence over catalog valuation. Recording does not infer token quantities
   for media. Besides counters, flags and cost it keeps only Chat's validated
   output `speed` (`chat/usage.md` -> Output speed) and the request outcome
   (Failures); other producer metadata such as `context_usage` returns to the
-  caller unpersisted.
+  caller unpersisted. Chat captures the duration at the response boundary, then settles
+  the outcome, completed counters, speed, cost and input calibration in a single write.
 - `update(id, usage, *, input_estimate=None)` enriches the same call without
-  changing its outcome. With `input_estimate=(model, estimate)` a measured
+  changing its outcome. On either operation, with `input_estimate=(model, estimate)` a measured
   input in the merged Usage also teaches the calibration in the same write
-  transaction (Chat's per-step update). When Usage carries `last_request_usage`,
+  transaction. When Usage carries `last_request_usage`,
   only that final physical attempt's measured input teaches calibration; an
   empty or partial snapshot never falls back to aggregate attempt counters.
   Cumulative Live Voice reports replace counters instead of adding repeated
-  snapshots. Chat enriches its record with final estimates before appending the
-  Assistant Message. Token-only or estimated-cost updates keep an existing
+  snapshots. Token-only or estimated-cost updates keep an existing
   Provider-reported cost snapshot. A newer Provider-reported cost replaces it
   across scalar and structured reports. Catalog-valued enrichment uses the rates
   already stored for that call, including after a cumulative update leaves the amount temporarily unknown. Completion without new Usage retains earlier measurements.

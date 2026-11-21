@@ -26,15 +26,33 @@ export function createChatViewLifecycle(context) {
   let lastAgentsRefreshToken = null;
 
   $effect(() => {
-    if (
-      context.sharedAgents.length > 0 &&
-      context.sharedAgents !== lastSharedAgents
-    ) {
-      lastSharedAgents = context.sharedAgents;
-      setAgents(chatState, context.sharedAgents, {
+    if (context.boundSession) return;
+    const roster = context.sharedRoster;
+    const rows = roster ? roster.agents : context.sharedAgents;
+    if (roster) {
+      chatState.agentsError = roster.agentsError;
+      chatState.loadingAgents = !roster.agentsLoaded && !roster.agentsError;
+      if (!roster.agentsLoaded) return;
+    } else if (!rows.length) return;
+    if (rows === lastSharedAgents) return;
+    const first = lastSharedAgents === null;
+    lastSharedAgents = rows;
+    untrack(() => {
+      if (first && roster && context.sharedSelectedAgentId) {
+        selectAgent(chatState, context.sharedSelectedAgentId);
+      }
+      setAgents(chatState, rows, {
         preserveSessionSelection: context.preserveSessionSelection,
       });
-    }
+      if (
+        first &&
+        roster &&
+        !context.pendingSessionNavigation &&
+        !context.preloadSession?.preload
+      ) {
+        void chatController.loadAdoptedSelectionHistory();
+      }
+    });
   });
 
   let initialSharedAgentSyncDone = false;
@@ -102,7 +120,7 @@ export function createChatViewLifecycle(context) {
   });
 
   $effect(() => {
-    if (context.boundSession) return;
+    if (context.boundSession || context.sharedRoster) return;
     if (lastAgentsRefreshToken === null) {
       lastAgentsRefreshToken = context.agentsRefreshToken;
       return;
@@ -212,7 +230,7 @@ export function createChatViewLifecycle(context) {
     if (context.boundSession) {
       const { agentAddress, sessionId } = context.boundSession;
       void actions.loadHistoryForSession(agentAddress, sessionId);
-    } else {
+    } else if (!context.sharedRoster) {
       loadAgents({ preferredAgentId: context.sharedSelectedAgentId });
     }
     const onPageAttentionChange = () => {
@@ -326,6 +344,11 @@ export function createChatViewLifecycle(context) {
   untrack(() =>
     chatController.startFromServerState(context.connectionSnapshot),
   );
+
+  $effect.pre(() => {
+    const session = context.preloadSession;
+    untrack(() => chatController.prepareLinkedHistory(session));
+  });
 
   return {
     controller: chatController,
