@@ -8,6 +8,8 @@ Read this reference when you change token pricing, repricing, Context tiers or c
 
 A canonical refresh's repricing of a catalog Load takes from the system root is not kept (`models/refresh.md` -> Staging and publication).
 
+Google bills Lyria 3 Clip, Lyria 3 Pro and Lyria 3.5 per song. Their `google.overrides.json` entries supply empty token rates, replacing the whole inherited price with an unknown token price. [Google Gemini API pricing](https://aistudio.google.com/docs/pricing#lyria-3-5).
+
 ## Cost computation
 
 Pricing selects Context tiers from the complete input of each request (including cache); explicit `tiers` take precedence over legacy `context_over_200k`. Cache reads/writes are removed from ordinary input before applying their rates. Reasoning is already in output and is split only when a distinct rate exists. Zero is a valid price, absent used bucket rates are unknown, and unsupported tier shapes are not silently treated as flat pricing. A finite Provider-reported amount wins over estimation. Prices value API usage; they do not establish actual subscription charges. Chat and Compaction snapshot this result in canonical Usage; historical aggregation and coverage belong to `statistics.md`.
