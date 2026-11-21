@@ -30,15 +30,17 @@ _GUIDES = "references/extensions"
 
 
 def compose_vbot_docs(
-    source: Path, cache_root: Path, records: Sequence[ExtensionRecord]
+    source: Path, cache_root: Path, records: Sequence[ExtensionRecord], *, bootstrap: bool = False
 ) -> Path | None:
     """Build an immutable, read-only-by-policy Skill package before registry publication.
 
     Only this bundled package is composed. Extension code and undeclared files
     are never copied. Old generations survive reloads so existing readers can
-    finish; bootstrap clears the disposable cache before admitting readers.
+    finish. Bootstrap verifies any retained generation before admitting readers.
     """
     if not is_file_strict(source / "SKILL.md"):
+        if bootstrap:
+            clear_documentation_cache(cache_root)
         return None
     files = read_directory(source)
     occupied = {unicodedata.normalize("NFC", name).casefold() for name in files}
@@ -96,7 +98,10 @@ def compose_vbot_docs(
     if not names:
         lines.extend(["No Extensions discovered.", ""])
     files[_INDEX] = PackageFile("\n".join(lines).encode("utf-8"))
-    return _publish(cache_root, files)
+    package = _publish(cache_root, files, bootstrap=bootstrap)
+    if bootstrap:
+        clear_documentation_cache(cache_root, keep=package.parent)
+    return package
 
 
 def _plain(value: str) -> str:
@@ -152,17 +157,19 @@ def _cache_directory(cache_root: Path) -> None:
         raise OSError("The Skill documentation cache is not a regular directory")
 
 
-def clear_documentation_cache(cache_root: Path) -> None:
+def clear_documentation_cache(cache_root: Path, *, keep: Path | None = None) -> None:
     """Discard only our generated trees at bootstrap, before Skills have readers."""
     if stat_or_none(cache_root, follow_symlinks=False) is None:
         return
     _cache_directory(cache_root)
     for child in cache_root.iterdir():
+        if child == keep:
+            continue
         if re.fullmatch(r"[0-9a-f]{64}", child.name) or child.name.startswith(".staging-"):
             remove_tree(child, within=cache_root)
 
 
-def _publish(cache_root: Path, files: dict[str, PackageFile]) -> Path:
+def _publish(cache_root: Path, files: dict[str, PackageFile], *, bootstrap: bool) -> Path:
     digest = hashlib.sha256()
     for path, file in sorted(files.items()):
         digest.update(path.encode("utf-8") + b"\0")
@@ -174,9 +181,19 @@ def _publish(cache_root: Path, files: dict[str, PackageFile]) -> Path:
     package = destination / "vbot-docs"
     status = stat_or_none(destination, follow_symlinks=False)
     if status is not None:
-        if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
-            raise OSError("The Skill documentation generation is not a regular directory")
-        return package
+        regular = not is_link_status(status) and stat.S_ISDIR(status.st_mode)
+        if not bootstrap:
+            if not regular:
+                raise OSError("The Skill documentation generation is not a regular directory")
+            return package
+        if regular:
+            try:
+                if read_directory(package, reject_excluded=True) == files:
+                    return package
+            except PackageError, OSError:
+                pass
+        # No readers exist at bootstrap. Never trust a directory name alone.
+        remove_tree(destination, within=cache_root)
     staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=cache_root))
     try:
         for relative, file in files.items():
