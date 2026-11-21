@@ -42,6 +42,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.usage import ContextRoute, RequestContextUsage
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT, RequestImageBudget
+from core.compaction.errors import CompactionPromptChangedError
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts.pinned_context import (
@@ -69,6 +70,9 @@ if TYPE_CHECKING:
     from core.compaction.compaction import CompactionService, CompactionSettings
     from core.runs import Run
     from core.sessions import SessionReadCursor, TemporarySessionBinding
+
+
+_PROMPT_REFRESH_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -447,7 +451,7 @@ class ChatCompactionHost:
         skill_ceiling: frozenset[str] | None,
         refresh_permissions: Callable[[], Awaitable[RunPermissions]],
     ) -> _CompactionPromptRefresh:
-        while True:
+        for _ in range(_PROMPT_REFRESH_ATTEMPTS):
             permissions = await refresh_permissions()
             refresh = await self.run_transform(
                 self._prepare_prompt_refresh_sync,
@@ -466,6 +470,7 @@ class ChatCompactionHost:
             )
             if permissions.inputs.matches(latest):
                 return cast(_CompactionPromptRefresh, refresh)
+        raise CompactionPromptChangedError("Permissions changed during Compaction. Please retry.")
 
     def _prepare_prompt_refresh_sync(
         self,

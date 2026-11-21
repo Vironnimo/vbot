@@ -29,3 +29,7 @@ class CompactionIncompleteError(CompactionError):
 
 class CompactionInsufficientReclaimError(CompactionError):
     """Raised when an automatic checkpoint would not reclaim enough Context."""
+
+
+class CompactionPromptChangedError(CompactionError):
+    """Raised when changing permissions prevent a stable prompt refresh."""

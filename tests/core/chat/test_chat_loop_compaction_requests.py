@@ -138,6 +138,7 @@ async def test_compaction_routes_session_context_through_selected_adapter(
         await run.wait()
         snapshot = session.read_chat_history_snapshot(limit=1)
         terminal = run.events[-1]
+        assert run.contributes_to_agent_activity
         assert terminal.payload["history_persisted"] is True
         assert terminal.payload["history_cursor"] == snapshot.after_cursor
         assert snapshot.page.record_run_ids == (run.id,)

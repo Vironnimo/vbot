@@ -31,7 +31,7 @@ SCENARIO_DEADLINE_SECONDS = 10
 
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("stage", ["finalizer", "observer"])
-async def test_completion_observer_abort_cannot_strand_committed_run(cancelled, stage):
+async def test_completion_observer_abort_cannot_strand_committed_run(cancelled, stage, caplog):
     class ObserverAbort(BaseException):
         pass
 
@@ -68,13 +68,12 @@ async def test_completion_observer_abort_cannot_strand_committed_run(cancelled, 
 
     run = await manager.start(address, execute)
     queued = await manager.enqueue(address, successor)
-    assert run._task is not None
-    await asyncio.gather(run._task, return_exceptions=True)
-    assert run.status == RunStatus.COMPLETED
     assert await asyncio.wait_for(run.wait(), 1) == "completed output"
+    assert run.status == RunStatus.COMPLETED
     assert run.events[-1].payload["completion_notification_errors"]
     next_run = await asyncio.wait_for(queued.future, 1)
     assert await next_run.wait() == "successor"
+    assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
     await manager.aclose()
 
 
@@ -279,7 +278,7 @@ async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
     assert await replacement.wait() == "must not run"
 
 
-async def test_cancel_during_admission_still_persists_the_cancelled_run() -> None:
+async def test_repeated_cancel_during_admission_still_persists_the_cancelled_run() -> None:
     # The user can cancel before the Run's durable admission has committed. The
     # admission must not be abandoned half-way: the Run is recorded, then closed
     # as cancelled, and its executor never starts.
@@ -307,13 +306,65 @@ async def test_cancel_during_admission_still_persists_the_cancelled_run() -> Non
 
     run = await manager.start(SESSION, execute)
     await admitting.wait()
-    cancel = asyncio.create_task(manager.cancel(run.id))
+    run.request_cancel()
     await asyncio.sleep(0)
+    assert run._task is not None
+    run._task.cancel()
+    await asyncio.sleep(0)
+    assert run.status == RunStatus.RUNNING
+    assert not finished
     release.set()
 
-    assert (await asyncio.wait_for(cancel, 1)).status == RunStatus.CANCELLED
+    with pytest.raises(RunCancelledError):
+        await asyncio.wait_for(run.wait(), 1)
+    await run.wait_admitted()
     assert finished == [(run.id, "cancelled")]
     assert entered == []
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_registrations_while_the_terminal_commit_is_pending(cancelled: bool) -> None:
+    committing = asyncio.Event()
+    release = asyncio.Event()
+    callbacks: list[RunStatus] = []
+    cleanup_calls: list[bool] = []
+
+    class Persistence:
+        async def start_run(self, run):
+            pass
+
+        async def finish_run(self, run, status, payload, *, completion_reason):
+            committing.set()
+            await release.wait()
+            return {"history_persisted": True}
+
+    manager = ChatRunManager(persistence=Persistence())
+
+    async def execute(run: Run) -> str:
+        if cancelled:
+            run.request_cancel()
+            await asyncio.sleep(0)
+        return "done"
+
+    async def observe(status: RunStatus) -> None:
+        callbacks.append(status)
+
+    run = await manager.start(SESSION, execute)
+    await committing.wait()
+    run.add_completion_observer(observe)
+    run.add_cancel_callback(lambda: cleanup_calls.append(True))
+    assert not callbacks
+    release.set()
+
+    expected = RunStatus.CANCELLED if cancelled else RunStatus.COMPLETED
+    if cancelled:
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+    else:
+        assert await run.wait() == "done"
+    assert callbacks == [expected]
+    assert cleanup_calls == ([True] if cancelled else [])
+    await manager.aclose()
 
 
 async def test_cancel_keeps_session_owned_until_async_cleanup_finishes() -> None:

@@ -13,11 +13,14 @@ from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.chat import ChatMessage
 from core.chat._effort_epoch import EffortPin
 from core.chat._prompt_block_epoch import PromptBlockPin
+from core.chat._run_permissions import PermissionInputs
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
+from core.chat.compaction_host import ChatCompactionHost
 from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ToolCall
 from core.chat.wire_shaping import PINNED_IMAGE_DELIVERY_SLOT, PINNED_IMAGE_RETIREMENT_SLOT
+from core.compaction.errors import CompactionPromptChangedError
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
@@ -35,7 +38,7 @@ from core.prompts.pinned_context import (
     pinned_skill_catalog,
     pinned_soul_context,
 )
-from core.runs import Run, RunExecutionOwner
+from core.runs import COMPACTION_ABORTED_EVENT, Run, RunExecutionOwner
 from core.tools import ANALYZE_IMAGE_TOOL_NAME, ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from core.tools.load_tools import register_load_tools_tool
@@ -241,6 +244,55 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         "Prompt context refresh failed after automatic Compaction" in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True], ids=["automatic", "manual"])
+async def test_compaction_aborts_when_permissions_keep_changing_during_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manual: bool
+) -> None:
+    runtime = compaction_runtime(tmp_path, adapter=ClosingStubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    host = loop._compaction_runs._host
+    assert isinstance(host, ChatCompactionHost)
+    render = host._prepare_prompt_refresh_sync
+    matches = PermissionInputs.matches
+    renders = 0
+    rendered = False
+
+    def render_with_rules_changing(**kwargs: Any) -> Any:
+        nonlocal renders, rendered
+        renders += 1
+        assert renders <= 3
+        result = render(**kwargs)
+        rendered = True
+        return result
+
+    def compare(previous: PermissionInputs, latest: PermissionInputs) -> bool:
+        nonlocal rendered
+        if rendered:
+            rendered = False
+            return False
+        return matches(previous, latest)
+
+    monkeypatch.setattr(host, "_prepare_prompt_refresh_sync", render_with_rules_changing)
+    monkeypatch.setattr(PermissionInputs, "matches", compare)
+    try:
+        if manual:
+            run = await loop.start_compaction_run("coder", session.id)
+            with pytest.raises(CompactionPromptChangedError):
+                await run.wait()
+        else:
+            probe = await auto_compact(loop, runtime.agents.get("coder"), session, usage=None)
+            assert probe.rebuilt == probe.request
+            assert probe.run.events[-1].type == COMPACTION_ABORTED_EVENT
+            assert probe.run.events[-1].payload == {"reason": "stale_context"}
+        assert renders == 3
+        assert "compaction_checkpoint" not in persisted_roles(session.load())
+    finally:
+        await runtime.chat_runs.aclose()
 
 
 @pytest.mark.asyncio

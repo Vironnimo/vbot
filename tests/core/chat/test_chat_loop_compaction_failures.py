@@ -136,8 +136,9 @@ async def test_failed_compaction_logs_and_keeps_the_request(
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_preparation_failure_keeps_the_agentic_run_working(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stage", ["context_check", "summary_adapter", "checkpoint"])
+async def test_compaction_preparation_failure_keeps_the_agentic_run_working(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
     runtime = compaction_runtime(
         tmp_path, adapter=StubAdapter([{"content": "Done"}]), context_window=1_000_000
@@ -153,16 +154,24 @@ async def test_checkpoint_preparation_failure_keeps_the_agentic_run_working(
             raise DatabaseUnavailableError("injected checkpoint metadata read failure")
         return await metadata_value(address, key)
 
-    monkeypatch.setattr(sessions, "metadata_value_async", unavailable_scratch_metadata)
+    def unavailable(*_args, **_kwargs):
+        raise DatabaseUnavailableError("injected Compaction preparation failure")
+
+    if stage == "context_check":
+        monkeypatch.setattr(service, "has_new_compactable_context", unavailable)
+    elif stage == "summary_adapter":
+        monkeypatch.setattr(loop._compaction_runs._host, "resolve_summary_adapter", unavailable)
+    else:
+        monkeypatch.setattr(sessions, "metadata_value_async", unavailable_scratch_metadata)
     try:
         run = await loop.start_run("coder", "Continue", session_id=session.id)
         assert (await run.wait()).content == "Done"
-        assert len(service.compact_calls) == 1
         assert "compaction_checkpoint" not in persisted_roles(session.load())
-        assert _lifecycle(await runtime.timelines.events(run)) == [
-            COMPACTION_STARTED_EVENT,
-            COMPACTION_ABORTED_EVENT,
-        ]
+        expected = (
+            [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT] if stage == "checkpoint" else []
+        )
+        assert len(service.compact_calls) == (stage == "checkpoint")
+        assert _lifecycle(await runtime.timelines.events(run)) == expected
     finally:
         await runtime.chat_runs.aclose()
 
@@ -506,3 +515,32 @@ async def test_requested_post_answer_compaction_keeps_the_answer_resolved(
     # The Run stopped after its final answer, so the next request tells nothing about it.
     request = _embed_notes_into_request(session.load())
     assert "previous turn" not in json.dumps(request)
+
+
+@pytest.mark.asyncio
+async def test_stop_settles_a_pending_compaction_before_ending_the_run(tmp_path: Path) -> None:
+    answering = asyncio.Event()
+    service = StubCompactionService(should_auto=False)
+    runtime = compaction_runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="one")
+
+    async def hold_answer(*_args: Any, **_kwargs: Any) -> Any:
+        answering.set()
+        await asyncio.Event().wait()
+
+    runtime.adapter.send = hold_answer
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    try:
+        run = await loop.start_run("coder", "Finish", session_id=session.id)
+        await asyncio.wait_for(answering.wait(), WAIT_SECONDS)
+        assert run.request_compaction()
+        await runtime.chat_runs.cancel(run.id, reason="user")
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+        events = await runtime.timelines.events(run)
+        [aborted] = [event for event in events if event.type == COMPACTION_ABORTED_EVENT]
+        assert aborted.payload == {"reason": "run_finished", "requested_by_user": True}
+        assert aborted.sequence < events[-1].sequence
+        assert not service.compact_calls
+    finally:
+        await runtime.chat_runs.aclose()

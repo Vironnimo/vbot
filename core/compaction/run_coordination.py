@@ -28,6 +28,7 @@ from core.compaction.compaction import (
     carry_notes_into_checkpoint,
     effective_compaction_policy,
 )
+from core.compaction.errors import CompactionPromptChangedError
 from core.performance import record_span, session_track
 from core.providers.providers import context_capacity
 from core.runs import (
@@ -326,6 +327,8 @@ class CompactionRunCoordinator:
             prompt_refresh: object | None = None
             try:
                 prompt_refresh = await self._host.prepare_manual_prompt_refresh(run, agent, request)
+            except CompactionPromptChangedError:
+                raise
             except Exception:
                 _LOGGER.warning(
                     "Prompt context refresh failed after manual Compaction (agent=%s session=%s)",
@@ -422,99 +425,103 @@ class CompactionRunCoordinator:
         if self._host.compaction_service is None:
             return current_state
 
-        settings = await self._run_compaction_settings(context)
-        forced = run.compaction_state == "pending"
-        # A pending request comes from the user; otherwise a configured threshold fired.
-        trigger, reason = ("manual", "requested") if forced else ("auto", settings.trigger)
-        if not settings.auto and not forced:
-            return current_state
-        if settings.strategy == "continuation" and not allow_continuation:
-            if forced and not continue_same_run:
-                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
-            return current_state
+        try:
+            settings = await self._run_compaction_settings(context)
+            forced = run.compaction_state == "pending"
+            # A pending request comes from the user; otherwise a configured threshold fired.
+            trigger, reason = ("manual", "requested") if forced else ("auto", settings.trigger)
+            if not settings.auto and not forced:
+                return current_state
+            if settings.strategy == "continuation" and not allow_continuation:
+                if forced and not continue_same_run:
+                    run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
+                return current_state
 
-        context_window = await self._host.run_transform(
-            self._host.resolve_context_window, agent, target
-        )
-        if context_window is None:
-            if forced:
-                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
-            return current_state
-        input_limit = target.adapter.input_token_limit(target.model_id)
-        capacity = context_capacity(context_window, input_limit)
-
-        current_request_messages = continuation_request_messages or messages
-        accounting = getattr(context, "context_usage", None) or RequestContextUsage()
-        if request_estimate is not None:
-            # Chat supplies this only with the exact completed continuation.
-            # Calibration and the measurement anchor remain live at this boundary.
-            effective_context_usage = accounting.project_prepared(
-                request_estimate, context_window=capacity
+            context_window = await self._host.run_transform(
+                self._host.resolve_context_window, agent, target
             )
-        else:
-            effective_context_usage = await self._host.run_transform(
-                accounting.project,
-                current_request_messages,
-                target=target,
-                tools=tools,
-                scope=context.prompt_cache_affinity_id,
-                context_window=capacity,
-            )
-        input_tokens = int(effective_context_usage["tokens"])
-        run.terminal_payload_extras["context_usage"] = effective_context_usage
+            if context_window is None:
+                if forced:
+                    run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
+                return current_state
+            input_limit = target.adapter.input_token_limit(target.model_id)
+            capacity = context_capacity(context_window, input_limit)
 
-        should_compact = self._host.compaction_service.should_auto_compact(
-            input_tokens,
-            capacity,
-            settings.threshold,
-            settings=settings,
-        )
-        # Compact before the request could exceed a hard limit, including the
-        # estimation margin of its estimated part: the Provider's input limit,
-        # or the room a stable thinking budget needs in the window.
-        request_input = projected_request_input(effective_context_usage)
-        effort = current_state.effort
-        reservation = target.adapter.minimum_output_tokens(
-            target.model_id, effort.current if effort is not None else agent.thinking_effort
-        )
-        limit_reason: str | None = None
-        if input_limit is not None and request_input.upper_bound > input_limit:
-            limit_reason = "input_limit"
-        elif reservation > 0 and request_input.upper_bound > context_window - reservation:
-            limit_reason = "output_reservation"
-        if limit_reason is not None:
-            should_compact = True
-            if not forced:
-                reason = limit_reason
-        if not should_compact and not forced:
-            return current_state
-        # Only this Run appends through its snapshot, but out-of-band writers
-        # (Notes, deliveries) may have advanced the Session; the delta brings the
-        # snapshot current, and its cursor is what the checkpoint commit verifies.
-        async with self._host.sessions.write_lock(session.address):
-            await context.session_snapshot.refresh(session)
-        session_messages = list(context.session_snapshot.active_messages)
-        # The next Model step of this Run must read a freshly loaded Skill before
-        # Compaction digests it; a user request compacts without waiting.
-        if (
-            not forced
-            and settings.strategy == "summary_tail"
-            and has_unconsumed_skill_activation(session_messages, run_id=run.id)
-        ):
-            return current_state
-        has_new_context = await self._host.run_transform(
-            self._host.compaction_service.has_new_compactable_context,
-            session_messages,
-            settings,
-            request_messages=continuation_request_messages or messages,
-            active_adapter=target.adapter,
-            active_model_id=target.model_id,
-            minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-            estimate_factor=accounting.factor(target),
-        )
-        if not has_new_context:
-            if forced:
-                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "no_compactable_context"})
+            current_request_messages = continuation_request_messages or messages
+            accounting = getattr(context, "context_usage", None) or RequestContextUsage()
+            if request_estimate is not None:
+                # Chat supplies this only with the exact completed continuation.
+                # Calibration and the measurement anchor remain live at this boundary.
+                effective_context_usage = accounting.project_prepared(
+                    request_estimate, context_window=capacity
+                )
+            else:
+                effective_context_usage = await self._host.run_transform(
+                    accounting.project,
+                    current_request_messages,
+                    target=target,
+                    tools=tools,
+                    scope=context.prompt_cache_affinity_id,
+                    context_window=capacity,
+                )
+            input_tokens = int(effective_context_usage["tokens"])
+            run.terminal_payload_extras["context_usage"] = effective_context_usage
+
+            should_compact = self._host.compaction_service.should_auto_compact(
+                input_tokens,
+                capacity,
+                settings.threshold,
+                settings=settings,
+            )
+            # Compact before the request could exceed a hard limit, including the
+            # estimation margin of its estimated part: the Provider's input limit,
+            # or the room a stable thinking budget needs in the window.
+            request_input = projected_request_input(effective_context_usage)
+            effort = current_state.effort
+            reservation = target.adapter.minimum_output_tokens(
+                target.model_id, effort.current if effort is not None else agent.thinking_effort
+            )
+            limit_reason: str | None = None
+            if input_limit is not None and request_input.upper_bound > input_limit:
+                limit_reason = "input_limit"
+            elif reservation > 0 and request_input.upper_bound > context_window - reservation:
+                limit_reason = "output_reservation"
+            if limit_reason is not None:
+                should_compact = True
+                if not forced:
+                    reason = limit_reason
+            if not should_compact and not forced:
+                return current_state
+            # Only this Run appends through its snapshot, but out-of-band writers
+            # (Notes, deliveries) may have advanced the Session; the delta brings the
+            # snapshot current, and its cursor is what the checkpoint commit verifies.
+            async with self._host.sessions.write_lock(session.address):
+                await context.session_snapshot.refresh(session)
+            session_messages = list(context.session_snapshot.active_messages)
+            # The next Model step of this Run must read a freshly loaded Skill before
+            # Compaction digests it; a user request compacts without waiting.
+            if (
+                not forced
+                and settings.strategy == "summary_tail"
+                and has_unconsumed_skill_activation(session_messages, run_id=run.id)
+            ):
+                return current_state
+            has_new_context = await self._host.run_transform(
+                self._host.compaction_service.has_new_compactable_context,
+                session_messages,
+                settings,
+                request_messages=continuation_request_messages or messages,
+                active_adapter=target.adapter,
+                active_model_id=target.model_id,
+                minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                estimate_factor=accounting.factor(target),
+            )
+            if not has_new_context:
+                if forced:
+                    run.emit(COMPACTION_ABORTED_EVENT, {"reason": "no_compactable_context"})
+                return current_state
+        except Exception as exc:
+            self._report_auto_preparation_failure(run, exc)
             return current_state
 
         token_limit = (
@@ -559,7 +566,13 @@ class CompactionRunCoordinator:
         try:
             # Keep the acquired Adapter owned here even if cancellation wins the
             # worker await after construction has already completed.
-            summary_model_id, summary_provider_id = await self._host.run_transform(acquire_summary)
+            try:
+                summary_model_id, summary_provider_id = await self._host.run_transform(
+                    acquire_summary
+                )
+            except Exception as exc:
+                self._report_auto_preparation_failure(run, exc)
+                return current_state
             announced = (
                 run.emit(
                     COMPACTION_STARTED_EVENT,
@@ -669,6 +682,14 @@ class CompactionRunCoordinator:
             prompt_refresh: object | None = None
             try:
                 prompt_refresh = await self._host.prepare_automatic_prompt_refresh(context)
+            except CompactionPromptChangedError:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
+                _LOGGER.debug(
+                    "Compaction discarded because permissions kept changing (run=%s session=%s)",
+                    run.id,
+                    run.session_id,
+                )
+                return current_state
             except Exception:
                 _LOGGER.warning(
                     "Prompt context refresh failed after automatic Compaction "
@@ -776,6 +797,25 @@ class CompactionRunCoordinator:
                     name="compaction",
                     args={"run_id": run.id, "trigger": "auto"},
                 )
+
+    @staticmethod
+    def _report_auto_preparation_failure(run: Run, error: Exception) -> None:
+        if run.compaction_state == "pending":
+            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+        if isinstance(error, VBotError):
+            _LOGGER.warning(
+                "Compaction preparation failed (run=%s session=%s cause=%s)",
+                run.id,
+                run.session_id,
+                type(error).__name__,
+            )
+        else:
+            _LOGGER.error(
+                "Compaction preparation failed unexpectedly (run=%s session=%s)",
+                run.id,
+                run.session_id,
+                exc_info=error,
+            )
 
     @staticmethod
     def _emit_compaction_cancelled(run: Run) -> None:

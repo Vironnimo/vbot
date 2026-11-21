@@ -605,9 +605,8 @@ class Run:
         if self.cancel_requested:
             self._schedule_cancel_callback(callback)
             return
-        if self.status != RunStatus.RUNNING:
-            # A finished Run can never be cancelled; keeping the callback
-            # would only pin the resources it closes over.
+        if self.status != RunStatus.RUNNING or self._completion_started:
+            # A Run with a frozen outcome can no longer accept a new cancel request.
             return
         self._cancel_callbacks.append(callback)
 
