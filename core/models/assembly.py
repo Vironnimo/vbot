@@ -336,7 +336,9 @@ def _merge_fields(
     the higher value wholesale. Neither input is mutated.
     """
 
-    result: dict[str, Any] = {key: _plain(value) for key, value in low.items()}
+    # The lower layer is the owned result of the previous merge (or data
+    # freshly decoded by the canonical loader). Only incoming leaves need copying.
+    result = dict(low)
     for key, value in high.items():
         current = result.get(key)
         if value is None:

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from jsonschema.exceptions import SchemaError
 
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions import _callbacks as extension_callbacks
@@ -49,6 +50,8 @@ async def test_services_accept_only_bounded_json_objects(
         name = "extension:fixture:read"
     else:
         catalog.bind([ExtensionService(name, "query", schema, handler)])
+        with pytest.raises(SchemaError):
+            catalog.bind([ExtensionService(name, "query", {"type": "invalid"}, handler)])
     services = catalog.for_owner(ExtensionRegistrationIdentity("consumer", "one"), lambda: None)
     try:
         for params in ({"value": object()}, {"value": float("nan")}, {"value": "x" * (256 * 1024)}):

@@ -146,6 +146,10 @@ class ManagementOperation:
     parameters: JsonObject
     handler: Callable[[JsonObject], Awaitable[JsonObject]]
     secret: bool = False
+    validator: Draft202012Validator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "validator", Draft202012Validator(self.parameters))
 
 
 @dataclass
@@ -201,7 +205,7 @@ class ExtensionOperations:
         operation = self.operations.get(name)
         if operation is None:
             raise ValueError(f"Unknown operation {name!r}; available: {', '.join(self.operations)}")
-        errors = list(Draft202012Validator(operation.parameters).iter_errors(arguments))
+        errors = list(operation.validator.iter_errors(arguments))
         if errors:
             # Validation errors can contain credential values. Expose paths only.
             paths = ["/".join(map(str, error.absolute_path)) or "arguments" for error in errors]

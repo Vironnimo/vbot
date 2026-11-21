@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, lru_cache
 from typing import NamedTuple
 
 from core.database.errors import DatabaseSchemaMismatchError
@@ -95,6 +95,7 @@ def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+@lru_cache(maxsize=1024)
 def _normalized_ddl(sql: str, *, fold_case: bool = False) -> str:
     """Normalize formatting and comments outside quoted SQL tokens, never their values."""
     result: list[str] = []

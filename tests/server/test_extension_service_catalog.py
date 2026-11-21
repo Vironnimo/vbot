@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from core.calendar import CalendarService
 from core.extensions import ExtensionRegistrationIdentity, ExtensionRegistry
@@ -47,6 +48,8 @@ def _bind(state: Any) -> tuple[Any, Any]:
 
 def test_every_rpc_has_an_explicit_public_contract_or_a_discoverable_exclusion() -> None:
     audit_application_services(METHODS)
+    for _, _, schema, _ in SERVICE_DEFINITIONS:
+        Draft202012Validator.check_schema(schema)
     with pytest.raises(ValueError):
         audit_application_services({**METHODS, "future.unreviewed": METHODS["agent.list"]})
     with pytest.raises(ValueError):
