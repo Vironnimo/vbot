@@ -180,9 +180,7 @@ describe('SettingsView', () => {
       }
       await clickButton('Providers');
       expect(document.body.textContent).toContain('OpenAI');
-      expect(
-        document.querySelector('.s-provider-card .chip.success'),
-      ).toBeTruthy();
+      expect(document.querySelector('.s-provider-card .chip')).toBeTruthy();
 
       await clickButton('System');
       expect(document.body.textContent).toContain('127.0.0.1:8420');

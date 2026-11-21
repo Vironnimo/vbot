@@ -32,7 +32,7 @@ describe('SettingsProvidersPanel', () => {
     document.body.innerHTML = '';
     init('en');
     rpcMock.mockReset();
-    rpcMock.mockResolvedValue({});
+    rpcMock.mockResolvedValue({ verification: 'verified' });
     onRefreshProviderSettingsMock.mockReset();
     onRefreshProviderSettingsMock.mockResolvedValue(undefined);
     mountedComponent = null;
@@ -44,6 +44,51 @@ describe('SettingsProvidersPanel', () => {
       mountedComponent = null;
     }
     document.body.innerHTML = '';
+  });
+
+  it('opens key verification for the newly saved Custom Provider without waiting for catalog publication', async () => {
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'provider.custom_save') {
+        return {
+          provider: {
+            ...params.provider,
+            connection_id: 'local-ai:default',
+            credentials_configured: false,
+          },
+        };
+      }
+      return {};
+    });
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: { providers: { items: [] } },
+        visible: true,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
+      },
+    });
+    flushSync();
+    findButton(t('settings.providers.custom.addButton')).click();
+    flushSync();
+    for (const [id, value] of [
+      ['id', 'local-ai'],
+      ['name', 'Local AI'],
+      ['base-url', 'http://127.0.0.1:8080/v1'],
+    ]) {
+      const input = document.getElementById('custom-provider-' + id);
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    document.getElementById('custom-provider-form').requestSubmit();
+    await waitForCondition(() =>
+      document.querySelector('.provider-connect-modal input[type="password"]'),
+    );
+    expect(
+      document.querySelector('.provider-connect-modal').textContent,
+    ).toContain('Local AI');
+    expect(document.querySelector('#provider-account-name').value).toBe(
+      'default',
+    );
   });
 
   it('explains shared OpenCode edits and removes the selected shared Account', async () => {
@@ -97,10 +142,17 @@ describe('SettingsProvidersPanel', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     findButton('Save key').click();
+    await waitForCondition(() =>
+      document
+        .querySelector('.provider-connect-modal [role="status"]')
+        ?.textContent.includes('accepted'),
+    );
+    document.querySelector('.provider-connect-modal .btn-primary').click();
     await waitForCondition(
       () => onRefreshProviderSettingsMock.mock.calls.length > 0,
     );
     expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+      verify: true,
       provider_id: 'opencode-go',
       connection_id: 'opencode-go:api-key',
       account: 'work',

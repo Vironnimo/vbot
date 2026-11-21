@@ -152,7 +152,13 @@ describe('SettingsView provider credentials', () => {
         case 'provider.disconnect':
           return { ...params, status: 'disconnected' };
         case 'provider.set_key':
-          return { ...params, credential_key: 'KEY', configured: true };
+          if (params.value === 'invalid') return { verification: 'rejected' };
+          return {
+            ...params,
+            credential_key: 'KEY',
+            configured: true,
+            verification: 'verified',
+          };
         case 'provider.unset_key':
           return unsetKeyResult;
         default:
@@ -180,9 +186,9 @@ describe('SettingsView provider credentials', () => {
       await openProviders();
 
       expect(document.querySelectorAll('.s-provider-card')).toHaveLength(1);
-      expect(
-        providerRow('OpenRouter').querySelector('.chip.success'),
-      ).toBeTruthy();
+      expect(providerRow('OpenRouter').textContent).toContain(
+        'API key configured',
+      );
       expect(rowButton('OpenRouter', 'Replace key…')).toBeTruthy();
       expect(rowButton('OpenRouter', 'Remove')).toBeTruthy();
     });
@@ -196,12 +202,26 @@ describe('SettingsView provider credentials', () => {
         .click();
       flushSync();
 
+      setInputValue('.provider-connect-modal input', 'invalid');
+      buttonByText('Save key').click();
+      await waitForCondition(() =>
+        modalRoot()
+          ?.querySelector('[role="alert"]')
+          ?.textContent.includes('rejected'),
+      );
+      expect(successToasts(toastMock)).toHaveLength(0);
       currentSettings = credentialSettings({ anthropic: true });
       setInputValue('.provider-connect-modal input', 'sk-ant-test');
       buttonByText('Save key').click();
-      await waitForCondition(() => successToasts(toastMock).length > 0);
+      await waitForCondition(() =>
+        modalRoot()
+          ?.querySelector('[role="status"]')
+          ?.textContent.includes('accepted the API key'),
+      );
+      modalRoot().querySelector('.modal-footer .btn-primary').click();
 
       expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+        verify: true,
         provider_id: 'anthropic',
         connection_id: 'anthropic:api-key',
         account: 'default',
@@ -229,6 +249,7 @@ describe('SettingsView provider credentials', () => {
       );
 
       expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+        verify: true,
         ...OPENROUTER_KEY,
         account: 'default',
         value: 'sk-or-replacement',
@@ -331,6 +352,7 @@ describe('SettingsView provider credentials', () => {
         rpcMock.mock.calls.some((call) => call[0] === 'provider.set_key'),
       );
       expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+        verify: true,
         ...OPENROUTER_KEY,
         account: 'work',
         value: 'sk-or-second',
@@ -366,9 +388,9 @@ describe('SettingsView provider credentials', () => {
       await openProviders();
 
       expect(document.body.textContent).not.toContain('GitHub Copilot');
-      expect(
-        providerRow('OpenRouter').querySelector('.chip.success'),
-      ).toBeTruthy();
+      expect(providerRow('OpenRouter').textContent).toContain(
+        'API key configured',
+      );
       buttonByText('Add provider').click();
       flushSync();
       expect(modalRoot().textContent).toContain('GitHub Copilot');

@@ -139,7 +139,7 @@ describe('CustomProviderModal', () => {
     flushSync();
 
     expect(document.getElementById('custom-provider-id').disabled).toBe(true);
-    expect(document.getElementById('custom-provider-api-key').value).toBe('');
+    expect(document.querySelector('input[type="password"]')).toBeNull();
     // Another writer changed the record after the modal opened.
     rpcMock.mockRejectedValueOnce(
       new ApiClientError('settings_conflict', 'Settings changed', {

@@ -889,21 +889,23 @@ export default Object.freeze({
   'settings.providers.unreachableHint':
     'Start the local server; its Models appear automatically.',
   'settings.providers.endpoint': 'Endpoint',
-  'settings.providers.modelDb.title': 'Model DB',
+  'settings.providers.modelDb.title': 'Model list',
   'settings.providers.modelDb.description':
     'Fetch new Models after a Provider releases them.',
   'settings.providers.modelDb.help':
     'Fetches the current Model lists from your connected Providers and the public Model catalog. Run it when a Provider ships new Models.\n\nYour hand-maintained Model overrides are never changed.',
-  'settings.providers.refreshModels': 'Update',
-  'settings.providers.refreshModelsAria': 'Update Model DB',
+  'settings.providers.refreshModels': 'Update Model list',
+  'settings.providers.refreshModelsAria': 'Update Model list',
   'settings.providers.refreshingModels': 'Updating…',
   'settings.providers.refreshSuccess':
-    'Model DB updated: {providerCount} providers, {count} models available.',
-  'settings.providers.refreshError': 'Model DB could not be updated.',
+    'Model list updated: {providerCount} providers, {count} models available.',
+  'settings.providers.refreshError': 'Model list could not be updated.',
   'settings.providers.refreshPartial':
     'Some providers could not be reached and were skipped: {providers}.',
   'settings.providers.connect': 'Connect',
   'settings.providers.disconnect': 'Disconnect',
+  'settings.providers.keyConfigured': 'API key configured',
+  'settings.providers.keyConfiguredHint': 'This Connection has an API key.',
   'settings.providers.connected': 'Connected',
   'settings.providers.disabledChip': 'Disabled',
   'settings.providers.notReachableChip': 'Not reachable',
@@ -1090,6 +1092,20 @@ export default Object.freeze({
   'settings.providers.add.apiKeyPlaceholder': 'Paste the API key…',
   'settings.providers.add.apiKeyHint':
     'Stored as {credentialKey} in vBot’s encrypted Secret Store. A {credentialKey} set in the server environment takes precedence.',
+  'settings.providers.add.keyVerified':
+    '{provider} accepted the API key. The key is saved.',
+  'settings.providers.add.checkingKey': 'Checking API key…',
+  'settings.providers.add.keyRejected':
+    'The Provider rejected this API key. Check the key and try again.',
+  'settings.providers.add.keyUnavailable':
+    'The Provider could not confirm this key. Retry the check or save it as unverified.',
+  'settings.providers.add.keyUnsupported':
+    'This endpoint cannot verify API keys. You can save the key as unverified.',
+  'settings.providers.add.keyOverridden':
+    'This Account uses an environment variable. Update the key in the server environment.',
+  'settings.providers.add.saveUnchecked': 'Save unverified key',
+  'settings.providers.add.keySavedUnchecked':
+    'API key saved. Provider access is unverified.',
   'settings.providers.add.saveKey': 'Save key',
   'settings.providers.add.keyError': 'API key could not be saved.',
   'settings.providers.add.oauthIntro':
@@ -1128,12 +1144,6 @@ export default Object.freeze({
   'settings.providers.custom.modelsEndpointHint':
     'Optional. Leave empty to use manual Models only.',
   'settings.providers.custom.modelsEndpointPlaceholder': '/models',
-  'settings.providers.custom.apiKey': 'API key',
-  'settings.providers.custom.replaceApiKey': 'Replace API key',
-  'settings.providers.custom.apiKeyNewHint':
-    'Optional. Stored in vBot’s encrypted Secret Store.',
-  'settings.providers.custom.apiKeyHint':
-    'Stored in vBot’s encrypted Secret Store. Leave empty to keep the current key.',
   'settings.providers.custom.modelsTitle': 'Manual Models',
   'settings.providers.custom.modelsHint':
     'Describe Models the endpoint does not list, or correct the facts of listed ones. A manual Model overrides a discovered Model with the same wire id.',
@@ -1240,7 +1250,7 @@ export default Object.freeze({
   'settings.providers.custom.deleteBody':
     'Its stored API keys are removed too. Model references to it stay but become unavailable.',
   'settings.channels.title': 'Channels',
-  'settings.providers.connectedCount': '{count} connected',
+  'settings.providers.connectedCount': '{count} configured',
   'settings.channels.add': 'Add channel',
   'settings.channels.count': '{count} configured',
   'settings.channels.edit': 'Edit channel {id}',

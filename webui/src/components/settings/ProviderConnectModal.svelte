@@ -71,6 +71,7 @@
   let accountValue = $state(untrack(() => scopedAccount) ?? '');
   let saving = $state(false);
   let errorMessage = $state('');
+  let keyCheck = $state('');
   let oauthData = $state(null);
   let oauthActive = $state(false);
   let activeOAuthAccount = $state(DEFAULT_ACCOUNT_ID);
@@ -213,6 +214,7 @@
   }
 
   function goBack() {
+    keyCheck = '';
     errorMessage = '';
     apiKeyValue = '';
     if (!accountFixed) {
@@ -232,13 +234,17 @@
     if (saving) {
       return;
     }
+    if (keyCheck === 'verified' || keyCheck === 'saved') {
+      void completeKey();
+      return;
+    }
     if (oauthActive) {
       void cancelOAuthFlow();
     }
     finishClose();
   }
 
-  async function submitApiKey(event) {
+  async function submitApiKey(event, verify = true) {
     event.preventDefault();
 
     const value = apiKeyValue.trim();
@@ -250,24 +256,47 @@
     errorMessage = '';
 
     try {
-      await setProviderKey({
+      const result = await setProviderKey({
         provider_id: selectedProvider.id,
         connection_id: getPublicConnectionId(selectedConnection),
         account: effectiveAccount(),
         value,
+        ...(verify ? { verify: true } : {}),
       });
-      onToast({
-        title: t('settings.providers.device_flow.success_toast', {
-          provider: providerName(selectedProvider),
-        }),
-        variant: 'success',
-      });
-      await onCompleted();
-      finishClose();
+      if (closed) return;
+      keyCheck = verify ? result?.verification || 'unavailable' : 'saved';
+      if (keyCheck === 'verified' || keyCheck === 'saved') {
+        apiKeyValue = '';
+      } else if (keyCheck === 'rejected') {
+        errorMessage = t('settings.providers.add.keyRejected');
+      } else if (keyCheck === 'overridden') {
+        errorMessage = t('settings.providers.add.keyOverridden');
+      } else if (keyCheck === 'unsupported') {
+        errorMessage = t('settings.providers.add.keyUnsupported');
+      } else {
+        errorMessage = t('settings.providers.add.keyUnavailable');
+      }
     } catch (error) {
       errorMessage = `${t('settings.providers.add.keyError')} ${error.message}`;
     } finally {
       saving = false;
+    }
+  }
+
+  async function completeKey() {
+    if (saving || closed) return;
+    saving = true;
+    try {
+      await onCompleted();
+    } catch (error) {
+      onToast({
+        title: t('settings.loadError'),
+        message: error.message,
+        variant: 'error',
+      });
+    } finally {
+      saving = false;
+      finishClose();
     }
   }
 
@@ -532,6 +561,7 @@
         disabled={fieldDisabled || accountFixed}
         onInput={(next) => {
           accountValue = next;
+          keyCheck = '';
           errorMessage = '';
         }}
       />
@@ -550,7 +580,9 @@
         provider: providerName(selectedProvider),
       })
     : t('settings.providers.add.title')}
-  description={stepDescription}
+  description={keyCheck === 'verified' || keyCheck === 'saved'
+    ? ''
+    : stepDescription}
   labelledById="provider-connect-modal-title"
   class={setupMode
     ? 'provider-connect-modal provider-connect-modal--setup'
@@ -560,7 +592,18 @@
 >
   {#snippet body()}
     <div class="modal-body provider-connect-modal__body">
-      {#if step === 'provider'}
+      {#if keyCheck === 'verified' || keyCheck === 'saved'}
+        <Banner
+          variant={keyCheck === 'verified' ? 'success' : 'warn'}
+          role="status"
+        >
+          {keyCheck === 'verified'
+            ? t('settings.providers.add.keyVerified', {
+                provider: providerName(selectedProvider),
+              })
+            : t('settings.providers.add.keySavedUnchecked')}
+        </Banner>
+      {:else if step === 'provider'}
         {#if providers.length === 0}
           <p>{t('settings.providers.add.allConnected')}</p>
         {:else}
@@ -677,6 +720,7 @@
                 aria-describedby={field.describedBy}
                 onInput={(next) => {
                   apiKeyValue = next;
+                  keyCheck = '';
                   errorMessage = '';
                 }}
               />
@@ -779,47 +823,69 @@
   {/snippet}
 
   {#snippet footer()}
-    {#if canGoBack}
-      <div class="modal-footer__start">
-        <Button variant="tertiary" disabled={saving} onClick={goBack}>
-          {t('common.back')}
+    {#if keyCheck === 'verified' || keyCheck === 'saved'}
+      <Button variant="primary" disabled={saving} onClick={completeKey}
+        >{setupMode ? t('common.next') : t('common.close')}</Button
+      >
+    {:else}
+      {#if canGoBack}
+        <div class="modal-footer__start">
+          <Button variant="tertiary" disabled={saving} onClick={goBack}>
+            {t('common.back')}
+          </Button>
+        </div>
+      {/if}
+      <Button variant="secondary" disabled={saving} onClick={close}>
+        {t('common.cancel')}
+      </Button>
+      {#if step === 'api-key'}
+        {#if keyCheck === 'unsupported' || keyCheck === 'unavailable'}
+          <Button
+            variant="secondary"
+            disabled={saving || accountInvalid}
+            onClick={(event) => submitApiKey(event, false)}
+            >{t('settings.providers.add.saveUnchecked')}</Button
+          >
+        {/if}
+        <Button
+          type="submit"
+          form="provider-connect-key-form"
+          variant="primary"
+          disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
+        >
+          {saving
+            ? t('settings.providers.add.checkingKey')
+            : t('settings.providers.add.saveKey')}
         </Button>
-      </div>
-    {/if}
-    <Button variant="secondary" disabled={saving} onClick={close}>
-      {t('common.cancel')}
-    </Button>
-    {#if step === 'api-key'}
-      <Button
-        type="submit"
-        form="provider-connect-key-form"
-        variant="primary"
-        disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
-      >
-        {saving ? t('common.saving') : t('settings.providers.add.saveKey')}
-      </Button>
-    {:else if step === 'keyless'}
-      <Button variant="primary" disabled={saving} onClick={addKeylessProvider}>
-        {saving ? t('common.saving') : t('settings.providers.add.localSubmit')}
-      </Button>
-    {:else if step === 'external'}
-      <Button
-        variant="primary"
-        disabled={saving}
-        onClick={connectExternalProvider}
-      >
-        {saving
-          ? t('common.loading')
-          : t('settings.providers.external.checkLogin')}
-      </Button>
-    {:else if step === 'oauth' && !oauthActive}
-      <Button
-        variant="primary"
-        disabled={accountInvalid}
-        onClick={startOAuthFlow}
-      >
-        {t('settings.providers.connect')}
-      </Button>
+      {:else if step === 'keyless'}
+        <Button
+          variant="primary"
+          disabled={saving}
+          onClick={addKeylessProvider}
+        >
+          {saving
+            ? t('common.saving')
+            : t('settings.providers.add.localSubmit')}
+        </Button>
+      {:else if step === 'external'}
+        <Button
+          variant="primary"
+          disabled={saving}
+          onClick={connectExternalProvider}
+        >
+          {saving
+            ? t('common.loading')
+            : t('settings.providers.external.checkLogin')}
+        </Button>
+      {:else if step === 'oauth' && !oauthActive}
+        <Button
+          variant="primary"
+          disabled={accountInvalid}
+          onClick={startOAuthFlow}
+        >
+          {t('settings.providers.connect')}
+        </Button>
+      {/if}
     {/if}
   {/snippet}
 </Modal>

@@ -78,6 +78,7 @@
   const stepIds = ['provider', 'model', 'components', 'services'];
   let stepHeading = $state();
   let modalScope = $state(null);
+  let hadProviderBeforeConnect = false;
   let connectionRevision = $state(0);
   let preferredProviderId = $state('');
   let models = $state([]);
@@ -400,7 +401,7 @@
   }
 
   async function handleConnected() {
-    const hadConnectedBefore = usableProviders.length > 0;
+    const hadConnectedBefore = hadProviderBeforeConnect;
     const providerId = modalScope?.scopedProvider?.id ?? '';
     await loadSettings();
     if (disposed) return;
@@ -619,7 +620,10 @@
                 transitioning ||
                 Boolean(settingsError)}
               resetToken={connectionRevision}
-              onSelect={(scope) => (modalScope = scope)}
+              onSelect={(scope) => {
+                hadProviderBeforeConnect = usableProviders.length > 0;
+                modalScope = scope;
+              }}
             />
           {/if}
 

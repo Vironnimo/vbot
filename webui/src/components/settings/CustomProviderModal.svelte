@@ -171,7 +171,6 @@
   let adapter = $state(untrack(() => provider?.adapter ?? 'openai_compatible'));
   let baseUrl = $state(untrack(() => provider?.base_url ?? ''));
   let auth = $state(untrack(() => provider?.auth ?? 'api_key'));
-  let apiKey = $state('');
   let modelsEndpoint = $state(
     untrack(() => provider?.models_endpoint ?? '/models'),
   );
@@ -398,15 +397,12 @@
         // The server refuses the save if the record changed after this modal opened.
         params.expected_revision = provider.revision;
       }
-      if (auth === 'api_key' && apiKey.trim()) {
-        params.api_key = apiKey.trim();
-      }
-      await saveCustomProvider(params);
+      const result = await saveCustomProvider(params);
       onToast({
         title: t('settings.providers.custom.saved'),
         variant: 'success',
       });
-      await onSaved();
+      await onSaved(result.provider);
       onClose();
     } catch (error) {
       const issues = error.details?.data?.wire_issues;
@@ -659,37 +655,6 @@
                 />
               </div>
             </div>
-
-            {#if auth === 'api_key'}
-              <div class="s-row">
-                <div class="s-row-info">
-                  <label class="s-row-label" for="custom-provider-api-key">
-                    {editing
-                      ? t('settings.providers.custom.replaceApiKey')
-                      : t('settings.providers.custom.apiKey')}
-                  </label>
-                  <div class="s-row-desc" id="custom-provider-api-key-desc">
-                    {editing
-                      ? t('settings.providers.custom.apiKeyHint')
-                      : t('settings.providers.custom.apiKeyNewHint')}
-                  </div>
-                </div>
-                <div class="s-row-control">
-                  <TextField
-                    id="custom-provider-api-key"
-                    type="password"
-                    autocomplete="off"
-                    value={apiKey}
-                    disabled={saving}
-                    aria-describedby="custom-provider-api-key-desc"
-                    onInput={(value) => {
-                      apiKey = value;
-                      errorMessage = '';
-                    }}
-                  />
-                </div>
-              </div>
-            {/if}
           </div>
         </section>
 

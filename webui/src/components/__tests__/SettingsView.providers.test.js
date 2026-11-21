@@ -30,7 +30,7 @@ vi.mock('svelte', async () => {
 const { default: SettingsView } = await import('../SettingsView.svelte');
 
 const DEPTH = '#settings-subagents-max-depth';
-const REFRESH = 'Update Model DB';
+const REFRESH = 'Update Model list';
 
 function refreshButtons(root = document) {
   return root.querySelectorAll(`button[aria-label="${REFRESH}"]`);
