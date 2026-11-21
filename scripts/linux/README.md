@@ -22,6 +22,11 @@ public identity already published in `scripts/install.sh`. Publishers select
 only the resulting `vbot-linux` artifact; intermediate `unsigned-linux-*`
 artifacts never reach a release.
 
+When `scripts/install.sh` finds an existing application record, it checks the
+active pointer, the launcher and its runtime before reporting that vBot is
+already installed. An incomplete installation is left in place and reported as
+an error before downloading a package.
+
 ## Files
 
 - `python.lock.json` pins the python-build-standalone CPython of each platform by URL and

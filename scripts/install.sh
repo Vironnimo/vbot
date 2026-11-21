@@ -135,6 +135,17 @@ command -v python3 >/dev/null || fail "python3 is missing; install it first (sud
 INSTALL_DIR="$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$INSTALL_DIR")"
 DATA_DIR="$(python3 -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$DATA_DIR")"
 if [ -f "$INSTALL_DIR/application.json" ]; then
+    ACTIVE_VERSION=$(head -n 1 "$INSTALL_DIR/active-version" 2>/dev/null | tr -d '\r') || ACTIVE_VERSION=""
+    case "$ACTIVE_VERSION" in
+        "" | *[!A-Za-z0-9_.-]* | .*)
+            fail "The vBot installation at $INSTALL_DIR is incomplete. Its active-version file is missing or invalid."
+            ;;
+    esac
+    ACTIVE_RUNTIME="$INSTALL_DIR/versions/$ACTIVE_VERSION/runtime/bin/python3"
+    if [ ! -f "$INSTALL_DIR/vbot" ] || [ ! -x "$INSTALL_DIR/vbot" ] \
+        || [ ! -f "$ACTIVE_RUNTIME" ] || [ ! -x "$ACTIVE_RUNTIME" ]; then
+        fail "The vBot installation at $INSTALL_DIR is incomplete. Its launcher or active runtime is missing or cannot be executed."
+    fi
     status_line OK "vBot is already installed at $INSTALL_DIR"
     echo "Update it with: $INSTALL_DIR/vbot update"
     exit 0

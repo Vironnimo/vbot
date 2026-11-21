@@ -53,6 +53,9 @@ echo "install $*" >> "$FAKE_LOG"
 while [ $# -gt 0 ]; do [ "$1" = --root ] && root="$2"; shift; done
 mkdir -p "$root"
 echo '{}' > "$root/application.json"
+echo 'v1_test' > "$root/active-version"
+mkdir -p "$root/versions/v1_test/runtime/bin"
+cp "$0" "$root/versions/v1_test/runtime/bin/python3"
 printf '#!/bin/sh\necho "vbot $*" >> "$FAKE_LOG"\n' > "$root/vbot"
 chmod 755 "$root/vbot"
 """
@@ -259,6 +262,28 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
 
     assert again.returncode == 0 and "already installed" in again.stdout
     assert _calls(environment) == calls
+
+
+@pytest.mark.parametrize("active_version", [None, "", "v1_missing"])
+def test_installer_reports_an_incomplete_existing_installation(
+    tmp_path: Path, active_version: str | None
+) -> None:
+    environment = _environment(tmp_path)
+    root = Path(environment["HOME"]) / ".local" / "share" / "vbot"
+    root.mkdir(parents=True)
+    (root / "application.json").write_text("{}", encoding="utf-8")
+    launcher = root / "vbot"
+    launcher.write_text("#!/bin/sh\nexit 111\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    if active_version is not None:
+        (root / "active-version").write_text(active_version + "\n", encoding="utf-8")
+
+    result = _install(environment)
+
+    assert result.returncode == 1
+    assert "already installed" not in result.stdout
+    assert str(root) in result.stderr
+    assert _calls(environment) == []
 
 
 @pytest.mark.parametrize(
