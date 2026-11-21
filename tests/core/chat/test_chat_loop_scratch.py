@@ -14,6 +14,7 @@ import pytest
 from core.chat import ChatMessage, _run_execution
 from core.chat._message_history import effective_compaction_messages
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.runs import RunCancelledError, RunInterruptedError, RunKind, RunStatus
 from core.sessions import ChatSession, SessionAddress
 from core.tools import ToolRegistry, tool_success
@@ -365,7 +366,10 @@ async def test_compaction_preserves_exactly_one_current_scratch_announcement(
 
 
 @pytest.mark.asyncio
-async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(tmp_path: Path) -> None:
+@pytest.mark.parametrize("internal", [False, True])
+async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(
+    tmp_path: Path, internal: bool
+) -> None:
     runtime = _runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="source")
     loop = build_chat_loop(runtime)
@@ -373,10 +377,21 @@ async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(tmp_pa
     await run.wait()
     session.append(
         ChatMessage.compaction_checkpoint(
-            summary="Summary", projection=[], compacted_token_count=10
+            summary="Summary",
+            projection=[ChatMessage.user("Previous input"), ChatMessage.note("Previous reminder")],
+            compacted_token_count=10,
         )
     )
-    run = await loop.start_run("coder", "Continue", session_id=session.id)
+    run = await loop.start_run(
+        "coder",
+        "Continue",
+        session_id=session.id,
+        internal=internal,
+        run_kind=RunKind.SYSTEM if internal else RunKind.USER,
+    )
     await run.wait()
     assert len(_notes(tmp_path, session.load())) == 2
-    assert len(_notes(tmp_path, effective_compaction_messages(session.load_active()))) == 1
+    effective = effective_compaction_messages(session.load_active())
+    [scratch] = _notes(tmp_path, effective)
+    replay = _embed_notes_into_request(effective[: effective.index(scratch) + 1])
+    assert runtime.adapter.requests[-1]["messages"][-len(replay) :] == replay

@@ -37,8 +37,8 @@ from core.chat._run_state import (
 from core.chat._scratch_context import (
     SCRATCH_ANNOUNCED_META_KEY,
     SCRATCH_RUN_KINDS,
+    history_for_scratch_announcement,
     scratch_note,
-    scratch_note_visible,
     uses_scratch,
 )
 from core.chat._skill_activation import _activate_triggered_skills
@@ -788,12 +788,12 @@ class RunExecution:
                 or prior.get("own") != own
                 or prior.get("incarnation") != folder.incarnation
             )
-            visible = await _CHAT_TRANSFORM_WORKERS.run(
-                scratch_note_visible,
+            effective = await _CHAT_TRANSFORM_WORKERS.run(
+                history_for_scratch_announcement,
                 context.session_snapshot.active_messages,
-                prior.get("note_id"),
+                prior.get("note_id") if not changed else None,
             )
-            if prior and not changed and visible:
+            if effective is None:
                 return True
             note = scratch_note(folder)
             await context.session_snapshot.commit(
@@ -818,10 +818,11 @@ class RunExecution:
             and len(history) == history_length + 1
             and history[-1].id == note.id
         ):
+            effective.append(note)
             extend_request_with_notes(
                 state.messages,
                 [note],
-                history,
+                effective,
                 replay_policy=context.primary_target.replay_policy,
                 agent_model=context.primary_target.model_reference,
             )
