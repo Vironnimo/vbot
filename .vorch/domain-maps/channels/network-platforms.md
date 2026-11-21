@@ -14,6 +14,8 @@ Slack and Mattermost threads use the parent chat's Session and return replies to
 
 ## Slack
 
+Repeated sends to a Slack destination reuse its last outbound lookup while the adapter retains it. An inbound message carries different sender and thread facts and triggers a fresh destination lookup.
+
 The bot token comes from `token_env_var`; the Socket Mode app token comes from a distinct `app_token_env_var`. `auth.test` establishes the bot identity. `apps.connections.open` uses only the app token and yields a validated Slack WebSocket URL. Envelopes are acknowledged before message dispatch. Bot/self messages and edited/deleted subtypes are ignored. Text/file-share events use stable string conversation IDs.
 
 Outbound files use `files.getUploadURLExternal`, raw-byte upload, then `files.completeUploadExternal`; the retired `files.upload` endpoint is never used. Only HTTPS `files.slack.com` attachment URLs receive the bot token, and redirects are disabled. `conversations.info` validates outbound chat metadata before recording Session context; like the Mattermost channel lookup, this lookup runs under the same per-step retry as the posts, so a transient failure before anything was sent does not fail the send. Required app scopes/events and installation steps are in `USAGE.md` -> Slack.
