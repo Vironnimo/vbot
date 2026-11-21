@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncGenerator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, tzinfo
@@ -45,7 +44,12 @@ from core.providers.errors import (
     in_band_error_text,
     usage_limit_error,
 )
-from core.providers.http import iter_stream_lines, split_stream_lines, wrap_network_error
+from core.providers.http import (
+    iter_stream_lines,
+    parse_sse_json_data,
+    split_stream_lines,
+    wrap_network_error,
+)
 from core.providers.reasoning import merge_reasoning_meta
 from core.utils.http_status import parse_rate_limit_retry_after, parse_retry_after
 
@@ -262,16 +266,10 @@ def _flush_sse_event(
     data = "\n".join(data_parts).strip()
     if not data or data == RESPONSES_DONE_MARKER:
         return
-    try:
-        parsed = json.loads(data)
-    except json.JSONDecodeError as exc:
-        raise ProviderError(
-            f"Responses provider sent malformed JSON in stream ({exc.msg}): {data}",
-            retryable=False,
-        ) from exc
+    parsed = parse_sse_json_data(data, context="Responses provider")
     if not isinstance(parsed, Mapping):
         raise ProviderError(
-            f"Responses provider sent non-object JSON in stream: {data}",
+            "Responses provider sent non-object JSON in stream",
             retryable=False,
         )
     yield event_name, parsed

@@ -166,7 +166,7 @@ The shared Responses codec's `stream_responses_sse` (`_responses_stream.py`, exp
 - `retry_async()` stamps every caught `VBotError` with this retry loop's one-based `attempts_made` count before either retrying or rethrowing it. Provider-backed Tools may preserve that metadata in their failure envelope; a nested retry boundary reports its own operation-attempt count rather than an aggregate of lower-level HTTP attempts.
 - Authorization headers are rebuilt inside every retry attempt so OAuth refresh remains effective.
 
-The shared Responses SSE framer uses Provider-neutral error wording and includes the malformed/non-object data frame in the exception message so persisted failures retain the evidence (`test_stream_bad_frames_keep_evidence_without_naming_a_provider`).
+The shared Responses SSE framer reports malformed JSON and non-object frames with Provider-neutral errors. Raw frames stay in the transport's opt-in Debug capture (`debug.md`; `test_stream_bad_frames_keep_payload_out_of_provider_errors`).
 
 ## Provider-backed task clients
 
