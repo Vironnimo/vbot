@@ -250,6 +250,8 @@ def responses_terminal_outcome(
         reason = (
             incomplete_details.get("reason") if isinstance(incomplete_details, Mapping) else None
         )
+        if not isinstance(reason, str):
+            return TERMINAL_OUTCOME_UNKNOWN
         if reason == "max_output_tokens":
             return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
         if reason in {"content_filter", "content_policy_violation"}:

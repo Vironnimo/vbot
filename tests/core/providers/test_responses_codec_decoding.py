@@ -308,13 +308,16 @@ def test_normalize_response_extracts_tool_calls(
         ("incomplete", "max_output_tokens", TERMINAL_OUTCOME_OUTPUT_TRUNCATED),
         ("incomplete", "content_filter", TERMINAL_OUTCOME_CONTENT_FILTERED),
         ("incomplete", "other", TERMINAL_OUTCOME_UNKNOWN),
+        pytest.param(
+            "incomplete", ["content_filter"], TERMINAL_OUTCOME_UNKNOWN, id="malformed-reason"
+        ),
         ("failed", "", TERMINAL_OUTCOME_ERROR),
         ("completed", "", TERMINAL_OUTCOME_TOOL_CALLS),
         (None, "", TERMINAL_OUTCOME_UNKNOWN),
     ],
 )
 def test_normalize_response_terminal_outcome_guards_incomplete_calls(
-    status: str | None, reason: str, outcome: str
+    status: str | None, reason: str | list[str], outcome: str
 ) -> None:
     response = normalize_responses_response(
         {
