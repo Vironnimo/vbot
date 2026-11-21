@@ -4,6 +4,7 @@ import {
   agentNeedsModel,
   connectedProviderId,
   isOperational,
+  pickDefaultOnboardingModel,
   providerModalScope,
   onboardingProviders,
 } from '../onboarding.js';
@@ -228,5 +229,32 @@ describe('onboardingProviders', () => {
       connected: true,
       scope: null,
     });
+  });
+});
+
+describe('pickDefaultOnboardingModel', () => {
+  it('preserves a matching saved Model, else prefers favorite, verified, then suitable', () => {
+    const options = [
+      { value: 'openrouter/a', suitable: true },
+      {
+        value: 'openrouter/b',
+        suitable: true,
+        marker: { label: 'Verified' },
+      },
+      {
+        value: 'openrouter/c',
+        suitable: true,
+        favorite: { listed: true },
+      },
+    ];
+    expect(
+      pickDefaultOnboardingModel(options, { currentModel: 'openrouter/a' }),
+    ).toBe('openrouter/a');
+    expect(pickDefaultOnboardingModel(options)).toBe('openrouter/c');
+    expect(pickDefaultOnboardingModel(options.slice(0, 2))).toBe(
+      'openrouter/b',
+    );
+    expect(pickDefaultOnboardingModel([options[0]])).toBe('openrouter/a');
+    expect(pickDefaultOnboardingModel([])).toBe('');
   });
 });

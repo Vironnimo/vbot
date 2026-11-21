@@ -9,7 +9,16 @@ from typing import Any, override
 from unittest.mock import AsyncMock
 
 import pytest
-from textual.widgets import Button, Checkbox, Input, OptionList, SelectionList, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Collapsible,
+    Input,
+    OptionList,
+    Select,
+    SelectionList,
+    Static,
+)
 
 from cli._server_target import ServerInstance
 from cli.tui.app import ConversationApp
@@ -31,7 +40,10 @@ class SetupServer(TerminalClient):
         self.model = ""
         self.fail_method = ""
         self.connected = False
+        self.extra_connected = False
+        self.extra_providers: list[JsonObject] = []
         self.connection_type = "api_key"
+        self.models: list[JsonObject] | None = None
         self.extension_settings = {"disabled": ["kept-off"], "config": {"example": {"a": 1}}}
         self.service: JsonObject = {
             "state": "idle",
@@ -61,23 +73,23 @@ class SetupServer(TerminalClient):
             self.state.update(status="completed" if self.model else "skipped", auto_show=False)
             return dict(self.state)
         if method == "settings.get":
-            return {
-                "providers": {
-                    "items": [
+            items: list[JsonObject] = [
+                {
+                    "id": "test",
+                    "name": "Test Provider",
+                    "connections": [
                         {
-                            "id": "test",
-                            "connections": [
-                                {
-                                    "id": "test:api",
-                                    "label": "Test API",
-                                    "type": self.connection_type,
-                                    "connectable": True,
-                                }
-                            ],
+                            "id": "test:api",
+                            "label": "Test API",
+                            "type": self.connection_type,
+                            "connectable": True,
+                            "usable": self.connected,
                         }
-                    ]
+                    ],
                 }
-            }
+            ]
+            items.extend(self.extra_providers)
+            return {"providers": {"items": items}}
         if method == "provider.connect":
             if self.connection_type == "external":
                 return {"connected": False, "setup_command": "test login"}
@@ -86,11 +98,23 @@ class SetupServer(TerminalClient):
             self.connected = True
             return {"connected": True}
         if method == "provider.set_key":
-            return {"connection_id": "test:api"}
+            return {"connection_id": params["connection_id"]}
         if method == "connection.set_enabled":
-            self.connected = True
+            if params["provider_id"] == "test":
+                self.connected = True
+            else:
+                self.extra_connected = True
+                for provider in self.extra_providers:
+                    if provider["id"] == params["provider_id"]:
+                        for row in provider["connections"]:
+                            if row["id"] == params["connection_id"]:
+                                row["usable"] = True
             return {"enabled": True}
+        if method == "model.refresh_db":
+            return {"providers": [], "model_count": 0}
         if method == "model.list":
+            if self.models is not None:
+                return {"models": list(self.models)}
             return {
                 "models": [{"id": "test/model", "name": "Test Model"}] if self.connected else []
             }
@@ -141,7 +165,7 @@ async def test_setup_can_finish_each_step_without_changing_defaults(step: str) -
         await pilot.pause()
         if step == "model":
             assert app.screen.query_one("#setup-choices", OptionList).option_count == 0
-        await pilot.click("#setup-finish")
+        await pilot.click("#setup-skip")
         await pilot.pause()
     assert server.state["status"] == "skipped"
     assert server.state["auto_show"] is False
@@ -165,7 +189,17 @@ async def test_tui_setup_precedes_chat_and_reopen_keeps_terminal_status(
         await pilot.pause()
         assert isinstance(app.screen, SetupScreen)
         bootstrap.assert_not_awaited()
+        search = app.screen.query_one("#setup-search", Input)
+        search.value = "test"
         await pilot.press("escape")
+        await pilot.pause()
+        assert search.value == ""
+        assert isinstance(app.screen, SetupScreen)
+        assert server.state["status"] == "pending"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, SetupScreen)
+        await pilot.click("#setup-skip")
         await pilot.pause()
         bootstrap.assert_awaited_once()
         assert server.state["status"] == "skipped"
@@ -174,7 +208,7 @@ async def test_tui_setup_precedes_chat_and_reopen_keeps_terminal_status(
         assert isinstance(app.screen, SetupScreen)
         assert server.state["status"] == "skipped"
         assert server.state["auto_show"] is False
-        await pilot.click("#setup-finish")
+        await pilot.click("#setup-skip")
         await pilot.pause()
 
 
@@ -196,7 +230,10 @@ async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model(
         key.value = "test-secret"
         if retry_enablement:
             server.fail_method = "connection.set_enabled"
-        await pilot.click("#setup-connect")
+            await pilot.click("#setup-connect")
+        else:
+            key.focus()
+            await pilot.press("enter")
         await pilot.pause()
         assert key.value == ""
         if retry_enablement:
@@ -205,12 +242,10 @@ async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model(
             await pilot.click("#setup-retry")
             await pilot.pause()
         assert server.connected
-        await pilot.click("#setup-next")
-        await pilot.pause()
-        choices = app.screen.query_one("#setup-choices", OptionList)
-        choices.focus()
-        choices.highlighted = 0
-        await pilot.press("enter")
+        # Connecting the first Provider auto-advances to Model and preselects one.
+        assert isinstance(app.screen, SetupScreen)
+        assert app.screen.step == "model"
+        assert app.screen.selected_model == "test/model"
         await pilot.click("#setup-finish")
         await pilot.pause()
     assert server.model == "test/model"
@@ -218,6 +253,72 @@ async def test_setup_masks_key_and_finishes_after_assigning_first_agent_model(
     assert ("agent.update", {"id": "first", "model": "test/model"}) in server.calls
     assert len([method for method, _ in server.calls if method == "provider.set_key"]) == 1
     assert not hasattr(app, "draft_store")
+
+
+@pytest.mark.asyncio
+async def test_setup_add_another_provider_stays_on_provider_and_filters_models() -> None:
+    server = SetupServer()
+    server.extra_providers = [
+        {
+            "id": "second",
+            "name": "Second Provider",
+            "connections": [
+                {"id": "second:api", "label": "API Key", "type": "api_key", "connectable": True},
+                {"id": "second:oauth", "label": "Sign in", "type": "oauth", "connectable": True},
+            ],
+        }
+    ]
+    server.models = [
+        {"id": "test/one", "provider_id": "test", "name": "Test One"},
+        {"id": "second/two", "provider_id": "second", "name": "Second Two"},
+    ]
+    app = SetupApp(server)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#setup-choices", OptionList)
+        choices.focus()
+        choices.highlighted = 1  # Test Provider (sorted alphabetically after Second Provider)
+        await pilot.press("enter")
+        key = app.screen.query_one("#setup-key", Input)
+        key.value = "first-key"
+        key.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SetupScreen)
+        assert app.screen.step == "model"
+        assert app.screen.selected_model == "test/one"
+
+        await pilot.click("#setup-back")
+        await pilot.pause()
+        assert app.screen.step == "provider"
+        choices = app.screen.query_one("#setup-choices", OptionList)
+        choices.focus()
+        choices.highlighted = 0  # Second Provider
+        await pilot.press("enter")
+        methods = app.screen.query_one("#setup-methods", OptionList)
+        assert methods.display is True
+        methods.highlighted = 0
+        await pilot.press("enter")
+        key = app.screen.query_one("#setup-key", Input)
+        key.value = "second-key"
+        key.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        # Subsequent Provider connections stay on Providers so more can be added.
+        assert app.screen.step == "provider"
+        assert server.extra_connected
+
+        await pilot.click("#setup-next")
+        await pilot.pause()
+        assert app.screen.step == "model"
+        assert app.screen.selected_model == "second/two"
+        selector = app.screen.query_one("#setup-provider-select", Select)
+        selector.value = "test"
+        await pilot.pause()
+        assert app.screen.selected_model == "test/one"
+        await pilot.click("#setup-finish")
+        await pilot.pause()
+    assert server.model == "test/one"
 
 
 @pytest.mark.asyncio
@@ -237,7 +338,7 @@ async def test_setup_connects_local_and_login_connections(connection_type: str) 
         if connection_type != "none":
             app.screen.query_one("#setup-login-check", Button).press()
             await pilot.pause()
-        await pilot.press("escape")
+        await pilot.click("#setup-skip")
         await pilot.pause()
     assert server.connected
     assert server.state["status"] == "skipped"
@@ -265,6 +366,7 @@ async def test_setup_saves_component_choices_on_exit_without_overwriting_other_s
 @pytest.mark.parametrize("retry", [False, True])
 async def test_setup_loading_failure_remains_visible_and_allows_finish(retry: bool) -> None:
     server = SetupServer()
+    server.connected = True
     server.fail_method = "model.list"
     app = SetupApp(server)
     async with app.run_test(size=(110, 40)) as pilot:
@@ -279,7 +381,7 @@ async def test_setup_loading_failure_remains_visible_and_allows_finish(retry: bo
             assert isinstance(app.screen, SetupScreen)
             assert app.screen.step == "model"
             assert server.state["step"] == "model"
-        await pilot.click("#setup-finish")
+        await pilot.click("#setup-skip")
         await pilot.pause()
     assert server.state["status"] == "skipped"
 
@@ -290,13 +392,15 @@ async def test_setup_rpc_failure_can_retry_and_close_without_claiming_completion
     method: str,
 ) -> None:
     server = SetupServer()
+    if method == "setup.update":
+        server.connected = True
     server.fail_method = method
     app = SetupApp(server)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         if method != "setup.get":
             app.screen.query_one(
-                "#setup-next" if method == "setup.update" else "#setup-finish", Button
+                "#setup-next" if method == "setup.update" else "#setup-skip", Button
             ).press()
             await pilot.pause()
         assert str(app.screen.query_one("#setup-error", Static).content) == "Test refusal"
@@ -334,6 +438,7 @@ async def test_service_plan_requires_explicit_prerequisite_selection() -> None:
     async with app.run_test(size=(110, 40)) as pilot:
         await pilot.pause()
         panel = app.screen.query_one(ServicePanel)
+        assert panel.query_one("#service-existing-collapsible", Collapsible).collapsed is True
         await pilot.click("#service-install")
         await pilot.pause()
         assert not any(method == "managed_service.apply" for method, _ in server.calls)
@@ -372,7 +477,7 @@ async def test_service_authorizes_local_prerequisites_then_uses_fresh_plan(
         app.screen.query_one("#service-prerequisites", Checkbox).value = True
         app.screen.query_one("#service-install", Button).press()
         await pilot.pause()
-        await pilot.press("escape")
+        await pilot.click("#setup-skip")
         await pilot.pause()
     assert authorized == [(server.target, True)]
     assert (

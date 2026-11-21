@@ -327,7 +327,7 @@ describe('OnboardingView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('stays on Providers after connecting and advances only when the user continues', async () => {
+  it('auto-advances after the first Provider, preselects a Model, and stays on Providers when adding another', async () => {
     mountedComponent = mount(OnboardingView, {
       target: document.body,
       props: { onComplete: vi.fn(), onDismiss: vi.fn(), onToast: vi.fn() },
@@ -336,22 +336,16 @@ describe('OnboardingView', () => {
 
     await connectProvider();
     await waitFor(() => {
-      expect(
-        document.querySelector('.onboarding-provider-row--connected'),
-      ).toBeTruthy();
-      expect(document.querySelector('.onboarding-model-body')).toBeNull();
-      expect(
-        document.querySelector('.onboarding-connected-summary').textContent,
-      ).toContain('OpenRouter');
-    });
-    await continueToModels();
-
-    await waitFor(() => {
+      expect(document.querySelector('.onboarding-model-body')).toBeTruthy();
       expect(
         document.querySelector(
           '.onboarding-progress li:nth-child(2) [aria-current="step"]',
         ),
       ).toBeTruthy();
+      expect(
+        document.querySelector('.onboarding-selection')?.textContent,
+      ).toContain('Claude Sonnet 4');
+      expect(byText('button', 'Start chatting').disabled).toBe(false);
     });
     expect(rpcMock).toHaveBeenCalledWith(
       'provider.set_key',
@@ -361,6 +355,30 @@ describe('OnboardingView', () => {
       }),
     );
     expect(rpcMock).toHaveBeenCalledWith('model.list');
+
+    // Adding another Provider keeps the user on the Provider step after connecting.
+    byText('button', t('onboarding.model.back')).click();
+    await waitFor(() =>
+      expect(byText('.onboarding-provider-row', 'OpenAI')).toBeTruthy(),
+    );
+    expect(server.state.lastAgentUpdate).toBeNull();
+    byText('.onboarding-provider-row', 'OpenAI').click();
+    flushSync();
+    byText('.provider-pick-item', 'API Key').click();
+    flushSync();
+    const keyInput = document.querySelector('#provider-api-key');
+    keyInput.value = 'sk-openai-key';
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document
+      .querySelector('#provider-connect-key-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.querySelector('.onboarding-model-body')).toBeNull();
+      expect(
+        document.querySelector('.onboarding-connected-summary').textContent,
+      ).toContain(connectedCount(2));
+    });
   });
 
   it('starts with an unfiltered Model search and offers a reversible free filter that clears a paid selection', async () => {
@@ -489,7 +507,7 @@ describe('OnboardingView', () => {
     },
   );
 
-  it('connects multiple Providers and both sign-in and API-key methods without leaving the Provider step', async () => {
+  it('connects multiple Providers and both sign-in and API-key methods after returning to Providers', async () => {
     const props = reactiveProps({
       providerAuthEvent: null,
       modelsRefreshToken: 0,
@@ -521,11 +539,14 @@ describe('OnboardingView', () => {
     props.modelsRefreshToken += 1;
     await waitFor(() => {
       expect(document.querySelector('[role="dialog"]')).toBeNull();
-      expect(document.querySelector('.onboarding-model-body')).toBeNull();
+      expect(document.querySelector('.onboarding-model-body')).toBeTruthy();
+    });
+    byText('button', t('onboarding.model.back')).click();
+    await waitFor(() =>
       expect(
         byText('.onboarding-provider-row--connected', 'OpenAI'),
-      ).toBeTruthy();
-    });
+      ).toBeTruthy(),
+    );
     byText('.onboarding-provider-row', 'OpenAI').click();
     flushSync();
     // The one remaining method opens directly and keeps the original sign-in.
@@ -572,7 +593,7 @@ describe('OnboardingView', () => {
     await waitFor(() => {
       expect(document.querySelector('.empty-state--compact')).toBeTruthy();
       expect(byText('.btn-secondary', 'Try again')).toBeTruthy();
-      expect(byText('button', 'Back to Providers')).toBeTruthy();
+      expect(byText('button', t('onboarding.model.back'))).toBeTruthy();
       expect(byText('button', 'Start chatting').disabled).toBe(true);
     });
 
@@ -648,7 +669,7 @@ describe('OnboardingView', () => {
       expect(document.querySelector('[role="alert"]')).toBeTruthy(),
     );
     expect(byText('button', 'Start chatting').disabled).toBe(true);
-    byText('button', 'Back to Providers').click();
+    byText('button', t('onboarding.model.back')).click();
     await waitFor(() =>
       expect(
         document.querySelector('.onboarding-provider-row--connected'),
@@ -776,7 +797,13 @@ describe('OnboardingView', () => {
     flushSync();
     byText('.s-dropdown-opt', 'OpenAI').click();
     flushSync();
-    expect(byText('button', 'Start chatting').disabled).toBe(true);
+    expect(
+      document.querySelector('.onboarding-selection')?.textContent,
+    ).toContain('Other Model');
+    expect(
+      document.querySelector('.onboarding-selection')?.textContent,
+    ).not.toContain('Claude Sonnet');
+    expect(byText('button', 'Start chatting').disabled).toBe(false);
     document.querySelector('#onboarding-model').click();
     flushSync();
     expect(byText('.s-dropdown-opt', 'Other Model')).toBeTruthy();
@@ -797,7 +824,7 @@ describe('OnboardingView', () => {
     mountedComponent = mount(OnboardingView, { target: document.body });
     await continueToModels();
     await waitFor(() => expect(resolveModels).toBeTypeOf('function'));
-    expect(byText('button', 'Back to Providers')).toBeTruthy();
+    expect(byText('button', t('onboarding.model.back'))).toBeTruthy();
     await unmount(mountedComponent);
     mountedComponent = null;
     resolveModels({ models: openrouterModels() });
@@ -825,9 +852,7 @@ describe('OnboardingView', () => {
             ? t('onboarding.progress.service')
             : step === 'model'
               ? t('onboarding.progress.model')
-              : step === 'components'
-                ? t('onboarding.progress.components')
-                : t('onboarding.progress.services'),
+              : t('onboarding.optional.badge'),
         ),
       );
       byText('button', t('onboarding.dismiss')).click();
@@ -1065,10 +1090,15 @@ describe('OnboardingView', () => {
       await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('setup.get'));
 
       if (source === 'local') {
-        byText(
-          '.onboarding-progress button',
-          t('onboarding.progress.components'),
-        ).click();
+        server.state.connected = true;
+        server.state.setup.step = 'model';
+        props.initialSetup = { ...server.state.setup };
+        await waitFor(() =>
+          expect(
+            byText('button', t('onboarding.model.customize')),
+          ).toBeTruthy(),
+        );
+        byText('button', t('onboarding.model.customize')).click();
       } else {
         props.initialSetup = { ...server.state.setup, step: 'components' };
       }

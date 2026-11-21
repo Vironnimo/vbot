@@ -537,6 +537,13 @@
   padding-top: 20px;
   border-top: 1px solid var(--border);
 }
+.onboarding-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
 .onboarding-footer .btn-primary {
   min-height: 42px;
   padding-inline: 18px;
@@ -637,7 +644,12 @@
     align-items: stretch;
     gap: 12px;
   }
-  .onboarding-footer > button {
+  .onboarding-footer-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .onboarding-footer > button,
+  .onboarding-footer-actions > button {
     min-height: 44px;
   }
   .onboarding-footnote {

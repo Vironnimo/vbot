@@ -5,8 +5,39 @@ import {
   getUsableProviderItems,
   isOAuthDeviceFlowConnection,
 } from './settingsView.js';
+import {
+  parseModelSelectionValue,
+  selectModelValue,
+} from './modelSelection.js';
 
 export const ONBOARDING_TARGET_AGENT_ID = 'main';
+export const CORE_ONBOARDING_STEPS = ['provider', 'model'];
+
+// Pick a sensible initial Model for onboarding: preserve a matching current
+// selection, else prefer favorites, verified wire profiles, then suitable ones.
+export function pickDefaultOnboardingModel(
+  options,
+  { currentModel = '' } = {},
+) {
+  if (!Array.isArray(options) || options.length === 0) return '';
+  const trimmed = typeof currentModel === 'string' ? currentModel.trim() : '';
+  if (trimmed) {
+    const resolved = selectModelValue(trimmed, options);
+    const parsed = parseModelSelectionValue(trimmed);
+    const match = options.find(
+      (option) =>
+        option.value === resolved ||
+        parseModelSelectionValue(option.value).model === parsed.model,
+    );
+    if (match) return match.value;
+  }
+  const preferred =
+    options.find((option) => option.favorite?.listed) ??
+    options.find((option) => Boolean(option.marker)) ??
+    options.find((option) => option.suitable !== false) ??
+    options[0];
+  return preferred?.value ?? '';
+}
 
 // Credentials alone do not make a disabled Connection operational.
 export function isOperational(settings) {

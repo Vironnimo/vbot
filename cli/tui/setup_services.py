@@ -8,7 +8,7 @@ from typing import Any, override
 from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Checkbox, Input, Static
+from textual.widgets import Button, Checkbox, Collapsible, Input, Static
 
 from cli._dispatch_service import ActionRequiredError, install_local_service_prerequisites
 from cli.tui.rendering import terminal_text
@@ -47,11 +47,16 @@ class ServicePanel(Vertical):
             ):
                 yield Button(label, id=f"service-{action}")
         yield Button("Refresh status", id="service-refresh")
-        yield Input(
-            placeholder="Existing SearXNG URL, e.g. http://127.0.0.1:8080",
-            id="service-existing-url",
-        )
-        yield Button("Use existing instance", id="service-connect")
+        with Collapsible(
+            title="Use an existing SearXNG instance",
+            collapsed=True,
+            id="service-existing-collapsible",
+        ):
+            yield Input(
+                placeholder="Existing SearXNG URL, e.g. http://127.0.0.1:8080",
+                id="service-existing-url",
+            )
+            yield Button("Use existing instance", id="service-connect")
         yield Static("", id="service-error", markup=False)
 
     def on_mount(self) -> None:
