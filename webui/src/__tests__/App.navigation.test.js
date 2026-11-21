@@ -1390,6 +1390,52 @@ describe('App navigation', () => {
       },
     );
 
+    it('restores the current Session selection when Back overtakes a Project link', async () => {
+      const scan = {
+        team: [{ agent_id: 'builder', display_name: 'Builder' }],
+      };
+      const readingProject = Promise.withResolvers();
+      rpcMock.mockImplementation(
+        createAppRpcMock({
+          agents: [ALPHA],
+          history: ({ session_id }) =>
+            assistantHistory(session_id, `Reply in ${session_id}`),
+          methods: {
+            'project.list': () => ({
+              projects: [{ project_id: 'work', scan }],
+            }),
+            'project.show': () => readingProject.promise,
+          },
+        }),
+      );
+      mountApp();
+      await waitForCondition(() => {
+        expect(window.location.hash).toBe('#chat/alpha/session-alpha');
+        expect(document.body.textContent).toContain('Reply in session-alpha');
+      });
+
+      window.location.hash = '#chat/builder@work/linked-session';
+      await waitForCondition(() => {
+        expect(localStorage.getItem('vbot.selectedProjectId')).toBe('work');
+        expect(document.body.textContent).toContain('Reply in session-alpha');
+      });
+      window.history.back();
+      await waitForCondition(() =>
+        expect(window.location.hash).toBe('#chat/alpha/session-alpha'),
+      );
+      readingProject.resolve({ project: { project_id: 'work' }, scan });
+      await tick();
+      await tick();
+      expect(localStorage.getItem('vbot.selectedProjectId')).toBeNull();
+      expect(document.body.textContent).toContain('Reply in session-alpha');
+
+      window.history.forward();
+      await waitForCondition(() => {
+        expect(window.location.hash).toBe('#chat/builder@work/linked-session');
+        expect(document.body.textContent).toContain('Reply in linked-session');
+      });
+    });
+
     it('opens the Session a startup link names and takes the link out of the address bar', async () => {
       rpcMock.mockImplementation(olderSessionRpc());
       window.history.replaceState(
