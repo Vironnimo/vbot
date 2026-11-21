@@ -72,6 +72,6 @@ Try to refute each candidate before it counts. With subagents, a separate subage
 
 ## 5. Report and fix
 
-Report the confirmed findings as one numbered list: area, severity (🔴 harms users now, 🟡 real, 🔵 minor), a one-line summary, the failure scenario, and a recommendation with a short reason: fix now, record in `FLAGGED.md`, or leave as it is. Name the number of dropped candidates in one line. Ask which numbers to fix.
+Report the confirmed findings as one numbered list: area, severity (🔴 harms users now, 🟡 real, 🔵 minor), a one-line summary, the failure scenario, and the recommended fix: what to change in which owner, and why this way rather than the obvious alternative when one exists. Name the number of dropped candidates in one line. Ask which numbers to fix.
 
 Fix the chosen findings following `AGENTS.md` (Git, Testing). Record confirmed findings the user did not choose in `.vorch/FLAGGED.md` under its rules.
