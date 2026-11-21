@@ -988,6 +988,34 @@ export function createChatScrollController(
   return {
     contentChanged: queueContentChanged,
     sessionChanged,
+    // Mount a viewport row in reading mode, then align the rendered match,
+    // which may be deep inside a tall Markdown row.
+    revealRow(id) {
+      const viewport = viewportFor(currentSessionId);
+      restorePending = false;
+      pendingUserScrollTop = null;
+      viewport.pinned = false;
+      viewport.anchorId = id;
+      viewport.anchorDelta = 0;
+      viewport.readingAnchor = null;
+      aimWindow(viewport);
+      onViewChanged();
+    },
+    alignSearchMatch(element, range) {
+      const rect = range?.getBoundingClientRect?.();
+      const top = rect?.height ? rect.top : element.getBoundingClientRect().top;
+      writeScroll(
+        container.scrollTop +
+          top -
+          container.getBoundingClientRect().top -
+          container.clientHeight * 0.25,
+      );
+      const viewport = viewportFor(currentSessionId);
+      viewport.pinned = false;
+      captureAnchor(viewport);
+      syncWindow();
+      onViewChanged();
+    },
     pinToBottom,
     forceFollowOnNextRestore,
     noteUserInput,

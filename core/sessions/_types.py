@@ -577,6 +577,7 @@ class SessionSearchHit:
     text: str
     rank: float
     message_index: int | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -586,9 +587,9 @@ class SessionSearchResult:
     ``complete`` is false when the candidate budget ended before the search
     found its limit or ran out of candidates, so more matches may exist.
     ``method`` names what enumerated candidates; ``fallback_reason`` says why a
-    requested FTS search scanned instead: ``fts_unavailable``, ``fts_error``, or
-    ``tool_inclusive`` (a Tool-inclusive FTS search found nothing and retried by
-    substring).
+    requested FTS search scanned instead: ``fts_unavailable``, ``fts_error``,
+    ``tool_inclusive`` (no indexed Tool-inclusive hit), or ``timeline_substring``
+    (no usable trigram anchor for the displayed Session).
     """
 
     hits: tuple[SessionSearchHit, ...]

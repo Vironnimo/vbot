@@ -1227,11 +1227,12 @@ class ChatSessionManager:
         excluded_session_ids: Sequence[str] = (),
         include_subagents: bool = False,
         use_fts: bool = True,
+        timeline_only: bool = False,
     ) -> SessionSearchResult:
         """Return up to ``limit`` active Messages whose conversation text matches.
 
-        Only live Sessions whose Recall visibility the request admits are
-        searched. Each candidate is checked literally (case-insensitive
+        Recall visibility applies unless searching the timeline of one exact
+        live Session. Each candidate is checked literally (case-insensitive
         substring per ``match_mode``) before it counts, so results are exact
         and full when enough matches exist; a candidate budget marks longer
         searches incomplete. FTS supplies candidates by relevance or time;
@@ -1252,5 +1253,6 @@ class ChatSessionManager:
                 excluded_session_ids=excluded_session_ids,
                 include_subagents=include_subagents,
                 use_fts=use_fts,
+                timeline_only=timeline_only,
             )
         )

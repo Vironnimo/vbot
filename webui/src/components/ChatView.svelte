@@ -23,6 +23,10 @@
   import SecretRequests from './chat/SecretRequests.svelte';
   import SessionAdvancedSettings from './sessions/SessionAdvancedSettings.svelte';
   import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
+  import ChatSearchPanel from './chat/ChatSearchPanel.svelte';
+  import { latestSearchMessage } from '$lib/chatState/sessionSearch.svelte.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import ChatPendingApprovals from './chat/ChatPendingApprovals.svelte';
   import { sessionApprovalRequests } from '$lib/permissionApprovals.js';
@@ -395,6 +399,10 @@
 
   let showSessionDrawer = $state(untrack(() => initialSessionListOpen));
   let activityPanelOpen = $state(false);
+  const navigator = useNavigation();
+  let searchPanel = $state(null);
+  let timeline = $state(null);
+  let surfaceWidth = $state(0);
   let activityRunningCount = $state(0);
   // Counts the Sessions this area's drafts created; each one refreshes the
   // Session list.
@@ -739,6 +747,73 @@
     },
   });
   const chatController = lifecycle.controller;
+  const search = chatController.search;
+  const searchOpen = $derived(
+    Boolean(
+      search.key && active && search.key === target.activeSessionState?.key,
+    ),
+  );
+  const latestSearchId = $derived(
+    searchOpen && search.query
+      ? latestSearchMessage(target.activeSessionState?.timelineItems ?? [])
+      : '',
+  );
+  $effect(() => {
+    if (search.key && !searchOpen) untrack(search.close);
+  });
+  $effect(() => {
+    if (!searchOpen) return;
+    return navigator?.registerLayer({ close: closeSearch });
+  });
+  $effect(() => {
+    latestSearchId;
+    target.activeSessionState?.historyAfter;
+    target.activeSessionState?.historyEditVersion;
+    if (searchOpen) untrack(() => search.refresh());
+  });
+
+  function openSearch() {
+    const session = target.activeSessionState;
+    if (!session?.sessionId) return;
+    activityPanelOpen = false;
+    search.open(session);
+    searchPanel?.focusField();
+  }
+  function closeSearch() {
+    search.close();
+    document
+      .getElementById(`${chatTitleId}-search`)
+      ?.focus({ preventScroll: true });
+  }
+  function handleChatShortcut(event) {
+    if (
+      active &&
+      interactive &&
+      !boundSession &&
+      !event.defaultPrevented &&
+      !isImeComposing(event) &&
+      !document.querySelector('[aria-modal="true"]')
+    ) {
+      if (event.key === 'Escape' && searchOpen) {
+        event.preventDefault();
+        closeSearch();
+        return;
+      }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key?.toLowerCase() === 'f' &&
+        target.activeSessionState?.sessionId &&
+        !searchPanel?.fieldFocused()
+      ) {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
+    }
+    handleNewSessionShortcut(event);
+  }
 
   $effect(() => {
     chatController.reconcileSubAgentRows(activity.timelineItems, {
@@ -787,7 +862,7 @@
   });
 </script>
 
-<svelte:window onkeydown={handleNewSessionShortcut} />
+<svelte:window onkeydown={handleChatShortcut} />
 
 {#snippet returnIcon()}
   <svg
@@ -854,11 +929,17 @@
       onNewSession={navigation.handleNewSession}
       {otherArea}
       actions={workspaceActions}
+      {searchOpen}
+      searchDisabled={!target.activeSessionState?.sessionId}
+      onSearch={() => (searchOpen ? closeSearch() : openSearch())}
       infoPanelOpen={activityPanelOpen}
       infoPanelId={`${componentId}-info`}
       infoToggleId={`${componentId}-info-toggle`}
       infoRunningCount={activityRunningCount}
-      onToggleInfoPanel={() => (activityPanelOpen = !activityPanelOpen)}
+      onToggleInfoPanel={() => {
+        search.close();
+        activityPanelOpen = !activityPanelOpen;
+      }}
     />
   {:else if onOpenFull}
     <div class="chat-view__embed-header">
@@ -931,11 +1012,14 @@
       {/if}
       <div
         class="chat-view__surface"
-        class:chat-view__surface--info-open={activityPanelOpen}
+        class:chat-view__surface--info-open={activityPanelOpen || searchOpen}
+        bind:clientWidth={surfaceWidth}
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
         <div class="chat-view__timeline-shell">
           <ChatTimeline
+            bind:this={timeline}
+            searchTarget={searchOpen ? search.target : null}
             uiContext={contributionContext}
             timelineItems={activity.timelineItems}
             sessionKey={target.activeSessionState?.key ?? ''}
@@ -1239,6 +1323,19 @@
             </div>
           {/if}
         </div>
+        {#if searchOpen}
+          <ChatSearchPanel
+            bind:this={searchPanel}
+            {search}
+            agentName={target.activeAgent.name}
+            narrow={surfaceWidth > 0 && surfaceWidth < 740}
+            onChoose={(hit) =>
+              search.select(hit, (dest, current) =>
+                timeline?.revealSearchHit(dest, current),
+              )}
+            onClose={closeSearch}
+          />
+        {/if}
         {#if !boundSession}
           <ChatActivityPanel
             bind:open={activityPanelOpen}

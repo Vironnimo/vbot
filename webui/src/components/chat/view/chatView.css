@@ -15,6 +15,11 @@
   background: var(--bg);
 }
 
+::highlight(chat-search) {
+  background-color: var(--amber);
+  color: var(--bg);
+}
+
 .chat-view[hidden] {
   display: none;
 }

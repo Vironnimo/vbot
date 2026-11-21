@@ -1,5 +1,6 @@
 import { t } from '../i18n.js';
 import { markWidgetStatesSent } from '../widgetStates.svelte.js';
+import { createSessionSearch } from './sessionSearch.svelte.js';
 import { createChatHistory } from './historyLoading.js';
 import { createChatQueue } from './queue.js';
 import { createChatActivity } from './activity.js';
@@ -122,6 +123,7 @@ export function createChatController({
     loadRunHistory,
     syncDisplayedHistoryLoad,
   } = history;
+  const search = createSessionSearch({ operations, history, errorMessage });
   let lastHistoryInvalidationId = null;
 
   // Apply App's Session invalidation window: activity first, then the History
@@ -731,6 +733,7 @@ export function createChatController({
     initialHistoryPending = false;
     chatState.loadingAgents = false;
     runStream.closeSubscriptions();
+    search.close();
     history.destroy();
     queue.destroy();
     childTasks.dispose();
@@ -739,6 +742,7 @@ export function createChatController({
   }
 
   return {
+    search,
     applyCommandStatuses,
     applyConnectionSnapshot,
     applyQueueInvalidation,

@@ -59,6 +59,7 @@ from server.rpc._chat_reads import (
     _subagent_inspect,
     _subagent_tree,
 )
+from server.rpc._chat_search import chat_search
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -627,6 +628,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "chat.history": _chat_history,
+        "chat.search": chat_search,
         "chat.timeline": _chat_timeline,
         "chat.timeline_children": _chat_timeline_children,
         "chat.tool_call": _chat_tool_call,

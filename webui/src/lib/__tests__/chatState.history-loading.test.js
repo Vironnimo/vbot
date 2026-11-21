@@ -21,6 +21,52 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
+  it('search jumps page contiguously and only reveal the latest target', async () => {
+    const page = deferred();
+    const hit = (id) => ({
+      message_id: id,
+      role: 'user',
+      sequence: id === 'near' ? 3 : 1,
+    });
+    const row = (id) => messageItem({ id, role: 'user', content: id });
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [row('last')],
+        next_before: 'c2',
+        has_more: true,
+      })
+      .mockReturnValueOnce(page.promise)
+      .mockResolvedValueOnce({ items: [row('old')], has_more: false });
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadChatHistory },
+    });
+    await controller.loadHistoryForSession('alpha', 'one');
+    const session = ensureSessionState(chatState, 'alpha', 'one');
+    const reveal = vi.fn().mockResolvedValue(true);
+    controller.search.open(session);
+    const stale = controller.search.select(hit('near'), reveal);
+    const latest = controller.search.select(hit('old'), reveal);
+    page.resolve({ items: [row('near')], has_more: true, next_before: 'c1' });
+    expect(await stale).toBe(false);
+    expect(await latest).toBe(true);
+    expect(
+      loadChatHistory.mock.calls
+        .slice(1)
+        .map(([{ before, limit }]) => [before, limit]),
+    ).toEqual([
+      ['c2', 500],
+      ['c1', 500],
+    ]);
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(reveal.mock.calls[0][0].hit).toEqual(hit('old'));
+    expect(session.timelineItems.map((row) => row.id)).toEqual([
+      'old',
+      'near',
+      'last',
+    ]);
+  });
+
   it('ignores a child page once its Run gap is gone', async () => {
     const pending = deferred();
     const { chatState, controller } = setupController({

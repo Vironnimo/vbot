@@ -66,6 +66,9 @@
     // The Session information panel at the right: whether it is open, its id,
     // the toggle's id, how much work runs (marked on the toggle), and the
     // toggle itself. The toggle sits at the bar's very end.
+    searchOpen = false,
+    searchDisabled = true,
+    onSearch = () => {},
     infoPanelOpen = false,
     infoPanelId = undefined,
     infoToggleId = undefined,
@@ -534,6 +537,24 @@
   {@render actions?.()}
 {/snippet}
 
+{#snippet searchContribution()}
+  <Button
+    variant="secondary"
+    icon
+    class="chat-header__action"
+    id={`${titleId}-search`}
+    ariaLabel={t('chat.search.title')}
+    tooltip={t('chat.search.title')}
+    aria-expanded={searchOpen}
+    disabled={searchDisabled}
+    onClick={onSearch}
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"
+      ><circle cx="10" cy="10" r="6.5" /><path d="m15 15 5 5" /></svg
+    >
+  </Button>
+{/snippet}
+
 {#snippet infoContribution()}
   <Button
     id={infoToggleId}
@@ -654,6 +675,12 @@
           title: t('chat.title'),
           order: 10,
           render: areaContribution,
+        },
+        {
+          id: 'core:chat-header.search',
+          title: t('chat.search.title'),
+          order: 15,
+          render: searchContribution,
         },
         {
           id: 'core:chat-header.info',

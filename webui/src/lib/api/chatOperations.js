@@ -15,6 +15,7 @@ import {
   listQueue as requestListQueue,
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
+  searchChat as requestSearchChat,
   loadChatTimeline as requestLoadChatHistory,
   loadChatTimelineChildren as requestLoadTimelineChildren,
   loadChatToolCall as requestLoadToolCall,
@@ -52,6 +53,7 @@ export function defaultChatOperations({ includeInherited = true } = {}) {
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     getSessionUsage: (...args) => requestGetSessionUsage(...args),
     getSubAgentTree: (...args) => requestGetSubAgentTree(...args),
+    searchChat: (...args) => requestSearchChat(...args),
     loadChatHistory: (params, ...options) =>
       requestLoadChatHistory(
         includeInherited ? params : { ...params, include_inherited: false },

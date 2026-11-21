@@ -736,6 +736,15 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "Read the presented Chat timeline and optional Tool children.",
     ),
     service(
+        "chat.search",
+        "query",
+        params(
+            {**_ADDRESS, "query": {**_nonempty(), "maxLength": 256}}, (*_ADDRESS_REQUIRED, "query")
+        ),
+        ("sessions",),
+        "Search the displayed Session for User and Assistant messages, newest first.",
+    ),
+    service(
         "chat.timeline_children",
         "query",
         params(
