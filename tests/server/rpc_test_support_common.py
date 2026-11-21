@@ -549,20 +549,19 @@ class StubAgentResolver:
     async def session_working_project_async(self, address: SessionAddress) -> str | None:
         return await self._overrides.session_working_project_async(address)
 
-    def inherited_tool_loading(self) -> dict[str, Any]:
-        """The shared On-demand Tools default, both parts complete, as the real resolver."""
-        defaults = (
-            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
+    def agent_defaults(self) -> AgentDefaults:
+        return AgentDefaults.from_dict(
+            self._agents._defaults_provider() if self._agents._defaults_provider else {}
         )
-        return complete_tool_loading(defaults.get("tool_loading"))
 
-    def inherited_permission_rules(self, member: Any = None) -> dict[str, Any] | None:
-        """The shared Permission Rules default an Agent inherits, as the real resolver."""
+    def inherited_tool_loading(self, *, defaults: AgentDefaults | None = None) -> dict[str, Any]:
+        return complete_tool_loading((defaults or self.agent_defaults()).tool_loading)
+
+    def inherited_permission_rules(
+        self, member: Any = None, *, defaults: AgentDefaults | None = None
+    ) -> dict[str, Any] | None:
         del member
-        defaults = (
-            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
-        )
-        return inherited_permission_rules(AgentDefaults.from_dict(defaults))
+        return inherited_permission_rules(defaults or self.agent_defaults())
 
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None
@@ -588,25 +587,25 @@ class StubAgentResolver:
                     effective[name] = {"value": value, "source": "session"}
         return effective
 
-    def effective_config_for_identity(self, raw: Any) -> dict[str, dict[str, Any]]:
+    def effective_config_for_identity(
+        self, raw: Any, *, defaults: AgentDefaults | None = None
+    ) -> dict[str, dict[str, Any]]:
         """The identity provenance of persisted values the caller holds, as the real resolver."""
-        defaults = (
-            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
-        )
+        values = (defaults or self.agent_defaults()).to_dict()
         return {
             "permission_rules": permission_rules_source(
-                (("agent", raw.permission_rules),), AgentDefaults.from_dict(defaults)
+                (("agent", raw.permission_rules),), defaults or self.agent_defaults()
             ),
-            "model": _identity_source(raw.model, defaults, "model", empty=""),
+            "model": _identity_source(raw.model, values, "model", empty=""),
             "fallback_models": _identity_source(
                 raw.fallback_models,
-                defaults,
+                values,
                 "fallback_models",
                 empty=[],
             ),
-            "temperature": _identity_source(raw.temperature, defaults, "temperature", empty=None),
+            "temperature": _identity_source(raw.temperature, values, "temperature", empty=None),
             "thinking_effort": _identity_source(
-                raw.thinking_effort, defaults, "thinking_effort", empty=None
+                raw.thinking_effort, values, "thinking_effort", empty=None
             ),
         }
 

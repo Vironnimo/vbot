@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 from core.chat import ChatMessage
@@ -17,6 +18,7 @@ from core.providers.providers import (
 )
 from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR
 from core.runs import QueuedRunItem, Run
+from core.settings import AgentDefaults
 from core.tools import tool_is_ready
 from server.file_delivery import FILE_PREVIEW_WORKERS
 
@@ -205,8 +207,34 @@ def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
     return load
 
 
+@dataclass(frozen=True)
+class AgentResponseDefaults:
+    agent: AgentDefaults
+    tool_loading: JsonObject
+    permission_rules: JsonObject | None
+    compaction: Callable[[], JsonObject]
+    local_windows: Mapping[str, Any]
+
+    @classmethod
+    def read(cls, state: Any) -> AgentResponseDefaults:
+        resolver = state.runtime.agent_resolver
+        defaults = resolver.agent_defaults()
+        return cls(
+            defaults,
+            resolver.inherited_tool_loading(defaults=defaults),
+            resolver.inherited_permission_rules(defaults=defaults),
+            _global_compaction_policy_loader(state),
+            _local_context_windows(state),
+        )
+
+
 def _agent_response(
-    state: Any, agent: Any, persisted: Any = None, *, placement: Any = None
+    state: Any,
+    agent: Any,
+    persisted: Any = None,
+    *,
+    placement: Any = None,
+    defaults: AgentResponseDefaults | None = None,
 ) -> JsonObject:
     """Build an Identity Agent's payload.
 
@@ -215,7 +243,10 @@ def _agent_response(
     """
     if persisted is None:
         persisted = state.runtime.agents.get_raw(agent.id)
-    effective = _agent_effective(state, persisted)
+    defaults = defaults or AgentResponseDefaults.read(state)
+    effective = state.runtime.agent_resolver.effective_config_for_identity(
+        persisted, defaults=defaults.agent
+    )
     agent_policy = getattr(agent, "compaction_policy", None)
     if not isinstance(agent_policy, dict):
         agent_policy = None
@@ -256,23 +287,25 @@ def _agent_response(
         "builtin": getattr(agent, "builtin", None),
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
         "effective_compaction_policy": effective_compaction_policy(
-            None, agent_policy, _global_compaction_policy_loader(state)
+            None, agent_policy, defaults.compaction
         ),
         # On-demand Tools the Agent runs with, its own parts filled in from the shared
         # default (``config.tool_loading`` holds its own); ``None`` while neither sets one.
         "tool_loading": _tool_loading_payload(agent),
         # What the Agent inherits for each part it does not set, both parts complete.
-        "tool_loading_default": state.runtime.agent_resolver.inherited_tool_loading(),
+        "tool_loading_default": defaults.tool_loading,
         # The Permission Rules the Agent runs with, its own parts filled in from the
         # shared default (``config.permission_rules`` holds its own); ``None`` is full
         # access. Built-in Agents always have full access.
         "permission_profile": getattr(persisted, "permission_profile", None),
         "permission_rules": effective["permission_rules"]["value"],
         # What the Agent inherits for each part it does not set; ``None`` for nothing.
-        "permission_rules_default": state.runtime.agent_resolver.inherited_permission_rules(),
+        "permission_rules_default": defaults.permission_rules,
         # ``None`` while the Agent has no current Session (a new conversation).
         "current_session_id": agent.current_session_id or None,
-        "context_window": _agent_context_window(state, agent),
+        "context_window": resolve_agent_context_window(
+            state.runtime, agent, local_context_windows=defaults.local_windows
+        ),
         # Raw own values (pre-default-bake), so the editor can distinguish an
         # explicit per-agent value from an inherited global default. Top-level keys
         # above keep today's baked semantics unchanged.
@@ -311,11 +344,6 @@ def _agent_raw_config(raw: Any) -> JsonObject:
         "permission_rules": _permission_rules_payload(raw),
         "permission_profile": getattr(raw, "permission_profile", None),
     }
-
-
-def _agent_effective(state: Any, raw: Any) -> JsonObject:
-    """Return an identity agent's per-field effective value + source map."""
-    return cast(JsonObject, state.runtime.agent_resolver.effective_config_for_identity(raw))
 
 
 def _model_response(

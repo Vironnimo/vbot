@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import cache, partial
 from typing import Any
 
 from core.chat import latest_session_context_usage
@@ -105,6 +107,7 @@ def _extension_response(
     state: Any,
 ) -> JsonObject:
     manifest = record.manifest
+    ready = cache(partial(_tool_is_ready, state))
     return {
         "name": record.name,
         "status": record.status,
@@ -120,8 +123,8 @@ def _extension_response(
         "api_version": manifest.api_version if manifest is not None else None,
         "config": config_map.get(record.name, {}),
         "settings_schema": _settings_schema_response(record, state),
-        "capabilities": _extension_capabilities(record, state),
-        "ready_state": _extension_ready_state(record, state),
+        "capabilities": _extension_capabilities(record, state, ready),
+        "ready_state": _extension_ready_state(record, ready),
     }
 
 
@@ -165,7 +168,9 @@ def _credential_is_set(state: Any, env_key: str) -> bool:
     return resolved.strip() != ""
 
 
-def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
+def _extension_capabilities(
+    record: ExtensionRecord, state: Any, ready: Callable[[str], bool]
+) -> JsonObject:
     """Summarize what a loaded extension contributed (empty for failed/disabled).
 
     Each declared tool becomes ``{"name", "ready"}``: the declared name is looked
@@ -185,7 +190,7 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
         "hooks": {
             event: len(handlers) for event, handlers in declarations.hooks.items() if handlers
         },
-        "tools": [{"name": name, "ready": _tool_is_ready(state, name)} for name in tool_names],
+        "tools": [{"name": name, "ready": ready(name)} for name in tool_names],
         "commands": [
             {
                 "name": declaration.name,
@@ -229,7 +234,7 @@ def _tool_is_ready(state: Any, tool_name: str) -> bool:
     return tool_readiness(tool)
 
 
-def _extension_ready_state(record: ExtensionRecord, state: Any) -> str:
+def _extension_ready_state(record: ExtensionRecord, ready: Callable[[str], bool]) -> str:
     """Return the derived, display-only extension readiness state.
 
     ``"waiting"`` when the record is ``loaded``, declares at least one tool, and
@@ -242,7 +247,7 @@ def _extension_ready_state(record: ExtensionRecord, state: Any) -> str:
     tools = record.declarations.tools
     if not tools:
         return "ready"
-    if any(not _tool_is_ready(state, declaration.name) for declaration in tools):
+    if any(not ready(declaration.name) for declaration in tools):
         return "waiting"
     return "ready"
 

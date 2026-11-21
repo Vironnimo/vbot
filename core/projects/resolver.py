@@ -789,19 +789,21 @@ class AgentResolver:
                 )
         return effective
 
-    def inherited_tool_loading(self) -> dict[str, Any]:
+    def agent_defaults(self) -> AgentDefaults:
+        """Read the shared defaults for one resolution or roster projection."""
+        return AgentDefaults.from_dict(self._global_agent_defaults())
+
+    def inherited_tool_loading(self, *, defaults: AgentDefaults | None = None) -> dict[str, Any]:
         """Return the On-demand Tools setting an Agent runs with where it sets no part itself.
 
         Both parts complete: the global default ``defaults.agent.tool_loading``, switched
         off and with the built-in always-loaded Tools where it sets nothing. Identity and
         Project Agents inherit the same value; editors show it as the default.
         """
-        return complete_tool_loading(
-            AgentDefaults.from_dict(self._global_agent_defaults()).tool_loading
-        )
+        return complete_tool_loading((defaults or self.agent_defaults()).tool_loading)
 
     def inherited_permission_rules(
-        self, member: AgentProfile | None = None
+        self, member: AgentProfile | None = None, *, defaults: AgentDefaults | None = None
     ) -> dict[str, Any] | None:
         """Return the Permission Rules an Agent inherits for each part it does not set itself.
 
@@ -811,7 +813,7 @@ class AgentResolver:
         the stored default is invalid; editors show the value as the default.
         """
         return inherited_permission_rules(
-            AgentDefaults.from_dict(self._global_agent_defaults()),
+            defaults or self.agent_defaults(),
             repository=member.permission_rules if member is not None else None,
         )
 
@@ -837,14 +839,16 @@ class AgentResolver:
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
-    def effective_config_for_identity(self, raw: Agent) -> dict[str, dict[str, Any]]:
+    def effective_config_for_identity(
+        self, raw: Agent, *, defaults: AgentDefaults | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Compute an Identity Agent's effective config from its persisted values.
 
         The cheap seam behind the Agent listing, like :meth:`effective_config_for_member`:
         *raw* is what ``AgentStore.get_raw`` returns, which the caller already
         holds, so a roster read never rereads each ``agent.json``.
         """
-        defaults = AgentDefaults.from_dict(self._global_agent_defaults())
+        defaults = defaults or self.agent_defaults()
         return {
             "model": _identity_string_source(raw.model, defaults.model),
             "fallback_models": _identity_string_list_source(

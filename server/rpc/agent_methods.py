@@ -73,7 +73,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_archived_sessions, publish_resource_changed
-from server.rpc.payloads import _agent_response
+from server.rpc.payloads import AgentResponseDefaults, _agent_response
 from server.rpc.setup_methods import observe_configuration
 from server.rpc.validation import (
     _ensure_model_connection_supported,
@@ -132,11 +132,16 @@ async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
 
 def _agent_list_response(state: Any, listing: Any) -> JsonObject:
     """Blocking: an Agent payload resolves its Model's Connection."""
+    defaults = AgentResponseDefaults.read(state) if listing.agents else None
     return {
         # The roster read holds each Agent's persisted values: no file is read again.
         "agents": [
             _agent_response(
-                state, agent, listing.persisted[agent.id], placement=listing.placements[agent.id]
+                state,
+                agent,
+                listing.persisted[agent.id],
+                placement=listing.placements[agent.id],
+                defaults=defaults,
             )
             for agent in listing.agents
         ],

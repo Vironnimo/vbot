@@ -882,9 +882,13 @@ def _validated_model_mappings(state: Any, value: Any) -> dict[str, str]:
     return dict(value)
 
 
-def _detect_project(state: Any, params: JsonObject) -> JsonObject:
+async def _detect_project(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("project.detect"), "project.detect")
     cwd = _optional_string(params, "cwd")
+    return await _PROJECT_WORKERS.run(_detect_project_sources, cwd)
+
+
+def _detect_project_sources(cwd: str | None) -> JsonObject:
     if not cwd or not cwd_exists(cwd):
         return {"cwd_exists": False, "sources": []}
     return {"cwd_exists": True, "sources": [item.to_dict() for item in detect_sources(Path(cwd))]}
