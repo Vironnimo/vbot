@@ -424,6 +424,25 @@ async def test_pattern_with_case_and_context_fields(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pattern_pages_keep_context_after_a_match_on_an_earlier_page(project: Path) -> None:
+    args = {"path": "src/app.txt", "pattern": "^line 5$", "context": 2, "limit": 2}
+    first = await dispatch(project, args)
+    second = await dispatch(project, {**args, "offset": first["data"]["next_offset"]})
+    third = await dispatch(project, {**args, "offset": second["data"]["next_offset"]})
+
+    numbered_lines = [
+        line
+        for page in (first, second, third)
+        for line in content(page).splitlines()
+        if line.partition("|")[0].isdigit()
+    ]
+    assert numbered_lines == [f"{n}| line {n}" for n in range(3, 8)]
+    assert "next_offset" not in third["data"]
+    past_context = await dispatch(project, {**args, "offset": 8})
+    assert not any(line.partition("|")[0].isdigit() for line in content(past_context).splitlines())
+
+
+@pytest.mark.asyncio
 async def test_pattern_that_is_not_a_regex_matches_as_text(project: Path) -> None:
     matched = await dispatch(project, {"path": "src/code.py", "pattern": "greet("})
     missing = await dispatch(project, {"path": "src/code.py", "pattern": "absent"})
