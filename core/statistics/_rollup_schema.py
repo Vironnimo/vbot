@@ -202,6 +202,7 @@ CREATE TABLE agg_cache_breaks (
     cache_read_tokens INTEGER NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+CREATE INDEX agg_cache_breaks_instant ON agg_cache_breaks(instant);
 """
 
 ROLLUP_TABLES = (

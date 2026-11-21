@@ -32,4 +32,6 @@ A Run's request totals come from ledger requests for its Session generation and 
 
 ## Report reads
 
+Time-window fact queries have `instant` indexes on records, Tool invocations, errors and cache breaks. Diagnostics ranks and limits cache-break incidents in SQL over the listed Sessions.
+
 `ReportContext` loads the listed Sessions and ledger units once per report (`temp.report_sessions`, `temp.report_units`) with their actor, Project and a Session address id shared by a Session and its ledger units. Group usage joins its owned Runs (`temp.group_runs`) to `agg_runs` and `agg_run_models` by primary key; `run_activity` is a SQL `ORDER BY ... LIMIT 200` plus a count over `agg_runs`. Report sections read the aggregate tier plus small indexed fact queries (errors, Tool error codes, Skill activations, Extension groups, recent calls, Run lists); only diagnostics Compactions still walk checkpoint rows (`_compactions.CHECKPOINT_SQL` folded by `CompactionAccumulator`).
