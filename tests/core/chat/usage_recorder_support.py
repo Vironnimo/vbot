@@ -24,6 +24,9 @@ class RecordingUsageRecorder:
         self.calls.append({**context, "id": call_id, "status": "started", "usage": None})
         return call_id
 
+    def capture_duration_ms(self, call_id: str) -> int:
+        return 0
+
     async def finish(
         self,
         call_id: str,
@@ -31,11 +34,12 @@ class RecordingUsageRecorder:
         *,
         status: str = "completed",
         failure: Any = None,
+        input_estimate: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         row = next(call for call in self.calls if call["id"] == call_id)
         row["status"] = status
         row["failure_class"] = classify_failure(failure)[0] if status == "failed" else None
-        return await self.update(call_id, usage or {})
+        return await self.update(call_id, usage or {}, input_estimate=input_estimate)
 
     async def update(
         self,

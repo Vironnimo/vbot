@@ -6,7 +6,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._run_state import (
@@ -15,7 +15,6 @@ from core.chat._run_state import (
 )
 from core.chat._step_outcomes import (
     OUTPUT_INTEGRITY_RECOVERY_NOTE,
-    _with_assistant_output_files,
 )
 from core.chat._stream_response import ToolCallSink as ToolCallSink
 from core.chat._stream_response import (
@@ -30,7 +29,7 @@ from core.chat.events import (
     _emit_assistant_events,
     _exception_to_error_kind,
 )
-from core.chat.messages import JsonObject
+from core.chat.messages import ChatMessage, JsonObject
 from core.chat.output_files import OutputFileScope
 from core.chat.recovery import (
     IncompleteResponseError,
@@ -71,6 +70,10 @@ if TYPE_CHECKING:
 
 
 _LOGGER = get_logger("chat")
+
+_FinishResponse = Callable[
+    [ChatMessage, str | None, str, Exception | Literal["incomplete"]], Awaitable[ChatMessage]
+]
 
 
 def _normalize_non_streaming_step(
@@ -171,6 +174,7 @@ class WireRequestRunner:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         stream_draft: StreamDraft | None = None,
         *,
+        finish_response: _FinishResponse,
         public_model: str,
         request_context_usage: JsonObject,
         provider_id: str = "",
@@ -197,7 +201,8 @@ class WireRequestRunner:
         ``connection_id`` (``provider:connection``) the Connection that serves the
         request; both are recorded with each attempt's Usage. ``before_request``
         admits each physical attempt after retry waiting, before accounting or
-        sending it; its failure stops the step without another paid request.
+        sending it; its failure stops the step without another paid request. A usable
+        response goes to ``finish_response`` once, outside the Provider retry budget.
         """
         messages, effort_kwargs = route_effort(
             effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
@@ -275,7 +280,11 @@ class WireRequestRunner:
                     # recovery. Standalone Adapter consumers keep their retries.
                     with caller_owns_retries():
                         if use_streaming:
-                            step = await self._consume_stream_attempt(
+                            (
+                                step,
+                                call_id,
+                                preserve_after_cancel,
+                            ) = await self._consume_stream_attempt(
                                 agent,
                                 adapter,
                                 model_id,
@@ -307,7 +316,10 @@ class WireRequestRunner:
                             )
                             try:
                                 async with asyncio.timeout(remaining):
-                                    step = await self._send_non_streaming_assistant_request(
+                                    (
+                                        step,
+                                        call_id,
+                                    ) = await self._send_non_streaming_assistant_request(
                                         agent,
                                         adapter,
                                         model_id,
@@ -327,14 +339,7 @@ class WireRequestRunner:
                                 raise ProviderTimeoutError(
                                     "Model recovery time budget exhausted"
                                 ) from exc
-                            step = replace(
-                                step,
-                                message=_with_assistant_output_files(
-                                    step.message,
-                                    scope=output_scope,
-                                ),
-                            )
-                            _emit_assistant_events(run, step.message)
+                            preserve_after_cancel = False
                 except _StreamRestartNeeded as restart:
                     if restart.non_streaming:
                         use_streaming = False
@@ -357,6 +362,26 @@ class WireRequestRunner:
                     if isinstance(exc, NetworkError):
                         raise budget.exhausted() from exc
                     raise
+                status = (
+                    "cancelled"
+                    if use_streaming and run.cancel_requested
+                    else "failed"
+                    if step.message.interrupted or step.failure or step.recovery_error
+                    else "completed"
+                )
+                message = await _finish_visible_boundary(
+                    finish_response(
+                        step.message,
+                        call_id,
+                        status,
+                        step.failure or step.recovery_error or "incomplete",
+                    ),
+                    run,
+                    preserve_after_cancel,
+                )
+                step = replace(step, message=message)
+                if not use_streaming:
+                    _emit_assistant_events(run, message)
                 if (
                     step.recovery == "continue"
                     or step.terminal_outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED
@@ -389,7 +414,7 @@ class WireRequestRunner:
         message_id: str | None,
         session_generation_id: str | None = None,
         connection_id: str = "",
-    ) -> _AssistantStep:
+    ) -> tuple[_AssistantStep, str | None]:
         """Ask for a completed response: only after the Provider refused to stream."""
         send_started = time.perf_counter()
         recorder = self._dependencies.usage_recorder
@@ -430,15 +455,8 @@ class WireRequestRunner:
                     failure=exc,
                 )
             raise
-        if recorder is not None and call_id is not None:
-            usage = await recorder.finish(
-                call_id,
-                step.message.usage,
-                status="failed" if step.message.interrupted else "completed",
-                failure="incomplete",
-            )
-            step = replace(step, message=replace(step.message, usage=usage))
-        return replace(step, message=replace(step.message, thinking_effort=run.thinking_effort))
+        step = replace(step, message=replace(step.message, thinking_effort=run.thinking_effort))
+        return step, call_id
 
     async def _start_usage_call(
         self,
@@ -487,7 +505,7 @@ class WireRequestRunner:
         on_tool_calls: ToolCallSink | None = None,
         session_generation_id: str | None = None,
         connection_id: str = "",
-    ) -> _AssistantStep:
+    ) -> tuple[_AssistantStep, str | None, bool]:
         accumulator = StreamingAccumulator()
         recorder = self._dependencies.usage_recorder
         call_id = await self._start_usage_call(
@@ -529,33 +547,13 @@ class WireRequestRunner:
                 # replaces its output, and a failure ends the Run without it.
                 await stream_draft.discard()
             raise
-        if recorder is not None and call_id is not None:
-            status = (
-                "cancelled"
-                if run.cancel_requested
-                else "failed"
-                if step.message.interrupted
-                or step.failure is not None
-                or step.recovery_error is not None
-                else "completed"
+        # Started Tool Calls and readable output may already be visible. Their
+        # accounting and Assistant turn must survive a concurrent Run cancellation.
+        preserve_after_cancel = (
+            step.message.interrupted
+            or accumulator.has_taken_tool_calls
+            or (
+                not step.message.tool_calls and bool(step.message.content or step.message.reasoning)
             )
-            usage = await _finish_visible_boundary(
-                recorder.finish(
-                    call_id,
-                    step.message.usage,
-                    status=status,
-                    # A stream break without an error left the step unfinished.
-                    failure=step.failure or step.recovery_error or "incomplete",
-                ),
-                run,
-                step.message.interrupted
-                # Started Tool Calls may already have effects; their turn
-                # must reach the Session.
-                or accumulator.has_taken_tool_calls
-                or (
-                    not step.message.tool_calls
-                    and bool(step.message.content or step.message.reasoning)
-                ),
-            )
-            step = replace(step, message=replace(step.message, usage=usage))
-        return step
+        )
+        return step, call_id, preserve_after_cancel
