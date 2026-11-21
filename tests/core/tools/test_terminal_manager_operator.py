@@ -11,6 +11,7 @@ from typing import Any, override
 import pytest
 
 import core.tools._terminal_state as terminal_state
+from core.event_stream import retained_event_size
 from core.tools._terminal_catalog import resolve_root_view
 from core.tools._terminal_state import TerminalOwner, TerminalSessionView
 from core.tools.terminal_manager import (
@@ -194,7 +195,7 @@ async def test_terminal_snapshots_obey_byte_budget_and_reconnect(
     events = manager._sessions[terminal_id]._stream.events
     snapshots = [event for event in events if event["type"] == "terminal_snapshot"]
     assert 0 < len(snapshots) < 20
-    assert sum(terminal_state._stream_event_size(event) for event in events) <= 50_000
+    assert sum(retained_event_size(event) for event in events) <= 50_000
     stream = manager.watch_for_operator(terminal_id)
     reconnected = await anext(stream)
     assert reconnected["sequence"] == events[-1]["sequence"]

@@ -279,13 +279,10 @@ def _connection_replay_status(
     if client_after_sequence > last_sequence:
         return REPLAY_STATUS_GAP
 
-    retained_events = event_bus.events
-    if not retained_events or client_after_sequence == last_sequence:
+    if client_after_sequence == last_sequence:
         return REPLAY_STATUS_RESUMED
-    oldest_retained_sequence = retained_events[0].get("sequence")
-    if not isinstance(oldest_retained_sequence, int):
-        return REPLAY_STATUS_GAP
-    if client_after_sequence < oldest_retained_sequence - 1:
+    oldest = event_bus.oldest_sequence
+    if oldest is None or client_after_sequence < oldest - 1:
         return REPLAY_STATUS_GAP
     return REPLAY_STATUS_RESUMED
 
