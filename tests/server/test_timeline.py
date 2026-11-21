@@ -17,6 +17,7 @@ from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.runs import Run
 from core.sessions import SessionAddress
+from server import timeline
 from server.file_delivery import FileDelivery
 from server.timeline import (
     TimelineStreamingResponse,
@@ -229,6 +230,37 @@ async def test_snapshot_survives_replay_eviction_and_patches_only_new_text(
         assert projection.snapshot()[0]["items"][0]["content"].endswith("tail")
         with pytest.raises(StopAsyncIteration):
             await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_timeline_delivers_after_idle_and_batches_a_burst(monkeypatch) -> None:
+    active = run()
+    now = 0.0
+    waits = []
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        waits.append(delay)
+        active.emit("assistant_output_delta", {"content_delta": "c"})
+        now += delay
+
+    monkeypatch.setattr(timeline, "monotonic", lambda: now)
+    monkeypatch.setattr(timeline, "_sleep", sleep)
+    async with aclosing(sse_timeline(SimpleNamespace(file_delivery=None), active)) as stream:
+        initial = data(await anext(stream))
+        now = 0.120
+        active.emit("assistant_output_delta", {"content_delta": "a"})
+        first = data(await anext(stream))
+        assert first["base_sequence"] == initial["sequence"]
+        assert first["children"][0]["content"] == "a"
+        assert waits == []
+
+        now += 0.010
+        active.emit("assistant_output_delta", {"content_delta": "b"})
+        burst = data(await anext(stream))
+        assert waits == pytest.approx([0.040])
+        assert burst["base_sequence"] == first["sequence"]
+        assert burst["child_updates"][0]["append"]["content"] == "bc"
 
 
 @pytest.mark.asyncio
