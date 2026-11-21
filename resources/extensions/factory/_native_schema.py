@@ -83,6 +83,8 @@ CREATE TABLE native_executions (
  updated_at TEXT NOT NULL, body_json TEXT NOT NULL,
  UNIQUE(kind, scope_id, member_id, epoch)
 ) STRICT;
+CREATE INDEX native_executions_active ON native_executions(factory_id, member_id)
+ WHERE state IN ('admitting','running','draining');
 CREATE INDEX native_executions_factory ON native_executions(factory_id, state, id);
 CREATE INDEX native_executions_scope ON native_executions(kind, scope_id, id);
 CREATE INDEX native_executions_member ON native_executions(member_id, state, id);
