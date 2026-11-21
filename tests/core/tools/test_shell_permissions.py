@@ -260,6 +260,7 @@ async def test_restricted_shell_keeps_cli_grant_through_review_and_releases_it_a
     analyzer.result = replace(
         analyzer.result,
         commands=(replace(analyzer.result.commands[0], instance_cli=True),),
+        literal_cli_syntax=True,
     )
     cli = Mock(allows=AsyncMock(return_value=True))
     grant = cli.issue.return_value
