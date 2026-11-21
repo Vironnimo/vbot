@@ -74,7 +74,7 @@ from core.chat.usage import (
     aggregate_session_usage,
     latest_session_context_usage,
 )
-from core.chat.wire_shaping import _strip_assistant_reasoning_fields
+from core.chat.wire_shaping import _strip_assistant_reasoning_fields, extend_request_with_notes
 from core.extensions import HookContext, SessionRequestContext
 from core.performance import measure, session_track
 from core.runs import (
@@ -772,6 +772,8 @@ class RunExecution:
         if not uses_scratch(context.run.run_kind, tool_names):
             return False
         session = context.session
+        history = context.session_snapshot.active_lineage
+        history_length = len(history)
         folder = await scratch.folder_for(session.address)
         sessions = self._dependencies.sessions
         async with sessions.write_lock(session.address):
@@ -794,20 +796,36 @@ class RunExecution:
             if prior and not changed and visible:
                 return True
             note = scratch_note(folder)
-            await context.session_snapshot.append(session, [note])
-            await sessions.run_async(
-                sessions.mutate_metadata,
-                session.address,
-                lambda metadata: metadata.update(
-                    {
+            await context.session_snapshot.commit(
+                session,
+                partial(
+                    session.append_many_async,
+                    [note],
+                    metadata_update={
                         SCRATCH_ANNOUNCED_META_KEY: {
                             "own": own,
                             "incarnation": folder.incarnation,
                             "note_id": note.id,
                         }
-                    }
+                    },
                 ),
+                written=[note],
             )
+        # In the ordinary case the built request already covers everything but
+        # this note. A replaced lineage or concurrent append needs a full replay.
+        if (
+            context.session_snapshot.active_lineage is history
+            and len(history) == history_length + 1
+            and history[-1].id == note.id
+        ):
+            extend_request_with_notes(
+                state.messages,
+                [note],
+                history,
+                replay_policy=context.primary_target.replay_policy,
+                agent_model=context.primary_target.model_reference,
+            )
+            return True
         context.request_state = await self._requests.rebuild_live_request_state(
             context.agent,
             session,

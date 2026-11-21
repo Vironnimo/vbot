@@ -251,6 +251,10 @@ def withholds_subagent_tool(dependencies: ChatLoopDependencies, address: Session
 def has_open_goal(sessions: ChatSessionManager, address: SessionAddress) -> bool:
     """Return whether *address* has a goal that grants ``update_goal``. Blocking."""
     goal = sessions.metadata_value(address, SESSION_GOAL_META_KEY)
+    return goal_is_open(goal)
+
+
+def goal_is_open(goal: object) -> bool:
     return isinstance(goal, dict) and goal.get("status") in SESSION_GOAL_OPEN_STATUSES
 
 
@@ -880,7 +884,11 @@ def _resolve_working_project(
 
 
 async def refresh_run_permissions(
-    dependencies: ChatLoopDependencies, context: _RunExecutionContext, *, force: bool = False
+    dependencies: ChatLoopDependencies,
+    context: _RunExecutionContext,
+    *,
+    force: bool = False,
+    metadata: JsonObject | None = None,
 ) -> bool:
     """Rebuild the Run's boundary when one of its rule sources changed, or on *force*.
 
@@ -891,9 +899,9 @@ async def refresh_run_permissions(
     # A Parent's send can narrow a Sub-Agent's grants while its Run is active.
     # The operator setter excludes active/queued Runs, so it cannot retarget a
     # running conversation underneath an admitted Tool batch.
-    context.execution = normalize_execution(
-        await dependencies.sessions.metadata_value_async(context.session.address, "execution")
-    )
+    if metadata is None:
+        metadata = await dependencies.sessions.get_metadata_async(context.session.address)
+    context.execution = normalize_execution(metadata.get("execution"))
     current = context.permission_sources
     if not (force or await current.changed(dependencies)):
         return False
@@ -1107,15 +1115,12 @@ async def create_run_execution_context(
         prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             dependencies.sessions.prompt_cache_affinity_id, session_address
         )
-        subagent_session = await _CHAT_TRANSFORM_WORKERS.run(
-            is_subagent_session, dependencies.sessions, session_address
-        )
+        metadata = await dependencies.sessions.get_metadata_async(session_address)
+        subagent_session = isinstance(metadata.get(SUBAGENT_PARENT_META_KEY), dict)
         subagent_tool_withheld = subagent_session and await _CHAT_TRANSFORM_WORKERS.run(
             withholds_subagent_tool, dependencies, session_address
         )
-        goal_session = await _CHAT_TRANSFORM_WORKERS.run(
-            has_open_goal, dependencies.sessions, session_address
-        )
+        goal_session = goal_is_open(metadata.get(SESSION_GOAL_META_KEY))
         permissions = await live_run_permission_boundary(
             dependencies,
             run,
@@ -1193,9 +1198,7 @@ async def create_run_execution_context(
             subagent_tool_withheld=subagent_tool_withheld,
             goal_session=goal_session,
             permissions=permissions.boundary,
-            execution=normalize_execution(
-                await dependencies.sessions.metadata_value_async(session_address, "execution")
-            ),
+            execution=normalize_execution(metadata.get("execution")),
             permission_sources=permissions,
             folder_instructions=folder_instructions,
             # The Session's newest measurement still anchors this Run's Context.

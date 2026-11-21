@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
+    ResolutionProjectNotFoundError,
     format_agent_address,
     parse_agent_address,
 )
@@ -126,27 +127,12 @@ def _identity_targets(
                 target_id, identity.name, identity.description
             )
 
-    projects = runtime.projects.list()
+    # Most grants name only identities. Read a Project's Team once, and only
+    # if the wildcard or an explicit qualified address needs that Project.
+    selected: dict[str, set[str]] = {}
     if wildcard:
-        for project in projects:
-            try:
-                team = runtime.agent_resolver.team_for_project(project.project_id)
-            except (AgentResolutionError, OSError, ValueError) as error:
-                _LOGGER.warning(
-                    "Skipping unavailable Project %r in Sub-Agent prompt catalog: %s",
-                    project.project_id,
-                    error,
-                )
-                continue
-            for member in team:
-                if member.unavailable_reason:
-                    continue
-                qualified_id = format_agent_address(member.agent_id, project.project_id)
-                targets[qualified_id] = SubAgentPromptTarget(
-                    qualified_id, member.display_name, member.description
-                )
+        project_ids = [project.project_id for project in runtime.projects.list()]
     else:
-        project_ids = {project.project_id for project in projects}
         for configured_target in allowed:
             try:
                 target_id, project_id = parse_agent_address(configured_target)
@@ -155,28 +141,32 @@ def _identity_targets(
                     "Skipping invalid configured Sub-Agent target %r", configured_target
                 )
                 continue
-            if project_id is None or project_id not in project_ids:
+            if project_id is not None:
+                selected.setdefault(project_id, set()).add(target_id)
+        project_ids = list(selected)
+
+    for project_id in project_ids:
+        try:
+            team = runtime.agent_resolver.team_for_project(project_id)
+        except ResolutionProjectNotFoundError:
+            continue
+        except (AgentResolutionError, OSError, ValueError) as error:
+            _LOGGER.warning(
+                "Skipping unavailable Project %r in Sub-Agent prompt catalog: %s",
+                project_id,
+                error,
+            )
+            continue
+        for member in team:
+            if wildcard and member.unavailable_reason:
                 continue
-            configured_member = _project_member(runtime, project_id, target_id)
-            if configured_member is not None:
-                qualified_id = format_agent_address(target_id, project_id)
-                targets[qualified_id] = SubAgentPromptTarget(
-                    qualified_id, configured_member.display_name, configured_member.description
-                )
+            if not wildcard and member.agent_id not in selected[project_id]:
+                continue
+            qualified_id = format_agent_address(member.agent_id, project_id)
+            targets[qualified_id] = SubAgentPromptTarget(
+                qualified_id, member.display_name, member.description
+            )
     return [targets[target_id] for target_id in sorted(targets)]
-
-
-def _project_member(runtime: RuntimeServices, project_id: str, agent_id: str) -> Any | None:
-    try:
-        team = runtime.agent_resolver.team_for_project(project_id)
-    except (AgentResolutionError, OSError, ValueError) as error:
-        _LOGGER.warning(
-            "Skipping unavailable Project %r in Sub-Agent prompt catalog: %s",
-            project_id,
-            error,
-        )
-        return None
-    return next((member for member in team if member.agent_id == agent_id), None)
 
 
 __all__ = ["SubAgentPromptTarget", "build_subagent_prompt_targets", "subagent_targets"]

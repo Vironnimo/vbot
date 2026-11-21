@@ -19,7 +19,7 @@ from core.chat._queued_input import (
     rebuild_after_steering,
 )
 from core.chat._request_history import _prepare_tool_context
-from core.chat._run_state import RequestBuildInputs, refresh_run_permissions
+from core.chat._run_state import RequestBuildInputs, goal_is_open, refresh_run_permissions
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -79,7 +79,6 @@ from core.runs import (
 )
 from core.sessions import (
     SESSION_GOAL_META_KEY,
-    SESSION_GOAL_OPEN_STATUSES,
     SessionAddress,
     SessionWriteLeaseScope,
 )
@@ -250,16 +249,12 @@ class AgenticProgression:
             # A rule edit since the last round applies to this round's Tool Calls;
             # steered input may have narrowed the Session's stored ceiling. A
             # changed boundary is told to the Model in this request's notes below.
+            metadata = await self._dependencies.sessions.get_metadata_async(session_address)
             permissions_rebuilt = await refresh_run_permissions(
-                self._dependencies, context, force=delivered
+                self._dependencies, context, force=delivered, metadata=metadata
             )
             # Goals can be created or completed by a Tool inside this Run.
-            goal = await self._dependencies.sessions.metadata_value_async(
-                session_address, SESSION_GOAL_META_KEY
-            )
-            context.goal_session = (
-                isinstance(goal, dict) and goal.get("status") in SESSION_GOAL_OPEN_STATUSES
-            )
+            context.goal_session = goal_is_open(metadata.get(SESSION_GOAL_META_KEY))
             # Tool changes are measured once per Run, after steering, and when
             # the Tool registry changed; the notes announcing them join this
             # request's boundary below, so the Tool list itself stays pinned.

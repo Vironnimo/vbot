@@ -224,7 +224,7 @@ async def _submit_chat(
         )
 
     try:
-        # Guard even the pre-admission reads (widget state, file mentions, current mark).
+        # Keep the pre-admission reads and the current mark on the expected generation.
         preparation = (
             state.chat_runs.prepare_admission(
                 agent_id, project_id=project_id, session_id=address.session_id
@@ -249,8 +249,6 @@ async def _submit_chat(
             content = await _expand_content_file_mentions(
                 state, address, content, file_mentions, file_reads=file_reads
             )
-            if project_id is None and ui_context is None:
-                await _mark_current_session(state, address)
             submission = await chat_loop.submit_accessor_input(
                 agent_id,
                 content,
@@ -262,6 +260,8 @@ async def _submit_chat(
                 project_id=project_id,
                 **run_options,
             )
+            if project_id is None and ui_context is None:
+                await _mark_current_session(state, address)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return submission
