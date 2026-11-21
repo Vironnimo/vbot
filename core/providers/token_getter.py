@@ -270,6 +270,13 @@ class OAuthTokenGetter:
                     )
             access_token = _required_token_string(response_data.get("access_token"))
             refresh_token = response_data.get("refresh_token")
+            if refresh_token is not None and (
+                not isinstance(refresh_token, str) or not refresh_token
+            ):
+                raise ProviderError(
+                    "OAuth token endpoint response contained an unusable refresh token",
+                    retryable=False,
+                )
             extra = dict(token.extra)
             if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
                 validate_nous_oauth_scope(response_data, self._oauth_config.scopes)
@@ -291,9 +298,7 @@ class OAuthTokenGetter:
                 expires_at = _parse_oauth_expiry(response_data, now)
             refreshed_token = OAuthToken(
                 access_token=access_token,
-                refresh_token=(
-                    refresh_token if isinstance(refresh_token, str) else stored_refresh_token
-                ),
+                refresh_token=refresh_token or stored_refresh_token,
                 expires_at=expires_at,
                 extra=extra,
             )

@@ -550,6 +550,18 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
             id="rotating-refresh-empty-access-token",
         ),
         pytest.param(
+            xai_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"access_token": "fresh", "refresh_token": ""}),
+            id="rotating-refresh-empty-replacement-token",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"access_token": "fresh", "refresh_token": 1}),
+            id="rotating-refresh-non-string-replacement-token",
+        ),
+        pytest.param(
             github_oauth_config(token_exchange=True),
             COPILOT_TOKEN,
             httpx.Response(200, json={}),
