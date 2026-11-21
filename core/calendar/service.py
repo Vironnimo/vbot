@@ -482,14 +482,14 @@ class CalendarService(CalendarProjection):
         self, fields: dict[str, Any], event: CalendarEvent | None
     ) -> tuple[str, str, str | None, str | None, str | None]:
         """Read an event's local anchor, named zone and exact anchor endpoints."""
+        system_zone = self._timezone
         requested = _resolve_zone(fields["timezone"]) if "timezone" in fields else None
         zone = requested or (
-            _resolve_zone(event.tz_name or self.system_timezone_name())
-            if event and event.tz_name
-            else self._timezone
+            _resolve_zone(event.tz_name) if event and event.tz_name else system_zone
         )
+        input_zone = requested or system_zone
         if "start" in fields:
-            start, own_zone = self._input_time(fields["start"], "start", event, timezone=requested)
+            start, own_zone = self._input_time(fields["start"], "start", zone, input_zone)
         else:
             assert event is not None
             start = local_time(event.start)
@@ -503,7 +503,7 @@ class CalendarService(CalendarProjection):
                 "timezone applies to timed events; an all-day event uses dates"
             )
         if fields.get("end") is not None:
-            end, end_zone = self._input_time(fields["end"], "end", event, timezone=requested)
+            end, end_zone = self._input_time(fields["end"], "end", zone, input_zone)
             if (end_zone is None) != all_day:
                 raise CalendarValidationError(
                     "end must have the same date or date-time form as start"
@@ -552,22 +552,20 @@ class CalendarService(CalendarProjection):
         *,
         times_in_event_zone: bool,
     ) -> tuple[str, str, str | None, str | None]:
-        zone = (
-            None if event.all_day else _resolve_zone(event.tz_name or self.system_timezone_name())
-        )
-        input_zone = zone if times_in_event_zone else None
+        system_zone = self._timezone
+        event_zone = _resolve_zone(event.tz_name) if event.tz_name else system_zone
+        zone = None if event.all_day else event_zone
+        input_zone = event_zone if times_in_event_zone else system_zone
         if zone is None:
             start = local_time(current.start)
         else:
             start = current.start_utc.astimezone(zone).replace(tzinfo=None)
         if fields.get("start") is not None:
             start, _ = self._input_time(
-                fields["start"], "start", event, kind_of=event, timezone=input_zone
+                fields["start"], "start", event_zone, input_zone, kind_of=event
             )
         if fields.get("end") is not None:
-            end, _ = self._input_time(
-                fields["end"], "end", event, kind_of=event, timezone=input_zone
-            )
+            end, _ = self._input_time(fields["end"], "end", event_zone, input_zone, kind_of=event)
         elif "start" not in fields:
             end = (
                 local_time(current.end)
@@ -606,14 +604,14 @@ class CalendarService(CalendarProjection):
         )
         return input_span(start, end, zone, explicit_end=explicit_end)
 
+    @staticmethod
     def _input_time(
-        self,
         value: object,
         field_name: str,
-        event: CalendarEvent | None,
+        event_zone: ZoneInfo,
+        input_zone: ZoneInfo,
         *,
         kind_of: CalendarEvent | None = None,
-        timezone: ZoneInfo | None = None,
     ) -> tuple[datetime, ZoneInfo | None]:
         """Read local clock values in the event's zone; an offset names an exact instant."""
         if not isinstance(value, str) or not value.strip():
@@ -634,17 +632,12 @@ class CalendarService(CalendarProjection):
                 f"{field_name} must be a date: an occurrence keeps the event's kind"
             )
         parsed = _parse_iso_datetime(text, field_name=field_name)
-        zone = timezone or (
-            _resolve_zone(event.tz_name or self.system_timezone_name())
-            if event and event.tz_name
-            else self._timezone
-        )
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone or self._timezone)
-        local = parsed.astimezone(zone).replace(tzinfo=None)
+            parsed = parsed.replace(tzinfo=input_zone)
+        local = parsed.astimezone(event_zone).replace(tzinfo=None)
         local = local.replace(microsecond=0)
         _check_year(local.year, field_name)
-        return local, zone
+        return local, event_zone
 
     # -- storage --------------------------------------------------------------------------
 
