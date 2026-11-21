@@ -389,13 +389,17 @@ async def test_portal_uses_the_admitted_proxy_origin_for_cookies_and_writes() ->
     registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(app))
     portal = _PortalApp(server, "shop", 5173)
     portal.listen_port = 7000
-    origin = "https://vbot.example:7000"
+    origin = "https://vbot.example"
     token = delivery.bind_payload(delivery.portal_token("shop"), HOST_PRINCIPAL)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=portal, client=("10.0.0.1", 1234)),
             base_url="http://vbot.example:7000",
-            headers={"x-forwarded-for": "192.0.2.10", "x-forwarded-proto": "https"},
+            headers={
+                "host": "VBOT.example:443",
+                "x-forwarded-for": "192.0.2.10",
+                "x-forwarded-proto": "https",
+            },
             cookies={"vbot_portal_7000": token},
         ) as client:
             entered = await client.get("/", params={"vbot_portal": token})
