@@ -29,8 +29,10 @@
   } from '$lib/modelSelection.js';
   import { getUsableProviderItems } from '$lib/settingsView.js';
   import {
+    CORE_ONBOARDING_STEPS,
     ONBOARDING_TARGET_AGENT_ID,
     connectedProviderId,
+    pickDefaultOnboardingModel,
   } from '$lib/onboarding.js';
 
   import ProviderConnectModal from './settings/ProviderConnectModal.svelte';
@@ -72,6 +74,7 @@
   let pendingSharedSetup = $state(null);
   let fieldFocused = $state(false);
   const autosave = useAutosaveContext();
+  const coreStepIds = CORE_ONBOARDING_STEPS;
   const stepIds = ['provider', 'model', 'components', 'services'];
   let stepHeading = $state();
   let modalScope = $state(null);
@@ -83,6 +86,8 @@
   let refreshingModels = $state(false);
   let modelsError = $state('');
   let selectedModelValue = $state('');
+  let savedAgentModel = $state('');
+  let userClearedModel = $state(false);
   let showAllModels = $state(false);
   let onlyFree = $state(false);
   let assigning = $state(false);
@@ -230,9 +235,20 @@
 
   function stepLabel(id) {
     if (id === 'provider') return t('onboarding.progress.service');
-    if (id === 'model') return t('onboarding.progress.model');
-    if (id === 'components') return t('onboarding.progress.components');
-    return t('onboarding.progress.services');
+    return t('onboarding.progress.model');
+  }
+
+  function isStepComplete(id) {
+    if (id === 'provider') {
+      return usableProviders.length > 0 && step !== 'provider';
+    }
+    if (id === 'model') {
+      return (
+        Boolean(selectedOption) &&
+        (step === 'components' || step === 'services')
+      );
+    }
+    return false;
   }
 
   function stepTitle() {
@@ -255,7 +271,12 @@
       transitioning = true;
       setupError = '';
       try {
-        if (step === 'model' && selectedOption && !(await saveModel()))
+        if (
+          step === 'model' &&
+          next !== 'provider' &&
+          selectedOption &&
+          !(await saveModel())
+        )
           return false;
         const result = await updateSetup(next);
         if (disposed) return false;
@@ -358,11 +379,17 @@
   function selectModelProvider(providerId) {
     if (providerId !== preferredProviderId) {
       selectedModelValue = '';
+      userClearedModel = false;
       onlyFree = false;
       showAllModels = false;
       assignError = '';
     }
     preferredProviderId = providerId;
+    if (step === 'model' && !selectedModelValue && !userClearedModel) {
+      selectedModelValue = pickDefaultOnboardingModel(suitableOptions, {
+        currentModel: savedAgentModel,
+      });
+    }
   }
 
   function goToModelStep() {
@@ -373,28 +400,46 @@
   }
 
   async function handleConnected() {
-    const providerId = modalScope?.scopedProvider?.id;
+    const hadConnectedBefore = usableProviders.length > 0;
+    const providerId = modalScope?.scopedProvider?.id ?? '';
     await loadSettings();
     if (disposed) return;
-    if (!preferredProviderId) preferredProviderId = providerId ?? '';
+    if (providerId) preferredProviderId = providerId;
     modalScope = null;
     connectionRevision += 1;
     void refreshModelDatabase();
+    if (!hadConnectedBefore && connectedProviderId(settings, providerId)) {
+      void moveToStep('model');
+    }
   }
 
   async function loadModels() {
     const request = ++modelRequest;
     loadingModels = true;
     modelsError = '';
+    userClearedModel = false;
     try {
-      const result = await catalog.load();
+      const agentId = activeAgentId || targetAgentId;
+      const [result, agent] = await Promise.all([
+        catalog.load(),
+        getAgent(agentId).catch(() => null),
+      ]);
       if (!result || disposed) return;
       models = result.models;
       connections = result.connections;
+      if (typeof agent?.model === 'string') {
+        savedAgentModel = agent.model;
+      }
       if (
         !allModelOptions.some((option) => option.value === selectedModelValue)
-      )
+      ) {
         selectedModelValue = '';
+      }
+      if (!selectedModelValue && !onlyFree) {
+        selectedModelValue = pickDefaultOnboardingModel(suitableOptions, {
+          currentModel: savedAgentModel,
+        });
+      }
     } catch (error) {
       if (!disposed)
         modelsError = `${t('onboarding.model.loadError')} ${error.message}`;
@@ -504,8 +549,8 @@
 
       <nav aria-label={t('onboarding.progress')}>
         <ol class="onboarding-progress">
-          {#each stepIds as id, index (id)}
-            <li class:current={step === id}>
+          {#each coreStepIds as id, index (id)}
+            <li class:current={step === id} class:complete={isStepComplete(id)}>
               <button
                 type="button"
                 aria-current={step === id ? 'step' : undefined}
@@ -522,6 +567,11 @@
               </button>
             </li>
           {/each}
+          {#if step === 'components' || step === 'services'}
+            <li class="current" aria-current="step">
+              <span>{t('onboarding.optional.badge')}</span>
+            </li>
+          {/if}
         </ol>
       </nav>
 
@@ -689,6 +739,13 @@
                         ).model.endsWith(':free')
                       ) {
                         selectedModelValue = '';
+                        userClearedModel = true;
+                      } else if (!onlyFree && !selectedModelValue) {
+                        userClearedModel = false;
+                        selectedModelValue = pickDefaultOnboardingModel(
+                          suitableOptions,
+                          { currentModel: savedAgentModel },
+                        );
                       }
                     }}>{t('onboarding.model.freeOnly')}</Button
                   >{/if}
@@ -710,6 +767,7 @@
                 onFooterAction={() => (showAllModels = !showAllModels)}
                 onValueChange={(value) => {
                   selectedModelValue = value;
+                  userClearedModel = !value;
                   assignError = '';
                 }}
               />
@@ -754,21 +812,23 @@
               disabled={assigning || transitioning}
               onClick={goToServiceStep}>{t('onboarding.model.back')}</Button
             >
-            <Button
-              variant="primary"
-              disabled={!canStart}
-              loading={assigning}
-              onClick={() => finish(onComplete)}
-              >{assigning
-                ? t('common.saving')
-                : t('onboarding.model.start')}{@render arrow()}</Button
-            >
-            <Button
-              variant="secondary"
-              disabled={!canStart || transitioning}
-              onClick={() => moveToStep('components')}
-              >{t('onboarding.model.customize')}</Button
-            >
+            <div class="onboarding-footer-actions">
+              <Button
+                variant="secondary"
+                disabled={assigning || transitioning}
+                onClick={() => moveToStep('components')}
+                >{t('onboarding.model.customize')}</Button
+              >
+              <Button
+                variant="primary"
+                disabled={!canStart}
+                loading={assigning}
+                onClick={() => finish(onComplete)}
+                >{assigning
+                  ? t('common.saving')
+                  : t('onboarding.model.start')}{@render arrow()}</Button
+              >
+            </div>
           </footer>
         {:else}
           {#if step === 'components'}<OnboardingComponents
@@ -778,21 +838,25 @@
               variant="tertiary"
               disabled={transitioning}
               onClick={() =>
-                moveToStep(step === 'services' ? 'components' : 'provider')}
-              >{t('common.back')}</Button
+                moveToStep(step === 'services' ? 'components' : 'model')}
+              >{step === 'services'
+                ? t('onboarding.optional.backToComponents')
+                : t('onboarding.optional.backToModel')}</Button
             >
-            {#if step === 'components'}<Button
-                variant="secondary"
+            <div class="onboarding-footer-actions">
+              {#if step === 'components'}<Button
+                  variant="secondary"
+                  disabled={transitioning}
+                  onClick={() => moveToStep('services')}
+                  >{t('onboarding.components.continue')}</Button
+                >{/if}
+              <Button
+                variant="primary"
                 disabled={transitioning}
-                onClick={() => moveToStep('services')}
-                >{t('onboarding.components.continue')}</Button
-              >{/if}
-            <Button
-              variant="primary"
-              disabled={transitioning}
-              onClick={() => finish(onComplete)}
-              >{t('onboarding.finish')}</Button
-            >
+                onClick={() => finish(onComplete)}
+                >{t('onboarding.finish')}{@render arrow()}</Button
+              >
+            </div>
           </footer>
         {/if}
       </div>

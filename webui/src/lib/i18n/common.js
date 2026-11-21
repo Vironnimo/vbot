@@ -278,21 +278,22 @@ export default Object.freeze({
     'Open Voice settings for details. The failure was written to the Desktop log.',
   'voice.toast.stopRecordingFailedTitle': 'The recording could not be stopped',
   'onboarding.title': 'Set up vBot',
-  'onboarding.dismiss': 'Finish with current settings',
-  'onboarding.finish': 'Finish setup',
-  'onboarding.progress.components': 'Skills & Extensions',
-  'onboarding.progress.services': 'Services',
-  'onboarding.step.components.title': 'Choose your Skills and Extensions',
+  'onboarding.dismiss': 'Skip for now',
+  'onboarding.finish': 'Start chatting',
+  'onboarding.step.components.title': 'Optional: Skills and Extensions',
   'onboarding.step.components.subtitle':
     'Choose the bundled Skills and installed Extensions you want. Unchanged options keep their current settings.',
-  'onboarding.step.services.title': 'Set up optional services',
+  'onboarding.step.services.title': 'Optional: Web search',
   'onboarding.step.services.subtitle':
     'Keep your current settings, connect an existing service, or let vBot set one up.',
   'onboarding.components.skills': 'Bundled Skills',
   'onboarding.components.extensions': 'Extensions',
   'onboarding.components.toggle': 'Enable {name}',
-  'onboarding.components.continue': 'Continue to services',
-  'onboarding.model.customize': 'Continue with optional setup',
+  'onboarding.components.continue': 'Next: Web search',
+  'onboarding.model.customize': 'Optional setup',
+  'onboarding.optional.backToModel': 'Back to Model',
+  'onboarding.optional.backToComponents': 'Back to Skills & Extensions',
+  'onboarding.optional.badge': 'Optional extras',
   'onboarding.services.description':
     'SearXNG provides web search without a search API key. vBot can install and manage a private instance on the server.',
   'onboarding.services.background':
@@ -364,16 +365,16 @@ export default Object.freeze({
   'onboarding.model.noFree':
     'No free Models match. Turn off the free filter to see more.',
   'onboarding.model.help':
-    'Models suited to Agent work are shown first. Search by name, or use “Show all models” in the list to see the rest.',
+    'Recommended Models for Agent work are shown first. Pick another anytime, or show all Models below.',
   'onboarding.model.ready':
-    'Finish now or continue with optional setup to save this Model for your Agent. You can change it later in Agents.',
+    'Ready to start chatting, or open optional setup for Skills and Web search. You can change Models later in Agents.',
   'onboarding.model.prompt': 'Choose a Model above to continue.',
   'onboarding.model.start': 'Start chatting',
   'onboarding.model.assignError': 'The Model could not be assigned.',
   'onboarding.model.finishSaved': 'Finish with saved settings',
   'onboarding.model.finishSavedHelp':
     'You can finish using the settings already saved on the server, without retrying this Model selection.',
-  'onboarding.model.back': 'Back to Providers',
+  'onboarding.model.back': 'Add another Provider',
   'dataStore.acknowledgeFailedTitle': 'Recovery notice still needs attention',
   'dataStore.acknowledgeFailed': 'Refresh the status and try again.',
   'dataStore.recoveredTitle': 'Data recovered',
