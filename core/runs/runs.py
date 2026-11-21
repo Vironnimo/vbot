@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -194,6 +194,7 @@ class ChatRunManager:
         self._lock = asyncio.Lock()
         self._active_by_session: dict[SessionAddress, Run] = {}
         self._queues: dict[SessionAddress, deque[QueuedRunItem]] = {}
+        self._paused_queues: Counter[SessionAddress] = Counter()
         self._guarded_sessions: set[SessionAddress] = set()
         self._guarded_agents: set[tuple[str | None, str]] = set()
         self._guarded_projects: set[str] = set()
@@ -488,6 +489,8 @@ class ChatRunManager:
             if self._closed:
                 raise RunAdmissionBlockedError("run manager is shutting down")
             self._ensure_run_admission_allowed_locked(address, admission)
+            if address in self._paused_queues:
+                raise RunAdmissionBlockedError("session is stopping work")
             active_run = self._active_by_session.get(address)
             if (
                 active_run is not None and active_run.status == RunStatus.RUNNING
@@ -556,8 +559,10 @@ class ChatRunManager:
                 raise
             active_run = self._active_by_session.get(address)
             if (
-                active_run is None or active_run.status != RunStatus.RUNNING
-            ) and not self._queues.get(address):
+                (active_run is None or active_run.status != RunStatus.RUNNING)
+                and not self._queues.get(address)
+                and address not in self._paused_queues
+            ):
                 if persist_input is not None:
                     await persist_input()
                 self._consume_waiting_work_admission(waiting_work_admission)
@@ -647,8 +652,10 @@ class ChatRunManager:
             raise RunAdmissionBlockedError("run manager is shutting down")
         for address, item in inputs:
             active = self._active_by_session.get(address)
-            if (active is None or active.status != RunStatus.RUNNING) and not self._queues.get(
-                address
+            if (
+                (active is None or active.status != RunStatus.RUNNING)
+                and not self._queues.get(address)
+                and address not in self._paused_queues
             ):
                 run = self._start_run_locked(
                     address=address,
@@ -660,6 +667,23 @@ class ChatRunManager:
             else:
                 self._queues.setdefault(address, deque()).append(item)
                 self._notify_queue_changed(address)
+
+    @asynccontextmanager
+    async def pause_queue(self, address: SessionAddress) -> AsyncIterator[None]:
+        """Accept queued work while preventing another Run from starting in the Session."""
+        async with self._lock:
+            self._paused_queues[address] += 1
+        try:
+            yield
+        finally:
+            await settle_before_cancelling(self._resume_queue(address))
+
+    async def _resume_queue(self, address: SessionAddress) -> None:
+        async with self._lock:
+            self._paused_queues[address] -= 1
+            if not self._paused_queues[address]:
+                del self._paused_queues[address]
+                await self._drain_next_locked(address)
 
     @asynccontextmanager
     async def queued_input_mutation(self) -> AsyncIterator[None]:
@@ -1218,6 +1242,8 @@ class ChatRunManager:
                     item.future.cancel()
             if closed_queue:
                 self._notify_queue_changed(address)
+            return
+        if address in self._paused_queues:
             return
         active_run = self._active_by_session.get(address)
         if active_run is not None and active_run.status == RunStatus.RUNNING:

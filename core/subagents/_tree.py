@@ -141,15 +141,16 @@ class SubAgentTreeControl:
         above them that are stopped too. The complete subtree is stopped regardless
         of where its answers go.
         """
-        stopped = await settle_before_cancelling(
-            self._stop_subtree(
-                address,
-                reason=reason,
-                initiator=initiator,
-                silence_root=False,
-                clear_root_queue=False,
+        async with self._runtime.chat_run_manager.pause_queue(address):
+            stopped = await settle_before_cancelling(
+                self._stop_subtree(
+                    address,
+                    reason=reason,
+                    initiator=initiator,
+                    silence_root=False,
+                    clear_root_queue=False,
+                )
             )
-        )
         # Without stopped_by the Session the user works in is always stopped.
         return stopped or 0
 

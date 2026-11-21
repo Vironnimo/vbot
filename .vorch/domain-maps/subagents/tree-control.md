@@ -14,6 +14,8 @@ Run cancellation stops only the current Run and the shell commands still inside 
 
 Tree stopping also silences descendant Runs that already ended but have not submitted their answers; forwarding rechecks that signal after its awaited facts reads. Held completion wakes in every stopped Session are suppressed synchronously with the cancellation signals, including pending follow-up admission; their cleanup settles outside the tree lock and their results remain as non-waking notes (`automation/completion-delivery.md` -> Pending wakes). The stopped count includes newly silenced terminal forwarding and suppressed completion wakes. Only Runs with a live forwarding watcher retain a silence signal.
 
+The retained root Queue resumes after resource cleanup and, for user commands and RPC, the Goal pause. Work accepted into that Queue during cleanup waits with existing input. Coverage: `test_stop_all_defers_the_retained_queue_through_cleanup`.
+
 `stop_tree` accepts explicit `reason` and `initiator` from its application ingress. Extension service `chat.stop_all` uses `extension_cancelled` / `extension_stop_all`, so forwarded outcomes do not claim that a person stopped the work. Service `chat.cancel` likewise records initiator `extension` and refuses the reserved `user` and `parent_agent` reasons; ordinary accessor semantics remain unchanged.
 
 ## Live work entries

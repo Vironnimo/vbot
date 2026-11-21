@@ -929,9 +929,10 @@ class CommandDispatcher:
             raise RuntimeError("Stop all is unavailable")
 
         async def stop() -> tuple[int, bool]:
-            stopped = await stop_tree(address)
-            goal_paused = await self._pause_goal_for_stop(address)
-            return stopped, goal_paused
+            async with self._chat_runs.pause_queue(address):
+                stopped = await stop_tree(address)
+                goal_paused = await self._pause_goal_for_stop(address)
+                return stopped, goal_paused
 
         return await settle_before_cancelling(stop())
 
