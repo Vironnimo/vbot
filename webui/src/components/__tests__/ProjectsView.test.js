@@ -429,7 +429,13 @@ describe('ProjectsView list and selection', () => {
     );
     flushSync();
 
-    let items = openRowMenu('beta');
+    const betaTrigger = buttonByTestId(
+      'project-toggle-beta',
+    ).parentElement.querySelector('[aria-haspopup="menu"]');
+    betaTrigger.click();
+    flushSync();
+    expect(betaTrigger.getAttribute('aria-expanded')).toBe('true');
+    let items = [...document.querySelectorAll('[role="menuitem"]')];
     expect(labels(items)).toEqual(['Copy path', 'Re-point…', 'Remove…']);
     items[0].click();
     await waitForCondition(() => onToast.mock.calls.length === 1);

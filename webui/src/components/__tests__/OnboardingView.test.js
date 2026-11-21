@@ -200,7 +200,7 @@ function createServer({ modelsAvailable = true } = {}) {
       case 'provider.set_key':
         state.connectedConnections.add(params.connection_id);
         if (params.provider_id === 'openrouter') state.connected = true;
-        return Promise.resolve({});
+        return Promise.resolve({ verification: 'verified' });
       case 'model.refresh_db':
         return Promise.resolve({ providers: [], model_count: 0 });
       case 'model.list':
@@ -265,6 +265,17 @@ async function connectProvider() {
 
   const form = document.querySelector('#provider-connect-key-form');
   form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await acceptVerifiedKey();
+}
+
+async function acceptVerifiedKey() {
+  await waitFor(() =>
+    expect(
+      document.querySelector('.provider-connect-modal [role="status"]')
+        ?.textContent,
+    ).toContain('accepted the API key'),
+  );
+  byText('.provider-connect-modal button', t('common.next')).click();
   flushSync();
 }
 
@@ -372,6 +383,7 @@ describe('OnboardingView', () => {
     document
       .querySelector('#provider-connect-key-form')
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await acceptVerifiedKey();
     await waitFor(() => {
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(document.querySelector('.onboarding-model-body')).toBeNull();
@@ -557,6 +569,7 @@ describe('OnboardingView', () => {
     document
       .querySelector('#provider-connect-key-form')
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await acceptVerifiedKey();
     await waitFor(() =>
       expect(document.querySelector('[role="dialog"]')).toBeNull(),
     );

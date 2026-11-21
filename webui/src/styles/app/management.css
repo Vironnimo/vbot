@@ -134,3 +134,16 @@
     border-top: 1px solid var(--border);
   }
 }
+
+.management-action-row {
+  display: flex;
+  align-items: center;
+}
+.management-action-row > .secondary-list__item {
+  min-width: 0;
+  flex: 1;
+}
+.management-action-row > .row-menu-button {
+  flex-shrink: 0;
+  color: var(--text-lo);
+}

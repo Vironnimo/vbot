@@ -15,6 +15,7 @@ from core.providers.accounts import (
     split_connection_id,
     validate_account_id,
 )
+from core.providers.key_check import check_api_key
 from core.providers.providers import custom_provider_credential_key
 from core.providers.wire_profiles import custom_provider_wire_file
 from core.secrets import CREDENTIALS, SecretStoreUnavailableError, credential_name_key
@@ -413,9 +414,46 @@ def _effective_account_id(
 
 async def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
-        params, {"provider_id", "connection_id", "value", "account"}, "provider set-key"
+        params, {"provider_id", "connection_id", "value", "account", "verify"}, "provider set-key"
     )
+    verify = params.get("verify", False)
+    if not isinstance(verify, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.verify must be a boolean")
+    params = {k: v for k, v in params.items() if k != "verify"}
+    if not verify:
+        return await serialized_mutation(
+            _store_provider_key, lock_attribute="_settings_mutation_lock"
+        )(state, params)
+    provider_id = _required_string(params, "provider_id")
+    connection_id = _required_string(params, "connection_id")
+    value = _required_string(params, "value")
+    try:
+        account_id = _effective_account_id(provider_id, connection_id, _account_param(params))
+        checked_provider = state.runtime.providers.get(provider_id)
+        connection = _api_key_connection(state.runtime, provider_id, connection_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    outcome = await check_api_key(checked_provider, connection, value)
+    if outcome != "verified":
+        return {"verification": outcome}
 
+    async def save(state: Any, params: JsonObject) -> JsonObject:
+        if state.runtime.providers.get(provider_id) != checked_provider:
+            return {"verification": "unavailable"}
+        accounts = await _CONNECTION_WORKERS.run(
+            state.runtime.provider_credentials.list_accounts, provider_id, connection.id
+        )
+        if any(slot.id == account_id and slot.source == "process_env" for slot in accounts):
+            # A data-directory key cannot replace the process credential.
+            return {"verification": "overridden"}
+        result = await _store_provider_key(state, params)
+        result["verification"] = "verified"
+        return result
+
+    return await serialized_mutation(save, lock_attribute="_settings_mutation_lock")(state, params)
+
+
+async def _store_provider_key(state: Any, params: JsonObject) -> JsonObject:
     provider_id = _required_string(params, "provider_id")
     value = _required_string(params, "value")
     raw_connection_id = params.get("connection_id")
@@ -751,9 +789,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "provider.custom_delete": serialized_mutation(
             _delete_custom_provider, lock_attribute="_settings_mutation_lock"
         ),
-        "provider.set_key": serialized_mutation(
-            _set_provider_key, lock_attribute="_settings_mutation_lock"
-        ),
+        "provider.set_key": _set_provider_key,
         "provider.unset_key": serialized_mutation(
             _unset_provider_key, lock_attribute="_settings_mutation_lock"
         ),

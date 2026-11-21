@@ -15,6 +15,16 @@ import { pendingWidgetStates } from '$lib/widgetStates.svelte.js';
 export function createComposerSubmission(context) {
   const { media, picker } = context;
   let inFlight = $state(false);
+  let failedDraft = $state.raw(null);
+
+  function recordFailure(snapshot, error) {
+    failedDraft = {
+      key: snapshot.draftKey,
+      content: snapshot.content,
+      attachments: snapshot.attachments.map((entry) => entry.source),
+      message: String(error?.message ?? error),
+    };
+  }
 
   // Which @-tokens in the outgoing text are actual files. Decided against the
   // picker's file list (fetched now if this draft never opened the picker, e.g.
@@ -106,12 +116,13 @@ export function createComposerSubmission(context) {
       return;
     }
 
+    failedDraft = null;
     try {
       // Capture the visible UI at the click, before asynchronous file lookup.
       // A closing or retired source refuses the send and leaves its draft.
       snapshot.uiContext = $state.snapshot(context.getUIContext?.());
     } catch (error) {
-      context.onSendError?.(String(error?.message ?? error));
+      recordFailure(snapshot, error);
       return;
     }
     inFlight = true;
@@ -122,7 +133,7 @@ export function createComposerSubmission(context) {
           : await collectFileMentions(snapshot);
       await finishSubmit(snapshot, fileMentions);
     } catch (error) {
-      context.onSendError?.(String(error?.message ?? error));
+      recordFailure(snapshot, error);
     } finally {
       inFlight = false;
     }
@@ -187,14 +198,9 @@ export function createComposerSubmission(context) {
       return false;
     }
 
-    let result;
-    try {
-      result = sendOptions
-        ? await snapshot.sendMessage(outgoingContent, sendOptions)
-        : await snapshot.sendMessage(outgoingContent);
-    } catch {
-      result = false;
-    }
+    const result = sendOptions
+      ? await snapshot.sendMessage(outgoingContent, sendOptions)
+      : await snapshot.sendMessage(outgoingContent);
     const continuedDraftKey =
       typeof result?.draftKey === 'string' ? result.draftKey : '';
     if (result !== true && !continuedDraftKey) {
@@ -327,6 +333,21 @@ ${movedText}`
   }
 
   return {
+    get error() {
+      if (
+        !failedDraft ||
+        failedDraft.key !== context.draftKey ||
+        failedDraft.content !== context.content
+      )
+        return '';
+      const attachments = media.pendingAttachments;
+      return failedDraft.attachments.length === attachments.length &&
+        failedDraft.attachments.every(
+          (source, index) => source === attachments[index],
+        )
+        ? failedDraft.message
+        : '';
+    },
     get inFlight() {
       return inFlight;
     },

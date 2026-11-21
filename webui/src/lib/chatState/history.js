@@ -66,6 +66,7 @@ export function loadHistory(sessionState, messages, options = {}) {
     (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.historyLoaded = true;
   if (!incremental) {
+    sessionState.olderHistoryError = '';
     sessionState.hasOlderHistory = options.hasMore === true;
     sessionState.historyBefore =
       options.hasMore === true && typeof options.nextBefore === 'string'

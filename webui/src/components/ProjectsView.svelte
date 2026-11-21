@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import ContributionSurface from './extensions/ContributionSurface.svelte';
+  import RowMenuButton from './ui/RowMenuButton.svelte';
   import Button from './ui/Button.svelte';
   import SaveStatus from './ui/SaveStatus.svelte';
   import Banner from './ui/Banner.svelte';
@@ -300,7 +301,11 @@
   function openMenu(project, event) {
     if (event.defaultPrevented) return;
     event.preventDefault();
-    menu = { ...contextMenuAnchor(event), ...projectMenu(project) };
+    menu = {
+      rowId: project.project_id,
+      ...contextMenuAnchor(event),
+      ...projectMenu(project),
+    };
   }
 
   async function copyProjectPath(path) {
@@ -384,33 +389,42 @@
             onDragActiveChange={projectsController.setReorderDragActive}
           >
             {#snippet item(project)}
-              <button
-                type="button"
-                class="project-item secondary-list__item"
-                class:active={project.project_id ===
-                  projectsState.selectedProjectId}
-                data-testid={`project-toggle-${project.project_id}`}
-                use:tooltip={() => projectRowDetails(project)}
-                onclick={() => navigation.navigate([project.project_id])}
-                oncontextmenu={(event) => openMenu(project, event)}
-                onkeydown={(event) => {
-                  if (isContextMenuKey(event)) openMenu(project, event);
-                }}
-              >
-                <span class="project-item-inner">
-                  <span class="project-item-head">
-                    <span class="project-item-name">
-                      {project.display_name || project.project_id}
+              <div class="management-action-row">
+                <button
+                  type="button"
+                  class="project-item secondary-list__item"
+                  class:active={project.project_id ===
+                    projectsState.selectedProjectId}
+                  data-testid={`project-toggle-${project.project_id}`}
+                  use:tooltip={() => projectRowDetails(project)}
+                  onclick={() => navigation.navigate([project.project_id])}
+                  oncontextmenu={(event) => openMenu(project, event)}
+                  onkeydown={(event) => {
+                    if (isContextMenuKey(event)) openMenu(project, event);
+                  }}
+                >
+                  <span class="project-item-inner">
+                    <span class="project-item-head">
+                      <span class="project-item-name">
+                        {project.display_name || project.project_id}
+                      </span>
+                      {#if needsRePoint(project)}
+                        <StatusChip variant="error">
+                          {t('projects.rePoint.title')}
+                        </StatusChip>
+                      {/if}
                     </span>
-                    {#if needsRePoint(project)}
-                      <StatusChip variant="error">
-                        {t('projects.rePoint.title')}
-                      </StatusChip>
-                    {/if}
+                    <span class="project-item-cwd">{project.cwd}</span>
                   </span>
-                  <span class="project-item-cwd">{project.cwd}</span>
-                </span>
-              </button>
+                </button>
+                <RowMenuButton
+                  label={t('projects.menu.label', {
+                    name: project.display_name || project.project_id,
+                  })}
+                  expanded={menu?.rowId === project.project_id}
+                  onClick={(event) => openMenu(project, event)}
+                />
+              </div>
             {/snippet}
           </SortableList>
         {/if}
@@ -541,6 +555,10 @@
                   {trackModelDropdownOpen}
                 />
                 <ProjectTeamPanel
+                  requestedMember={navigation.place[0] ===
+                    selectedProject.project_id && navigation.place[1] === 'team'
+                    ? navigation.place[2]
+                    : ''}
                   bind:findingsExpanded
                   bind:projectsState
                   {projectsController}

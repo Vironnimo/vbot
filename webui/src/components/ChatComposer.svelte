@@ -4,6 +4,7 @@
   import FileAutocomplete from './FileAutocomplete.svelte';
   import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor } from './ui/contextMenu.js';
@@ -48,7 +49,6 @@
     // the key the composer continues in.
     onSendMessage,
     getUIContext = null,
-    onSendError = null,
     onCancelRun = () => {},
     // Known work of this Session that outlives its Run (a running Sub-Agent
     // or background command, or a waiting Session): Stop all stays offered
@@ -159,9 +159,6 @@
     },
     get onListFilesForSubmit() {
       return onListFilesForSubmit;
-    },
-    get onSendError() {
-      return onSendError;
     },
     get getUIContext() {
       return getUIContext;
@@ -789,6 +786,17 @@
     </svg>
   </Button>
 {/snippet}
+
+{#if submission.error}
+  <Banner variant="error" role="alert">
+    <span>{submission.error} {t('chat.draftRetained')}</span>
+    <Button
+      variant="tertiary"
+      disabled={disabled || Boolean(sendDisabledReason)}
+      onClick={() => submission.submit()}>{t('common.retry')}</Button
+    >
+  </Banner>
+{/if}
 
 <form
   class="input-area"

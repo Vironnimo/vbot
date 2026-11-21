@@ -127,9 +127,9 @@ describe('send and edit admission', () => {
       .mockRejectedValue(new ApiClientError('network_error', 'Disconnected'));
     const first = setupController({ operationOverrides: { startChatRun } });
     const draft = { agentAddress: 'alpha', key: 'alpha::~draft-0' };
-    expect(await first.controller.sendToNewSession(draft, 'Once')).toEqual({
-      kind: 'failed',
-    });
+    expect(
+      await first.controller.sendToNewSession(draft, 'Once'),
+    ).toMatchObject({ kind: 'failed' });
     const original = startChatRun.mock.calls[0][0];
     first.controller.destroy();
     const onSessionCreated = vi.fn();
@@ -217,7 +217,7 @@ describe('send and edit admission', () => {
     });
     const session = ensureSessionState(chatState, 'alpha', 'slash');
     const content = '/tmp/file explain this path';
-    expect(await controller.sendMessage(session, content)).toEqual({
+    expect(await controller.sendMessage(session, content)).toMatchObject({
       kind: 'failed',
     });
     expect(startChatRun).toHaveBeenCalledTimes(1);
@@ -413,7 +413,7 @@ describe('send and edit admission', () => {
 
       expect(
         await controller.sendMessage(sessionState, content, { widgetStates }),
-      ).toEqual({ kind: 'failed' });
+      ).toMatchObject({ kind: 'failed' });
       expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
 
       await controller.sendMessage(sessionState, content, { widgetStates });
@@ -494,8 +494,8 @@ describe('send and edit admission', () => {
     // Without a Session, a failure reports beside the draft's composer.
     expect(await controller.sendToNewSession(draft, 'Again')).toEqual({
       kind: 'failed',
+      error: `${t('chat.sendError')} provider down`,
     });
-    expect(chatState.actionError).toBe(`${t('chat.sendError')} provider down`);
   });
 
   it('attaches send admission errors only to the addressed Session', async () => {
@@ -508,9 +508,8 @@ describe('send and edit admission', () => {
 
     expect(await controller.sendMessage(addressed, 'Hello')).toEqual({
       kind: 'failed',
+      error: `${t('chat.sendError')} provider down`,
     });
-
-    expect(addressed.actionError).toBe(`${t('chat.sendError')} provider down`);
     expect(addressed.error).toBeNull();
     expect(addressed.status).toBe('idle');
     expect(other.actionError).toBe('');

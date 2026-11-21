@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import { t, tOr } from '$lib/i18n.js';
   import InfoHint from '../ui/InfoHint.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -38,6 +39,7 @@
   let {
     projectsState = $bindable(),
     projectsController,
+    requestedMember = '',
     scanAction,
     findingsExpanded = $bindable(false),
     trackModelDropdownOpen,
@@ -404,6 +406,14 @@
                 type="button"
                 class="projects-team-header"
                 data-testid={`project-team-toggle-${member.agent_id}`}
+                {@attach (element) => {
+                  if (requestedMember !== member.agent_id) return;
+                  untrack(() => {
+                    projectsState.expandedMembers[member.agent_id] = true;
+                    element.focus({ preventScroll: true });
+                    element.scrollIntoView?.({ block: 'nearest' });
+                  });
+                }}
                 aria-expanded={expanded}
                 use:tooltip={() => memberDetails(member)}
                 onclick={() => toggleMember(member.agent_id)}

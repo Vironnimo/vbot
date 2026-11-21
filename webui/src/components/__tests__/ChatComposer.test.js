@@ -728,8 +728,11 @@ describe('ChatComposer', () => {
       resetWidgetStates();
     });
 
-    it('keeps the draft and attachments when send admission fails', async () => {
-      const onSendMessage = vi.fn().mockResolvedValue(false);
+    it('keeps the draft and attachments for an inline retry when send admission fails', async () => {
+      const onSendMessage = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Offline'))
+        .mockResolvedValue(true);
       uploadAttachment.mockResolvedValue(
         uploaded('attachment-file-1', 'paper.pdf', 'application/pdf'),
       );
@@ -759,6 +762,24 @@ describe('ChatComposer', () => {
       expect(getDraft('agent::one')).toBe('keep this');
       expect(attachments()).toHaveLength(1);
       expect(getHistory('agent')).toEqual([]);
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+          'Offline',
+        ),
+      );
+      typeInComposer('a different draft');
+      flushSync();
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      typeInComposer('keep this');
+      flushSync();
+      const notice = document.querySelector('[role="alert"]');
+      expect(notice.textContent).toContain('Offline');
+      expect(notice.textContent).toContain(t('chat.draftRetained'));
+      notice.querySelector('button').click();
+      await vi.waitFor(() => expect(composerInput().value).toBe(''));
+      expect(onSendMessage.mock.calls[1]).toEqual(onSendMessage.mock.calls[0]);
+      expect(composerInput().value).toBe('');
+      expect(attachments()).toHaveLength(0);
     });
 
     it.each([

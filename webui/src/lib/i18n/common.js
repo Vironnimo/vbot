@@ -321,8 +321,8 @@ export default Object.freeze({
   'onboarding.service.clearSearch': 'Clear',
   'onboarding.service.noMatches': 'No Providers match your search.',
   'onboarding.service.existing': 'Connected Providers',
-  'onboarding.service.connected': 'Connected',
-  'onboarding.service.connectedCount': '{count} connected',
+  'onboarding.service.connected': 'Configured',
+  'onboarding.service.connectedCount': '{count} configured',
   'onboarding.service.addMore': 'Add another, or continue when you’re ready.',
   'onboarding.service.required': 'Connect at least one Provider to continue.',
   'onboarding.service.later':

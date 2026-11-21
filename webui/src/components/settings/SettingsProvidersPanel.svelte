@@ -5,6 +5,7 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import {
+    DEFAULT_ACCOUNT_ID,
     describeProviderBilling,
     formatModelCount,
     getConfiguredConnections,
@@ -134,7 +135,7 @@
       getConnectionAccounts(connection).length === 0 ||
       connectionAccountsUsable(connection)
     ) {
-      return 'connected';
+      return connection.type === 'api_key' ? 'key_configured' : 'connected';
     }
     return 'not_usable';
   }
@@ -148,6 +149,7 @@
     if (statuses.includes('connected')) {
       return 'connected';
     }
+    if (statuses.includes('key_configured')) return 'key_configured';
     if (statuses.includes('unreachable')) {
       return 'unreachable';
     }
@@ -159,6 +161,13 @@
   }
 
   function statusChip(status) {
+    if (status === 'key_configured') {
+      return {
+        variant: 'neutral',
+        label: t('settings.providers.keyConfigured'),
+        hint: t('settings.providers.keyConfiguredHint'),
+      };
+    }
     if (status === 'not_checked') {
       return {
         variant: 'neutral',
@@ -251,7 +260,7 @@
   $effect(() => {
     if (
       pendingProviderRefresh &&
-      shouldApplyReloadNow({ focused: modalScope !== null })
+      shouldApplyReloadNow({ focused: modalScope !== null || customModalOpen })
     ) {
       pendingProviderRefresh = false;
       void Promise.resolve(onRefreshProviderSettings()).catch((error) => {
@@ -339,8 +348,15 @@
     );
   }
 
-  async function reloadAfterCustomProviderSave() {
-    await onRefreshProviderSettings();
+  function reloadAfterCustomProviderSave(provider) {
+    pendingProviderRefresh = true;
+    if (provider.auth === 'api_key' && !provider.credentials_configured) {
+      modalScope = {
+        provider,
+        connection: { id: provider.connection_id, type: provider.auth },
+        account: DEFAULT_ACCOUNT_ID,
+      };
+    }
   }
 
   async function confirmDeleteCustomProvider() {
@@ -695,7 +711,10 @@
             {#if provider.id === 'openrouter'}
               <OpenRouterRoutingSettings
                 {provider}
-                active={expanded && summaryStatus === 'connected'}
+                active={expanded &&
+                  getConfiguredConnections(provider).some(
+                    (connection) => connection.usable === true,
+                  )}
                 {modelsRefreshToken}
                 {onRefreshProviderSettings}
                 {onToast}

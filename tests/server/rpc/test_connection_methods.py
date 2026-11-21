@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from core.providers.accounts import ConnectionRef
@@ -399,6 +400,77 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
     )
     # A credential change alters which Models are selectable and the Secret Store's counts.
     assert resource_changes(state) == [{"kind": "providers"}, {"kind": "data_store"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "status", "body", "control", "expected"),
+    [
+        ("openrouter", 200, {"data": {"label": "test"}}, None, "verified"),
+        ("openrouter", 401, {"error": "unauthorized"}, None, "rejected"),
+        ("openrouter", 200, {"message": "unexpected"}, None, "unavailable"),
+        ("openai", 200, {"data": []}, 200, "unsupported"),
+        ("openai", 200, {"data": []}, 401, "verified"),
+        ("xai", 200, {"api_key_id": "key", "api_key_disabled": True}, None, "rejected"),
+        ("xai", 403, {"code": "unauthenticated:bad-credentials"}, None, "rejected"),
+        (
+            "xai",
+            400,
+            {"code": "invalid-argument", "error": "Incorrect API key provided."},
+            None,
+            "rejected",
+        ),
+        ("google", 400, {"error": {"details": [{"reason": "API_KEY_INVALID"}]}}, None, "rejected"),
+        ("anthropic", 429, {}, None, "unavailable"),
+    ],
+)
+async def test_connect_checks_the_submitted_account_key_before_replacing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    status: int,
+    body: dict[str, Any],
+    control: int | None,
+    expected: str,
+) -> None:
+    state = _openrouter_state(tmp_path, monkeypatch)
+    provider = ProviderRegistry.load(_REPO_RESOURCES).get(provider_id)
+    state.runtime.providers.add(provider)
+    connection = provider.get_connection("api-key")
+    slot = connection.auth.credential_key + "__WORK"
+    monkeypatch.delenv(slot, raising=False)
+    state.runtime.storage.set_data_dir_credential(slot, "previous")
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            assert request.headers[connection.auth.header] == connection.auth.prefix + "candidate"
+            if provider_id == "openrouter":
+                assert request.url.path == "/api/v1/key"
+            if provider_id == "anthropic":
+                assert "anthropic-version" in request.headers
+            return httpx.Response(status, json=body)
+        assert control is not None and len(requests) == 2
+        assert request.headers[connection.auth.header] != connection.auth.prefix + "candidate"
+        return httpx.Response(control, json=body)
+
+    def client(*, base_url: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr("core.providers.key_check.build_async_client", client)
+    target = {
+        "provider_id": provider_id,
+        "connection_id": f"{provider_id}:api-key",
+        "account": "work",
+    }
+    result = await rpc_result(state, "provider.set_key", **target, value="candidate", verify=True)
+    assert result["verification"] == expected
+    assert _stored_credentials(state)[slot] == (
+        "candidate" if expected == "verified" else "previous"
+    )
+    assert len(requests) == (1 if control is None else 2)
+    assert bool(resource_changes(state)) == (expected == "verified")
 
 
 @pytest.mark.asyncio

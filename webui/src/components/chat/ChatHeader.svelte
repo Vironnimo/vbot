@@ -52,6 +52,7 @@
     // shows it as the current Agent.
     displayedAgentName = '',
     loadingAgents = false,
+    onConfigureAgent = null,
     onSelectAgent = () => {},
     // The Session list beside the chat: whether it is open, and its toggle.
     // While it is open, the list itself offers New session, so the bar does
@@ -95,17 +96,30 @@
   // A right click or the context menu key on an Agent tab offers to show the
   // Agent in the other Chat area.
   function openAgentMenu(entry, event) {
-    if (!otherArea || event.defaultPrevented) return;
+    if ((!otherArea && !onConfigureAgent) || event.defaultPrevented) return;
     event.preventDefault();
     agentMenu = {
       ...contextMenuAnchor(event),
       label: t('chat.agentMenu.label', { name: entry.fullName }),
       items: [
-        {
-          id: 'open-in-other-area',
-          label: otherArea.label,
-          onSelect: () => otherArea.open({ agentAddress: entry.address }),
-        },
+        ...(onConfigureAgent
+          ? [
+              {
+                id: 'configure-agent',
+                label: t('chat.agentMenu.configure'),
+                onSelect: () => onConfigureAgent(entry.address),
+              },
+            ]
+          : []),
+        ...(otherArea
+          ? [
+              {
+                id: 'open-in-other-area',
+                label: otherArea.label,
+                onSelect: () => otherArea.open({ agentAddress: entry.address }),
+              },
+            ]
+          : []),
       ],
     };
   }

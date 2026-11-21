@@ -482,7 +482,7 @@ export function createChatHistory({
       return false;
     }
     sessionState.loadingOlderHistory = true;
-    sessionState.actionError = '';
+    sessionState.olderHistoryError = '';
     const editVersion = sessionState.historyEditVersion;
     try {
       while (sessionState.hasOlderHistory && pageBefore()) {
@@ -503,7 +503,7 @@ export function createChatHistory({
         } catch (error) {
           if (sessionState.historyEditVersion !== editVersion) return false;
           if (!isCurrentBoundary()) continue;
-          sessionState.actionError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
+          sessionState.olderHistoryError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
           return false;
         }
         if (sessionState.historyEditVersion !== editVersion) return false;

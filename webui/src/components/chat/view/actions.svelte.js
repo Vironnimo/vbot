@@ -212,6 +212,7 @@ export function createChatViewActions(context) {
       content,
       options,
     );
+    if (outcome.kind === 'failed') throw new Error(outcome.error);
     if (outcome.modelChanged) {
       context.sessionSettings.modelCommandApplied({
         agentAddress: sessionState.agentId,
@@ -238,6 +239,7 @@ export function createChatViewActions(context) {
       content,
       options,
     );
+    if (outcome.kind === 'failed') throw new Error(outcome.error);
     const sessionState = outcome.sessionState ?? null;
     if (sessionState) {
       context.sessionSettings.draftSent(draft, sessionState);
@@ -339,12 +341,20 @@ export function createChatViewActions(context) {
     return isSent(outcome);
   };
 
+  async function sendActionCommand(agent, sessionState, command) {
+    try {
+      await sendStream(agent, sessionState, command);
+    } catch (error) {
+      setSessionActionError(error.message, sessionState);
+    }
+  }
+
   // The goal bar's buttons send `/goal pause|resume|clear` like typed commands.
   const handleGoalCommand = async (argument) => {
     const agent = context.target.activeAgent;
     const sessionState = context.target.activeSessionState;
     if (agent && sessionState) {
-      await sendStream(agent, sessionState, `/goal ${argument}`);
+      await sendActionCommand(agent, sessionState, `/goal ${argument}`);
     }
   };
 
@@ -370,7 +380,7 @@ export function createChatViewActions(context) {
     }
     compactionSubmissions = [...compactionSubmissions, key];
     try {
-      await sendStream(agent, sessionState, '/compact');
+      await sendActionCommand(agent, sessionState, '/compact');
     } finally {
       compactionSubmissions = compactionSubmissions.filter(
         (pendingKey) => pendingKey !== key,

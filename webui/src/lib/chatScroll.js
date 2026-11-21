@@ -258,13 +258,13 @@ export function createChatScrollController(
     onViewChanged();
   }
 
-  function maybeRequestLoadOlder({ automatic = false } = {}) {
+  function maybeRequestLoadOlder({ automatic = false, explicit = false } = {}) {
     if (
       destroyed ||
       restorePending ||
       (automatic && (!hasLayout() || olderHistoryFailed)) ||
       loadingOlderSessions.has(currentSessionId) ||
-      container.scrollTop > LOAD_OLDER_THRESHOLD_PX ||
+      (!explicit && container.scrollTop > LOAD_OLDER_THRESHOLD_PX) ||
       !shouldLoadOlder()
     ) {
       return;
@@ -992,6 +992,7 @@ export function createChatScrollController(
   }
 
   return {
+    retryOlderHistory: () => maybeRequestLoadOlder({ explicit: true }),
     contentChanged: queueContentChanged,
     sessionChanged,
     // Mount a viewport row in reading mode, then align the rendered match,
