@@ -27,6 +27,11 @@ from resources.extensions.mcp.interactions import InputRequests
 CONNECTION_TOOL = "mcp_example"
 
 
+async def run_inline(operation, *args):
+    """In-memory database stand-in for the worker that runs encryption and JSON."""
+    return operation(*args)
+
+
 class SessionPayloads:
     """Result payloads kept with Tool Results, visible in the Session that received them.
 

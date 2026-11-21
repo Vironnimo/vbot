@@ -20,6 +20,7 @@ from mcp.client.auth import OAuthFlowError
 from mcp.shared.exceptions import MCPError
 
 from core.extensions.operations import ExtensionHost
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
 
@@ -108,6 +109,7 @@ class ConnectionRunner:
         publish: Any,
         *,
         authorize: Callable[[ToolContext], Awaitable[None] | None] | None = None,
+        masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
         on_change: Callable[[], None] | None = None,
         recovery: Any = None,
     ) -> None:
@@ -136,7 +138,13 @@ class ConnectionRunner:
         # Whether this connection's transport reports which requests it delivered,
         # and whether its HTTP client does so instead of its write stream.
         self._tracks_delivery = False
-        self._events = ConnectionEvents(host, lambda: self.config, on_stderr=self._stderr_changed)
+        self._events = ConnectionEvents(
+            host,
+            lambda: self.config,
+            masker=masker,
+            invocation=self._event_context,
+            on_stderr=self._stderr_changed,
+        )
         self._protocol = ConnectionProtocol(self)
         self._transport = ConnectionTransport(self)
         self._requests = ServerRequests(
@@ -309,7 +317,7 @@ class ConnectionRunner:
 
     def events(self, after: int = 0) -> dict[str, Any]:
         """The connection's events after cursor *after*, with the count of dropped ones."""
-        return self._events.read(after)
+        return self._events.read(after, operator=True)
 
     def redact(self, message: str) -> str:
         """*message* without the credentials of this connection."""
@@ -772,13 +780,16 @@ class ConnectionRunner:
         # Each task runs in its own context copy: this marks only this call.
         _CURRENT_CALL.set(call)
         argument_secrets = (
-            call.context.external_secret_values if call.context is not None else frozenset()
+            call.context.external_secret_values | call.context.prepared_secret_literals.keys()
+            if call.context is not None
+            else frozenset()
         )
         # A connection Tool can substitute values before dispatching the remote Tool.
         if call.canonical_context is not None:
             argument_secrets |= call.canonical_context.external_secret_values
+            argument_secrets |= call.canonical_context.prepared_secret_literals.keys()
         if argument_secrets:
-            self._events.remember_argument_secrets(argument_secrets)
+            self._events.remember_argument_secrets(frozenset(argument_secrets))
         try:
             if call.resuming:
                 value = await self._protocol._resume_task(call)
@@ -843,7 +854,7 @@ class ConnectionRunner:
                 self.id,
                 call.operation,
                 safe,
-                exc_info=error,
+                exc_info=(RuntimeError, RuntimeError(safe), error.__traceback__),
             )
         status = call.http_status
         call.retry = (
@@ -864,6 +875,16 @@ class ConnectionRunner:
             )
             return
         call.result.set_exception(ValueError(safe))
+
+    def _event_context(self) -> ToolContext | None:
+        # A sole active caller is insufficient: a delayed notification or stderr
+        # line can come from any earlier call on the shared connection.
+        call = _CURRENT_CALL.get()
+        return (
+            call.context
+            if call is not None and call.runner is self and call in self._calls
+            else None
+        )
 
     def _attributed_context(self) -> ToolContext | None:
         """The Agent call a server request belongs to, or ``None`` for no Agent.

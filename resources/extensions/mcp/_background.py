@@ -7,9 +7,10 @@ import json
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from core.database import DatabaseUnavailableError
+from core.secrets.store import SecretStoreError
 from core.tools.tools import ToolContext, tool_failure, tool_success
 
 from ._invocation import CANONICAL_CONTEXT, RETAIN_CALL
@@ -99,16 +100,19 @@ class BackgroundCalls:
             if receipt is None:
                 # A caller without a durable Session must keep ownership of its wait.
                 return await self.finish(runner, context, arguments, invocation)
+            literals = await self.recovery.seal_literals(receipt, "protected_calls", context)
             self.recovery.deferred_receipts.add(receipt)
             await self.recovery.database.write_async(
                 lambda connection: connection.execute(
-                    "INSERT INTO pending_calls(receipt_id,connection_id,configuration_hash,"
-                    "arguments_json) VALUES(?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING",
+                    "INSERT INTO protected_calls(receipt_id,connection_id,configuration_hash,"
+                    "arguments_json,sealed_literals) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(receipt_id) DO NOTHING",
                     (
                         receipt,
                         runner.id,
                         configuration_hash(runner.config),
                         json.dumps({"name": arguments["name"]}),
+                        literals,
                     ),
                 )
             )
@@ -158,7 +162,9 @@ class BackgroundCalls:
                 self._connections.pop(receipt, None)
                 self._cancellations.discard(receipt)
             if not task.cancelled() and (error := task.exception()) is not None:
-                self.recovery.logger.error("MCP background outcome failed", exc_info=error)
+                self.recovery.logger.error(
+                    "MCP background outcome failed (error_type=%s)", type(error).__name__
+                )
 
         task.add_done_callback(finished)
 
@@ -171,30 +177,38 @@ class BackgroundCalls:
             if self._closed:
                 raise
             outcome = _unknown("cancellation was requested; remote effects may already exist")
-        outcome = await self._save(receipt, outcome)
+        outcome = await self._save(receipt, outcome, context)
         await pending.persisted.wait()
         await self._deliver(receipt, pending.runner.id, outcome)
 
-    async def _save(self, receipt: str, outcome: dict[str, Any]) -> dict[str, Any]:
+    async def _save(
+        self, receipt: str, outcome: dict[str, Any], context: ToolContext
+    ) -> dict[str, Any]:
         assert self.recovery.database is not None
 
-        def save(db: Any) -> dict[str, Any]:
+        outcome = {
+            key: context.mask_prepared_secrets(value, include_keys=key == "data")
+            for key, value in outcome.items()
+        }
+
+        def save(db: Any) -> str:
             db.execute(
-                "UPDATE pending_calls SET outcome_json=? WHERE receipt_id=? "
-                "AND outcome_json IS NULL",
-                (json.dumps(outcome), receipt),
+                "UPDATE protected_calls SET sealed_outcome=?, sealed_received=NULL, "
+                "sealed_literals=NULL WHERE receipt_id=? AND sealed_outcome IS NULL",
+                (payload, receipt),
             )
             row = db.execute(
-                "SELECT outcome_json FROM pending_calls WHERE receipt_id=?", (receipt,)
+                "SELECT sealed_outcome FROM protected_calls WHERE receipt_id=?", (receipt,)
             ).fetchone()
-            return cast(dict[str, Any], json.loads(row["outcome_json"]))
+            return str(row["sealed_outcome"])
 
         while True:
             try:
+                payload = await self.recovery.seal(receipt, "protected_calls.outcome", outcome)
                 saved = await self.recovery.database.write_async(save)
                 await self.recovery.forget(receipt)
-                return saved
-            except DatabaseUnavailableError, OSError:
+                return await self.recovery.unseal(receipt, "protected_calls.outcome", saved)
+            except DatabaseUnavailableError, SecretStoreError, OSError:
                 await _sleep(30)
 
     async def _deliver(self, receipt: str, connection: str, outcome: dict[str, Any]) -> None:
@@ -237,7 +251,7 @@ class BackgroundCalls:
                 try:
                     await self.recovery.database.write_async(
                         lambda db: db.execute(
-                            "UPDATE pending_calls SET delivered=1 WHERE receipt_id=?", (receipt,)
+                            "UPDATE protected_calls SET delivered=1 WHERE receipt_id=?", (receipt,)
                         )
                     )
                     return
@@ -254,7 +268,8 @@ class BackgroundCalls:
                 dict(row)
                 for row in db.execute(
                     "SELECT receipt_id, connection_id, configuration_hash, arguments_json, "
-                    "received_json, outcome_json, delivered FROM pending_calls"
+                    "sealed_received, sealed_outcome, sealed_literals, delivered "
+                    "FROM protected_calls"
                 )
             ]
         )
@@ -282,28 +297,37 @@ class BackgroundCalls:
         if context is None:
             await self._forget(receipt)
             return
-        if row["outcome_json"] is not None:
-            outcome = json.loads(row["outcome_json"])
-        elif row["received_json"] is not None:
+        context = await self.recovery.restore_context(
+            receipt, "protected_calls", context, row["sealed_literals"]
+        )
+        if row["sealed_outcome"] is not None:
+            outcome = await self.recovery.unseal(
+                receipt, "protected_calls.outcome", row["sealed_outcome"]
+            )
+        elif row["sealed_received"] is not None:
 
             async def received() -> dict[str, Any]:
-                return cast(dict[str, Any], json.loads(row["received_json"]))
+                return await self.recovery.unseal(
+                    receipt, "protected_calls.received", row["sealed_received"]
+                )
 
             outcome = await self.finish(
                 row["connection_id"], context, json.loads(row["arguments_json"]), received()
             )
-            outcome = await self._save(receipt, outcome)
+            outcome = await self._save(receipt, outcome, context)
         else:
             native = await self.recovery.database.read_async(
                 lambda db: db.execute(
-                    "SELECT task_json, outcome_json FROM pending_tasks WHERE receipt_id=?",
+                    "SELECT sealed_task, sealed_outcome FROM protected_tasks WHERE receipt_id=?",
                     (receipt,),
                 ).fetchone()
             )
-            if native is not None and native["outcome_json"] is not None:
+            if native is not None and native["sealed_outcome"] is not None:
 
                 async def stored() -> dict[str, Any]:
-                    return cast(dict[str, Any], json.loads(native["outcome_json"]))
+                    return await self.recovery.unseal(
+                        receipt, "protected_tasks.outcome", native["sealed_outcome"]
+                    )
 
                 outcome = await self.finish(
                     row["connection_id"], context, json.loads(row["arguments_json"]), stored()
@@ -315,7 +339,12 @@ class BackgroundCalls:
                     and runner.config["enabled"]
                     and configuration_hash(runner.config) == row["configuration_hash"]
                 ):
-                    run = _decode(native["task_json"], receipt)
+                    run = _decode(
+                        await self.recovery.unseal(
+                            receipt, "protected_tasks.task", native["sealed_task"]
+                        ),
+                        receipt,
+                    )
                     with suppress(ValueError, OSError):
                         await runner.invoke("tasks/cancel", {"taskId": run.state.task_id}, context)
                 outcome = _unknown("cancellation was requested; remote effects may already exist")
@@ -325,7 +354,12 @@ class BackgroundCalls:
                 and runner.config["enabled"]
                 and configuration_hash(runner.config) == row["configuration_hash"]
             ):
-                run = _decode(native["task_json"], receipt)
+                run = _decode(
+                    await self.recovery.unseal(
+                        receipt, "protected_tasks.task", native["sealed_task"]
+                    ),
+                    receipt,
+                )
                 arguments = json.loads(row["arguments_json"])
 
                 async def recover() -> dict[str, Any]:
@@ -345,7 +379,7 @@ class BackgroundCalls:
                 return
             else:
                 outcome = _unknown("the MCP wait was interrupted before a result was saved")
-            outcome = await self._save(receipt, outcome)
+            outcome = await self._save(receipt, outcome, context)
         await self._deliver(receipt, row["connection_id"], outcome)
 
     async def load_result(
@@ -362,7 +396,7 @@ class BackgroundCalls:
             return None
         row = await self.recovery.database.read_async(
             lambda db: db.execute(
-                "SELECT arguments_json,outcome_json FROM pending_calls "
+                "SELECT arguments_json,sealed_outcome FROM protected_calls "
                 "WHERE receipt_id=? AND connection_id=?",
                 (receipt, connection),
             ).fetchone()
@@ -372,8 +406,10 @@ class BackgroundCalls:
         return {
             "connection": connection,
             "source": json.loads(row["arguments_json"]).get("name"),
-            "payload": json.loads(row["outcome_json"])
-            if row["outcome_json"] is not None
+            "payload": await self.recovery.unseal(
+                receipt, "protected_calls.outcome", row["sealed_outcome"]
+            )
+            if row["sealed_outcome"] is not None
             else {
                 "state": "running",
                 "result_id": receipt,
@@ -410,7 +446,7 @@ class BackgroundCalls:
     async def _forget(self, receipt: str) -> None:
         assert self.recovery.database is not None
         await self.recovery.database.write_async(
-            lambda db: db.execute("DELETE FROM pending_calls WHERE receipt_id=?", (receipt,))
+            lambda db: db.execute("DELETE FROM protected_calls WHERE receipt_id=?", (receipt,))
         )
         self.recovery.deferred_receipts.discard(receipt)
         await self.recovery.forget(receipt)
@@ -427,11 +463,12 @@ class BackgroundCalls:
 
     async def _save_received(self, receipt: str, payload: dict[str, Any]) -> None:
         assert self.recovery.database is not None
+        sealed = await self.recovery.seal(receipt, "protected_calls.received", payload)
         await self.recovery.database.write_async(
             lambda db: db.execute(
-                "UPDATE pending_calls SET received_json=? "
-                "WHERE receipt_id=? AND outcome_json IS NULL",
-                (json.dumps(payload), receipt),
+                "UPDATE protected_calls SET sealed_received=? "
+                "WHERE receipt_id=? AND sealed_outcome IS NULL",
+                (sealed, receipt),
             )
         )
 
@@ -448,7 +485,7 @@ class BackgroundCalls:
                 assert self.recovery.database is not None
                 try:
                     await self._save_received(receipt, pending.invocation.result())
-                except (DatabaseUnavailableError, OSError) as error:
+                except (DatabaseUnavailableError, SecretStoreError, OSError) as error:
                     # Storage failure must not prevent stopping the live request.
                     self.recovery.logger.warning(
                         "MCP received reply could not be saved during shutdown (error_type=%s)",

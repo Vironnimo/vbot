@@ -11,8 +11,10 @@ import pytest
 import pytest_asyncio
 from mcp.server import MCPServer
 
+from core.extensions.databases import OwnerDataProtection
 from core.extensions.operations import ExtensionHost
 from core.permissions import PermissionBoundary
+from core.secrets.store import SecretStore
 from core.tools.availability import ToolAccess
 from resources.extensions.mcp.config import validate_connection
 from tests.resources.extensions.mcp.mcp_test_support import SessionPayloads, start_service
@@ -37,6 +39,7 @@ def host(tmp_path: Path) -> ExtensionHost:
     state_dir.mkdir(parents=True)
     return ExtensionHost(
         data_dir=tmp_path,
+        protected_data=OwnerDataProtection(SecretStore(tmp_path), "mcp", lambda: None),
         sample=sample,
         resolve_agent=lambda project, name: agent,
         resolve_tool_agent=lambda context: agent,

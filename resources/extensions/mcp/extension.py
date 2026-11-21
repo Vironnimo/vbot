@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
+from core.secrets.agent_secrets import EMPTY_MASKER
 from core.storage import SettingsConflictError
 from core.tools.availability import resolve_tool_access
 from core.tools.contracts import declared_parameters
@@ -162,7 +163,7 @@ class MCPService:
             raise RuntimeError("MCP requires an owner-bound Extension host")
         self.host = host
         self.store = ConnectionStore(host.state_dir)
-        self.content = ContentStore(host)
+        self.content = ContentStore(host, self.api.operations.tool_registry)
         self.connectors = await run_tool_worker(load_connectors)
         for issue in self.connectors.issues:
             self.api.logger.warning(
@@ -180,7 +181,7 @@ class MCPService:
             )
         # Saved summaries first, so each connection Tool starts with its known names.
         await self.catalogs.open(host)
-        self.recovery = TaskRecovery(host, self.api.logger)
+        self.recovery = TaskRecovery(host, self.api.logger, content=self.content)
         await self.recovery.open()
         self.background = BackgroundCalls(self.recovery, self._finish_background)
         if self.connections:
@@ -278,6 +279,11 @@ class MCPService:
                 self.inputs,
                 self._publish,
                 authorize=self._authorize,
+                masker=lambda: (
+                    registry.secret_masker
+                    if (registry := self.api.operations.tool_registry) is not None
+                    else EMPTY_MASKER
+                ),
                 recovery=self.recovery,
                 on_change=lambda: self._connection_changed(identifier),
             )
@@ -616,6 +622,10 @@ class MCPService:
         if document["source"] and remote_tool_name(runner.id, document["source"]) not in allowed:
             return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
         try:
+            document = {
+                **document,
+                "payload": await self.content.protect(document["payload"], context),
+            }
             page = await run_tool_worker(self.content.read_result, document, arguments)
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
