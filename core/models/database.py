@@ -37,7 +37,9 @@ from core.models.assembly import (
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text, replace_path
 from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
+from core.utils.workers import BoundedWorkerPool
 
+MODEL_DB_WORKERS = BoundedWorkerPool(name="model-db-refresh", max_workers=1)
 MODEL_DATABASE_DIRECTORY_NAME = "models"
 MODEL_DATABASE_MANIFEST_FILE_NAME = "manifest.json"
 MODEL_DATABASE_SCHEMA_VERSION = 2
