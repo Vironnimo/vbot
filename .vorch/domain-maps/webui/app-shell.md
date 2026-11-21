@@ -48,6 +48,8 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 
 ## Access gate
 
+The HTML preloads the same-origin access-status request after the built entry and its module preloads, while JavaScript loads. The gate consumes the response on boot and checks the server again on retry.
+
 `main.js` mounts `components/access/AccessGate.svelte` with `App` as a prop instead of App itself. `lib/accessGate.js` owns the gate's decisions, `lib/pairing.js` the pairing request and `components/access/PairingScreen.svelte` its screen; `lib/api/access.js` holds the `/api/auth/*` calls and the `devices.*` wrappers. Server contracts: `access/accessor-contracts.md`.
 
 - **Boot decision:** before App mounts, the gate reads `GET /api/auth/status` (10 s budget). `authenticated: true` mounts App; `authenticated` mode without a principal shows the pairing screen; every other answer mounts App, so `local` and `lan` look as before. A 403 `access_denied` (the guard refuses the peer or transport before any route, the status route included) shows the refusal screen with Retry and no pairing. A 503 `devices_unavailable` (the server cannot check this browser's device cookie right now) shows the `unavailable` screen, "The server cannot check this sign-in right now": the browser stays signed in, the gate checks again on its own no sooner than the answer's `Retry-After` (and not before its usual backoff), and offers Retry; never pairing. When the first check fails otherwise (server down, timeout), App mounts anyway and shows its usual offline state; the server stays the security boundary.
