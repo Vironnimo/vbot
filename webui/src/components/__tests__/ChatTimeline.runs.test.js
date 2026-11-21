@@ -241,8 +241,10 @@ describe('ChatTimeline Runs', () => {
     openDisclosures('.reasoning-block');
     expect(
       runChildren().map((child) => [
-        expected.find(([className]) =>
-          child.classList.contains(className),
+        expected.find(
+          ([className]) =>
+            child.classList.contains(className) ||
+            child.querySelector(`:scope > .${className}`),
         )?.[0],
         child.textContent,
       ]),
