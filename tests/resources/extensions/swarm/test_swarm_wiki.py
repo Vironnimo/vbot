@@ -361,8 +361,10 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
 @pytest.mark.asyncio
 async def test_wiki_bounded_reads_search_and_frozen_pagination(board):
     # Case-fold expansions before the match must not move its displayed excerpt.
-    content = "ß" * 20500 + "\nÜberraschung"
+    content = "\0" + "🙂" * 319 + "ß" * (20500 - 320) + "\nÜberraschung"
     page_ids = [await create(board, content, f"Page {index}") for index in range(3)]
+    page = await board.store.wiki(board.swarm["id"], None, {"action": "list", "limit": 1})
+    assert page["entries"][0]["excerpt"] == content[:320]
     # A read without limit shows as much as one read can.
     result = (await invoke(board, {"action": "read", "page_id": page_ids[0]}))["data"]
     assert len(result["content"]) == 20000

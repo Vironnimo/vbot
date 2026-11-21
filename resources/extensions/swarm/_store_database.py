@@ -145,14 +145,18 @@ DATABASE_NAME = "swarm"
 # kind values are validated in code, never by CHECK constraints.
 #
 # Every index names its reader:
+# - ``swarm_events_swarm``: per-Swarm event history and its high-water mark.
+# - ``wiki_pages_swarm``: restrict current-page title and content reads to one Swarm.
+# - ``wiki_revisions_swarm``: high-water mark of a Swarm's Wiki snapshot.
 # - ``wiki_revision_page``: one page's revision history, the latest revision of
-#   each page for the page list, the revision high-water mark
+#   each page for the page list
 #   (``_store_wiki.wiki``), and each page's first revision, which orders the
 #   page numbers (``_store_wiki._page_numbers``).
 # - ``recipients_pending_participant``: a participant's undelivered Posts
 #   (``_store_records._pending_rows`` and ``_pending_count``, and
 #   ``_store_delivery._prepare_automatic_delivery``, which names it with
 #   ``INDEXED BY``), so delivered history does not dominate the scan.
+# - ``delivery_batches_unacknowledged``: cross-participant recovery pages in rowid order.
 # - ``delivery_batches_pending_participant``: the oldest unacknowledged automatic
 #   batch of one participant (``_store_delivery._prepare_automatic_delivery``),
 #   excluding acknowledged batches retained for receipt recovery.
@@ -183,8 +187,12 @@ CREATE TABLE requests(scope TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash 
 CREATE TABLE swarm_goals(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),post_id TEXT NOT NULL REFERENCES posts(id)) STRICT;
 CREATE TABLE wiki_pages(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),revision INTEGER NOT NULL) STRICT;
 CREATE TABLE wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),page_id TEXT NOT NULL REFERENCES wiki_pages(id),revision INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),author_id TEXT NOT NULL,author_name TEXT NOT NULL,author_kind TEXT NOT NULL,created_at TEXT NOT NULL,replacement_author_id TEXT,UNIQUE(page_id,revision)) STRICT;
+CREATE INDEX swarm_events_swarm ON swarm_events(swarm_id,id);
+CREATE INDEX wiki_pages_swarm ON wiki_pages(swarm_id);
+CREATE INDEX wiki_revisions_swarm ON wiki_revisions(swarm_id,id);
 CREATE INDEX wiki_revision_page ON wiki_revisions(swarm_id,page_id,id DESC);
 CREATE INDEX recipients_pending_participant ON recipients(participant_id,post_id) WHERE delivered_at IS NULL;
+CREATE INDEX delivery_batches_unacknowledged ON delivery_batches(acknowledged_at) WHERE acknowledged_at IS NULL;
 CREATE INDEX delivery_batches_pending_participant ON delivery_batches(participant_id,effect_kind,created_at) WHERE acknowledged_at IS NULL;
 CREATE INDEX posts_discussion_page ON posts(swarm_id,discussion_id,sequence DESC);
 CREATE UNIQUE INDEX discussions_one_main ON discussions(swarm_id) WHERE is_main=1;
@@ -213,4 +221,6 @@ POST_CONTEXT_COLUMNS = (
     "d.title AS discussion_title,d.sequence AS discussion_sequence,"
     "(SELECT q.sequence FROM posts q WHERE q.id=p.reply_to) AS reply_sequence"
 )
-ALIASED_WIKI_REVISION_COLUMNS = qualified(WIKI_REVISION_COLUMNS, "r")
+WIKI_METADATA_COLUMNS = (
+    "page_id,revision,title,deleted,author_id,author_name,author_kind,created_at"
+)

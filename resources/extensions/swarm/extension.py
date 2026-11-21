@@ -272,7 +272,7 @@ class SwarmExtension:
             or binding.generation_id != owner.generation_id
         ):
             raise SwarmStoreError("participant_inactive")
-        swarm = await store.get_swarm(owner.group_id)
+        swarm = await store.get_swarm(owner.group_id, include_snapshot=False)
         groups.validate(address, RunAdmission(owner=owner))
         if swarm["execution_epoch"] != owner.epoch:
             raise SwarmStoreError("swarm_closed")
