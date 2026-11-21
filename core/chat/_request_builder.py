@@ -221,7 +221,15 @@ class RequestBuilder:
         """
         inputs = RequestBuildInputs.from_context(context, context.primary_target)
         failed_blocks: set[str] = set()
-        session_blocks = await self._session_prompt_blocks(inputs, failed_blocks=failed_blocks)
+        # A live comparison follows the same epoch as the request the Model saw.
+        # Pins without an order still need the full Session inventory for migration.
+        state = context.request_state
+        pin = state.prompt_blocks if only is not None and state is not None else None
+        session_blocks = await self._session_prompt_blocks(
+            inputs,
+            only=only if pin is not None and pin.order else None,
+            failed_blocks=failed_blocks,
+        )
         read_paths: list[FileRead] = []
         note = await _CHAT_TRANSFORM_WORKERS.run(
             self._plan_prompt_block_change,
@@ -233,6 +241,7 @@ class RequestBuilder:
             failed_blocks,
             read_paths,
             only,
+            pin,
         )
         if read_paths:
             await _CHAT_TRANSFORM_WORKERS.run(
@@ -253,9 +262,12 @@ class RequestBuilder:
         failed_blocks: set[str],
         read_paths: list[FileRead],
         only: Collection[str] | None,
+        pin: PromptBlockPin | None,
     ) -> str | None:
         sessions = self._dependencies.sessions
-        pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
+        pin = pin or PromptBlockPin.from_payload(
+            sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT)
+        )
         if pin is None:
             return None
         tool_pin = self.tool_catalog._stored_tool_epoch_pin(address)
@@ -305,16 +317,20 @@ class RequestBuilder:
         return await self.plan_prompt_block_change(context, only=(PERMISSIONS_BLOCK_ID,))
 
     async def _session_prompt_blocks(
-        self, inputs: RequestBuildInputs, *, failed_blocks: set[str] | None = None
+        self,
+        inputs: RequestBuildInputs,
+        *,
+        only: Collection[str] | None = None,
+        failed_blocks: set[str] | None = None,
     ) -> tuple[BlockDefinition, ...]:
         """Render temporary Session contributions for snapshots and change notes.
 
         The Run's ``core:permissions`` block joins them: like them it follows the
         Run, not the prompt layout, and is pinned per prompt epoch.
         """
-        blocks: list[BlockDefinition] = (
-            [permissions_prompt_block(inputs.permissions)] if inputs.permissions is not None else []
-        )
+        blocks: list[BlockDefinition] = []
+        if inputs.permissions is not None and (only is None or PERMISSIONS_BLOCK_ID in only):
+            blocks.append(permissions_prompt_block(inputs.permissions))
         binding = inputs.temporary_binding
         if binding is None:
             return tuple(blocks)
@@ -331,6 +347,8 @@ class RequestBuilder:
             )
         for declaration in capability.prompt_blocks:
             block_id = f"extension_session:{declaration.slug}"
+            if only is not None and block_id not in only:
+                continue
             try:
                 rendered = await invoke_extension_handler(
                     declaration.render, binding, extension_name=capability.identity.name

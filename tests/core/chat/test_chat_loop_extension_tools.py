@@ -18,6 +18,7 @@ from core.extensions import (
 )
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionOperations
+from core.json_documents import document_change
 from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
 from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError, RunExecutionOwner
 from core.sessions import SessionAddress
@@ -26,6 +27,7 @@ from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 from tests.core.chat.chat_loop_tools_test_support import WAIT_SECONDS
+from tests.core.prompts.prompts_test_support import _manager
 
 
 def _value_schema(value_type: str) -> dict[str, Any]:
@@ -661,10 +663,18 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
     api = ExtensionAPI("private", declarations, config={}, logger=None)
     finished: list[str] = []
     private_call_ids: list[str] = []
+    block_rendered_after_tool: list[bool] = []
+
+    def render_private(_binding):
+        block_rendered_after_tool.append(bool(private_call_ids))
+        return "test-prompt-sentinel"
 
     async def hidden(context, arguments):
         del arguments
         private_call_ids.append(context.tool_call_id)
+        # Recheck the Permission Boundary before the continuation's request.
+        with document_change(tmp_path / "settings.json"):
+            pass
         context.record_delivery_receipt("tool-receipt", "tool-hash", "inbox")
         context.record_delivery_receipt("second-receipt", "second-hash", "inbox")
         context.add_note("deferred-tool-note")
@@ -721,7 +731,7 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         {"type": "object", "properties": {}, "additionalProperties": False},
         hidden,
     )
-    api.register_session_prompt_block("private", render=lambda _binding: "test-prompt-sentinel")
+    api.register_session_prompt_block("private", render=render_private)
     api.register_session_tool(
         "sibling_tool",
         "test-sentinel",
@@ -762,6 +772,7 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
     )
     agent = StubAgent(id="ordinary", model="openai/gpt-5.2", allowed_tools=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.system_prompts = _manager(tmp_path, tools=tools)
     runtime.extensions = extensions
     temporary = TemporaryAgentRegistry(runtime.chat_sessions)
     runtime.agent_resolver.temporary_agents = temporary
@@ -801,6 +812,7 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         *(["program_tool"] if programmatic else []),
     }
     assert "test-prompt-sentinel" in request["messages"][0]["content"]
+    assert block_rendered_after_tool and not any(block_rendered_after_tool)
     assert "test-delivery-sentinel" in str(request["messages"])
     assert [
         message.content
