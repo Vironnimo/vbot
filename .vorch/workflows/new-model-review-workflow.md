@@ -9,8 +9,6 @@ Before reading any code, show the user the catalog below as a numbered list (num
 - which numbers to review;
 - whether to use subagents.
 
-Give a recommendation on every item and on the subagent question, each with a short reason: review now, or later. Base it on the catalog order, the usage budget the user names, and open entries in `.vorch/FLAGGED.md` that point at an area.
-
 Wait for the answer. Review only the chosen numbers, in catalog order.
 
 ## 2. Catalog
