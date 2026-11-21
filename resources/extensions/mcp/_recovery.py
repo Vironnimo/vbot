@@ -16,7 +16,7 @@ from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 
 from ._recovery_storage import MIGRATIONS, TASK_SCHEMA, payload_identity, protect_prior_records
-from .content import ContentStore
+from .content import ContentStore, outcome_preview
 
 if TYPE_CHECKING:
     from ._tasks import TaskRun
@@ -369,13 +369,8 @@ def _decode(value: dict[str, Any], receipt: str) -> TaskRun:
 
 def _outcome_note(tool_name: str, connection: str, receipt: str, outcome: dict[str, Any]) -> str:
     # The server's content is data, including any reminder-like tags it contains.
-    encoded = json.dumps(outcome, ensure_ascii=True)
-    value: dict[str, Any] = {"tool": tool_name}
-    if len(encoded) <= 6000:
-        value["result"] = outcome
-    else:
-        value["preview"] = encoded[:3000]
-        value["complete"] = False
+    value = {"tool": tool_name, **outcome_preview(outcome)}
+    if "preview" in value:
         value["read"] = {"tool": f"mcp_{connection}", "action": "read", "result_id": receipt}
     quoted = json.dumps(value, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e")
     return (

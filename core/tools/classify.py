@@ -9,6 +9,8 @@ from typing import Any
 from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import ITEM_LIMIT, NOT_CONFIGURED_MESSAGE, DecisionService
+from core.secrets._references import map_strings
+from core.secrets.agent_secrets import SecretMasker
 from core.tools._classify_arguments import normalize_classify_arguments, wire_question
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import ToolContext, ToolDisplay, ToolRegistry, tool_failure, tool_success
@@ -111,6 +113,7 @@ def register_classify_tool(registry: ToolRegistry, service: DecisionService) -> 
                 items,
                 [wire_question(question) for question in questions],
                 context=arguments.get("context"),
+                secret_masker=lambda: registry.secret_masker_for(context),
                 usage_context=TaskUsageContext(
                     agent_id=context.agent_id,
                     project_id=context.project_id,
@@ -129,7 +132,8 @@ def register_classify_tool(registry: ToolRegistry, service: DecisionService) -> 
             first = errors[0]
             prefix = "" if len(outcomes) == 1 else "No item was classified. "
             return tool_failure(first.code, prefix + str(first))
-        return tool_success({"content": _result_text(items, questions, outcomes)})
+        masker = registry.secret_masker_for(context)
+        return tool_success({"content": _result_text(items, questions, outcomes, masker)})
 
     registry.register(
         "classify",
@@ -163,20 +167,21 @@ def _result_text(
     items: list[Any],
     questions: list[dict[str, Any]],
     outcomes: list[dict[str, Any] | DecisionError],
+    masker: SecretMasker,
 ) -> str:
     """One line per item in item order; failed items are named for a repeated call."""
     several = len(items) > 1
     lines: list[str] = []
     failed: list[int] = []
     for number, (item, outcome) in enumerate(zip(items, outcomes, strict=True), 1):
-        prefix = f"item {number} ({_excerpt(item)}): " if several else ""
+        prefix = f"item {number} ({_excerpt(item, masker)}): " if several else ""
         if isinstance(outcome, DecisionError):
             failed.append(number)
             lines.append(f"{prefix}not classified: {outcome}")
             continue
         answers = [
             ("" if len(questions) == 1 else f"{question['id']}: ")
-            + _answer_text(question, outcome["answers"][question["id"]])
+            + _answer_text(question, outcome["answers"][question["id"]], masker)
             for question in questions
         ]
         lines.append(prefix + "; ".join(answers))
@@ -190,14 +195,29 @@ def _result_text(
     return "\n".join(lines)
 
 
-def _excerpt(item: Any) -> str:
-    text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+def _excerpt(item: Any, masker: SecretMasker) -> str:
+    if isinstance(item, str):
+        text = masker.guard_layout(item)
+    else:
+        projected = map_strings(
+            item, lambda value: masker.mask(masker.guard_layout(value)), include_keys=True
+        )
+        text = json.dumps(projected, ensure_ascii=False)
     line = next((part.strip() for part in text.splitlines() if part.strip()), "")
     line = " ".join(line.split())
-    return line if len(line) <= _EXCERPT_LENGTH else line[: _EXCERPT_LENGTH - 3] + "..."
+    return _short_text(line, _EXCERPT_LENGTH, masker)
 
 
-def _answer_text(question: dict[str, Any], answer: dict[str, Any]) -> str:
+def _short_text(text: str, limit: int, masker: SecretMasker) -> str:
+    if len(text) > limit:
+        text = masker.guard_slice(text, 0, limit - 3) + "..."
+    projected = masker.mask(text)
+    if len(projected) > limit:
+        return masker.guard_slice(projected, 0, limit - 3) + "..."
+    return projected
+
+
+def _answer_text(question: dict[str, Any], answer: dict[str, Any], masker: SecretMasker) -> str:
     if answer.get("type") == "refusal":
         return "not answered: the model declined this question"
     kind = question["type"]
@@ -209,8 +229,7 @@ def _answer_text(question: dict[str, Any], answer: dict[str, Any]) -> str:
         # Options numbered from 1 carry their meaning only in the options; the
         # answer quotes the chosen one, so the number needs no lookup.
         if list(options) == [str(number) for number in range(1, len(options) + 1)]:
-            option = str(options[text])
-            shown = option if len(option) <= 80 else option[:77] + "..."
+            shown = _short_text(masker.guard_layout(str(options[text])), 80, masker)
             text += f" {shown!r}"
     else:
         text = f"level {_number(answer['score'])} on levels 0-{len(question['levels']) - 1}"

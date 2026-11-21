@@ -34,6 +34,7 @@ from core.tools import (
     tool_failure_for_exception,
 )
 from core.tools.on_demand import CALL_TOOL_NAME
+from core.tools.tools import project_secret_use_labels
 from core.utils.logging import get_logger
 from core.utils.surrogates import without_lone_surrogates
 from core.utils.timestamps import format_canonical_timestamp
@@ -106,7 +107,11 @@ class _EmittingToolRegistry(ToolRegistry):
         self._tool_media: dict[str, list[JsonObject]] = {}
         self._extension_hook_lock = asyncio.Lock()
 
-    def _secret_masker(self) -> SecretMasker:
+    @override
+    def secret_masker_for(self, context: ToolContext) -> SecretMasker:
+        scoped = getattr(self._registry, "secret_masker_for", None)
+        if callable(scoped):
+            return cast(SecretMasker, scoped(context))
         masker = getattr(self._registry, "secret_masker", None)
         return masker if isinstance(masker, SecretMasker) else EMPTY_MASKER
 
@@ -114,6 +119,11 @@ class _EmittingToolRegistry(ToolRegistry):
         self, context: ToolContext, result: JsonObject, display: JsonObject
     ) -> tuple[JsonObject, JsonObject]:
         """Keep newly read keys usable without publishing or persisting their values."""
+        result = {
+            key: context.mask_prepared_secrets(item, include_keys=key == "data")
+            for key, item in result.items()
+        }
+        display = context.mask_prepared_secrets(display)
         try:
             capture = getattr(self._registry, "capture_output_secrets", None)
             if capture is not None:
@@ -136,15 +146,10 @@ class _EmittingToolRegistry(ToolRegistry):
                 ),
                 _empty_tool_display_payload(),
             )
-        masker = self._secret_masker()
-        result = {
-            key: context.mask_prepared_secrets(item, include_keys=key == "data")
-            for key, item in result.items()
-        }
-        return (
-            _leaving_call(masker, result),
-            _leaving_call(masker, context.mask_prepared_secrets(display)),
-        )
+        masker = self.secret_masker_for(context)
+        if labels := display.get("secrets_used"):
+            display = {**display, "secrets_used": project_secret_use_labels(labels, masker)}
+        return _leaving_call(masker, result), _leaving_call(masker, display)
 
     def _hook_context(self) -> HookContext:
         return HookContext(
@@ -515,6 +520,9 @@ class _EmittingToolRegistry(ToolRegistry):
         started_perf: float,
     ) -> JsonObject:
         """Emit the lifecycle of a call answered before any hook or handler ran."""
+        masker = self.secret_masker_for(context)
+        result = _leaving_call(masker, result)
+        display = _leaving_call(masker, display)
         timing = _timing_payload(started_at, started_perf)
         self._tool_timings[context.tool_call_id] = timing
         self._tool_displays[context.tool_call_id] = display
@@ -587,6 +595,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 await self._result_payloads.record_tool_started(
                     context.tool_call_id, context.tool_name, format_canonical_timestamp(started_at)
                 )
+            masker = self.secret_masker_for(context)
             self._run.tool_call_count += 1
             self._run.tool_call_names.add(context.tool_name)
             self._run.emit(
@@ -597,9 +606,9 @@ class _EmittingToolRegistry(ToolRegistry):
                         "id": context.tool_call_id,
                         "index": context.tool_call_index,
                         "name": context.tool_name,
-                        "arguments": events.arguments,
+                        "arguments": _leaving_call(masker, events.arguments),
                     },
-                    "display": display,
+                    "display": _leaving_call(masker, display),
                     "schema_fingerprint": fingerprint,
                 },
             )

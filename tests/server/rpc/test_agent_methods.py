@@ -21,6 +21,7 @@ from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import ChatSessionManager
 from core.storage import StorageManager
 from core.tools.tool_loading import DEFAULT_ALWAYS_LOADED_TOOLS
@@ -103,28 +104,34 @@ async def test_a_suggested_description_comes_from_the_agent_files_and_saves_noth
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    adapter = StubAdapter([{"content": '"Reviews pull requests for correctness."\nMore text'}])
+    adapter = StubAdapter([{"content": '"Reviews pull requests with private-token."\nMore text'}])
     close_adapter = AsyncMock()
     monkeypatch.setattr(adapter, "aclose", close_adapter, raising=False)
     state = make_state(tmp_path, adapter)
     workspace = tmp_path / "coder-workspace"
+    state.runtime.agent_secrets = SimpleNamespace(
+        masker=SecretMasker({"private-token": "[redacted]"}, filter_references=True)
+    )
     workspace.mkdir()
     state.runtime.agents.update("coder", workspace=str(workspace))
-    (workspace / "SOUL.md").write_text("You review pull requests.", encoding="utf-8")
+    (workspace / "SOUL.md").write_text(
+        "You review pull requests. Use private-token.", encoding="utf-8"
+    )
     sessions = state.runtime.chat_sessions
-    sessions.set_title(sessions.create("coder").address, "Review the RPC changes")
+    sessions.set_title(sessions.create("coder").address, "Review the RPC changes {{secret:OLD}}")
     sessions.set_title(sessions.create("another-agent").address, "Unrelated private task")
 
     result = await rpc_result(state, "agent.suggest_description", id="coder")
 
-    assert result == {"description": "Reviews pull requests for correctness"}
+    assert result == {"description": "Reviews pull requests with [redacted]"}
     [system, user] = adapter.requests[0]["messages"]
     assert system["role"] == "system"
     # The Agent's files reach the Model as delimited data.
     assert user["content"].startswith("<agent>\n")
     assert "You review pull requests." in user["content"]
     assert "debugging: Debug failures." in user["content"]
-    assert "Review the RPC changes" in user["content"]
+    assert "Review the RPC changes [redacted]" in user["content"]
+    assert "Use [redacted]." in user["content"]
     assert "Unrelated private task" not in user["content"]
     assert adapter.requests[0]["model_id"] == "gpt-5.2"
     close_adapter.assert_awaited_once()

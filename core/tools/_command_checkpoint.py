@@ -183,7 +183,7 @@ class CommandCheckpoints:
             "exit_code": report.exit_code,
             "stop_reason": report.stop_reason,
             "not_run": report.not_run,
-            "consumed_once_secrets": list(report.consumed_once_secrets),
+            "one_time_secrets_spent": report.consumed_once_secrets,
             "transcript": asdict(report.transcript),
             "log_path": str(report.log_path) if report.log_path is not None else None,
             "failed_programs": list(report.failed_programs),
@@ -380,7 +380,14 @@ class CommandCheckpoints:
             body = state.get("body")
             execution = state.get("execution_owner")
             report = self._interrupted(report, log)
-            if body is None and state["pending"]:
+            pending = bool(state["pending"])
+            legacy_retry = bool(body and report.not_run and state.get("consumed_once_secrets"))
+            if legacy_retry and pending:
+                # An old-format Note may already have been written before the crash.
+                pending = not await self.store.run_async(
+                    self.store.background_command_delivered, report.command_id, body
+                )
+            if legacy_retry or (body is None and pending):
                 body = format_command_delivery(
                     report,
                     permissions=_delivery_boundary(report, ceiling, self.store.data_dir),
@@ -390,7 +397,7 @@ class CommandCheckpoints:
                 row["origin_run_id"],
                 body,
                 RunExecutionOwner(**execution) if execution is not None else None,
-                bool(state["pending"]),
+                pending,
             )
             if any(matches(entry) for matches in self._withdrawals):
                 entry.pending = False
@@ -662,7 +669,10 @@ def _report(row: dict[str, Any]) -> CommandReport:
         background=True,
         elapsed_seconds=float(state["elapsed_seconds"]),
         not_run=cast(NotRunReason | None, state.get("not_run")),
-        consumed_once_secrets=tuple(state.get("consumed_once_secrets", ())),
+        # Older checkpoints kept a list of names. Only presence matters for retry.
+        consumed_once_secrets=bool(
+            state.get("one_time_secrets_spent", state.get("consumed_once_secrets"))
+        ),
         log_loss=(
             LogLoss(
                 RuntimeError("output logging failed before restart"),

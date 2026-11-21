@@ -17,9 +17,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.agents import LIVE_BACKEND_AGENT_ID
+from core.chat._secret_history import project_secret_result
 from core.chat.messages import INPUT_ORIGIN_LIVE_VOICE, ContentBlock, TextBlock
 from core.model_tasks._live_brief import EFFECTS_LABEL
 from core.runs import TOOL_CALL_RESULT_EVENT, Run, RunKind
+from core.secrets.agent_secrets import AgentSecrets, SecretMasker
+from core.sessions import SessionAddress
 from core.tools.live import LIVE_READ_ONLY_TOOLS, TOOL_END_CALL, LiveToolHost, LiveToolHosts
 from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
 from core.tools.web_search import WEB_SEARCH_TOOL_NAME
@@ -34,6 +37,8 @@ REQUEST_TIMEOUT_SECONDS = 240.0
 _LOOKUP_TOOLS = frozenset({*LIVE_READ_ONLY_TOOLS, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME})
 _MAX_EFFECTS = 8
 _EFFECT_CHARS = 240
+# The effects line outlives the source result and can no longer identify broker fields on replay.
+_NO_NAMED_SECRETS = SecretMasker({}, filter_references=True)
 # How long the effects wait for the Run's event stream after the Run ended.
 _EFFECTS_DRAIN_SECONDS = 2.0
 _CLOSE_SECONDS = 3.0
@@ -79,6 +84,8 @@ class LiveBackend:
         *,
         chat: Any,
         sessions: Any,
+        secrets: AgentSecrets,
+        voice_masker: Callable[[], SecretMasker],
         hosts: LiveToolHosts,
         host: LiveToolHost,
         title: str,
@@ -88,6 +95,8 @@ class LiveBackend:
     ) -> None:
         self._chat = chat
         self._sessions = sessions
+        self._secrets = secrets
+        self._voice_masker = voice_masker
         self._hosts = hosts
         self._host = host
         self._title = title
@@ -107,6 +116,16 @@ class LiveBackend:
         """The backend Session, once the first request created it."""
         return self._session_id
 
+    @property
+    def secret_masker(self) -> SecretMasker:
+        """The backend Agent's current grants for the Session receiving call context."""
+        assert self._session_id is not None
+        return self._secrets.masker_for(
+            SessionAddress(
+                project_id=None, agent_id=LIVE_BACKEND_AGENT_ID, session_id=self._session_id
+            )
+        )
+
     async def answer(
         self,
         prepare: Callable[[], Awaitable[BackendRequest]],
@@ -121,10 +140,10 @@ class LiveBackend:
         async with self._turn:
             if self._closed:
                 return _STOPPED
-            request = await prepare()
+            session_id = await self._session()
             if self._closed:
                 return _STOPPED
-            session_id = await self._session()
+            request = await prepare()
             if self._closed:
                 return _STOPPED
             item = await self._chat.queue_run(
@@ -228,12 +247,14 @@ class LiveBackend:
     async def _outcome(self, run: Run, on_progress: Callable[[str], Awaitable[None]] | None) -> str:
         effects: list[str] = []
         hangup: list[str] = []
-        collector = asyncio.create_task(_collect_effects(run, effects, hangup, on_progress))
+        collector = asyncio.create_task(
+            _collect_effects(run, effects, hangup, on_progress, self._voice_masker)
+        )
         try:
             try:
                 async with asyncio.timeout(self._timeout):
                     final = await asyncio.shield(run.wait())
-                answer = _text(getattr(final, "content", None)) or _NO_ANSWER
+                answer = _text(getattr(final, "content", None), self._voice_masker()) or _NO_ANSWER
             except TimeoutError:
                 _LOGGER.warning("Live backend request timed out (run=%s)", run.id)
                 run.request_cancel()
@@ -299,6 +320,7 @@ async def _collect_effects(
     effects: list[str],
     hangup: list[str],
     on_progress: Callable[[str], Awaitable[None]] | None,
+    voice_masker: Callable[[], SecretMasker],
 ) -> None:
     async for event in run.subscribe():
         if event.type != TOOL_CALL_RESULT_EVENT:
@@ -306,7 +328,7 @@ async def _collect_effects(
         call = event.payload.get("tool_call")
         name = str(call.get("name") or "") if isinstance(call, dict) else ""
         if name and name not in _LOOKUP_TOOLS:
-            effects.append(_effect(name, event.payload.get("result")))
+            effects.append(_effect(name, event.payload.get("result"), voice_masker()))
             result = event.payload.get("result")
             if name == TOOL_END_CALL and isinstance(result, dict) and result.get("ok") is True:
                 hangup.append(effects[-1])
@@ -322,9 +344,10 @@ async def _collect_effects(
                     on_progress = None
 
 
-def _effect(name: str, result: Any) -> str:
+def _effect(name: str, result: Any, masker: SecretMasker) -> str:
     """One Tool result as a short fact: a Live Tool's text, else which Tool ran or failed."""
     result = result if isinstance(result, dict) else {}
+    result = project_secret_result(result, name, _NO_NAMED_SECRETS)
     if result.get("ok") is True:
         data = result.get("data")
         content = data.get("content") if isinstance(data, dict) else None
@@ -333,9 +356,9 @@ def _effect(name: str, result: Any) -> str:
         error = result.get("error")
         message = error.get("message") if isinstance(error, dict) else None
         text = f"{name} failed: {message}" if isinstance(message, str) else f"{name} failed."
-    text = " ".join(text.split())
+    text = " ".join(masker.mask(text).split())
     if len(text) > _EFFECT_CHARS:
-        text = text[: _EFFECT_CHARS - 3].rstrip() + "..."
+        text = masker.guard_slice(text, 0, _EFFECT_CHARS - 3).rstrip() + "..."
     return text
 
 
@@ -347,9 +370,11 @@ async def _settled(run: Run) -> None:
         pass
 
 
-def _text(content: str | list[ContentBlock] | None) -> str:
+def _text(content: str | list[ContentBlock] | None, masker: SecretMasker) -> str:
     if isinstance(content, str):
-        return content.strip()
+        return masker.mask(content).strip()
     if isinstance(content, list):
-        return "\n".join(block.text for block in content if isinstance(block, TextBlock)).strip()
+        return masker.mask(
+            "\n".join(masker.mask(block.text) for block in content if isinstance(block, TextBlock))
+        ).strip()
     return ""

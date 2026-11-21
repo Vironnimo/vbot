@@ -397,11 +397,17 @@ class RunExecution:
                         )
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
-                                masked_content(user_content, self._dependencies.secret_masker),
+                                masked_content(
+                                    user_content,
+                                    self._dependencies.secret_masker_for(
+                                        session_address, passed_only=context.subagent_session
+                                    ),
+                                ),
                                 context.session_snapshot.active_messages,
                             ),
                             sender=request.sender,
                             input_origin=request.input_origin,
+                            cron_approval_scope=request.cron_approval_scope,
                         )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
                     # One transaction persists the input, records the announced
@@ -704,7 +710,12 @@ class RunExecution:
             return None
         return asyncio.create_task(
             run_context_commands(
-                runner, planned, context.permissions, self._dependencies.secret_masker
+                runner,
+                planned,
+                context.permissions,
+                self._dependencies.secret_masker_for(
+                    context.session.address, passed_only=context.subagent_session
+                ),
             ),
             name=f"context-commands-{run.id}",
         )

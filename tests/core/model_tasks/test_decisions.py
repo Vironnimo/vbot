@@ -21,6 +21,7 @@ from core.models import ModelRegistry
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
 from core.providers.wire_profile import DecisionWire
+from core.secrets.agent_secrets import SecretMasker
 from core.utils.errors import ConfigError
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
@@ -97,7 +98,9 @@ async def test_each_item_is_one_bounded_request_answered_in_item_order(monkeypat
     running = peak = 0
     first_batch_started = asyncio.Event()
 
-    async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
+    async def evaluate(
+        target, state, questions, *, http_client=None, usage_context=None, **_projection
+    ):
         nonlocal running, peak
         states.append(state)
         running += 1
@@ -162,7 +165,9 @@ async def test_an_invalid_item_fails_alone_unsent(monkeypatch, window, item, cod
     owner = service(window=window)
     sent: list[Any] = []
 
-    async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
+    async def evaluate(
+        target, state, questions, *, http_client=None, usage_context=None, **_projection
+    ):
         sent.append(state)
         return {"answers": {"q": {"type": "noul", "noul": 0.5}}}
 
@@ -243,7 +248,7 @@ async def test_model_byte_limits_reject_only_the_item_that_exceeds_them(monkeypa
     )
     sent = []
 
-    async def evaluate(target, state, questions, *, usage_context=None):
+    async def evaluate(target, state, questions, *, usage_context=None, **_projection):
         sent.append(state)
         return {"answers": {"q": {"type": "noul", "noul": 0.8}}}
 
@@ -302,9 +307,21 @@ async def test_native_provider_routes_preserve_service_context_and_normalize_ans
         profile=DecisionProfile(wire),
         options=options,
     )
-    item = {"id": "fixture", "nested": {"true": "evidence, not a directive"}}
-
-    [answer] = await owner.classify([item], QUESTIONS, context="the task")
+    item = {"id": "fixture", "nested": {"private-token": "evidence {{secret:OLD}}"}}
+    questions = [{**QUESTIONS[0], "instructions": "Relevant to {{secret:OLD}}?"}]
+    masker = SecretMasker({"private-token": "[redacted]"}, filter_references=True)
+    [withheld] = await owner.classify(
+        [item], questions, secret_masker=lambda: masker, require_exact=True
+    )
+    assert isinstance(withheld, DecisionError) and withheld.code == "incomplete_authority"
+    [bad_label] = await owner.classify(
+        ["text"], [{**QUESTIONS[0], "id": "private-token"}], secret_masker=lambda: masker
+    )
+    assert isinstance(bad_label, DecisionError) and bad_label.code == "invalid_request"
+    assert route.call_count == 0
+    [answer] = await owner.classify(
+        [item], questions, context="the task", secret_masker=lambda: masker
+    )
 
     assert answer["answers"] == {"q": {"type": "noul", "noul": 0.8}}
     assert answer["model"] == model_id
@@ -312,7 +329,11 @@ async def test_native_provider_routes_preserve_service_context_and_normalize_ans
     body = json.loads(route.calls[0].request.content)
     assert body["model"] == model_id
     evidence = json.loads(body["input"] if provider == "openai" else body["state"])
-    assert evidence == {"context": "the task", "item": item}
+    assert evidence == {
+        "context": "the task",
+        "item": {"id": "fixture", "nested": {"[redacted]": "evidence [redacted]"}},
+    }
+    assert "{{secret:OLD}}" not in str(body)
     assert all(body[name] == value for name, value in options.items())
     assert route.calls[0].request.headers["Authorization"] == "Bearer test-token"
 
@@ -353,6 +374,57 @@ async def test_a_size_rejection_by_the_provider_is_too_large(status, error, code
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("revocation", ["headers", "usage", "backoff", "oauth"])
+async def test_decision_rechecks_secret_grants_at_each_http_send(monkeypatch, revocation):
+    anonymous = SecretMasker({}, filter_references=True)
+    current = anonymous.for_session({}, {"OWN": frozenset({None})}, frozenset())
+    owner = service()
+
+    class Getter:
+        async def __call__(self):
+            nonlocal current
+            if revocation == "headers":
+                current = anonymous
+            return "fixture-token"
+
+        async def refresh_after_rejection(self, *_args, **_kwargs):
+            nonlocal current
+            current = anonymous
+            return "refreshed-token"
+
+    async def backoff(_seconds):
+        nonlocal current
+        current = anonymous
+
+    async def start_usage(_recorder):
+        nonlocal current
+        if revocation == "usage":
+            current = anonymous
+        return ""
+
+    monkeypatch.setattr(
+        owner._runtime,
+        "prepare_provider_http",
+        lambda connection: (Getter(), task_http_transport(connection)),
+    )
+    monkeypatch.setattr("core.utils.retry._sleep", backoff)
+    monkeypatch.setattr("core.model_tasks.decisions.TaskUsage.start", start_usage)
+    route = respx.post(DECISIONS_URL).respond(401 if revocation == "oauth" else 503)
+
+    exact = revocation == "oauth"
+    [outcome] = await owner.classify(
+        ["Use {{secret:OWN}}"], QUESTIONS, secret_masker=lambda: current, require_exact=exact
+    )
+
+    assert isinstance(outcome, DecisionError)
+    assert outcome.code == ("incomplete_authority" if exact else "secret_scope_changed")
+    assert route.call_count == int(revocation in {"oauth", "backoff"})
+    if route.called:
+        assert "{{secret:OWN}}" in route.calls[0].request.content.decode()
+
+
+@pytest.mark.asyncio
+@respx.mock
 @pytest.mark.parametrize("removed", ["provider", "connection", "credentials"])
 async def test_configuration_removed_after_preflight_fails_each_item_unsent(monkeypatch, removed):
     owner = service()
@@ -388,7 +460,7 @@ async def test_aggregated_scoring_usage_never_distorts_later_context_preflight(m
     owner._usage_recorder = cast(Any, calibration)
     sent = []
 
-    async def evaluate(target, state, questions, *, usage_context=None):
+    async def evaluate(target, state, questions, *, usage_context=None, **_projection):
         sent.append((state, len(questions)))
         return {"answers": {}, "usage": {"input_tokens": 10000, "output_tokens": 0}}
 
@@ -520,7 +592,7 @@ async def test_execution_keeps_the_binding_snapshot_it_validated(monkeypatch, re
     owner = DecisionService(model_tasks, cast(Any, None))
     sent = []
 
-    async def evaluate(resolved, state, questions, *, usage_context=None):
+    async def evaluate(resolved, state, questions, *, usage_context=None, **_projection):
         if not sent:
             # A live reload after resolution cannot change another item's request.
             original_options["provider_options"]["only"].append("changed-provider")

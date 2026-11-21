@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from core.recall import (
@@ -13,6 +13,7 @@ from core.recall import (
 from core.recall.canonical import (
     compact_text,
 )
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions import (
     ChatSessionManager,
     SessionAddress,
@@ -63,6 +64,7 @@ class _SearchSessionContext:
     descriptor: JsonObject
     conversations: dict[tuple[str, int | None], list[JsonObject]]
     is_subagent: bool
+    excerpts: dict[RecallSearchHit, Callable[[int, int], str]]
 
 
 def _no_match_guidance(request: _RequestEcho, *, searched: int) -> list[str]:
@@ -134,6 +136,7 @@ def _render_search_page(
                 hit,
                 index + 1,
                 excerpt_chars=0,
+                project=session_contexts[hit.session_id].excerpts[hit],
                 target=targets[index],
                 context=session_contexts[hit.session_id].conversations.get(
                     (hit.message_id, hit.message_index), []
@@ -183,6 +186,7 @@ def _render_search_page(
                 hit,
                 index + 1,
                 excerpt_chars=excerpt_chars,
+                project=session_contexts[hit.session_id].excerpts[hit],
                 target=targets[index],
                 context=session_contexts[hit.session_id].conversations.get(
                     (hit.message_id, hit.message_index), []
@@ -294,15 +298,17 @@ def _hit_item(
     excerpt_chars: int,
     target: JsonObject,
     context: list[JsonObject],
+    project: Callable[[int, int], str],
 ) -> JsonObject:
     start, end = _excerpt_bounds(hit, excerpt_chars)
+    shown, end = _bounded_window(project, start, end, excerpt_chars)
     single_message = hit.end_message_id in (None, hit.message_id)
     known_boundaries = hit.result_type == "message" or (
         single_message and hit.source_length is not None
     )
     source_length = hit.source_length if hit.source_length is not None else len(hit.text)
     source_start, source_end = hit.source_start + start, hit.source_start + end
-    excerpt: JsonObject = {"text": hit.text[start:end]}
+    excerpt: JsonObject = {"text": shown}
     if known_boundaries:
         excerpt |= {
             "start_char": source_start,
@@ -355,6 +361,7 @@ def _search_context_for_hits(
     include_subagents: bool,
     excluded_session_ids: tuple[str, ...],
     allowed_session_ids: frozenset[str] | None = None,
+    masker: SecretMasker = EMPTY_MASKER,
 ) -> tuple[list[RecallSearchHit], list[JsonObject], dict[str, _SearchSessionContext]]:
     """Describe the Sessions of *hits* and keep the hits this search may return.
 
@@ -385,14 +392,22 @@ def _search_context_for_hits(
         title = source.metadata.get("title") or source.metadata.get("auto_title")
         descriptor: JsonObject = {"agent_id": agent_id, "session_id": session_id}
         if isinstance(title, str) and title.strip():
-            descriptor["title"] = compact_text(title)[:SESSION_DESCRIPTOR_TITLE_MAX_CHARS]
+            title = compact_text(masker.mask(title))
+            descriptor["title"], _ = _bounded_window(
+                masker.slice_projector(title),
+                0,
+                min(len(title), SESSION_DESCRIPTOR_TITLE_MAX_CHARS),
+                SESSION_DESCRIPTOR_TITLE_MAX_CHARS,
+            )
         loaded[session_id] = _SearchSessionContext(
             descriptor=descriptor,
             conversations={},
             is_subagent=source.recall_visibility == "subagent",
+            excerpts={},
         )
     kept: list[RecallSearchHit] = []
     targets: list[JsonObject] = []
+    sources_by_anchor: dict[tuple[str, str, int | None], tuple[str, Callable[[int, int], str]]] = {}
     for hit in hits:
         context = loaded.get(hit.session_id)
         if context is None:
@@ -402,12 +417,60 @@ def _search_context_for_hits(
             target["include_subagents"] = True
         anchor = (hit.message_id, hit.message_index)
         if sessions is not None and anchor not in context.conversations:
-            context.conversations[anchor] = sessions.recall_context(
-                addresses[hit.session_id], hit.message_id, message_index=hit.message_index
+            neighbors = sessions.recall_context(
+                addresses[hit.session_id],
+                hit.message_id,
+                message_index=hit.message_index,
+                include_source=bool(masker),
             )
+            context.conversations[anchor] = []
+            for item in neighbors:
+                text = item["text"]
+                if item.get("anchor"):
+                    sources_by_anchor[(hit.session_id, *anchor)] = (
+                        text,
+                        masker.slice_projector(text),
+                    )
+                    continue
+                if masker:
+                    shown, end = _bounded_window(
+                        masker.slice_projector(text), 0, min(len(text), 800), 800
+                    )
+                    item = {**item, "text": shown, "truncated": end < len(text)}
+                context.conversations[anchor].append(item)
+        entry = sources_by_anchor.get((hit.session_id, *anchor))
+        if (
+            entry
+            and hit.end_message_id in (None, hit.message_id)
+            and entry[0].startswith(hit.text, hit.source_start)
+        ):
+            context.excerpts[hit] = _offset_projector(entry[1], hit.source_start)
+        elif (
+            masker
+            and hit.source_length is not None
+            and (hit.source_start or hit.source_length != len(hit.text))
+        ):
+            # An edited or missing canonical source cannot establish what was
+            # cut at either end of the indexed window.
+            continue
+        else:
+            context.excerpts[hit] = masker.slice_projector(hit.text)
         kept.append(hit)
         targets.append(target)
     return kept, targets, loaded
+
+
+def _offset_projector(project: Callable[[int, int], str], offset: int) -> Callable[[int, int], str]:
+    return lambda start, end: project(offset + start, offset + end)
+
+
+def _bounded_window(
+    project: Callable[[int, int], str], start: int, end: int, limit: int
+) -> tuple[str, int]:
+    """Fit whole replacements while retaining the original character coordinates."""
+    while len(shown := project(start, end)) > limit:
+        end = max(start, end - (len(shown) - limit))
+    return shown, end
 
 
 def _session_descriptors_for_hits(

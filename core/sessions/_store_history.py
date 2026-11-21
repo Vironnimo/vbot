@@ -649,7 +649,7 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
 # -- Recall ------------------------------------------------------------------------
 
 _RECALL_TEXT = (
-    "(SELECT substr(COALESCE(t.content, t.search_text, ''), 1, 801) FROM entry_text AS t "
+    "(SELECT COALESCE(t.content, t.search_text, '') FROM entry_text AS t "
     "WHERE t.entry_key = e.entry_key)"
 )
 _RECALL_HAS_TEXT = (
@@ -664,12 +664,14 @@ def recall_context(
     message_id: str,
     *,
     message_index: int | None = None,
+    include_source: bool = False,
 ) -> list[JsonObject]:
     """Read the enclosing question and final answer of one current hit.
 
     Only current conversation text is projected; the caller already has the
     hit. An anchor an edit replaced returns no context. Public ids may repeat;
-    without a sequence, an ambiguous id returns no context.
+    without a sequence, an ambiguous id returns no context. With include_source,
+    return the full anchor and neighbors so the reader can mask before clipping.
     """
     state = _store_values._find_live(connection, address)
     if state is None:
@@ -686,28 +688,34 @@ def recall_context(
         descending=True,
         limit=2,
     )
-    if len(anchor) != 1 or anchor[0]["role"] not in {"user", "assistant"}:
+    if len(anchor) != 1:
         return []
     seq = int(anchor[0]["seq"])
-    first = view_seq(connection, ranges, where="e.role = 'user'", upper=seq + 1)
-    if first is None:
+    wanted = {seq} if include_source else set()
+    if anchor[0]["role"] in {"user", "assistant"}:
+        first = view_seq(connection, ranges, where="e.role = 'user'", upper=seq + 1)
+        if first is not None:
+            following = view_seq(
+                connection, ranges, where="e.role = 'user'", lower=seq + 1, newest=False
+            )
+            answer = view_seq(
+                connection,
+                ranges,
+                where=f"e.role = 'assistant' AND e.searchable = 1 AND {_RECALL_HAS_TEXT}",
+                lower=first + 1,
+                upper=_store_lineage.MAX_SEQ if following is None else following,
+            )
+            wanted.update(value for value in (first, answer) if value is not None and value != seq)
+    elif anchor[0]["role"] != "compaction_checkpoint":
         return []
-    following = view_seq(connection, ranges, where="e.role = 'user'", lower=seq + 1, newest=False)
-    answer = view_seq(
-        connection,
-        ranges,
-        where=f"e.role = 'assistant' AND e.searchable = 1 AND {_RECALL_HAS_TEXT}",
-        lower=first + 1,
-        upper=_store_lineage.MAX_SEQ if following is None else following,
-    )
-    wanted = sorted({value for value in (first, answer) if value is not None and value != seq})
+    text_column = _RECALL_TEXT if include_source else f"substr({_RECALL_TEXT}, 1, 801)"
     rows = [
         row
-        for value in wanted
+        for value in sorted(wanted)
         for row in _store_lineage.ordered_rows(
             connection,
             ranges,
-            columns=f"e.seq, e.entry_id, e.role, e.created_at, {_RECALL_TEXT} AS text",
+            columns=f"e.seq, e.entry_id, e.role, e.created_at, {text_column} AS text",
             lower=value,
             upper=value + 1,
         )
@@ -718,8 +726,9 @@ def recall_context(
             "message_id": str(row["entry_id"]),
             "role": str(row["role"]),
             "timestamp": str(row["created_at"]),
-            "text": str(row["text"])[:800],
-            "truncated": len(str(row["text"])) > 800,
+            "text": str(row["text"]) if include_source else str(row["text"])[:800],
+            "truncated": not include_source and len(str(row["text"])) > 800,
+            **({"anchor": True} if include_source and row["seq"] == seq else {}),
         }
         for row in rows
         if row["text"]

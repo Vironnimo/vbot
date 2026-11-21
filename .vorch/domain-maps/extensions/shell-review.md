@@ -13,6 +13,7 @@ User decision (2026-10-31): retain the source and authorized scope of requests r
 
 ## Policy and preview
 
+The reviewer requests an exact native decision. If masking changes the command, authority or other evidence needed for the decision, review requires the existing operator approval.
 `_review.py::ShellReview` evaluates a detached request containing actual OS, Shell, resolved cwd, exact command, attributed user requests and existing approvals, with optional permission summary and labeled evidence. Commands, comments and evidence are data, not an authority that can approve themselves. Missing authority refuses automatic approval before a Model call. Invalid Settings, native refusals, absent/non-finite answers, Provider errors and the bounded review timeout return `ask`; cancellation propagates. Inputs are never truncated into a potentially different authorization question.
 
 One native `noul` question estimates whether the exact command can proceed without new confirmation. Only a finite answer at or above the configured threshold returns `allow`; it is a Model estimate, not measured accuracy. Results name the Model, probability, threshold and a fixed reason code when available, never an invented generated explanation. No decision is cached or reused for another command.

@@ -22,6 +22,7 @@ from tests.core.extensions.extension_test_support import tool_context
         ("cron", "authorized_task"),
         ("unapproved_cron", "none"),
         ("changed_cron", "none"),
+        ("redacted_cron", "none"),
         ("member", "none"),
         ("admin", "user"),
         ("peer", "none"),
@@ -74,7 +75,15 @@ async def test_current_input_authority_only_uses_this_runs_trusted_input(
             else None
         )
         if source != "earlier":
-            session.for_run(run.id).append(ChatMessage.user("Current task", sender=sender))
+            session.for_run(run.id).append(
+                ChatMessage.user(
+                    "[redacted]" if source == "redacted_cron" else "Current task",
+                    sender=sender,
+                    cron_approval_scope="1" * 64
+                    if source in {"cron", "changed_cron", "unapproved_cron"}
+                    else None,
+                )
+            )
         context = replace(
             tool_context("factory_card", tmp_path),
             agent_id="main",
@@ -82,16 +91,26 @@ async def test_current_input_authority_only_uses_this_runs_trusted_input(
             run_id=run.id,
             run_kind=run.run_kind,
             direct_user_input=source
-            not in {"cron", "unapproved_cron", "changed_cron", "system", "earlier"},
+            not in {
+                "cron",
+                "unapproved_cron",
+                "changed_cron",
+                "redacted_cron",
+                "system",
+                "earlier",
+            },
             subagent_session=source == "subagent",
         )
         if source == "owned":
             context = replace(context, execution_owner=SimpleNamespace(extension="factory"))
         job = SimpleNamespace(
             operator_approved=source != "unapproved_cron",
+            operator_approval="2" * 64 if source == "changed_cron" else "1" * 64,
             agent_id="main",
             project_id=None,
-            prompt="Other task" if source == "changed_cron" else "Current task",
+            prompt={"changed_cron": "Other task", "redacted_cron": "[redacted]"}.get(
+                source, "Current task"
+            ),
         )
         assert (
             await current_input_authority(

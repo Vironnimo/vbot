@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from core.model_tasks.decision_profile import DecisionProfile
@@ -27,6 +28,7 @@ from core.model_tasks.task_execution import (
 )
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.tokens import estimate_json_tokens
@@ -114,6 +116,8 @@ class DecisionService:
         *,
         context: str | None = None,
         usage_context: TaskUsageContext | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
+        require_exact: bool = False,
     ) -> list[dict[str, Any] | DecisionError]:
         """Answer every question about each item separately, in item order.
 
@@ -150,7 +154,12 @@ class DecisionService:
                     except DecisionError as exc:
                         raise TaskCandidateMismatchError(exc) from exc
                     return await self._evaluate(
-                        target, state, questions, usage_context=usage_context
+                        target,
+                        state,
+                        questions,
+                        usage_context=usage_context,
+                        secret_masker=secret_masker,
+                        require_exact=require_exact,
                     )
 
                 async with slots:
@@ -170,6 +179,8 @@ class DecisionService:
         questions: list[dict[str, Any]],
         *,
         usage_context: TaskUsageContext | None = None,
+        secret_masker: Callable[[], SecretMasker],
+        require_exact: bool,
     ) -> dict[str, Any]:
         ref = parse_task_model_target_id(target.target)
         try:
@@ -185,8 +196,25 @@ class DecisionService:
                 # A binding snapshot cannot keep its Provider, Connection or
                 # credentials alive while other items are being evaluated.
                 raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured") from exc
+            masker = secret_masker()
+            projected = _project_decision(state, questions, masker, require_exact)
+
+            def check_before_send() -> None:
+                current = secret_masker()
+                if (
+                    current is not masker
+                    and _project_decision(state, questions, current, require_exact) != projected
+                ):
+                    raise DecisionError(
+                        "Secret access changed before the decision was sent. Repeat the call.",
+                        code="secret_scope_changed",
+                    )
+
             return await client.evaluate(
-                state, questions, profile=target.profile, options=target.options
+                *projected,
+                profile=target.profile,
+                options=target.options,
+                before_send=check_before_send,
             )
         except ProviderError as exc:
             if isinstance(exc, ProviderRequestTooLargeError) or (
@@ -196,6 +224,39 @@ class DecisionService:
             raise DecisionError(str(exc), code="provider_error") from exc
         except NetworkError as exc:
             raise DecisionError(str(exc), code="provider_error") from exc
+
+
+def _project_decision(
+    state: Any,
+    questions: list[dict[str, Any]],
+    masker: SecretMasker,
+    require_exact: bool,
+) -> tuple[Any, list[dict[str, Any]]]:
+    projected_state = masker.mask_value(state, include_keys=True)
+    projected_questions = []
+    for question in questions:
+        projected = {
+            **question,
+            "id": masker.mask(question["id"]),
+            "instructions": masker.mask(question["instructions"]),
+        }
+        if "criteria" in question:
+            projected["criteria"] = masker.mask_value(
+                question["criteria"], include_keys=question["type"] == "choice"
+            )
+        if question["id"] != projected["id"] or (
+            question["type"] == "choice"
+            and question["criteria"].keys() != projected["criteria"].keys()
+        ):
+            raise DecisionError(
+                "Use question IDs and choice labels that contain no private Secret data."
+            )
+        projected_questions.append(projected)
+    if require_exact and (state != projected_state or questions != projected_questions):
+        raise DecisionError(
+            "The exact request contains protected Secret data.", code="incomplete_authority"
+        )
+    return projected_state, projected_questions
 
 
 # How a 400 body names a request beyond the context window: TypeSafe's

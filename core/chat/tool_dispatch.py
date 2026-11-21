@@ -143,7 +143,8 @@ class ToolRound:
             }
 
             safe_payload = _leaving_call(
-                self._registry._secret_masker(), tool_context.mask_prepared_secrets(payload)
+                self._registry.secret_masker_for(tool_context),
+                tool_context.mask_prepared_secrets(payload),
             )
             safe_payload["display_redacted"] = safe_payload != payload
             if safe_payload["session_grant"] != payload["session_grant"]:

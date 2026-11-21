@@ -107,6 +107,7 @@ from ._terminal_permissions import (
 from ._terminal_results import (
     _DELIVERIES_TEXT,
     _PAUSED_TEXT,
+    _RESULT_MASKER,
     _agent_state,
     _attachment,
     _background_task_refusal,
@@ -117,10 +118,12 @@ from ._terminal_results import (
     _computer_result,
     _find,
     _first_screen_pending_text,
+    _layout_text,
     _not_attached_text,
     _not_found_message,
     _not_found_program_message,
     _not_owned_message,
+    _prefix,
     _reply_pending_text,
     _screen_result,
     _short_program,
@@ -183,15 +186,16 @@ def make_terminal_handler(
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        result = await _handle_terminal(
-            terminal_manager,
-            projects,
-            subagents,
-            context,
-            arguments,
-            scratch_areas,
-            command_checker,
-        )
+        with _RESULT_MASKER.set(terminal_manager.output_masker):
+            result = await _handle_terminal(
+                terminal_manager,
+                projects,
+                subagents,
+                context,
+                arguments,
+                scratch_areas,
+                command_checker,
+            )
         return _computer_result(result, allowed=allowed_computers(context))
 
     return handler
@@ -818,10 +822,10 @@ async def _wait_unless_released(context: ToolContext, waiting: Awaitable[str]) -
 
 def _matched_line(line: str) -> str:
     """The line a pattern matched, as a result shows it."""
-    line = line.strip()
+    line = _layout_text(line).strip()
     if len(line) <= _MATCHED_LINE_CHARS:
         return line
-    return line[: _MATCHED_LINE_CHARS - 3] + "..."
+    return _prefix(line, _MATCHED_LINE_CHARS - 3) + "..."
 
 
 async def _handle_input(

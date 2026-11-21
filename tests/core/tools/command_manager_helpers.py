@@ -259,7 +259,7 @@ class Harness:
         formatter: CommandReportFormatter = format_report,
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
-        consumed_once_secrets: tuple[str, ...] = (),
+        consumed_once_secrets: bool = False,
     ) -> tuple[str, FakeProcess]:
         """Start a foreground command on a fake process, for a full-access Session
         unless *permissions* say otherwise."""

@@ -89,7 +89,7 @@ async def test_saved_mcp_output_masks_short_values_before_preview_and_later_read
         clock=lambda: datetime.fromtimestamp(59, UTC),
     )
     registry.set_secrets(secrets)
-    secrets.create(
+    login = secrets.create(
         name="LOGIN",
         kind="login",
         values={"username": "user", "password": "Q7!", "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"},
@@ -115,6 +115,10 @@ async def test_saved_mcp_output_masks_short_values_before_preview_and_later_read
     )
     identifier = payload_id(result["error"]["message"]) if is_error else result["data"]["result_id"]
     assert "Q7!" not in repr(result) and "287082" not in repr(result)
+    preview = (
+        result["error"]["message"].partition("[...")[0] if is_error else result["data"]["content"]
+    )
+    assert "{{sec" not in preview
     saved = await dispatch(
         registry,
         host,
@@ -127,6 +131,20 @@ async def test_saved_mcp_output_masks_short_values_before_preview_and_later_read
         },
     )
     assert saved["data"]["content"] == references
+    secrets.delete(login.id, actor="user")
+    page = await dispatch(
+        registry,
+        host,
+        {
+            "action": "read",
+            "result_id": identifier,
+            "pointer": "/content/0/text",
+            "offset": len(start),
+            "limit": 25,
+        },
+    )
+    assert page["data"]["content"].startswith("[redacted] [redacted]")
+    assert "LOGIN" not in repr(page)
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from core.runs import RunExecutionOwner
+from core.secrets.agent_secrets import SecretMasker
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
 from core.tools._terminal_remote import RemoteStopError, RemoteTerminalAdapter
@@ -577,7 +578,7 @@ class TerminalSession:
         ):
             self._notices.acknowledge(attention.revision)
 
-    async def read_for_operator(self) -> dict[str, Any]:
+    async def read_for_operator(self, *, live_masker: SecretMasker | None = None) -> dict[str, Any]:
         """Read the screen without changing any Agent's observation or binding."""
         async with self._lock:
             screen = await self._output.screen.screen_text()
@@ -585,9 +586,19 @@ class TerminalSession:
                 start_line=None, limit=_OPERATOR_READ_HISTORY_LINES
             )
             info = self.info()
+            live_view = (
+                {
+                    "live_screen": await self._output.screen.guard_rows(
+                        screen, page["screen_start_line"], live_masker, running=not info.finished
+                    )
+                }
+                if live_masker and screen
+                else {}
+            )
         return {
             "terminal": self._services.operator_summary(info),
             "screen": screen,
+            **live_view,
             "scrollback": page,
             "bracketed_paste": self._writing.bracketed_paste,
         }
@@ -876,7 +887,7 @@ class TerminalSession:
             if self._snapshot_on_settle:
                 self._snapshot_on_settle = False
                 await self._publish_snapshot()
-            return await self._output.screen.observe()
+            return await self._output.screen.observe(self._services.masker, running=True)
         except Exception as error:
             self._output.render_failed(error, self._output.log.size)
             return None
@@ -923,7 +934,7 @@ class TerminalSession:
             else:
                 observation: ScreenObservation | None = None
                 with contextlib.suppress(Exception):
-                    observation = await self._output.screen.observe()
+                    observation = await self._output.screen.observe(self._services.masker)
                 if error is None:
                     self._notices.set(
                         kind="exited",

@@ -27,6 +27,7 @@ from core.recall.canonical import (
     SESSION_RECALL_DEFAULT_ROLES,
 )
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions import (
     ChatSessionManager,
     SessionAddress,
@@ -172,6 +173,7 @@ def make_session_search_handler(
     timezone_name_loader: Callable[[], str] | None = None,
     agent_roster: AgentRoster | None = None,
     skill_check: SkillCheck | None = None,
+    secret_masker_for: Callable[[ToolContext], SecretMasker] | None = None,
 ):
     resolved_sessions = sessions or _backend_sessions(recall_backend)
 
@@ -184,6 +186,7 @@ def make_session_search_handler(
             timezone_name_loader=timezone_name_loader,
             agent_roster=agent_roster,
             skill_check=skill_check,
+            secret_masker_for=secret_masker_for,
         )
 
     return handler
@@ -198,6 +201,7 @@ async def session_search_handler(
     timezone_name_loader: Callable[[], str] | None = None,
     agent_roster: AgentRoster | None = None,
     skill_check: SkillCheck | None = None,
+    secret_masker_for: Callable[[ToolContext], SecretMasker] | None = None,
 ) -> JsonObject:
     """Search past Sessions.
 
@@ -231,6 +235,7 @@ async def session_search_handler(
             zone,
             agent_roster,
             skill_check,
+            secret_masker_for,
         )
         result = tool_success(data)
         _LOGGER.debug(
@@ -292,7 +297,12 @@ def register_session_search_tool(
         build_session_search_description(recall_backend),
         build_session_search_parameters(recall_backend),
         make_session_search_handler(
-            recall_backend, sessions, timezone_name_loader, agent_roster, skill_check
+            recall_backend,
+            sessions,
+            timezone_name_loader,
+            agent_roster,
+            skill_check,
+            registry.secret_masker_for,
         ),
         summary="Search past conversations.",
         family="sessions",
@@ -322,6 +332,7 @@ async def _search_sessions(
     zone: _Zone,
     agent_roster: AgentRoster | None = None,
     skill_check: SkillCheck | None = None,
+    secret_masker_for: Callable[[ToolContext], SecretMasker] | None = None,
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     requested = _optional_string(arguments.get("agent_id"))
@@ -411,6 +422,7 @@ async def _search_sessions(
         include_subagents=include_subagents,
         excluded_session_ids=excluded_session_ids,
         allowed_session_ids=tree,
+        masker=secret_masker_for(context) if secret_masker_for else EMPTY_MASKER,
     )
     if len(hits) != len(page.hits):
         page = replace(page, hits=tuple(hits))

@@ -368,6 +368,7 @@ def _build_terminal_manager(runtime: Runtime) -> TerminalManager:
         computers=runtime._computers,
         session_execution=lambda address: sessions.metadata_value(address, "execution"),
         output_allowed=partial(_terminal_output_allowed, runtime),
+        output_masker=lambda: runtime.agent_secrets.masker,
     )
     sessions.add_title_changed_callback(lambda _address: terminal_manager.forget_session_views())
     return terminal_manager

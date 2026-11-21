@@ -205,8 +205,8 @@ def insert_entry(
     cursor = connection.execute(
         "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
         "searchable, superseded_at_seq, subagent_reply_target, skill_package_source, "
-        "skill_package_name, skill_package_location, programmatic, parent_tool_call_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "skill_package_name, skill_package_location, programmatic, parent_tool_call_id, "
+        "cron_approval_scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_key,
             seq,
@@ -223,6 +223,7 @@ def insert_entry(
             message.skill_package.location if message.skill_package else None,
             int(message.programmatic),
             message.parent_tool_call_id,
+            message.cron_approval_scope,
         ),
     )
     if cursor.lastrowid is None:

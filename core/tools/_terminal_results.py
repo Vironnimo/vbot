@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -37,7 +38,7 @@ from core.tools.tools import (
 from ._terminal_arguments import TERMINAL_KEY_SUMMARY
 
 if TYPE_CHECKING:
-    pass
+    from core.secrets.agent_secrets import SecretMasker
 
 from core.utils.logging import get_logger
 
@@ -55,6 +56,22 @@ from ._terminal_definition import (
 )
 
 _LOGGER = get_logger("tools.terminal")
+
+_RESULT_MASKER: ContextVar[Callable[[], SecretMasker | None] | None] = ContextVar(
+    "terminal_result_masker", default=None
+)
+
+
+def _layout_text(text: str) -> str:
+    get = _RESULT_MASKER.get()
+    masker = get() if get else None
+    return masker.guard_layout(text) if masker else text
+
+
+def _prefix(text: str, end: int) -> str:
+    get = _RESULT_MASKER.get()
+    masker = get() if get else None
+    return masker.guard_slice(text, 0, end) if masker else text[:end]
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,10 +448,10 @@ def _terminal_facts(info: TerminalInfo, owner: TerminalOwner) -> JsonObject:
 
 
 def _short_program(program: str) -> str:
-    lines = program.strip().splitlines()
+    lines = _layout_text(program).strip().splitlines()
     first = lines[0] if lines else program
     if len(lines) > 1 or len(first) > _PROGRAM_CHARS:
-        return first[: _PROGRAM_CHARS - 3] + "..."
+        return _prefix(first, _PROGRAM_CHARS - 3) + "..."
     return first
 
 
@@ -496,9 +513,9 @@ def _call(action: str, terminal_id: str) -> str:
 
 
 def _terminal_label(info: TerminalInfo) -> str:
-    label = " ".join(info.program.split())
+    label = " ".join(_layout_text(info.program).split())
     if len(label) > _TERMINAL_LABEL_CHARS:
-        label = label[: _TERMINAL_LABEL_CHARS - 3] + "..."
+        label = _prefix(label, _TERMINAL_LABEL_CHARS - 3) + "..."
     return f"{info.call_name}, {label}" if info.call_name else label
 
 
@@ -671,7 +688,7 @@ def _unpassable_argument_message(program: str, value: str) -> str:
     breaks = "\n" in value or "\r" in value
     nul = "\0" in value
     if len(value) > _ARGUMENT_CHARS:
-        value = value[: _ARGUMENT_CHARS - 3] + "..."
+        value = _prefix(value, _ARGUMENT_CHARS - 3) + "..."
     what = " and ".join(
         part for part, present in (("a line break", breaks), ("a NUL character", nul)) if present
     )

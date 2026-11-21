@@ -31,6 +31,7 @@ from core.chat._run_permissions import (
     permissions_prompt_block,
 )
 from core.chat._run_state import RequestBuildInputs, _RequestState
+from core.chat._secret_history import with_secret_catalog
 from core.chat._tool_epoch import (
     LiveToolCatalog,
     ToolEpochPin,
@@ -634,7 +635,9 @@ class RequestBuilder:
         )
         prepared_messages = await _CHAT_TRANSFORM_WORKERS.run(
             _prepare_request_messages,
-            system_prompt=system_prompt,
+            system_prompt=with_secret_catalog(
+                system_prompt, prompt_blocks.blocks.get("tool:secrets")
+            ),
             agent_model=agent.model,
             session_messages=session_messages,
             replay_policy=inputs.replay_policy,

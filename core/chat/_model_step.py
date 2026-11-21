@@ -31,6 +31,7 @@ from core.chat.usage import (
 )
 from core.chat.wire_shaping import (
     extend_request_with_notes,
+    mask_request_messages,
 )
 from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
@@ -106,7 +107,20 @@ class ModelStepBoundary:
         # limiting always returns a new list, so later in-place updates of
         # the live list leave this request view unchanged.
         messages_for_request = messages
-        if extension_registry is not None:
+        if extension_registry is not None and extension_registry.has_context_handlers:
+            masker = self._dependencies.secret_masker_for(
+                session.address, passed_only=context.subagent_session
+            )
+            hook_messages = messages
+            if masker:
+                hook_messages = await _CHAT_TRANSFORM_WORKERS.run(
+                    mask_request_messages, messages, masker
+                )
+            system_contents = [
+                message["content"]
+                for message in hook_messages
+                if message.get("role") == "system" and isinstance(message.get("content"), str)
+            ]
             session.begin_defer_notes()
             extension_ctx = HookContext(
                 session_id=run.session_id,
@@ -117,11 +131,21 @@ class ModelStepBoundary:
             try:
                 messages_for_request = await extension_registry.dispatch_context(
                     extension_ctx,
-                    messages=messages,
+                    messages=hook_messages,
                 )
             finally:
                 async with self._dependencies.sessions.write_lock(session.address):
                     await context.session_snapshot.flush_deferred_notes(session)
+            if masker and system_contents:
+                from core.chat._secret_history import restore_secret_catalog
+
+                for message in messages_for_request:
+                    if message.get("role") == "system" and isinstance(
+                        content := message.get("content"), str
+                    ):
+                        marked = restore_secret_catalog(content, system_contents)
+                        if marked is not content:
+                            message["content"] = marked
             # Hook notes were persisted before this Model step. Send them
             # here too, so replay cannot move them ahead of its reply later.
             hook_notes = session.drain_pending_notes()

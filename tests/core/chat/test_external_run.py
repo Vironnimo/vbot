@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from core.chat.messages import INPUT_ORIGIN_LIVE_VOICE
 from core.json_documents import document_change
 from core.permissions import normalize_permission_rules
 from core.runs import RunCancelledError, RunKind, RunStatus
+from core.secrets.agent_secrets import AgentSecrets
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.change_tracker import ChangeTracker
 from tests.core.chat.chat_loop_support import (
@@ -29,6 +31,7 @@ from tests.core.chat.chat_loop_support import (
     session_address,
 )
 from tests.core.chat.chat_loop_tools_test_support import WAIT_SECONDS, final
+from tests.core.secrets.secrets_test_support import data_directory, open_store
 
 MODEL = "openai/gpt-5.2"
 
@@ -151,6 +154,67 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
     assert (await external.run_tool("call_3", "lookup", {}))["ok"] is False
     assert runtime.adapter.requests == []
     assert acknowledged == ["call_1"]
+
+
+@pytest.mark.asyncio
+async def test_external_model_sees_tools_and_results_under_its_current_secret_grants(
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    own, other = "{{secret:OWN}}", "{{secret:OTHER}}"
+    other_value = 'test-"private"-value'
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {other: {"type": "string", "default": other_value}},
+        "additionalProperties": False,
+    }
+    tools.register(
+        "lookup", f"Find a file by path. {own} or {other}", parameters, lambda *_: tool_success({})
+    )
+    runtime = _runtime(tmp_path, tools)
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    active = secrets.create(
+        name="OWN",
+        kind="token",
+        values={"value": "voice-test-value"},
+        agents=["coder"],
+        actor="user",
+    )
+    secrets.create(
+        name="OTHER", kind="token", values={"value": other_value}, agents=["another"], actor="user"
+    )
+    runtime.agent_secrets = secrets
+    external = await build_chat_loop(runtime).start_external_run(
+        "coder", model="voice-model", title="Live call"
+    )
+    try:
+        (offered,) = external.tool_definitions
+        assert offered["description"] == f"Find a file by path. {own} or [redacted]"
+        assert offered["parameters"]["properties"] == {
+            "[redacted]": {"type": "string", "default": "[redacted]"}
+        }
+        result = tool_success(
+            {"content": f"Use {own} with {other}", "detail": {other: other_value}}
+        )
+        assert external.model_tool_result("lookup", result)["data"] == {
+            "content": f"Use {own} with [redacted]",
+            "detail": {"[redacted]": "[redacted]"},
+        }
+        secrets.update(active.id, actor="user", agents=["another"])
+        assert (
+            external.tool_definitions[0]["description"]
+            == "Find a file by path. [redacted] or [redacted]"
+        )
+        assert (
+            external.model_tool_result("lookup", result)["data"]["content"]
+            == "Use [redacted] with [redacted]"
+        )
+        assert own in result["data"]["content"] and other in parameters["properties"]
+    finally:
+        await external.finish()
+        await external.run.wait()
 
 
 @pytest.mark.asyncio

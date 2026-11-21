@@ -16,10 +16,11 @@ from core.chat._queued_input import QueuedChatInput as _QueuedRunExecutor
 from core.chat._request_builder import RequestBuilder
 from core.chat._run_execution import RunExecution
 from core.chat._run_state import _RunRequest
+from core.chat._secret_capture import masked_context_note, prepare_run_input
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.compaction_host import ChatCompactionHost
-from core.chat.content_blocks import ContentBlock
+from core.chat.content_blocks import ContentBlock, masked_content
 from core.chat.errors import (
     ChatError,
     ChatSessionError,
@@ -55,6 +56,7 @@ from core.runs import (
     RunKind,
     WaitingWorkAdmission,
 )
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     SESSION_EPHEMERAL_META_KEY,
@@ -353,6 +355,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
+        cron_approval_scope: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         source_session_id: str | None = None,
         continuation_source: RunContinuationSource | None = None,
@@ -418,6 +421,7 @@ class ChatLoop:
             contributes_to_agent_activity=contributes_to_agent_activity,
             completion_activity=completion_activity,
             schedule_id=schedule_id,
+            cron_approval_scope=cron_approval_scope,
             notification_policy=notification_policy,
             source_session_id=source_session_id,
             continuation_source=continuation_source,
@@ -473,6 +477,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
+        cron_approval_scope: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         context_note: str | ChatMessage | None = None,
         context_note_factory: Callable[[], str] | None = None,
@@ -524,6 +529,7 @@ class ChatLoop:
             contributes_to_agent_activity=contributes_to_agent_activity,
             completion_activity=completion_activity,
             schedule_id=schedule_id,
+            cron_approval_scope=cron_approval_scope,
             notification_policy=notification_policy,
             context_note=context_note,
             context_note_factory=context_note_factory,
@@ -551,6 +557,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
+        cron_approval_scope: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         context_note: str | ChatMessage | None = None,
         context_note_factory: Callable[[], str] | None = None,
@@ -585,25 +592,18 @@ class ChatLoop:
             provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
             _ensure_provider_exists(self._dependencies.providers, provider_id)
             manager = self._dependencies.run_manager
-            if (
-                content is not None
-                and not internal
-                and (sender is None or sender.kind == "user")
-                and reply_surface is not None
-                and (
-                    (run_kind == RunKind.USER and reply_surface.kind in {"webui", "tui"})
-                    or (
-                        run_kind in {RunKind.USER, RunKind.CHANNEL}
-                        and reply_surface.kind == "channel"
-                        and reply_surface.conversation_kind == "direct"
-                    )
-                )
-            ):
-                from core.chat._secret_capture import capture_user_input
-
-                content = await capture_user_input(self._dependencies, session.address, content)
+            prepared_content, masker_for_input = await prepare_run_input(
+                self._dependencies,
+                session.address,
+                content,
+                internal=internal,
+                sender=sender,
+                reply_surface=reply_surface,
+                run_kind=run_kind,
+            )
+            assert prepared_content is not None
             request = _RunRequest(
-                content=content,
+                content=prepared_content,
                 run_overrides=run_overrides,
                 internal=internal,
                 input_origin=input_origin,
@@ -615,7 +615,8 @@ class ChatLoop:
                 tool_denial_resolver=tool_denial_resolver,
                 max_tool_iterations=max_tool_iterations,
                 input_persisted_hook=input_persisted_hook,
-                context_note=context_note,
+                context_note=masked_context_note(context_note, masker_for_input()),
+                cron_approval_scope=cron_approval_scope,
             )
             # Live input carries a conversation snapshot with each request. It
             # can steer only when that snapshot is persisted with the input.
@@ -636,8 +637,8 @@ class ChatLoop:
             return await manager.enqueue(
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
                 _QueuedRunExecutor(self, request),
-                display_content=_display_content_preview(content),
-                editable=queue_content_is_editable(content),
+                display_content=_display_content_preview(prepared_content),
+                editable=queue_content_is_editable(prepared_content),
                 steerable=steerable,
                 steering=steering,
                 internal=internal,
@@ -649,7 +650,7 @@ class ChatLoop:
                     completion_activity=completion_activity,
                     schedule_id=schedule_id,
                     notification_policy=notification_policy,
-                    prepare_executor=_context_preparer(context_note_factory),
+                    prepare_executor=_context_preparer(context_note_factory, masker_for_input),
                     expected_session_generation_id=session.generation_id,
                 ),
             )
@@ -689,6 +690,10 @@ class ChatLoop:
         session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
+        masker = self._dependencies.secret_masker_for(
+            session.address, passed_only=await self._dependencies.input_passed_only(session.address)
+        )
+        content = masked_content(content, masker)
         return (
             session.id,
             executor.with_edited_content(content, input_origin, reply_surface),
@@ -809,6 +814,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
+        cron_approval_scope: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
@@ -929,29 +935,21 @@ class ChatLoop:
                     raise ChatError("history edits require visible plain-text content")
                 editable_session_message_index(await session.load_active_async(), edit_message_id)
             manager = self._dependencies.run_manager
-            if (
-                content is not None
-                and not internal
-                and (sender is None or sender.kind == "user")
-                and reply_surface is not None
-                and (
-                    (run_kind == RunKind.USER and reply_surface.kind in {"webui", "tui"})
-                    or (
-                        run_kind in {RunKind.USER, RunKind.CHANNEL}
-                        and reply_surface.kind == "channel"
-                        and reply_surface.conversation_kind == "direct"
-                    )
+            try:
+                content, masker_for_input = await prepare_run_input(
+                    self._dependencies,
+                    session.address,
+                    content,
+                    internal=internal,
+                    sender=sender,
+                    reply_surface=reply_surface,
+                    run_kind=run_kind,
                 )
-            ):
-                from core.chat._secret_capture import capture_user_input
-
-                try:
-                    content = await capture_user_input(self._dependencies, session.address, content)
-                except BaseException:
-                    if new_session is not None:
-                        await preparation.release()
-                        await self._discard_new_session(session)
-                    raise
+            except BaseException:
+                if new_session is not None:
+                    await preparation.release()
+                    await self._discard_new_session(session)
+                raise
             request = _RunRequest(
                 content=content,
                 run_overrides=run_overrides,
@@ -967,7 +965,8 @@ class ChatLoop:
                 input_persisted_hook=input_persisted_hook,
                 edit_message_id=edit_message_id,
                 extension_app_chat=binding is not None,
-                context_note=context_note,
+                context_note=masked_context_note(context_note, masker_for_input()),
+                cron_approval_scope=cron_approval_scope,
             )
             address = SessionAddress(
                 project_id=project_id, agent_id=agent_id, session_id=session.id
@@ -983,7 +982,7 @@ class ChatLoop:
                         completion_activity=completion_activity,
                         schedule_id=schedule_id,
                         notification_policy=notification_policy,
-                        prepare_executor=_context_preparer(context_note_factory),
+                        prepare_executor=_context_preparer(context_note_factory, masker_for_input),
                         source_session_id=source_session_id,
                         parent_source=(
                             continuation_source.parent_source if continuation_source else None
@@ -1025,9 +1024,12 @@ class ChatLoop:
                 exc_info=True,
             )
 
-    def mask_user_input(self, content: str) -> str:
-        """``content`` with every known Secret value replaced by its reference."""
-        return self._dependencies.secret_masker.mask(content)
+    async def mask_user_input(self, address: SessionAddress, content: str) -> str:
+        """Mask text for the Session receiving an Extension input."""
+        masker = self._dependencies.secret_masker_for(
+            address, passed_only=await self._dependencies.input_passed_only(address)
+        )
+        return masker.mask(content)
 
     async def start_temporary_run(
         self,
@@ -1274,11 +1276,16 @@ def _validate_run_tool_iteration_limit(max_tool_iterations: int | None) -> None:
 
 def _context_preparer(
     factory: Callable[[], str] | None,
+    masker_for_input: Callable[[], SecretMasker],
 ) -> Callable[[RunExecutor], RunExecutor] | None:
     """Resolve programmatic context once at Run start, after any Queue wait."""
-    return None if factory is None else partial(_prepare_context_input, factory)
+    return None if factory is None else partial(_prepare_context_input, factory, masker_for_input)
 
 
-def _prepare_context_input(factory: Callable[[], str], executor: RunExecutor) -> RunExecutor:
+def _prepare_context_input(
+    factory: Callable[[], str], masker_for_input: Callable[[], SecretMasker], executor: RunExecutor
+) -> RunExecutor:
     assert isinstance(executor, _QueuedRunExecutor)
-    return replace(executor, request=replace(executor.request, context_note=factory()))
+    return replace(
+        executor, request=replace(executor.request, context_note=masker_for_input().mask(factory()))
+    )

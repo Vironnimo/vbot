@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import string
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -434,8 +434,17 @@ WIRE_TOOL_CALL_ID_PROFILES: Mapping[str, ToolCallIdProfile] = MappingProxyType(
 
 
 def normalize_tool_call_ids(
+    messages: list[JsonObject], profile: ToolCallIdProfile
+) -> list[JsonObject]:
+    """Return the Provider's request view with correlated call and result IDs."""
+    return _normalize_tool_call_ids(messages, profile, protect=None)
+
+
+def _normalize_tool_call_ids(
     messages: list[JsonObject],
     profile: ToolCallIdProfile,
+    *,
+    protect: Callable[[str], bool] | None,
 ) -> list[JsonObject]:
     """Return a target-wire request view with paired Tool call/result IDs normalized.
 
@@ -451,8 +460,38 @@ def normalize_tool_call_ids(
     calls, so appending a colliding ID never rewrites the existing prefix.
     """
 
-    request_messages = list(messages)
     used_wire_ids: set[str] = set()
+    protected_ids: set[str] = set()
+    if protect is not None:
+        # Reserve unchanged IDs from the whole request, including calls following
+        # a protected one. Protected aliases must preserve ordinary IDs verbatim.
+        for message in messages:
+            ids = [message.get("tool_call_id")]
+            if isinstance(calls := message.get("tool_calls"), list):
+                ids.extend(call.get("id") for call in calls if isinstance(call, dict))
+            for original_id in ids:
+                if isinstance(original_id, str):
+                    (protected_ids if protect(original_id) else used_wire_ids).add(original_id)
+        if not protected_ids:
+            return messages
+
+    def allocate(original_id: str, occurrence: str) -> str:
+        if protect is None:
+            return _allocate_tool_call_id(
+                original_id, profile, used_wire_ids=used_wire_ids, occurrence=occurrence
+            )
+        if original_id not in protected_ids:
+            return original_id
+        # Generate from position alone. The allocator reserves each candidate, including
+        # ones that happen to contain a protected value and must be skipped.
+        while True:
+            candidate = _allocate_tool_call_id(
+                occurrence, profile, used_wire_ids=used_wire_ids, occurrence=occurrence
+            )
+            if not protect(candidate):
+                return candidate
+
+    request_messages = list(messages)
     active_result_ids: dict[str, list[str]] = {}
 
     for message_index, message in enumerate(messages):
@@ -461,16 +500,23 @@ def normalize_tool_call_ids(
             request_messages[message_index], active_result_ids = _normalize_assistant_tool_call_ids(
                 message,
                 profile,
-                used_wire_ids=used_wire_ids,
+                allocate=allocate,
                 message_index=message_index,
             )
+            if protect is not None and request_messages[message_index] is not message:
+                # Native replay can carry the original function-call identity.
+                request_messages[message_index].pop("reasoning_meta", None)
             continue
         if role == "tool":
             original_id = message.get("tool_call_id")
             if isinstance(original_id, str):
                 mapped_ids = active_result_ids.get(original_id)
-                if mapped_ids:
-                    wire_id = mapped_ids.pop(0)
+                if mapped_ids or original_id in protected_ids:
+                    wire_id = (
+                        mapped_ids.pop(0)
+                        if mapped_ids
+                        else allocate(original_id, f"{message_index}:result")
+                    )
                     if wire_id != original_id:
                         request_messages[message_index] = {**message, "tool_call_id": wire_id}
             continue
@@ -483,7 +529,7 @@ def _normalize_assistant_tool_call_ids(
     message: JsonObject,
     profile: ToolCallIdProfile,
     *,
-    used_wire_ids: set[str],
+    allocate: Callable[[str, str], str],
     message_index: int,
 ) -> tuple[JsonObject, dict[str, list[str]]]:
     tool_calls = message.get("tool_calls")
@@ -498,12 +544,7 @@ def _normalize_assistant_tool_call_ids(
         original_id = tool_call.get("id")
         if not isinstance(original_id, str) or not original_id:
             continue
-        wire_id = _allocate_tool_call_id(
-            original_id,
-            profile,
-            used_wire_ids=used_wire_ids,
-            occurrence=f"{message_index}:{tool_call_index}",
-        )
+        wire_id = allocate(original_id, f"{message_index}:{tool_call_index}")
         result_ids.setdefault(original_id, []).append(wire_id)
         if wire_id != original_id:
             if wire_tool_calls is None:

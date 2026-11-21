@@ -23,6 +23,7 @@ from core.debug import DebugContext
 from core.models.pricing import TokenPricing
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_EPHEMERAL_META_KEY,
@@ -125,10 +126,15 @@ class SessionTitleService:
     """Set a local title immediately and optionally improve it in the background."""
 
     def __init__(
-        self, runtime: RuntimeServices, *, usage_recorder: UsageRecorder | None = None
+        self,
+        runtime: RuntimeServices,
+        *,
+        usage_recorder: UsageRecorder | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
         self._runtime = runtime
         self._usage_recorder = usage_recorder
+        self._secret_masker = secret_masker
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -216,7 +222,10 @@ class SessionTitleService:
             return None
 
         first_user_sequence, first_user = source
-        text, attachment_lines = _title_source_parts(first_user.content or "")
+        masker = self._secret_masker()
+        text, attachment_lines = _title_source_parts(first_user.content or "", masker)
+        text = masker.mask(text)
+        attachment_lines = [masker.mask(line) for line in attachment_lines]
         local_title = _local_title(text, attachment_lines)
         sessions.set_auto_title(
             address,
@@ -346,6 +355,7 @@ class SessionTitleService:
         if self._closed:
             return None
         sessions = self._runtime.chat_sessions
+        source_text = self._secret_masker().mask(source_text)
         local_title = _local_group_title(source_text)
         if not local_title:
             return None
@@ -484,8 +494,7 @@ class SessionTitleService:
                     usage_context=usage_context,
                 )
             return await _SESSION_TITLE_WORKERS.run(
-                _generated_title,
-                response,
+                _generated_title, self._secret_masker().mask_value(response)
             )
         finally:
             if adapter is not None:
@@ -513,7 +522,7 @@ class SessionTitleService:
                 adapter,
                 [
                     {"role": "system", "content": TITLE_SYSTEM_PROMPT},
-                    {"role": "user", "content": title_input},
+                    {"role": "user", "content": self._secret_masker().mask(title_input)},
                 ],
                 model_id=model_id,
                 thinking_effort=thinking_effort,
@@ -560,7 +569,9 @@ def _group_title_candidate(
     return usable[0] if usable else None
 
 
-def _title_source_parts(content: str | list[ContentBlock]) -> tuple[str, list[str]]:
+def _title_source_parts(
+    content: str | list[ContentBlock], masker: SecretMasker
+) -> tuple[str, list[str]]:
     if isinstance(content, str):
         return content, []
 
@@ -575,7 +586,7 @@ def _title_source_parts(content: str | list[ContentBlock]) -> tuple[str, list[st
             if isinstance(block, MediaBlock) and block.transcription is not None:
                 text_parts.append(block.transcription)
         elif isinstance(block, FileMentionBlock):
-            filename = _mentioned_filename(block.path)
+            filename = _mentioned_filename(masker.mask(block.path))
             size = f", {block.size_bytes} bytes" if block.size_bytes is not None else ""
             attachments.append(f"- {filename} (mentioned file{size})")
     return "\n".join(text_parts), attachments

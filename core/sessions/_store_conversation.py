@@ -64,7 +64,7 @@ def conversation_page(
         raise SessionNotFoundError("The Session reference belongs to an earlier generation")
     ranges = _store_lineage.view_ranges(connection, int(state["session_key"]))
     columns = (
-        "e.seq, e.entry_id, e.role, e.created_at, "
+        "e.seq, e.entry_id, e.role, e.created_at, e.cron_approval_scope, "
         f"substr({_TEXT}, 1, {max_text_chars + 1}) AS text, "
         f"{_SENDER_KIND} AS sender_kind, {_SENDER_ID} AS sender_id, e.subagent_reply_target, "
         f"{_SENDER_ROLE} AS sender_role, {_RUN_KIND} AS run_kind, "
@@ -157,6 +157,7 @@ def _message(row: sqlite3.Row, limit: int) -> SessionConversationMessage:
         sender_role=row["sender_role"],
         run_kind=row["run_kind"],
         schedule_id=row["schedule_id"],
+        cron_approval_scope=row["cron_approval_scope"],
         input_source_id=row["input_source_id"],
         run_id=row["run_id"],
         subagent_reply_target=(

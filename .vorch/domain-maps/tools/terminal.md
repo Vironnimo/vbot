@@ -32,6 +32,8 @@ New Terminal Session ids use `term_` plus 12 lowercase base32 characters, alloca
 
 ## Agent Tool contract
 
+Model-bound screen and history rows use the emulator's retained logical text and soft-wrap flags. The host suppresses partial Secret matches across physical rows and page edges, and keeps complete matches recognizable through VT styling for the receiving Session's projection. On a running program's unfinished last output line it holds back possible Secret prefixes, including in the line returned by a successful pattern wait. Live uses this display separately from its raw screen checks for Terminal input. Operator reads keep the rendered screen and history.
+
 Agent rename and Session move await matching admitted launches before transferring
 lifecycle and attachment scopes. A process still starting follows the new owner
 and is included in the transfer count, just like an already published Terminal.

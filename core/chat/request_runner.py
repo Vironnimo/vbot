@@ -175,6 +175,7 @@ class WireRequestRunner:
         stream_draft: StreamDraft | None = None,
         *,
         finish_response: _FinishResponse,
+        passed_only: bool,
         public_model: str,
         request_context_usage: JsonObject,
         provider_id: str = "",
@@ -207,13 +208,10 @@ class WireRequestRunner:
         messages, effort_kwargs = route_effort(
             effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
         )
-        # The projection reads every request text, so it stays off the Event Loop.
-        messages, tools = await _CHAT_TRANSFORM_WORKERS.run(
-            model_facing_request, messages, tools, self._dependencies.secret_masker
-        )
-        fast_mode = await self._dependencies.sessions.metadata_value_async(
-            SessionAddress(run.project_id, run.agent_id, run.session_id), "fast_mode"
-        )
+        address = SessionAddress(run.project_id, run.agent_id, run.session_id)
+        source_messages, source_tools = messages, tools
+        projected_masker = None
+        fast_mode = await self._dependencies.sessions.metadata_value_async(address, "fast_mode")
         request_context = {
             **_resolve_request_context_kwargs(
                 adapter, run, prompt_cache_affinity_id, session_generation_id
@@ -265,6 +263,13 @@ class WireRequestRunner:
                 await budget.begin(response_model, retry_notice)
                 if before_request is not None:
                     await before_request()
+                masker = self._dependencies.secret_masker_for(address, passed_only=passed_only)
+                if masker is not projected_masker:
+                    # Recheck grants after retry waits, keeping the unchanged projection cheap.
+                    messages, tools = await _CHAT_TRANSFORM_WORKERS.run(
+                        model_facing_request, source_messages, source_tools, masker
+                    )
+                    projected_masker = masker
                 reasoning = await _CHAT_TRANSFORM_WORKERS.run(
                     adapter.describe_reasoning_render,
                     model_id,

@@ -29,6 +29,7 @@ from core.tools.shell import (
 )
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
+from server.live._context import LIVE_OUTPUT_MASKER
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
@@ -94,6 +95,7 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("chat.run_result"), "chat.run_result")
     address = _required_session_address(params)
     run_id = _required_string(params, "run_id")
+    live_masker = LIVE_OUTPUT_MASKER.get()
 
     def read() -> JsonObject:
         session = state.runtime.chat_sessions.get(address)
@@ -102,7 +104,9 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
         return {
             "run_id": run_id,
             "found": result is not None,
-            "content": content[-6000:],
+            "content": live_masker().guard_slice(content, -6000, len(content))
+            if live_masker
+            else content[-6000:],
             "truncated": len(content) > 6000,
         }
 

@@ -29,6 +29,8 @@ from server.live._context import (
     LiveContext,
     LiveToolError,
     join_words,
+    live_layout_text,
+    live_slice,
     text_field,
 )
 from server.live._targets import (
@@ -139,7 +141,7 @@ class LiveSessions:
         # though the lines load concurrently.
         self._refs.session(key)
         name = await catalog.agent_name(key.address)
-        title = str(item.get("title") or item.get("auto_title") or "").strip()
+        title = live_layout_text(str(item.get("title") or item.get("auto_title") or "")).strip()
         ref = self._refs.session(key, session_title(name, title))
         head = f'- {ref} {name} "{title}"' if title else f"- {ref} {name}"
         if origin:
@@ -166,7 +168,7 @@ class LiveSessions:
             )
         except RpcError:
             return ""
-        return str(result.get("content") or "").strip()
+        return live_layout_text(str(result.get("content") or "")).strip()
 
     def _recent(self, item: JsonObject) -> bool:
         active = _timestamp(item.get("last_active_at"))
@@ -474,15 +476,18 @@ def _recent_messages(messages: Any) -> list[JsonObject]:
             content, str
         ):
             continue
+        content = live_layout_text(content)
         if not content.strip():
             continue
-        kept = content[-remaining:]
-        remaining -= len(kept)
-        truncated = len(kept) < len(content)
+        start = max(0, len(content) - remaining)
+        remaining -= len(content) - start
+        truncated = start > 0
         if truncated:
             # Start the kept part at a word, not inside one.
-            words = kept.split(None, 1)
-            kept = words[1] if len(words) == 2 and len(words[0]) < _MAX_CUT_WORD_CHARS else kept
+            words = content[start:].split(None, 1)
+            if len(words) == 2 and len(words[0]) < _MAX_CUT_WORD_CHARS:
+                start = len(content) - len(words[1])
+        kept = live_slice(content, start, len(content))
         recent.insert(0, {"role": message["role"], "content": kept, "truncated": truncated})
         if not remaining:
             break
@@ -491,10 +496,10 @@ def _recent_messages(messages: Any) -> list[JsonObject]:
 
 def _excerpt(text: str) -> str:
     """The end of a final message, where its question or result is, as one line."""
-    flat = " ".join(text.split())
+    flat = " ".join(live_layout_text(text).split())
     if len(flat) <= _EXCERPT_CHARS:
         return flat
-    return "..." + flat[-(_EXCERPT_CHARS - 3) :]
+    return "..." + live_slice(flat, -(_EXCERPT_CHARS - 3), len(flat))
 
 
 def _timestamp(value: Any) -> datetime | None:

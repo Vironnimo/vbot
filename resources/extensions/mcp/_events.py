@@ -222,6 +222,14 @@ class ConnectionEvents:
                 output, pending = pending[:boundary], pending[boundary:]
                 if output and not loop.is_closed():
                     loop.call_soon_threadsafe(self._stderr, self.redact(output))
+                # A reference permits arbitrarily long whitespace. If it never
+                # closes, keep draining the pipe without retaining its raw tail.
+                if len(pending) > 16 * STDERR_CHUNK_SIZE and pending.startswith("{{"):
+                    if not loop.is_closed():
+                        loop.call_soon_threadsafe(self._stderr, REDACTED)
+                    while stream.read(STDERR_CHUNK_SIZE):
+                        pass
+                    return
             if pending and not loop.is_closed():
                 loop.call_soon_threadsafe(self._stderr, self.redact(pending))
 

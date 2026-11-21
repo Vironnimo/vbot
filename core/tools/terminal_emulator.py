@@ -220,6 +220,51 @@ class TerminalEmulator:
                 digest.update(repr((row, cells)).encode("utf-8"))
         return digest.hexdigest()
 
+    def model_window(
+        self, start: int, count: int, padding: int
+    ) -> tuple[str, list[tuple[int, int]], bool]:
+        """The original text and offsets for these displayed rows plus nearby retained text."""
+        visible = self._screen_rows()
+        first = self._history[0].number if self._history else self._next_line
+        limit = self._next_line + len(visible)
+
+        # The alternate screen has no history of its own. Its first row never
+        # continues text on the primary screen.
+        def row(number: int) -> tuple[str, bool]:
+            if number < self._next_line:
+                item = self._history[number - first]
+                return item.text, item.wrapped and not (
+                    self._screen.alternate_active and number + 1 == self._next_line
+                )
+            return visible[number - self._next_line]
+
+        end = min(start + count, limit)
+        if end <= start:
+            return "", [], False
+        left, right = start, end
+        needed = padding
+        while left > first and needed > 0:
+            left -= 1
+            needed -= len("".join(row(left)[0].split()))
+        needed = padding
+        while right < limit and needed > 0:
+            needed -= len("".join(row(right)[0].split()))
+            right += 1
+        parts: list[str] = []
+        spans: list[tuple[int, int]] = []
+        offset = 0
+        open_end = right == limit and self._screen.cursor.y == len(visible) - 1
+        for number in range(left, right):
+            plain, wraps = row(number)
+            if start <= number < end:
+                spans.append((offset, offset + len(plain)))
+            parts.append(plain)
+            offset += len(plain)
+            if not wraps and not (open_end and number + 1 == right):
+                parts.append("\n")
+                offset += 1
+        return "".join(parts), spans, open_end
+
     def page(self, *, start_line: int | None, limit: int) -> dict[str, Any]:
         """Return a page of history and screen lines by stable line number.
 
@@ -262,7 +307,7 @@ class TerminalEmulator:
         """
         self._match_start = (self._next_line + self._screen.primary_cursor_row, True)
 
-    def pattern_text(self, *, start_line: int | None) -> dict[str, Any]:
+    def pattern_text(self, *, start_line: int | None, track_end: bool = False) -> dict[str, Any]:
         """The output a wait's pattern is matched against, and the line to check from next.
 
         The text is logical lines: rows a long line was auto-wrapped into are
@@ -314,7 +359,10 @@ class TerminalEmulator:
         next_line = screen_start - 1
         while next_line > first and wrapped(next_line - 1):
             next_line -= 1
-        return {"text": "\n".join(lines), "next_line": max(first, next_line)}
+        result: dict[str, Any] = {"text": "\n".join(lines), "next_line": max(first, next_line)}
+        if track_end:
+            result["open_end"] = self._screen.cursor.y == len(screen_rows) - 1
+        return result
 
     def ansi_snapshot(self) -> str:
         """Serialize bounded history plus the current screen for a late viewer.

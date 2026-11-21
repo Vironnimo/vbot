@@ -329,6 +329,7 @@ class ProviderTaskClient:
         parse: Callable[[httpx.Response], ParsedResultT],
         consume: Callable[[httpx.Response], Awaitable[ParsedResultT]] | None = None,
         json: JsonObject | None = None,
+        before_send: Callable[[], None] | None = None,
         data: Mapping[str, str | list[str]] | None = None,
         files: Any | None = None,
         headers: HeaderBuilder | None = None,
@@ -348,6 +349,8 @@ class ProviderTaskClient:
         bodies are still read before classification. Streaming callbacks own
         incremental decoding and must tolerate replay if the policy permits it.
         A supplied HTTP client is caller-owned and remains open after this call.
+        A caller can revalidate a prepared body with `before_send` immediately
+        before every POST, including transient retries and OAuth replays.
         """
 
         operation_key = uuid4().hex
@@ -371,6 +374,8 @@ class ProviderTaskClient:
                 failure: BaseException | None = None
                 try:
                     try:
+                        if before_send is not None:
+                            before_send()
                         response_context = (
                             client.stream(
                                 "POST",

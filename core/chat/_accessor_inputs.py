@@ -294,10 +294,14 @@ class AccessorInputs:
                     resolver.capture_session_settings, session.address, session_agent
                 )
             try:
+                passed_only = await deps.input_passed_only(session.address)
                 if sender is None or sender.kind == "user":
-                    content = await capture_user_input(deps, session.address, content)
-                else:
-                    content = masked_content(content, deps.secret_masker)
+                    content = await capture_user_input(
+                        deps, session.address, content, passed_only=passed_only
+                    )
+                masker = deps.secret_masker_for(session.address, passed_only=passed_only)
+                if sender is not None and sender.kind != "user":
+                    content = masked_content(content, masker)
             except BaseException:
                 if new is not None:
                     await preparation.release()
@@ -306,15 +310,9 @@ class AccessorInputs:
             if isinstance(context_note, str):
                 # Execution and the crash/terminal fallback share the same Note
                 # identity, including when the input append itself never succeeds.
-                context_note = (
-                    ChatMessage.note(deps.secret_masker.mask(context_note))
-                    if context_note
-                    else None
-                )
+                context_note = ChatMessage.note(masker.mask(context_note)) if context_note else None
             elif context_note is not None and isinstance(context_note.content, str):
-                context_note = replace(
-                    context_note, content=deps.secret_masker.mask(context_note.content)
-                )
+                context_note = replace(context_note, content=masker.mask(context_note.content))
             request = _RunRequest(
                 content=content,
                 extension_app_chat=app_chat_binding is not None,
@@ -322,7 +320,7 @@ class AccessorInputs:
                 input_origin=input_origin,
                 reply_surface=reply_surface,
                 context_note=context_note,
-                app_view=app_view_note(ui_context, mask=deps.secret_masker.mask)
+                app_view=app_view_note(ui_context, mask=masker.mask)
                 if ui_context is not None
                 else None,
                 run_overrides=run_overrides,

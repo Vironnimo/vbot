@@ -1044,7 +1044,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
             command_id, process = await harness.launch(
                 execution_owner=execution_owner,
                 not_run_codes={9101: "request_unreadable"},
-                consumed_once_secrets=("ONE_TIME",) if outcome == "not_run_once" else (),
+                consumed_once_secrets=outcome == "not_run_once",
             )
             if outcome == "moved_before_handoff":
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
@@ -1096,9 +1096,12 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 if outcome == "old_pid_hint_delivered":
                     await sessions.get(OWNER).add_note_async(checkpoint["body"])
             if outcome == "not_run_once":
-                assert checkpoint["consumed_once_secrets"] == ["ONE_TIME"]
+                assert checkpoint.pop("one_time_secrets_spent") is True
+                checkpoint["consumed_once_secrets"] = ["ONE_TIME"]  # Earlier checkpoint format.
                 # Rebuild the delivery from durable metadata after restart.
-                checkpoint["body"] = None
+                checkpoint["body"] = (
+                    "One-time Secrets ONE_TIME were used up while preparing this launch."
+                )
         # The harness closes fake processes; restore the exact durable crash
         # boundary rather than running an actual server/process crash.
         if outcome == "running":
@@ -1153,7 +1156,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     assert command_id in restored.sink.bodies[0]
                 if outcome == "not_run_once":
                     body = restored.sink.bodies[0]
-                    assert "ONE_TIME" in body and "provide them again before retrying" in body
+                    assert "ONE_TIME" not in body and "provide them again before retrying" in body
                 if outcome == "stop_after_restart":
                     assert await restored.manager.close_scope(restored_owner) == 0
                     assert restored.sink.futures[0].cancelled()
@@ -1219,10 +1222,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 else "completed"
             )
             if outcome == "not_run_once":
-                assert report.consumed_once_secrets == ("ONE_TIME",)
+                assert report.consumed_once_secrets
                 problem = not_run_problem(report)
                 assert problem is not None and problem[1] is False
-                assert "ONE_TIME" in problem[0]
+                assert "ONE_TIME" not in problem[0] and "provide them again" in problem[0]
             assert restored.manager.busy_addresses() == set()
             assert restored.launcher.processes == []
             assert not sessions.background_command_read()[0]["checkpoint"]["pending"]

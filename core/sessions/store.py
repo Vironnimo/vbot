@@ -920,12 +920,21 @@ class SessionStore:
         )
 
     def recall_context(
-        self, address: SessionAddress, message_id: str, *, message_index: int | None = None
+        self,
+        address: SessionAddress,
+        message_id: str,
+        *,
+        message_index: int | None = None,
+        include_source: bool = False,
     ) -> builtins.list[JsonObject]:
         """Return bounded conversation text beside a search anchor."""
         return self._read(
             lambda connection: _store_history.recall_context(
-                connection, address, message_id, message_index=message_index
+                connection,
+                address,
+                message_id,
+                message_index=message_index,
+                include_source=include_source,
             )
         )
 

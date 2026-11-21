@@ -16,6 +16,7 @@ import pytest
 
 from core.computers import ComputerError
 from core.providers._tool_result_text import render_tool_result_envelope
+from core.secrets.agent_secrets import SecretMasker
 from core.tools import _terminal_results as terminal_results
 from core.tools import _terminal_waits as terminal_waits
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
@@ -958,9 +959,11 @@ async def test_expensive_pattern_ends_the_wait_and_leaves_the_terminal_usable(
     original_match = terminal_waits._matching_line
     threads: list[int] = []
 
-    def matching(pattern: re.Pattern[str], text: str) -> tuple[str | None, bool]:
+    def matching(
+        pattern: re.Pattern[str], text: str, masker: SecretMasker | None, open_end: bool
+    ) -> tuple[str | None, bool]:
         threads.append(threading.get_ident())
-        return original_match(pattern, text)
+        return original_match(pattern, text, masker, open_end)
 
     monkeypatch.setattr(terminal_waits, "_matching_line", matching)
     terminal_id = await terminal.start()

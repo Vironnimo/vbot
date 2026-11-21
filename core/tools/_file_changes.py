@@ -1020,7 +1020,7 @@ def file_reports(
             before_text,
             after_text,
             destination=destination,
-            mask=context.mask_prepared_secrets,
+            mask=context._mask_output_text,
         )
         change = context.add_display_file_change(
             label, kind, before_text, after_text, destination=destination

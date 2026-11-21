@@ -21,6 +21,7 @@ from typing import Any
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.extensions.operations import ExtensionHost
+from core.secrets._references import REFERENCE_PATTERN
 from core.tools.tools import ToolContext, ToolRegistry, read_media_artifact, run_tool_worker
 from core.utils.ids import is_safe_id, new_id
 
@@ -71,6 +72,26 @@ class _PointerError(ValueError):
         self.reason = reason
 
 
+def _reference_edge(text: str, end: int, *, forward: bool = False) -> int:
+    """Keep a reference intact so later Session projections can still recognize it."""
+    start = text.rfind("{{", 0, end + 1)
+    if start >= 0:
+        match = REFERENCE_PATTERN.match(text, start)
+        if match and match.end() > end:
+            return match.end() if forward else start
+    return end
+
+
+def outcome_preview(outcome: dict[str, Any]) -> dict[str, Any]:
+    encoded = json.dumps(outcome, ensure_ascii=True)
+    if len(encoded) <= RESULT_VIEW_CHARACTERS:
+        return {"result": outcome}
+    return {
+        "preview": encoded[: _reference_edge(encoded, RESULT_TEXT_CHARACTERS)],
+        "complete": False,
+    }
+
+
 class ContentStore:
     def __init__(self, host: ExtensionHost, registry: ToolRegistry | None = None) -> None:
         self.host = host
@@ -78,14 +99,19 @@ class ContentStore:
 
     async def protect(self, payload: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Protect the complete text before pagination can split a credential."""
-        safe = context.mask_prepared_secrets(payload, include_keys=True)
         registry = self.registry
         if registry is None:
-            return safe
+            return context.mask_prepared_secrets(payload, include_keys=True)
         if not context.result_payloads_available and context.session_generation_id is None:
+            safe = context._project_prepared_secrets(
+                payload, include_keys=True, masker=registry.secret_masker
+            )
             return registry.secret_masker.mask_unbound(safe)
+        safe = context._project_prepared_secrets(
+            payload, include_keys=True, masker=registry.secret_masker_for(context)
+        )
         local_masker = await registry.capture_output_secrets(context, safe)
-        return registry.secret_masker.mask_value(
+        return registry.secret_masker_for(context).mask_value(
             local_masker.mask_value(safe, include_keys=True), include_keys=True
         )
 
@@ -206,12 +232,14 @@ class ContentStore:
         call: dict[str, Any] = {"action": "read", "result_id": identifier}
         rendered = body_parts(preserved)
         parts = rendered[0] if rendered is not None else []
+        head = _reference_edge(text, ERROR_HEAD_CHARACTERS)
+        tail = _reference_edge(text, len(text) - ERROR_TAIL_CHARACTERS, forward=True)
         if len(parts) == 1 and parts[0].pointer is not None and not parts[0].prefix:
-            call.update(pointer=parts[0].pointer, offset=ERROR_HEAD_CHARACTERS)
-        omitted = len(text) - shown
+            call.update(pointer=parts[0].pointer, offset=head)
+        omitted = tail - head
         return (
-            f"{text[:ERROR_HEAD_CHARACTERS]}\n[... {omitted} characters omitted; read the "
-            f"complete report with {compact(call)} ...]\n{text[-ERROR_TAIL_CHARACTERS:]}"
+            f"{text[:head]}\n[... {omitted} characters omitted; read the "
+            f"complete report with {compact(call)} ...]\n{text[tail:]}"
         ), artifacts
 
     @staticmethod
@@ -348,7 +376,7 @@ class ContentStore:
                 entry.update(
                     complete=False,
                     type=json_kind(item),
-                    preview=encoded[:RESULT_PREVIEW_CHARACTERS],
+                    preview=encoded[: _reference_edge(encoded, RESULT_PREVIEW_CHARACTERS)],
                     read={"action": "read", "result_id": identifier, "pointer": item_pointer},
                 )
                 if fields is not None and isinstance(value, list) and isinstance(item, dict):
@@ -414,6 +442,7 @@ def _text_prefix(parts: list[Part], budget: int) -> tuple[str, dict[str, Any] | 
             continue
         room = budget - used - gap - len(part.prefix)
         if part.pointer is not None and room > 0:
+            room = _reference_edge(part.text, room)
             shown.append(part.prefix + part.text[:room])
             continuation: dict[str, Any] = {"pointer": part.pointer, "offset": room}
         else:

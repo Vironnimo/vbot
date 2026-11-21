@@ -12,6 +12,7 @@ from contextlib import aclosing, suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -19,7 +20,10 @@ import pytest_asyncio
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
+from core.chat import ChatMessage
 from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected, PlaybackReceipt
+from core.secrets.agent_secrets import SecretMasker
+from server._app_lifecycle import _build_live_call_registry
 from server.app import create_app
 from server.events import ServerEventBus
 from server.live._call import LiveCallEntry
@@ -31,8 +35,11 @@ from server.live.owner import (
     LiveOwnerStream,
 )
 from server.live.registry import LiveCallLimits, LiveCallRegistry, LiveRegistryClosedError
+from server.rpc.dispatcher import dispatch_method
 from server.rpc.errors import RpcError
-from tests.server.rpc_test_support import StubAdapter, StubRuntime
+from server.rpc.methods import METHODS
+from tests.core.sessions.history_fixtures import complete_run
+from tests.server.rpc_test_support import StubAdapter, StubRuntime, make_state
 
 JsonObject = dict[str, Any]
 
@@ -948,6 +955,77 @@ async def test_hands_runs_finishing_during_the_call_to_it_with_their_outcome(
         "chat.run_result",
         {"agent_id": "joel@vbot", "session_id": "s1", "run_id": "r1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_live_excerpts_keep_secrets_whole_for_each_reader(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    reference = "{{secret:RUN_RESULT_PRIVATE}}"
+    value = "sample first second-private"
+    masker = SecretMasker({value: "[redacted]"}, filter_references=True)
+    state.runtime.agent_secrets = SimpleNamespace(masker=masker)
+    registry = _build_live_call_registry(state)
+    service = FakeService()
+    await registry.start(service, media="relay")
+    try:
+        call = service.calls[0]
+        session = state.runtime.chat_sessions.create("coder").start_run("r1")
+        # One reply crosses the 8000-character history window, the RPC's 6000,
+        # and the 157 retained by overview. A complete reference remains at the end.
+        chars = list("x" * 8200)
+        for budget, hidden_prefix, protected in (
+            (8000, "sample ", value),
+            (6000, "{{secret:RUN_", reference),
+            (157, "{{secret:RUN_", reference),
+        ):
+            start = len(chars) - budget - len(hidden_prefix)
+            chars[start : start + len(protected)] = protected
+        chars[-len(reference) :] = reference
+        reply = "".join(chars)
+        session.append(ChatMessage.assistant(model="test/model", content=reply))
+        stamp = datetime.now(UTC).isoformat()
+        complete_run(
+            session,
+            ChatMessage.run_summary(
+                run_id="r1",
+                status="completed",
+                iteration_count=1,
+                timing={"started_at": stamp, "completed_at": stamp, "duration_ms": 0},
+            ),
+        )
+        finish_run(
+            state.event_bus,
+            "r1",
+            at=datetime.now(UTC),
+            session_id=session.id,
+            agent_id="coder",
+            project_id=None,
+        )
+        await settle(lambda: bool(call.notices))
+        notice = call.notices[0]
+        assert notice.truncated
+        assert notice.excerpt.startswith("[redacted]x")
+        assert notice.excerpt.endswith(reference)
+
+        overview = await run_tool(call, "overview", {"agent": "coder"})
+        assert overview["ok"], overview
+        assert 'finished: "...[redacted]x' in overview["data"]["content"]
+        assert overview["data"]["content"].endswith(reference + '"')
+        history = await run_tool(call, "read_output", {"target": notice.session_ref})
+        assert history["ok"], history
+        assert "second-private" not in history["data"]["content"]
+        assert reference in history["data"]["content"]
+
+        normal = await dispatch_method(
+            state,
+            "chat.run_result",
+            {"agent_id": "coder", "session_id": session.id, "run_id": "r1"},
+            METHODS,
+        )
+        assert normal["content"] == reply[-6000:]
+        assert normal["content"].startswith("RESULT_PRIVATE}}")
+    finally:
+        await registry.aclose()
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ from core.tools._shell_display import record_command_stop, shell_detail_blocks
 from core.tools._shell_results import (
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
+    CONSUMED_SECRETS_NOTE,
     SHELL_TOOL_NAME,
     TERMINAL_TOOL_NAME,
     ToolNames,
@@ -47,7 +48,6 @@ from core.tools._shell_results import (
     _start_failure,
     background_command_statuses,
     command_output_text,
-    consumed_secrets_note,
     delivery_names,
     duration,
     ended_result,
@@ -538,8 +538,8 @@ class ShellTool:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
         if self._secrets is not None:
             # A credential the process inherited is masked once a command got it.
-            for name, value in credentials.items():
-                self._secrets.remember_value(value, f"{{{{secret:{name}}}}}")
+            for value in credentials.values():
+                self._secrets.remember_value(value)
         credentials.update(secret_environment)
 
         def prepare() -> HostShellStart:
@@ -618,13 +618,7 @@ class ShellTool:
             context.record_secret_uses(describe_uses(secret_uses))
         else:
             await authorize_launch()
-        spent = tuple(
-            dict.fromkeys(
-                use.name
-                for use in secret_uses
-                if use.secret is not None and use.secret.lifetime == "once"
-            )
-        )
+        spent = any(use.secret is not None and use.secret.lifetime == "once" for use in secret_uses)
         try:
             handle = await self._commands.launch(
                 CommandOwner(context.project_id, context.agent_id, context.session_id),
@@ -652,7 +646,7 @@ class ShellTool:
             started.cancel()
             result = await run_tool_worker(_start_failure, error, call, context, names)
             if spent:
-                result["error"]["message"] += f" {consumed_secrets_note(spent)}"
+                result["error"]["message"] += f" {CONSUMED_SECRETS_NOTE}"
                 result["error"]["retryable"] = False
             raise _NotStartedError(result) from error
         except BaseException:

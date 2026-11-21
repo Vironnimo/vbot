@@ -70,6 +70,7 @@ async def test_preview_uses_the_native_model_and_live_criteria_without_shell_exe
     assert first["model"] == "fixture/decision"
     assert judge.await_args is not None
     assert judge.await_args.args[1]["state"] == request
+    assert judge.await_args.args[1]["require_exact"] is True
     assert request["command"] == _request()["command"]
     assert registry.records()[0].declarations.tools == []
 

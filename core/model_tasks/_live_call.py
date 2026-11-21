@@ -57,7 +57,7 @@ from core.model_tasks._live_wire import (
     WireToolCall,
     WireUsage,
 )
-from core.tools import called_tool_name
+from core.secrets.agent_secrets import SecretMasker
 from core.tools.live import TOOL_END_CALL, TOOL_VBOT_REQUEST, LiveToolHost, LiveToolHosts
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -199,7 +199,7 @@ class LiveCallSession:
         # Set while no user transcript is unfinished.
         self._user_settled = asyncio.Event()
         self._user_settled.set()
-        self._updates: list[str] = []
+        self._updates: list[LiveRunNotice] = []
         # Records for the voice Session, stored in order by one task.
         self._records: deque[tuple[str, str]] = deque(maxlen=_RECORD_BACKLOG)
         self._record_ready = asyncio.Event()
@@ -322,8 +322,8 @@ class LiveCallSession:
         if notice.run_id in self._announced or self._done.is_set() or self._closing:
             return
         self._announced.append(notice.run_id)
-        self._updates.append(_render_notice(notice))
-        self._record("note", _render_notice(notice))
+        self._updates.append(notice)
+        self._record("note", _render_notice(notice, self._voice.secret_masker))
         if self._phase == "live":
             self._speak(notice)
         else:
@@ -332,9 +332,14 @@ class LiveCallSession:
     def _speak(self, notice: LiveRunNotice) -> None:
         # An excerpt is untrusted Agent output; where announcements count as
         # user input, the voice model would follow instructions quoted in it.
-        text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
+        async def send() -> None:
+            text = _render_notice(
+                notice, self._voice.secret_masker, excerpt=not self._wire.announces_as_user_input
+            )
+            await self._wire.announce(text)
+
         self._spawn(
-            self._send_command(lambda: self._wire.announce(text)),
+            self._send_command(send),
             name=f"live-call-announce:{self._log_id}",
         )
 
@@ -477,12 +482,16 @@ class LiveCallSession:
             await self._await_user_settled()
         said, self._said = self._said, []
         updates, self._updates = self._updates, []
+        state = await self._current_state()
+        assert self._backend is not None
+        masker = self._backend.secret_masker
+        notices = "\n".join(_render_notice(notice, masker) for notice in updates)
         return BackendRequest(
-            request=request,
-            conversation=_conversation_text(said, self._partial),
-            updates="\n".join(updates)[-_UPDATES_MAX_CHARS:],
-            state=await self._current_state(),
-            refs=self._host.known_refs(),
+            request=masker.mask(request) if request else request,
+            conversation=_conversation_text(said, self._partial, masker),
+            updates=masker.guard_slice(notices, -_UPDATES_MAX_CHARS, len(notices)),
+            state=masker.mask(state),
+            refs=masker.mask(self._host.known_refs()),
         )
 
     async def _current_state(self) -> str:
@@ -507,7 +516,8 @@ class LiveCallSession:
         async def send() -> None:
             if self._latest_delegation_id == delegation_id and not self._closing:
                 update = f"{LIVE_UPDATE_PREFIX}: " + json.dumps(
-                    {"confirmed_tool_result": text}, ensure_ascii=False
+                    {"confirmed_tool_result": self._voice.secret_masker.mask(text)},
+                    ensure_ascii=False,
                 )
                 await self._wire.deliver_result(delegation_id, update)
 
@@ -517,23 +527,27 @@ class LiveCallSession:
         """Answer one native delegation; the voice model always gets an answer."""
         arguments = {"request": event.request} if event.request else {}
         result = await self._call_text(event.delegation_id, TOOL_VBOT_REQUEST, arguments)
-        answer = _answer_text(result) if result is not None else _DELEGATION_FAILED
 
         async def send() -> None:
             if self._latest_delegation_id == event.delegation_id:
-                await self._wire.deliver_result(event.delegation_id, answer)
+                answer = _answer_text(result) if result is not None else _DELEGATION_FAILED
+                await self._wire.deliver_result(
+                    event.delegation_id, self._voice.secret_masker.mask(answer)
+                )
 
         await self._send_command(send)
 
     async def _run_tool(self, event: WireToolCall) -> None:
         """Run one Tool call of a Model; it always gets a result."""
         result = await self._call_text(event.call_id, event.name, event.arguments)
-        text = (
-            live_result_text(result)
-            if result is not None
-            else live_result_text(live_failure("tool_failed", _TOOL_FAILED))
-        )
-        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
+        if result is None:
+            result = live_failure("tool_failed", _TOOL_FAILED)
+
+        async def send() -> None:
+            projected = self._voice.model_tool_result(event.name, result)
+            await self._wire.deliver_result(event.call_id, live_result_text(projected))
+
+        await self._send_command(send)
 
     async def _call_text(self, call_id: str, name: str, arguments: Any) -> JsonObject | None:
         """Run one call in the voice Session; ``None`` after an internal error."""
@@ -542,9 +556,7 @@ class LiveCallSession:
             timeout += _REQUEST_EXTRA_SECONDS
         task = asyncio.current_task()
         assert task is not None
-        self._voice_calls[task] = called_tool_name(
-            name, [str(tool["name"]) for tool in self._voice.tool_definitions]
-        )
+        self._voice_calls[task] = self._voice.tool_name(name)
         try:
             async with self._delegation_slots:
                 self._set_busy(1)
@@ -919,14 +931,17 @@ class LiveCallSession:
             )
 
 
-def _conversation_text(said: list[tuple[str, str]], partial: dict[str, str]) -> str:
-    lines = [f"{_ROLE_LABELS.get(role, role)}: {text}" for role, text in said]
+def _conversation_text(
+    said: list[tuple[str, str]], partial: dict[str, str], masker: SecretMasker
+) -> str:
+    lines = [f"{_ROLE_LABELS.get(role, role)}: {masker.mask(text)}" for role, text in said]
     lines.extend(
-        f"{_ROLE_LABELS.get(role, role)} (still speaking): {text}"
+        f"{_ROLE_LABELS.get(role, role)} (still speaking): {masker.mask_growing(text)}"
         for role, text in partial.items()
         if text
     )
-    return "\n".join(lines)[-_CONVERSATION_MAX_CHARS:]
+    conversation = "\n".join(lines)
+    return masker.guard_slice(conversation, -_CONVERSATION_MAX_CHARS, len(conversation))
 
 
 def _answer_text(result: JsonObject) -> str:
@@ -941,12 +956,12 @@ def _answer_text(result: JsonObject) -> str:
     return message if isinstance(message, str) and message.strip() else _DELEGATION_FAILED
 
 
-def _render_notice(notice: LiveRunNotice, *, excerpt: bool = True) -> str:
-    payload: JsonObject = {"run": notice.kind, "agent": notice.agent_id}
+def _render_notice(notice: LiveRunNotice, masker: SecretMasker, *, excerpt: bool = True) -> str:
+    payload: JsonObject = {"run": notice.kind, "agent": masker.mask(notice.agent_id)}
     if notice.session_ref:
-        payload["session"] = notice.session_ref
+        payload["session"] = masker.mask(notice.session_ref)
     if excerpt:
-        text = notice.excerpt.strip()
-        payload["result_excerpt"] = text[:_ANNOUNCEMENT_EXCERPT_CHARS]
+        text = masker.mask(notice.excerpt).strip()
+        payload["result_excerpt"] = masker.guard_slice(text, 0, _ANNOUNCEMENT_EXCERPT_CHARS)
         payload["excerpt_truncated"] = notice.truncated or len(text) > _ANNOUNCEMENT_EXCERPT_CHARS
     return f"{LIVE_UPDATE_PREFIX}: {json.dumps(payload, ensure_ascii=False)}"

@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.secrets.agent_secrets import SecretMasker
 
 from core.utils.workers import BoundedWorkerPool
 
@@ -22,7 +26,9 @@ _PATTERN_WORKER = BoundedWorkerPool(name="terminal_pattern", max_workers=2)
 _PATTERN_SECONDS = 0.05
 
 
-def _matching_line(pattern: re.Pattern[str], text: str) -> tuple[str | None, bool]:
+def _matching_line(
+    pattern: re.Pattern[str], text: str, masker: SecretMasker | None, open_end: bool
+) -> tuple[str | None, bool]:
     # regex releases the GIL and bounds the whole search. It cannot load in
     # subinterpreters, so the renderer only supplies the immutable text.
     import regex
@@ -53,7 +59,10 @@ def _matching_line(pattern: re.Pattern[str], text: str) -> tuple[str | None, boo
         return None, False
     start = text.rfind("\n", 0, match.start()) + 1
     end = text.find("\n", match.start())
-    return text[start : len(text) if end < 0 else end], False
+    end = len(text) if end < 0 else end
+    if masker and open_end:
+        end = min(end, masker.growing_boundary(text))
+    return (masker.guard_slice(text, start, end) if masker else text[start:end]), False
 
 
 class TerminalWaits:
@@ -180,7 +189,9 @@ class TerminalWaits:
         """
         async with self._lock:
             found = await self._output.screen.pattern_text(start_line=from_line)
-        matched, exhausted = await _PATTERN_WORKER.run(_matching_line, pattern, found["text"])
+        matched, exhausted = await _PATTERN_WORKER.run(
+            _matching_line, pattern, found["text"], self._services.masker, bool(found["open_end"])
+        )
         return matched, int(found["next_line"]), exhausted
 
     def signal_change(self) -> None:

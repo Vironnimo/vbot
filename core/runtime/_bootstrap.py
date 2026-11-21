@@ -383,6 +383,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime,
             usage_recorder=runtime._usage_recorder,
             local_executor=local_embeddings,
+            secret_masker=lambda: runtime.agent_secrets.masker,
         )
         runtime._decisions = DecisionService(
             runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
@@ -702,12 +703,6 @@ def bootstrap(runtime: Runtime) -> None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
         assert runtime._models is not None
-        agent_secrets = runtime._agent_secrets
-        compaction_service = CompactionService(
-            pricing_lookup=runtime._models.pricing_for,
-            usage_recorder=runtime._usage_recorder,
-            secret_masker=lambda: agent_secrets.masker,
-        )
 
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
@@ -748,7 +743,9 @@ def bootstrap(runtime: Runtime) -> None:
             subject_created_at=lambda agent_id: runtime.agents.get(agent_id).created_at,
         )
         runtime._session_title_service = SessionTitleService(
-            runtime, usage_recorder=runtime._usage_recorder
+            runtime,
+            usage_recorder=runtime._usage_recorder,
+            secret_masker=lambda: runtime.agent_secrets.masker,
         )
         assert runtime._agent_resolver is not None
         assert runtime._projects is not None
@@ -819,7 +816,11 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._chat_loop = ChatLoop(
             chat_dependencies,
             attachment_resolver=resolver,
-            compaction_service=compaction_service,
+            compaction_service=CompactionService(
+                pricing_lookup=runtime._models.pricing_for,
+                usage_recorder=runtime._usage_recorder,
+                secret_masker=chat_dependencies.secret_masker_for,
+            ),
             reflection_service=runtime._reflection_service,
             session_title_service=runtime._session_title_service,
         )

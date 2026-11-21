@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -217,6 +218,8 @@ class ChatMessage:
     # Internal Tool activity retained for History, never part of Model Context.
     programmatic: bool = False
     parent_tool_call_id: str | None = None
+    # Internal write-side evidence on the initial Cron input. Never accepted from JSON.
+    cron_approval_scope: str | None = None
     # Provenance and original record of an imported conversation entry. These
     # are history data, never executable vBot Tool calls or Provider fields.
     external_history: JsonObject | None = None
@@ -239,6 +242,7 @@ class ChatMessage:
         *,
         sender: MessageSender | None = None,
         input_origin: InputOrigin | None = None,
+        cron_approval_scope: str | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a user message."""
@@ -247,6 +251,7 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="user",
             content=content,
+            cron_approval_scope=cron_approval_scope,
             sender=sender,
             input_origin=input_origin,
         )
@@ -781,6 +786,10 @@ class ChatMessage:
     def validate(self) -> None:
         """Validate this message against the role-specific canonical schema."""
         _message_validation._validate_core_fields(self)
+        if self.cron_approval_scope is not None and (
+            self.role != "user" or re.fullmatch(r"[0-9a-f]{64}", self.cron_approval_scope) is None
+        ):
+            raise ChatMessageValidationError("Cron approval requires a User entry and scope digest")
         if self.external_history is not None:
             if not isinstance(self.external_history, dict) or not isinstance(
                 self.external_history.get("source"), str

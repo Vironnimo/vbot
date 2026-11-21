@@ -40,6 +40,7 @@ from server.events import (
 )
 from server.extension_services import bind_application_services
 from server.file_delivery import FileDelivery
+from server.live._context import LIVE_OUTPUT_MASKER
 from server.live.registry import LiveCallRegistry
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
@@ -58,6 +59,7 @@ from server.update_availability import UpdateAvailabilityWatch, owning_installat
 
 if TYPE_CHECKING:
     from core.runtime import Runtime
+    from core.secrets.agent_secrets import SecretMasker
 
 
 JsonObject = dict[str, Any]
@@ -158,11 +160,21 @@ def _build_live_call_registry(state: Any) -> LiveCallRegistry:
     They act for no principal, even when a request's own task runs them.
     """
 
+    def output_masker() -> SecretMasker:
+        return cast("SecretMasker", state.runtime.agent_secrets.masker)
+
     async def dispatch(method: str, params: JsonObject) -> JsonObject:
-        with bound_principal(None):
+        # The Run feed reads outside Tool executions. Other RPCs, including
+        # those starting work asynchronously, keep their own output contracts.
+        with (
+            bound_principal(None),
+            LIVE_OUTPUT_MASKER.set(
+                output_masker if method in {"chat.run_result", "terminal.read"} else None
+            ),
+        ):
             return await dispatch_method(state, method, params, METHODS)
 
-    return LiveCallRegistry(events=state.event_bus, rpc=dispatch)
+    return LiveCallRegistry(events=state.event_bus, rpc=dispatch, output_masker=output_masker)
 
 
 async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:

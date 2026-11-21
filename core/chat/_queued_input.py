@@ -86,6 +86,7 @@ class QueuedChatInput:
             request=replace(
                 self.request,
                 content=content,
+                cron_approval_scope=None,
                 input_origin=input_origin,
                 reply_surface=reply_surface or self.request.reply_surface,
             ),
@@ -128,7 +129,12 @@ async def persist_steering_input(
         )
     message = ChatMessage.user(
         _assign_session_image_references(
-            masked_content(content, dependencies.secret_masker),
+            masked_content(
+                content,
+                dependencies.secret_masker_for(
+                    session.address, passed_only=context.subagent_session
+                ),
+            ),
             context.session_snapshot.active_messages,
         ),
         input_origin=request.input_origin,

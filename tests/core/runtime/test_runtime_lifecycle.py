@@ -32,7 +32,7 @@ from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.projects import PROJECT_FORMAT_VERSION
 from core.providers.accounts import ConnectionRef
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, ProviderStreamingUnsupportedError
 from core.providers.providers import ProviderRegistry
 from core.providers.usage import ProviderUsageService
 from core.runs import Run, RunStatus
@@ -1103,7 +1103,7 @@ async def test_extension_sampling_records_usage_before_returning(
     tool_delta: dict[str, Any] = {}
     try:
         private_value = "test-owned-sampling-value"
-        runtime.agent_secrets.create(
+        sampling_secret = runtime.agent_secrets.create(
             name="SAMPLING",
             kind="token",
             values={"value": private_value},
@@ -1113,6 +1113,7 @@ async def test_extension_sampling_records_usage_before_returning(
 
         async def stream(*_args: object, **_kwargs: object) -> AsyncIterator[dict[str, object]]:
             assert private_value not in repr((_args, _kwargs))
+            assert "UNAVAILABLE_KEY" not in repr((_args, _kwargs))
             if shutdown.begins_mid_call:
                 runtime._started = False  # noqa: SLF001 - shutdown begins mid-call.
             yield {"type": "content_delta", "text": "sample"}
@@ -1145,6 +1146,7 @@ async def test_extension_sampling_records_usage_before_returning(
         context = SimpleNamespace(
             agent_id="agent",
             session_id="session",
+            subagent_session=False,
             project_id=None,
             run_id="run",
             execution_owner=SimpleNamespace(extension="fixture", group_id="group"),
@@ -1165,7 +1167,7 @@ async def test_extension_sampling_records_usage_before_returning(
             "messages": [{"role": "user", "content": private_value}],
             "max_tokens": 100,
             "tools": [{"name": "sample_tool", "description": private_value}],
-            "stop_sequences": [private_value],
+            "stop_sequences": [private_value, "{{secret:UNAVAILABLE_KEY}}"],
         }
         # External sampling clients can execute every returned call, even a
         # native proposal whose name coincides with an advertised sampling Tool.
@@ -1209,5 +1211,24 @@ async def test_extension_sampling_records_usage_before_returning(
             ]
             * 6
         )
+
+        async def refused(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+            assert "{{secret:SAMPLING}}" in repr((args, kwargs))
+            runtime.agent_secrets.delete(sampling_secret.id, actor="user")
+            raise ProviderStreamingUnsupportedError("no stream")
+            yield  # pragma: no cover - make this a refused stream
+
+        async def completed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            assert "SAMPLING" not in repr((args, kwargs))
+            assert private_value not in repr((args, kwargs))
+            return {"content": "{{secret:SAMPLING}}"}
+
+        adapter.stream = refused
+        runtime._started = True  # Restore the test shutdown flag for a fresh request.
+        adapter.send = completed
+        adapter.normalize_response = lambda response, **_: response
+        shutdown.begins_mid_call = False
+        response = await runtime._sample_extension(context, sample_request)
+        assert response["content"] == "[redacted]"
     finally:
         await runtime.aclose()

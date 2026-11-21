@@ -730,10 +730,10 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
 
     completion_loop.start_run.assert_awaited_once()
     # Results reach the Run input and the Session masked.
-    assert "{{secret:GITHUB}}" in completion_loop.start_run.await_args.args[1]
+    assert "background command finished: [redacted]" in completion_loop.start_run.await_args.args[1]
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
-    assert "background command finished: {{secret:GITHUB}}" in notes[0]
+    assert "background command finished: [redacted]" in notes[0]
     assert "hunter2" not in completion_loop.start_run.await_args.args[1] + notes[0]
     assert discovered not in completion_loop.start_run.await_args.args[1] + notes[0]
     captured = secrets.usable(_ADDRESS)

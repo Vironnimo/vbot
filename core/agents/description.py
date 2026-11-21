@@ -13,6 +13,7 @@ from core.chat.streaming import stream_model_response
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
+from core.secrets.agent_secrets import SecretMasker
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ async def suggest_agent_description(
     get_adapter: Callable[[ConnectionRef], ProviderAdapter],
     usage_recorder: UsageRecorder | None,
     workers: BoundedWorkerPool,
+    secret_masker: Callable[[], SecretMasker],
 ) -> str:
     """Draft a description with the Agent's own Model; nothing is saved.
 
@@ -76,14 +78,15 @@ async def suggest_agent_description(
         )
         with guard:
             agent = agents.get(agent_id)
-            facts = _agent_facts(agent, skills_for)
+            masker = secret_masker()
+            facts = _agent_facts(agent, skills_for, masker)
             page = sessions.list_summaries_page([(None, agent_id)], limit=SESSION_TITLE_INPUT_MAX)
             titles = [
                 str(summary.get("title") or summary.get("auto_title") or "").strip()
                 for summary in page.sessions
             ]
-            return agent, facts + _section(
-                "Recent conversation titles", [title for title in titles if title]
+            return agent, masker.mask(
+                facts + _section("Recent conversation titles", [title for title in titles if title])
             )
 
     agent, facts = await sessions.run_async(capture)
@@ -107,25 +110,29 @@ async def suggest_agent_description(
         user_message = f"<agent>\n{facts}</agent>"
         try:
             response = await _request(
-                usage_recorder, adapter, model_id, user_message, "none", usage
+                usage_recorder, adapter, model_id, secret_masker().mask(user_message), "none", usage
             )
         except ProviderError:
             # Some reasoning-mandatory endpoints reject an explicit disable.
-            response = await _request(usage_recorder, adapter, model_id, user_message, "", usage)
+            response = await _request(
+                usage_recorder, adapter, model_id, secret_masker().mask(user_message), "", usage
+            )
     finally:
         if adapter is not None:
             try:
                 await adapter.aclose()
             except Exception:
                 _LOGGER.warning("Failed to close Agent description adapter", exc_info=True)
-    suggestion = _suggestion(response)
+    suggestion = _suggestion(secret_masker().mask_value(response))
     if not suggestion:
         raise AgentDescriptionSuggestionError("The Model returned no description")
     _LOGGER.debug("Drafted Agent description (agent=%s model=%s)", agent.id, model_id)
     return suggestion
 
 
-def _agent_facts(agent: Agent, skills_for: Callable[[str], SkillRegistry]) -> str:
+def _agent_facts(
+    agent: Agent, skills_for: Callable[[str], SkillRegistry], masker: SecretMasker
+) -> str:
     """Name, SOUL.md, own Skills and default Project as labeled sections."""
     facts = _section("Name", [agent.name])
     try:
@@ -133,7 +140,7 @@ def _agent_facts(agent: Agent, skills_for: Callable[[str], SkillRegistry]) -> st
     except FileNotFoundError:
         soul = ""
     if soul:
-        facts += _section("SOUL.md", [soul[:SOUL_INPUT_MAX_CHARACTERS]])
+        facts += _section("SOUL.md", [masker.mask(soul)[:SOUL_INPUT_MAX_CHARACTERS]])
     registry = skills_for(agent.id)
     skills = []
     for name in sorted(registry.always_allowed)[:SKILL_INPUT_MAX]:

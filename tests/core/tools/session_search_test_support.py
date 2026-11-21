@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from core.permissions import PermissionBoundary
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSessionManager
 from core.tools.session_search import SESSION_SEARCH_TOOL_NAME, register_session_search_tool
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
@@ -46,6 +47,7 @@ async def search(
     permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     agents: dict[str, str] | None = None,
     skills: tuple[str, ...] = (),
+    secrets: AgentSecrets | None = None,
 ) -> JsonObject:
     """Call session_search over ``backend`` as the Tool executor does.
 
@@ -59,6 +61,8 @@ async def search(
         return name in skills
 
     registry = ToolRegistry()
+    if secrets:
+        registry.set_secrets(secrets)
     register_session_search_tool(
         registry,
         backend,

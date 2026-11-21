@@ -21,7 +21,7 @@ from core.permissions import (
 )
 from core.runs import RunExecutionOwner, RunKind, is_unattended_run_kind
 from core.runs.run import ApprovalAnswer
-from core.secrets._references import map_strings
+from core.secrets._references import SecretMasker, map_strings
 from core.skills.policy import SkillPackageRef
 from core.tools._display_diff import (
     MAX_DISPLAY_DIFF_LINES,
@@ -421,6 +421,9 @@ class ToolContext:
     prepared_secret_literals: dict[str, str] = field(
         default_factory=dict, repr=False, compare=False
     )
+    _output_secret_masker: Callable[[ToolContext], SecretMasker] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     # The widget the call shows inline in the chat, recorded via ``show_display_widget``;
     # empty when it shows none.
     presentation_widget: JsonObject = field(default_factory=dict, repr=False, compare=False)
@@ -518,15 +521,24 @@ class ToolContext:
 
     def mask_prepared_secrets[T](self, value: T, *, include_keys: bool = False) -> T:
         """Mask exact values prepared for this call, including short values and TOTP."""
+        masker = self._output_secret_masker(self) if self._output_secret_masker else None
+        return self._project_prepared_secrets(value, include_keys=include_keys, masker=masker)
+
+    def _project_prepared_secrets[T](
+        self, value: T, *, include_keys: bool, masker: SecretMasker | None
+    ) -> T:
         literals = self.prepared_secret_literals
         if not literals:
             return value
         # Preserve references already present in a result or display, even if
         # their names contain a short value. Never re-mask a replacement.
-        replacements = {ref: ref for ref in literals.values()}
+        references = {ref: masker.mask(ref) if masker else ref for ref in literals.values()}
+        replacements = dict(references)
         for literal, reference in literals.items():
             if not literal:
                 continue
+            if masker is not None:
+                reference = masker.project_prepared(literal, reference)
             replacements[literal] = reference
             if "\n" in literal:
                 # File changes can preserve or normalize the target's line endings.
@@ -539,6 +551,11 @@ class ToolContext:
             return pattern.sub(lambda match: replacements[match[0]], text)
 
         return cast(T, map_strings(value, hide, include_keys=include_keys))
+
+    def _mask_output_text(self, text: str) -> str:
+        """Project the whole string before a file display takes a bounded excerpt."""
+        text = self.mask_prepared_secrets(text)
+        return self._output_secret_masker(self).mask(text) if self._output_secret_masker else text
 
     async def commit_prepared_secrets(self) -> None:
         """Atomically consume deferred Secret grants immediately before their effect."""
@@ -783,14 +800,20 @@ class ToolContext:
             after,
             destination=destination,
             line_budget=max(0, MAX_DISPLAY_DIFF_LINES - shown),
-            mask=self.mask_prepared_secrets if self.prepared_secret_literals else None,
+            mask=self._mask_output_text,
         )
         block["files"].append(recorded)
         return recorded
 
     def add_display_notice(self, level: str, text: str, *, subject: str | None = None) -> None:
         """Record one notice detail block (``info``, ``warning`` or ``error``) for the user."""
-        self.presentation_details.append(display_notice(level, text, subject=subject))
+        self.presentation_details.append(
+            display_notice(
+                level,
+                self._mask_output_text(text),
+                subject=self._mask_output_text(subject) if subject else subject,
+            )
+        )
 
     def record_secret_uses(self, uses: Sequence[str]) -> None:
         """Name Secrets this call used (``GITHUB.password (terminal)``), never their values."""
@@ -800,11 +823,21 @@ class ToolContext:
 
     def add_display_text(self, label: str, text: str) -> None:
         """Record one labelled text detail block, such as output the result does not hold."""
-        self.presentation_details.append(display_text(label, text=text))
+        self.presentation_details.append(display_text(label, text=self._mask_output_text(text)))
 
     def add_display_results(self, items: Sequence[Mapping[str, str | None]]) -> None:
         """Record the things a call found as one results detail block (``display_results``)."""
-        self.presentation_details.append(display_results(items))
+        self.presentation_details.append(
+            display_results(
+                [
+                    {
+                        key: self._mask_output_text(value) if value else value
+                        for key, value in item.items()
+                    }
+                    for item in items
+                ]
+            )
+        )
 
     def add_display_media(
         self,

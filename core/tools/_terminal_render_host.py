@@ -9,7 +9,7 @@ subinterpreter can start.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.tools import terminal_emulator
 from core.tools.terminal_emulator import EmulatorUpdate, ScreenObservation, TerminalEmulator
@@ -17,6 +17,9 @@ from core.tools.terminal_emulator import EmulatorUpdate, ScreenObservation, Term
 from . import _terminal_cells, _terminal_control, _terminal_vt_screen, _terminal_vt_types
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
 from ._terminal_state import TERMINAL_MAX_ROWS
+
+if TYPE_CHECKING:
+    from core.secrets.agent_secrets import SecretMasker
 
 
 class TerminalScreen:
@@ -42,23 +45,52 @@ class TerminalScreen:
         self.rows = rows
         await self._emulator.call("resize", columns, rows)
 
-    async def observe(self) -> ScreenObservation:
+    async def observe(
+        self, masker: SecretMasker | None = None, *, running: bool = False
+    ) -> ScreenObservation:
         observation: ScreenObservation = await self._emulator.call("observe")
+        if masker and observation.screen:
+            display = await self.guard_rows(
+                observation.screen, observation.screen_start_line, masker, running=running
+            )
+            return observation._replace(screen=display)
         return observation
+
+    async def guard_rows(
+        self, display: str, start: int, masker: SecretMasker, *, running: bool
+    ) -> str:
+        """Callers hold the Session lock across the rendered view and its source window."""
+        source, spans, open_end = await self._emulator.call(
+            "model_window", start, display.count("\n") + 1, masker.window_context
+        )
+        return masker.guard_rows(source, spans, display, growing=running and open_end)
 
     async def screen_text(self) -> str:
         text: str = await self._emulator.call("screen_text")
         return text
 
-    async def page(self, *, start_line: int | None, limit: int) -> dict[str, Any]:
+    async def page(
+        self,
+        *,
+        start_line: int | None,
+        limit: int,
+        masker: SecretMasker | None = None,
+        running: bool = False,
+    ) -> dict[str, Any]:
         page: dict[str, Any] = await self._emulator.call("page", start_line=start_line, limit=limit)
+        if masker and page["text"]:
+            page["text"] = await self.guard_rows(
+                page["text"], page["start_line"], masker, running=running
+            )
         return page
 
     async def mark_input(self) -> None:
         await self._emulator.call("mark_input")
 
     async def pattern_text(self, *, start_line: int | None) -> dict[str, Any]:
-        found: dict[str, Any] = await self._emulator.call("pattern_text", start_line=start_line)
+        found: dict[str, Any] = await self._emulator.call(
+            "pattern_text", start_line=start_line, track_end=True
+        )
         return found
 
     async def ansi_snapshot(self) -> str:

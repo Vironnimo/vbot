@@ -411,6 +411,7 @@ class Runtime(RuntimeServiceGraph):
             get_adapter=self.get_adapter,
             usage_recorder=self.usage_recorder,
             workers=_RUNTIME_WORKERS,
+            secret_masker=lambda: self.agent_secrets.masker,
         )
 
     def activate_bootstrap(self) -> None:

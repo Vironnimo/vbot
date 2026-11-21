@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, override
@@ -12,6 +13,7 @@ import pytest
 
 import core.tools._terminal_state as terminal_state
 from core.event_stream import retained_event_size
+from core.secrets.agent_secrets import SecretMasker
 from core.tools._terminal_catalog import resolve_root_view
 from core.tools._terminal_state import TerminalOwner, TerminalSessionView
 from core.tools.terminal_manager import (
@@ -257,6 +259,81 @@ async def test_operator_read_preserves_binding_and_rejects_stale_guarded_input(
     with pytest.raises(TerminalStaleScreenError):
         await manager.send_operator_input(terminal_id, "second", expected_screen_revision=revision)
     assert terminal_info(manager, terminal_id).attachment == owner()
+
+
+@pytest.mark.asyncio
+async def test_model_views_guard_secrets_split_by_the_terminal(tmp_path: Path) -> None:
+    factory = AdapterFactory()
+    raw = "synthetic-terminal-value"
+    ref = "{{secret:TERMINAL_PRIVATE}}"
+    long_value = "synthetic-length-" + "0123456789" * 120 + "-complete"
+    masker = SecretMasker(dict.fromkeys((raw, long_value), "[redacted]"), filter_references=True)
+    manager = _manager(factory, output_masker=lambda: masker)
+    manager.start()
+    try:
+        started = await manager.spawn(
+            owner(),
+            ["codex"],
+            cwd=tmp_path,
+            env=None,
+            columns=40,
+            rows=10,
+            origin_run_id="run-live",
+        )
+        terminal_id = started.terminal_id
+        factory.adapters[0].emit(
+            "x" * 25
+            + ref
+            + "\r\n"
+            + "y" * 29
+            + raw
+            + "\r\n"
+            + "a\r\n" * 7
+            + "\x1b[7mordinary\x1b[0m "
+            + ref
+            + " OK"
+        )
+        await eventually(lambda: screen_shows(manager, terminal_id, " OK"))
+        ordinary = await manager.read_for_operator(terminal_id)
+        page = await manager.read(terminal_id, start_line=0, lines=1)
+        model = await manager.snapshot(terminal_id, owner())
+        live = await manager.read_for_operator(terminal_id, live_masker=masker)
+        assert "live_screen" not in ordinary
+        assert "{{secret:TERMIN" in ordinary["scrollback"]["text"]
+        assert "synthetic-t" in ordinary["screen"] + ordinary["scrollback"]["text"]
+        assert "{{secret:TERMIN" not in page["scrollback"]["text"]
+        for view in (model["screen"], live["live_screen"]):
+            assert "PRIVATE}}" not in view.replace(ref, "")
+            assert "synthetic-t" not in view and "erminal-value" not in view
+            assert ref in view and " OK" in view
+        assert live["screen"] == ordinary["screen"]
+        for incomplete, ending in (("{{secret:STREAM_PRIV", "ATE}}"), (raw[:12], raw[12:])):
+            factory.adapters[0].emit("\r\nready " + incomplete)
+            await eventually(
+                lambda incomplete=incomplete: screen_shows(manager, terminal_id, incomplete)
+            )
+            assert incomplete not in (await manager.snapshot(terminal_id, owner()))["screen"]
+            live = await manager.read_for_operator(terminal_id, live_masker=masker)
+            assert live["screen"].endswith(incomplete)
+            assert live["live_screen"].endswith("ready ")
+            matched: list[str] = []
+            assert (
+                await manager.wait(
+                    terminal_id,
+                    owner(),
+                    seconds=1,
+                    pattern=re.compile(re.escape("ready " + incomplete)),
+                    on_match=matched.append,
+                )
+                == "matched"
+            )
+            assert matched == ["ready "]
+            factory.adapters[0].emit(ending)
+        factory.adapters[0].emit("\r\n" + long_value[:-9])
+        await eventually(lambda: screen_shows(manager, terminal_id, "0123456789"))
+        assert "0123456789" not in (await manager.snapshot(terminal_id, owner()))["screen"]
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

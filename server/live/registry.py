@@ -19,7 +19,7 @@ from typing import Any, Protocol
 from core.model_tasks.live import LiveCall, LiveCallHost
 from server.events import ServerEventBus
 from server.live._call import LiveCallEntry, LiveCallLimits
-from server.live._context import RpcInvoker
+from server.live._context import LiveMasker, RpcInvoker
 from server.live.owner import LiveOwnerStream
 
 JsonObject = dict[str, Any]
@@ -68,9 +68,11 @@ class LiveCallRegistry:
         rpc: RpcInvoker,
         limits: LiveCallLimits | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        output_masker: LiveMasker | None = None,
     ) -> None:
         self._events = events
         self._rpc = rpc
+        self._output_masker = output_masker
         self._limits = limits or LiveCallLimits()
         self._clock = clock
         self._start_lock = asyncio.Lock()
@@ -113,6 +115,7 @@ class LiveCallRegistry:
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
                 wake_phrases=wake_phrases,
+                output_masker=self._output_masker,
             )
             call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
             if self._closed:

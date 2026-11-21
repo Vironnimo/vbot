@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.computers import normalize_execution
 from core.runs import RunExecutionOwner
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import SessionAddress
 from core.sessions.errors import SessionNotFoundError
 from core.storage.temp_files import TemporaryFileManager
@@ -148,6 +149,7 @@ class TerminalManager:
         computers: ComputerRegistry | None = None,
         session_execution: Callable[[SessionAddress], Any] | None = None,
         output_allowed: Callable[[SessionAddress, TerminalInfo], Awaitable[bool]] | None = None,
+        output_masker: Callable[[], SecretMasker] | None = None,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
         does not show; without it, only output and declared signals show work.
@@ -227,10 +229,15 @@ class TerminalManager:
             open_screen=self._factory.open_screen,
             granted=partial(_session_grants_computer, session_execution),
             output_allowed=output_allowed,
+            output_masker=output_masker,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
     # Operator catalog
+
+    def output_masker(self) -> SecretMasker | None:
+        """Current matches for keeping Secrets intact through Terminal result formatting."""
+        return self._services.masker
 
     def add_changed_callback(self, callback: TerminalChangedCallback) -> Callable[[], None]:
         """Notify transport edges when operator-visible Terminal state changes."""
@@ -734,9 +741,11 @@ class TerminalManager:
             async for event in events:
                 yield event
 
-    async def read_for_operator(self, terminal_id: str) -> dict[str, Any]:
+    async def read_for_operator(
+        self, terminal_id: str, *, live_masker: SecretMasker | None = None
+    ) -> dict[str, Any]:
         """Read a bounded screen without changing any Agent's observation or binding."""
-        return await self._get(terminal_id).read_for_operator()
+        return await self._get(terminal_id).read_for_operator(live_masker=live_masker)
 
     async def send_operator_input(
         self,

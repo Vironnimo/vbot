@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, override
 from urllib.parse import urlsplit, urlunsplit
 
@@ -151,6 +151,7 @@ class ProviderDecisionClient(ProviderTaskClient):
         profile: DecisionProfile | None = None,
         options: Mapping[str, Any] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         if profile is None:
             binding = standalone_wire_binding(
@@ -172,6 +173,7 @@ class ProviderDecisionClient(ProviderTaskClient):
                 http_client=http_client,
                 retry_policy=DEFAULT_TASK_REQUEST_RETRY_POLICY,
                 json=body,
+                before_send=before_send,
                 parse=lambda response: _parse(response, questions, profile, ids, self._model_id),
             )
         except ProviderContentRefusedError:

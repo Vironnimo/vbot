@@ -88,7 +88,9 @@ from core.chat.messages import (
     MessageSender,
     error_kind_llm_visible,
 )
+from core.providers._tool_calls import _normalize_tool_call_ids
 from core.providers.adapter import (
+    MISTRAL_TOOL_CALL_ID_PROFILE,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     RequestContextText,
     neutralize_system_reminder_tags,
@@ -275,10 +277,9 @@ def model_facing_request(
     call arguments are never neutralized. The projection is deterministic and
     returns unchanged items as they are; persisted history is never modified.
 
-    ``masker`` replaces every Secret value vBot knows with its reference in all
-    readable text, System messages and Tool call arguments included, so a value
-    that slipped past the masking of results and input never reaches a Provider
-    (``core.secrets.agent_secrets``). Media and ``reasoning_meta`` stay as they are.
+    The receiving Session's masker projects known values and stored references
+    in readable messages, Tool definitions and their arguments. Native Reasoning
+    metadata that would need masking is omitted as a unit to preserve signatures.
     """
 
     def renamed(item: JsonObject) -> JsonObject:
@@ -288,7 +289,7 @@ def model_facing_request(
         return {**item, "name": model_tool_name(name)}
 
     projected: list[JsonObject] = []
-    for message in messages:
+    for message in mask_request_messages(messages, masker):
         if message.get("programmatic"):
             continue
         role = message.get("role")
@@ -309,29 +310,60 @@ def model_facing_request(
         elif role == "tool":
             _neutralize_field(message, TOOL_RESULT_CONTENT_BLOCKS_FIELD, changes)
             message = renamed(message)
-        if masker:
-            _mask_message(message, changes, masker)
         projected.append({**message, **changes} if changes else message)
-    return projected, [renamed(tool) for tool in tools]
+    return projected, [masker.mask_value(renamed(tool), include_keys=True) for tool in tools]
 
 
-def _mask_message(message: JsonObject, changes: JsonObject, masker: SecretMasker) -> None:
-    """Record in ``changes`` every readable field of ``message`` that masking changes."""
+def mask_request_messages(messages: list[JsonObject], masker: SecretMasker) -> list[JsonObject]:
+    """Mask outgoing history while preserving paired, request-unique Tool Call IDs."""
+    if not masker:
+        return messages
+    # Nine alphanumeric characters are valid on every supported Provider wire.
+    paired = _normalize_tool_call_ids(
+        messages, MISTRAL_TOOL_CALL_ID_PROFILE, protect=masker.contains
+    )
+    return [_mask_request_message(message, masker) for message in paired]
 
-    for key in ("content", "reasoning", TOOL_RESULT_CONTENT_BLOCKS_FIELD):
-        value = changes.get(key, message.get(key))
+
+def _mask_request_message(message: JsonObject, masker: SecretMasker) -> JsonObject:
+    """Project Secret visibility without applying Provider or reminder-tag transformations."""
+    original = message
+    if masker.filters_references:
+        from core.chat._secret_history import project_secret_history
+
+        message = project_secret_history(message, masker)
+    reprojected = message is not original
+    changes: JsonObject = {}
+
+    for key in ("content", "reasoning", "name", "tool_call_id", TOOL_RESULT_CONTENT_BLOCKS_FIELD):
+        value = message.get(key)
+        if key == "content" and message.get("role") == "system" and isinstance(value, str):
+            from core.chat._secret_history import mask_secret_catalog_prompt
+
+            projected = mask_secret_catalog_prompt(value, masker)
+            if projected is not None:
+                changes[key] = projected
+                continue
         masked = _masked_text(value, masker)
         if masked is not value:
             changes[key] = masked
-    calls = changes.get("tool_calls", message.get("tool_calls"))
+            reprojected = True
+    calls = message.get("tool_calls")
     if isinstance(calls, list):
-        masked_calls = masker.mask_value(calls)
+        masked_calls = masker.mask_value(calls, include_keys=True)
         if masked_calls is not calls:
             changes["tool_calls"] = masked_calls
+            reprojected = True
+    metadata = message.get("reasoning_meta")
+    if metadata is not None and (
+        reprojected or masker.mask_value(metadata, include_keys=True) is not metadata
+    ):
+        changes["reasoning_meta"] = None
+    return {**message, **changes} if changes else message
 
 
 def _masked_text(value: Any, masker: SecretMasker) -> Any:
-    """Mask a string, or the ``text`` of each block in a content list; ``value`` if unchanged."""
+    """Mask readable block fields while preserving binary payloads and storage identifiers."""
 
     if isinstance(value, str):
         if not masker.contains(value):
@@ -344,13 +376,15 @@ def _masked_text(value: Any, masker: SecretMasker) -> Any:
     blocks = list(value)
     changed = False
     for index, block in enumerate(blocks):
-        if (
-            isinstance(block, dict)
-            and isinstance(text := block.get("text"), str)
-            and masker.contains(text)
-        ):
-            blocks[index] = {**block, "text": masker.mask(text)}
-            changed = True
+        if isinstance(block, dict):
+            fields = {
+                key: masker.mask(text)
+                for key in ("text", "filename", "path", "transcription", "media_type")
+                if isinstance(text := block.get(key), str) and masker.contains(text)
+            }
+            if fields:
+                blocks[index] = {**block, **fields}
+                changed = True
     return blocks if changed else value
 
 

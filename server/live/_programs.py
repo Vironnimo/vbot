@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
+from server.live._context import live_layout_text, live_slice
+
 # A line where the shell started a program: PowerShell's ``PS C:\work``, cmd's
 # ``C:\work>``, or a POSIX ``user@host`` prompt (bash ``:~/dir$``, zsh ``%``,
 # fish ``>``) followed by the command. A long prompt wraps onto following
@@ -157,14 +159,22 @@ def program_prompt(program: CodingProgram, screen: str) -> CliPrompt | None:
     return None
 
 
-def selected_answer(program: CodingProgram, screen: str) -> str | None:
+def selected_answer(program: CodingProgram, screen: str, *, display: bool = False) -> str | None:
     """The selected answer of the menu or question on screen, without its number."""
-    selection = _last_marker_line(program, _program_area(screen))
+    area = _program_area(screen)
+    selection = _last_marker_line(program, area)
     if selection is None:
         return None
-    text = _marker_text(selection).strip()
+    raw = _marker_text(selection)
+    text = raw.strip()
     numbered = _NUMBERED.match(text)
-    return text[numbered.end() :].strip() if numbered else text
+    answer = text[numbered.end() :].strip() if numbered else text
+    if not display or not answer:
+        return answer
+    # Anchor the displayed span in the full screen, including anything hidden
+    # by the selection marker, list number, line ending or shell prompt.
+    end = len(screen) - len(area) + selection.start(1) + len(raw.rstrip())
+    return live_slice(screen, end - len(answer), end)
 
 
 def program_ready(program: CodingProgram, screen: str) -> bool:
@@ -237,11 +247,16 @@ def program_start_failure(program: CodingProgram, screen: str) -> str | None:
         line_end = screen.find("\n", start.start())
         if line_end < 0 or command.search(screen[start.start() : line_end]) is None:
             continue
-        lines = [line.strip() for line in screen[line_end + 1 :].splitlines() if line.strip()]
+        output = live_slice(screen, line_end + 1, len(screen))
+        lines = [line.strip() for line in live_layout_text(output).splitlines() if line.strip()]
         if not lines:
             return None
         shown = " ".join(lines[:-1]) or "(no output)"
-        return shown if len(shown) <= _START_FAILURE_CHARS else shown[:_START_FAILURE_CHARS] + "..."
+        return (
+            shown
+            if len(shown) <= _START_FAILURE_CHARS
+            else live_slice(shown, 0, _START_FAILURE_CHARS) + "..."
+        )
     return None
 
 

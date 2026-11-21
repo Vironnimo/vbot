@@ -16,10 +16,28 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from core.secrets.agent_secrets import SecretMasker
+
 JsonObject = dict[str, Any]
 RpcInvoker = Callable[[str, JsonObject], Awaitable[JsonObject]]
 UiRequester = Callable[[str, JsonObject], Awaitable[JsonObject]]
 AppContext = Callable[[], JsonObject | None]
+type LiveMasker = Callable[[], SecretMasker]
+
+# Intermediate Live text can be consumed by both the voice and backend Sessions.
+# Keep complete matches until their own Model boundaries choose the projection.
+LIVE_OUTPUT_MASKER: ContextVar[LiveMasker | None] = ContextVar("live_output_masker", default=None)
+
+
+def live_slice(text: str, start: int, end: int) -> str:
+    masker = LIVE_OUTPUT_MASKER.get()
+    return masker().guard_slice(text, start, end) if masker else text[start:end]
+
+
+def live_layout_text(text: str) -> str:
+    masker = LIVE_OUTPUT_MASKER.get()
+    return masker().guard_layout(text) if masker else text
+
 
 UI_ACTION_OPEN = "open"
 UI_ACTION_TERMINAL_VIEW = "terminal_view"
