@@ -78,6 +78,7 @@ from core.chat.wire_shaping import _strip_assistant_reasoning_fields, extend_req
 from core.extensions import HookContext, SessionRequestContext
 from core.performance import measure, session_track
 from core.runs import (
+    COMPACTION_ABORTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     USER_MESSAGE_EVENT,
     Run,
@@ -253,7 +254,11 @@ class RunExecution:
                 return await self._execute_run_impl(context)
             finally:
                 if run.compaction_state == "pending":
-                    run.emit("compaction_aborted", {"reason": "run_finished"})
+                    run.emit(
+                        COMPACTION_ABORTED_EVENT,
+                        {"reason": "run_finished"},
+                        allow_after_cancel=True,
+                    )
         except BaseException as exc:
             if (
                 isinstance(exc, Exception)
