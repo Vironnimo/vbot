@@ -88,6 +88,8 @@ Because the fake Provider's own timing is known, the report can separate vBot's 
 
 Output: `perf-results/load-<UTC>/` with `report.md`, `result.json` and one `level-NN/` folder per level (`runs.json`, `provider-requests.json`, `recording-summary.json`, the Perfetto trace, server logs, the server's `performance-history/` windows, and depending on the options `participants.json`, `heap.json`, `flamegraph.svg` / `ui-probe.log` / `ui-profile.cpuprofile`).
 
+Each entry in `runs.json` includes the measured Tool calls and durations. Match `tool_timings[].call_id` to `provider-requests.json` and the Run id to the recording to inspect an individual slow step.
+
 The report also lists the recording's **counters** (`events.*`, `webui.*`, top 25; all of them are in `result.json`). They show the push traffic behind the load: how many `/ws` events, SSE events and invalidations per kind the level caused.
 
 `--ui` needs Node.js, `npm ci` in `scripts/perf_load_suite/ui-probe` (the probe's own Playwright install) and a built WebUI. It reports Long Tasks and frame gaps in the browser while the load runs, and counts every `/api/rpc` request the browser makes, per method, including those of Extension page frames (`extensions.operation` is split into `extensions.operation:<extension>/<operation>`). The table *UI RPC calls by method* shows calls, total and maximum browser-side time and failures. A method called about every two seconds while nothing changes is polling; a burst after every Run event is a reload wave, which the server counters `webui.invalidation_rpcs.<kind>.<method>` attribute to the invalidation kind that caused it.
