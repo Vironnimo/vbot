@@ -287,42 +287,50 @@ class _Histories:
     projects: Mapping[str, tuple[Path, list[MemoryRevision]]]
 
     def changes(self, agent_id: str, run_id: str) -> RunLearningChanges:
-        memory_undone = _undone(self.memory)
-        changes = [
-            LearningChange(
-                store="memory",
-                kind=entry.kind,
-                revisions=tuple(entry.revisions),
-                undone=all(revision in memory_undone for revision in entry.revisions),
-                scope=entry.scope,
-                text=_preview(entry.shown),
-            )
-            for entry in _net_memory_changes(self.memory, run_id)
-        ]
-        for project_id, (_, memory_revisions) in self.projects.items():
-            undone = _undone(memory_revisions)
-            changes.extend(
-                LearningChange(
-                    store="memory",
-                    kind=entry.kind,
-                    revisions=tuple(entry.revisions),
-                    undone=all(revision in undone for revision in entry.revisions),
-                    scope=entry.scope,
-                    text=_preview(entry.shown),
-                    project_id=project_id,
-                )
-                for entry in _net_memory_changes(memory_revisions, run_id, agent_id=agent_id)
-            )
-        for owner_id, (_, history) in self.skills.items():
-            undone = _undone(history)
-            for skill, revisions in _skill_revisions(history, run_id).items():
-                changes.append(
-                    replace(
-                        _skill_change(skill, revisions, undone),
-                        skill_owner_id=owner_id if owner_id != agent_id else None,
+        return self.changes_for_runs(agent_id, {run_id})[run_id]
+
+    def changes_for_runs(self, agent_id: str, wanted: set[str]) -> dict[str, RunLearningChanges]:
+        changes: dict[str, list[LearningChange]] = {run_id: [] for run_id in wanted}
+        memory_homes: list[tuple[str | None, list[MemoryRevision]]] = [(None, self.memory)]
+        memory_homes.extend((key, revisions) for key, (_, revisions) in self.projects.items())
+        for project_id, revisions in memory_homes:
+            by_run = _by_requested_run(revisions, wanted)
+            if not by_run:
+                continue
+            # Reverts can belong to another Run, so resolve them over the whole home.
+            undone = _undone(revisions)
+            for run_id, edits in by_run.items():
+                for entry in _net_memory_changes(
+                    edits, run_id, agent_id=agent_id if project_id is not None else None
+                ):
+                    changes[run_id].append(
+                        LearningChange(
+                            store="memory",
+                            kind=entry.kind,
+                            revisions=tuple(entry.revisions),
+                            undone=all(revision in undone for revision in entry.revisions),
+                            scope=entry.scope,
+                            text=_preview(entry.shown),
+                            project_id=project_id,
+                        )
                     )
-                )
-        return RunLearningChanges(agent_id, run_id, tuple(changes))
+        for owner_id, (_, history) in self.skills.items():
+            skill_runs = _by_requested_run(history, wanted)
+            if not skill_runs:
+                continue
+            undone = _undone(history)
+            for run_id, writes in skill_runs.items():
+                for skill, skill_edits in _skill_revisions(writes, run_id).items():
+                    changes[run_id].append(
+                        replace(
+                            _skill_change(skill, skill_edits, undone),
+                            skill_owner_id=owner_id if owner_id != agent_id else None,
+                        )
+                    )
+        return {
+            run_id: RunLearningChanges(agent_id, run_id, tuple(entries))
+            for run_id, entries in changes.items()
+        }
 
     def pending_memory(self, run_id: str) -> list[int]:
         """Return the Run's personal Memory revisions not undone yet, oldest first.
@@ -390,6 +398,15 @@ class _Histories:
                     )
                 )
         return plans
+
+
+def _by_requested_run[T: _Revision](history: Sequence[T], wanted: set[str]) -> dict[str, list[T]]:
+    by_run: dict[str, list[T]] = {}
+    for revision in history:
+        run_id = revision.run_id
+        if run_id is not None and run_id in wanted:
+            by_run.setdefault(run_id, []).append(revision)
+    return by_run
 
 
 def _skill_revisions(
@@ -462,7 +479,7 @@ class LearningChanges:
         _check_ids(agent_id, run_id)
         with self._agent_guard(), self._project_guard():
             histories = self._read(agent_id)
-            self._check_skill_subject(histories, agent_id, run_id)
+            self._check_skill_subjects(histories, agent_id, [run_id])
             return histories.changes(agent_id, run_id)
 
     def summaries(self, agent_id: str, run_ids: Iterable[str]) -> dict[str, LearningSummary]:
@@ -473,9 +490,9 @@ class LearningChanges:
             return {}
         with self._agent_guard(), self._project_guard():
             histories = self._read(agent_id)
-            for run_id in wanted:
-                self._check_skill_subject(histories, agent_id, run_id)
-            return {run_id: histories.changes(agent_id, run_id).summary for run_id in wanted}
+            self._check_skill_subjects(histories, agent_id, wanted)
+            changes = histories.changes_for_runs(agent_id, set(wanted))
+            return {run_id: changes[run_id].summary for run_id in wanted}
 
     def undo(
         self,
@@ -519,7 +536,9 @@ class LearningChanges:
             if self._run_active(run_id):
                 raise LearningRunActiveError(run_id)
             histories = self._read(agent_id)
-            self._check_skill_subject(histories, agent_id, run_id, validated=validate is not None)
+            self._check_skill_subjects(
+                histories, agent_id, [run_id], validated=validate is not None
+            )
             skill_plans = histories.skill_undos(run_id, skill_revisions or {})
             memory_plans = histories.memory_undos(agent_id, run_id, workspace)
             if not memory_plans and not skill_plans:
@@ -602,11 +621,11 @@ class LearningChanges:
             after = self._read(agent_id).changes(agent_id, run_id)
             return LearningUndoResult(after, memory_changed, bool(skill_plans))
 
-    def _check_skill_subject(
+    def _check_skill_subjects(
         self,
         histories: _Histories,
         agent_id: str,
-        run_id: str,
+        run_ids: Sequence[str],
         *,
         validated: bool = False,
     ) -> None:
@@ -621,34 +640,35 @@ class LearningChanges:
         identity = self._subject_created_at(agent_id)
         if identity is None:
             raise LearningError(f"Agent '{agent_id}' is unavailable.")
-        revisions = [
-            (owner_id, revision)
-            for owner_id, (_, history) in histories.skills.items()
-            for revision in history
-            if revision.run_id == run_id and revision.kind != "revert"
-        ]
-        stamped = {
-            revision.subject_created_at
-            for _, revision in revisions
-            if revision.subject_created_at is not None
+        wanted = set(run_ids)
+        memory_runs = {
+            revision.run_id
+            for revision in histories.memory
+            if revision.kind == "edit" and revision.run_id in wanted
         }
-        if stamped and stamped != {identity}:
-            raise LearningError(f"Run '{run_id}' does not belong to this Agent '{agent_id}'.")
-        if (
-            stamped
-            or validated
-            or any(
-                revision.run_id == run_id and revision.kind == "edit"
-                for revision in histories.memory
-            )
-        ):
-            return
-        if any(owner_id != agent_id for owner_id, _ in revisions):
-            raise LearningError(
-                "This Run changed shared Skills before its writing Agent was recorded. "
-                "Those changes cannot be assigned safely. Inspect and revert them in each "
-                "owner's Skill history instead."
-            )
+        writes: dict[str, list[tuple[str, SkillRevision]]] = {}
+        for owner_id, (_, history) in histories.skills.items():
+            for revision in history:
+                run_id = revision.run_id
+                if run_id is not None and run_id in wanted and revision.kind != "revert":
+                    writes.setdefault(run_id, []).append((owner_id, revision))
+        for run_id in run_ids:
+            revisions = writes.get(run_id, [])
+            stamped = {
+                revision.subject_created_at
+                for _, revision in revisions
+                if revision.subject_created_at is not None
+            }
+            if stamped and stamped != {identity}:
+                raise LearningError(f"Run '{run_id}' does not belong to this Agent '{agent_id}'.")
+            if stamped or validated or run_id in memory_runs:
+                continue
+            if any(owner_id != agent_id for owner_id, _ in revisions):
+                raise LearningError(
+                    "This Run changed shared Skills before its writing Agent was recorded. "
+                    "Those changes cannot be assigned safely. Inspect and revert them in each "
+                    "owner's Skill history instead."
+                )
 
     def _read(self, agent_id: str) -> _Histories:
         try:

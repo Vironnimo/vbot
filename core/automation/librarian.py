@@ -83,7 +83,7 @@ from core.agents import (
 from core.automation._librarian_library import (
     _attended_changes,
     _by_run,
-    _counts,
+    _counts_by_run,
     _fingerprint,
     _inactive,
     _latest_revisions,
@@ -302,9 +302,8 @@ class LibrarianService:
         active = self._active.get(agent_id)
         if active is None:
             state = state.settled()
-        passes = await _LIBRARIAN_WORKERS.run(self._reported_passes, agent_id, state.passes)
+        passes, changes = await _LIBRARIAN_WORKERS.run(self._status_passes, agent_id, state.passes)
         last_pass = passes[0] if passes else None
-        changes = await _LIBRARIAN_WORKERS.run(self._pass_revisions, agent_id, last_pass)
         problem, blocked = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
         unscheduled = blocked or (None if settings["enabled"] else "schedule_disabled")
         next_due = None
@@ -463,7 +462,12 @@ class LibrarianService:
     ) -> set[str]:
         with self._runtime.agents.lifecycle_guard():
             record = self._pass_to_undo(agent_id, started_at, agent_created_at)
-            owners = {owner for owner, _revision in self._pass_revisions(agent_id, record)}
+            owners = {
+                owner
+                for owner, _revision in self._pass_revisions(
+                    agent_id, record, self._recorded_homes(agent_id)
+                )
+            }
 
         def validate() -> None:
             # Learning owns the lock order: undo lock, Agent guard, Project guard,
@@ -669,7 +673,7 @@ class LibrarianService:
     ) -> tuple[LibrarianProblem | None, list[dict[str, Any]]]:
         """The Librarian's problem and the recent passes over all Agents. Blocking."""
         problem = self._runtime.agents.librarian_problem()
-        passes: list[dict[str, Any]] = []
+        passes: list[tuple[str, str, LibrarianPass]] = []
         for agent in self._runtime.agents.list():
             try:
                 state = self._read_state(agent.id)
@@ -677,12 +681,21 @@ class LibrarianService:
                 continue
             if agent.id not in running:
                 state = state.settled()
-            passes.extend(
-                {"agent_id": agent.id, "agent_name": agent.name, **record.to_dict()}
-                for record in self._reported_passes(agent.id, state.passes)
+            passes.extend((agent.id, agent.name, record) for record in state.passes)
+        passes.sort(key=lambda item: item[2].started_at, reverse=True)
+        recent = passes[:LIBRARIAN_OVERVIEW_PASSES]
+        records = [record for _, _, record in recent]
+        history = (
+            self._recorded_homes(*(owner for owner, _, _ in recent))
+            if any(record.run_id is not None for record in records)
+            else {}
+        )
+        return problem, [
+            {"agent_id": owner, "agent_name": name, **record.to_dict()}
+            for (owner, name, _), record in zip(
+                recent, self._reported_passes(records, history), strict=True
             )
-        passes.sort(key=lambda record: str(record["started_at"]), reverse=True)
-        return problem, passes[:LIBRARIAN_OVERVIEW_PASSES]
+        ]
 
     def _begin(
         self, agent_id: str, trigger: PassTrigger, agent: Any, *, agent_created_at: str
@@ -1008,7 +1021,7 @@ class LibrarianService:
 
     def _run_counts(self, agent_id: str, run_id: str) -> tuple[int, int, int]:
         """Count the Skills a consolidation Run created, changed and merged away."""
-        return _counts(self._recorded_homes(agent_id), run_id)
+        return _counts_by_run(self._recorded_homes(agent_id), {run_id})[run_id]
 
     # -- state -------------------------------------------------------------------
 
@@ -1082,7 +1095,7 @@ class LibrarianService:
             )
 
     def _pass_revisions(
-        self, agent_id: str, record: LibrarianPass | None
+        self, agent_id: str, record: LibrarianPass | None, history: dict[str, list[SkillRevision]]
     ) -> list[tuple[str, SkillRevision]]:
         """The Skill revisions a pass recorded, newest first."""
         if record is None:
@@ -1090,16 +1103,18 @@ class LibrarianService:
         archived = set(record.archived_revisions)
         revisions = [
             (owner, revision)
-            for owner, history in self._recorded_homes(agent_id).items()
-            for revision in history
+            for owner, revisions in history.items()
+            for revision in revisions
             if (owner == agent_id and revision.id in archived) or _by_run(revision, record.run_id)
         ]
         return sorted(revisions, key=lambda item: (item[1].at, item[1].id, item[0]), reverse=True)
 
-    def _recorded_homes(self, agent_id: str) -> dict[str, list[SkillRevision]]:
+    def _recorded_homes(self, *agent_ids: str) -> dict[str, list[SkillRevision]]:
         """Read each current owner's history once, independent of current shares."""
         with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
-            owners = {agent.id for agent in self._runtime.agents.list_with_builtins()} | {agent_id}
+            owners = {agent.id for agent in self._runtime.agents.list_with_builtins()} | set(
+                agent_ids
+            )
             return {owner: self._recorded_revisions(owner) for owner in sorted(owners)}
 
     def _recorded_revisions(self, agent_id: str) -> list[SkillRevision]:
@@ -1113,17 +1128,27 @@ class LibrarianService:
         except SkillAuthoringError:
             return []
 
-    def _reported_passes(
+    def _status_passes(
         self, agent_id: str, passes: Sequence[LibrarianPass]
+    ) -> tuple[tuple[LibrarianPass, ...], list[tuple[str, SkillRevision]]]:
+        if not passes:
+            return (), []
+        history = self._recorded_homes(agent_id)
+        reported = self._reported_passes(passes, history)
+        return reported, self._pass_revisions(agent_id, reported[0], history)
+
+    def _reported_passes(
+        self, passes: Sequence[LibrarianPass], history: dict[str, list[SkillRevision]]
     ) -> tuple[LibrarianPass, ...]:
         """Reconstruct Run counts, including shared writes absent from older pass records."""
-        if not any(record.run_id is not None for record in passes):
+        wanted = {record.run_id for record in passes if record.run_id is not None}
+        if not wanted:
             return tuple(passes)
-        history = self._recorded_homes(agent_id)
+        counts = _counts_by_run(history, wanted)
         reported: list[LibrarianPass] = []
         for record in passes:
             if record.run_id is not None:
-                created, changed, merged = _counts(history, record.run_id)
+                created, changed, merged = counts[record.run_id]
                 record = replace(record, created=created, changed=changed, merged=merged)
             reported.append(record)
         return tuple(reported)

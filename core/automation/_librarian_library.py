@@ -140,22 +140,23 @@ def _by_run(revision: SkillRevision, run_id: str | None) -> bool:
     return run_id is not None and revision.actor == "librarian" and revision.run_id == run_id
 
 
-def _counts(
-    homes: Mapping[str, Sequence[SkillRevision]], run_id: str | None
-) -> tuple[int, int, int]:
-    """Count the Skills the consolidation Run ``run_id`` created, changed and merged away."""
-    written = [
-        (owner, revision)
-        for owner, revisions in homes.items()
-        for revision in revisions
-        if _by_run(revision, run_id)
-    ]
-    created = {(owner, revision.skill) for owner, revision in written if revision.kind == "create"}
-    merged = {
-        (owner, revision.skill) for owner, revision in written if revision.reason == "absorbed"
-    }
-    changed = {(owner, revision.skill) for owner, revision in written} - created - merged
-    return len(created), len(changed), len(merged)
+def _counts_by_run(
+    homes: Mapping[str, Sequence[SkillRevision]], wanted: set[str]
+) -> dict[str, tuple[int, int, int]]:
+    """Count distinct Skills each consolidation Run created, changed and merged away."""
+    written: dict[str, list[tuple[str, SkillRevision]]] = {run_id: [] for run_id in wanted}
+    for owner, revisions in homes.items():
+        for revision in revisions:
+            run_id = revision.run_id
+            if run_id is not None and run_id in written and _by_run(revision, run_id):
+                written[run_id].append((owner, revision))
+    counts = {}
+    for run_id, entries in written.items():
+        created = {(owner, rev.skill) for owner, rev in entries if rev.kind == "create"}
+        merged = {(owner, rev.skill) for owner, rev in entries if rev.reason == "absorbed"}
+        changed = {(owner, rev.skill) for owner, rev in entries} - created - merged
+        counts[run_id] = (len(created), len(changed), len(merged))
+    return counts
 
 
 def _fingerprint(latest_revisions: Mapping[str, int]) -> str:
