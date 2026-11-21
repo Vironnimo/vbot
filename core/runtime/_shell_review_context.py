@@ -8,7 +8,7 @@ from typing import Any, Literal
 from core.automation.cron import CronJobNotFoundError
 from core.runs import Run, RunKind, RunStatus
 from core.secrets.agent_secrets import SecretMasker
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, SessionConversationMessage
 from core.subagents.links import read_link
 from core.tools.tools import ToolContext
 
@@ -17,13 +17,35 @@ _TEXT_BUDGET = 64000
 _ANCESTOR_LIMIT = 64
 
 
+def _approved_cron_input(
+    cron: Any, message: SessionConversationMessage, address: SessionAddress
+) -> bool:
+    if (
+        cron is None
+        or message.run_kind != "cron"
+        or not message.schedule_id
+        or not message.cron_approval_scope
+    ):
+        return False
+    try:
+        job = cron.get_job(message.schedule_id)
+    except CronJobNotFoundError:
+        return False
+    # Only the original input of the approved job carries its approval digest.
+    return bool(
+        job.operator_approved
+        and job.agent_id == address.agent_id
+        and job.project_id == address.project_id
+        and job.operator_approval == message.cron_approval_scope
+    )
+
+
 async def current_input_authority(
     sessions: ChatSessionManager,
     context: ToolContext,
     *,
     run: Run | None,
     cron: Any = None,
-    masker: SecretMasker | None = None,
 ) -> Literal["user", "authorized_task", "none"]:
     """Classify this Run's latest input, never older or ancestral authority.
 
@@ -80,25 +102,17 @@ async def current_input_authority(
         if latest.sender_id is not None and latest.sender_role != "admin":
             return "none"
         return "user"
-    if run.run_kind != RunKind.CRON or not run.schedule_id or cron is None:
-        return "none"
-    try:
-        job = cron.get_job(run.schedule_id)
-    except CronJobNotFoundError:
-        return "none"
-    prompt = masker.mask(job.prompt) if masker is not None else job.prompt
     return (
         "authorized_task"
-        if job.operator_approved
-        and job.agent_id == context.agent_id
-        and job.project_id == context.project_id
-        and prompt == latest.text
+        if run.run_kind == RunKind.CRON
+        and run.schedule_id == latest.schedule_id
+        and _approved_cron_input(cron, latest, address)
         else "none"
     )
 
 
 def shell_review_context(
-    sessions: ChatSessionManager, context: ToolContext, masker: SecretMasker
+    sessions: ChatSessionManager, context: ToolContext, masker: SecretMasker, cron: Any = None
 ) -> dict[str, Any]:
     """Read only canonical conversation text, retaining who actually supplied it.
 
@@ -152,6 +166,7 @@ def shell_review_context(
             remaining -= len(message.text)
             text = masker.mask(message.text)
             if human:
+                truncated |= text != message.text
                 if message.sender_id is not None:
                     text = json.dumps(
                         {
@@ -165,6 +180,7 @@ def shell_review_context(
                     )
                 requests.append((message.timestamp, message.sequence, text))
             elif not peer and message.input_source_id is not None:
+                truncated |= text != message.text
                 tasks.append(
                     json.dumps(
                         {
@@ -176,15 +192,18 @@ def shell_review_context(
                     )
                 )
             elif not peer and automation:
-                automated.append(
-                    {
-                        "source": message.run_kind,
-                        "schedule_id": message.schedule_id,
-                        "agent_id": address.agent_id,
-                        "project_id": address.project_id,
-                        "text": text,
-                    }
-                )
+                task = {
+                    "source": message.run_kind,
+                    "schedule_id": message.schedule_id,
+                    "agent_id": address.agent_id,
+                    "project_id": address.project_id,
+                    "text": text,
+                }
+                if _approved_cron_input(cron, message, address):
+                    truncated |= text != message.text
+                    tasks.append(json.dumps(task, ensure_ascii=False))
+                else:
+                    automated.append(task)
             else:
                 delegated.append(text)
         link = read_link(sessions, address, strict=True)

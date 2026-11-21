@@ -26,7 +26,13 @@ from typing import Any
 
 from core.projects import format_agent_address
 from core.tools.call_syntax import spelling
-from server.live._context import JsonObject, LiveContext, LiveToolError
+from server.live._context import (
+    JsonObject,
+    LiveContext,
+    LiveToolError,
+    live_layout_text,
+    live_slice,
+)
 from server.live._programs import CODING_PROGRAMS, CodingProgram
 
 _EXECUTABLE_SUFFIX = re.compile(r"\.(exe|cmd|bat|ps1)$", re.IGNORECASE)
@@ -511,9 +517,11 @@ def _legend_name(value: object) -> str:
     """A title or name on one short line, so each legend entry stays one line."""
     if not isinstance(value, str):
         return ""
-    text = " ".join(value.split())
+    text = " ".join(live_layout_text(value).split())
     return (
-        text if len(text) <= _MAX_LEGEND_NAME_CHARS else text[: _MAX_LEGEND_NAME_CHARS - 3] + "..."
+        text
+        if len(text) <= _MAX_LEGEND_NAME_CHARS
+        else live_slice(text, 0, _MAX_LEGEND_NAME_CHARS - 3) + "..."
     )
 
 

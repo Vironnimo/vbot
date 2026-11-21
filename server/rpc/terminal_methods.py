@@ -16,6 +16,7 @@ from core.tools.terminal_manager import (
     TERMINAL_MIN_ROWS,
     TerminalManagerError,
 )
+from server.live._context import LIVE_OUTPUT_MASKER
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -48,11 +49,12 @@ async def _terminal_programs(state: Any, params: JsonObject) -> JsonObject:
 async def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("terminal.read"), "terminal.read")
     try:
-        return dict(
-            await _terminal_manager(state).read_for_operator(
-                _required_string(params, "terminal_id")
-            )
-        )
+        terminal_id = _required_string(params, "terminal_id")
+        manager = _terminal_manager(state)
+        live_masker = LIVE_OUTPUT_MASKER.get()
+        if live_masker:
+            return dict(await manager.read_for_operator(terminal_id, live_masker=live_masker()))
+        return dict(await manager.read_for_operator(terminal_id))
     except TerminalManagerError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 

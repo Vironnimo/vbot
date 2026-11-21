@@ -311,6 +311,7 @@ CREATE TABLE entries (
   role TEXT NOT NULL,
   entry_id TEXT NOT NULL,
   subagent_reply_target TEXT,
+  cron_approval_scope TEXT,
   skill_package_source TEXT,
   skill_package_name TEXT,
   skill_package_location TEXT,

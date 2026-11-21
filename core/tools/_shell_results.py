@@ -293,15 +293,12 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     problem = _not_run_problem(report)
     if problem is None or not report.consumed_once_secrets:
         return problem
-    return f"{problem[0]} {consumed_secrets_note(report.consumed_once_secrets)}", False
+    return f"{problem[0]} {CONSUMED_SECRETS_NOTE}", False
 
 
-def consumed_secrets_note(names: tuple[str, ...]) -> str:
-    """Why a failed launch needs fresh one-time Secrets before a retry."""
-    return (
-        f"One-time Secrets {', '.join(names)} were used up while preparing this launch. "
-        "Ask the user to provide them again before retrying."
-    )
+CONSUMED_SECRETS_NOTE = (
+    "This launch used up its one-time Secrets. Ask the user to provide them again before retrying."
+)
 
 
 def _not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
@@ -914,7 +911,7 @@ __all__ = [
     "ToolNames",
     "background_command_statuses",
     "command_output_text",
-    "consumed_secrets_note",
+    "CONSUMED_SECRETS_NOTE",
     "delivery_names",
     "duration",
     "ended_result",

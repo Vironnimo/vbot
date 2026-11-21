@@ -764,7 +764,7 @@ async def test_secret_storage_failure_refuses_input_before_acceptance(tmp_path, 
     )
     secrets.reload()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise OSError("store unavailable")
 
     monkeypatch.setattr(secrets, "capture_api_keys", fail)

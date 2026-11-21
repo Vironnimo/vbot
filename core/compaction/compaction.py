@@ -346,12 +346,12 @@ class CompactionService:
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
         usage_recorder: UsageRecorder | None = None,
-        secret_masker: Callable[[], SecretMasker] | None = None,
+        secret_masker: Callable[[SessionAddress], SecretMasker] | None = None,
     ) -> None:
         self._pricing_lookup = pricing_lookup
         self._usage_recorder = usage_recorder
         # Masks known Secret values in every Compaction request.
-        self._secret_masker = secret_masker or (lambda: EMPTY_MASKER)
+        self._secret_masker = secret_masker or (lambda _address: EMPTY_MASKER)
         if strategies is None:
             resolved_strategies: tuple[CompactionStrategy, ...] = (
                 SummarizationStrategy(),
@@ -516,20 +516,36 @@ class CompactionService:
                         request_kind="compaction",
                     )
                 )
-                model_messages, model_tools = await COMPACTION_WORKERS.run(
-                    _prepare_compaction_model_request,
-                    plan,
-                    active_tools,
-                    strip_reasoning=not same_target,
-                    masker=self._secret_masker(),
+
+                def project(
+                    masker: SecretMasker,
+                ) -> tuple[list[JsonObject], list[JsonObject], JsonObject]:
+                    shaped, tools = _prepare_compaction_model_request(
+                        plan, active_tools, strip_reasoning=not same_target, masker=masker
+                    )
+                    shaped, effort = route_effort(
+                        active_effort if same_target else None,
+                        shaped,
+                        adapter=adapter,
+                        model_id=model_id,
+                        fallback=active_thinking_effort if same_target else "",
+                    )
+                    return shaped, tools, effort
+
+                current_masker = await COMPACTION_WORKERS.run(self._secret_masker, session_address)
+                model_messages, model_tools, effort_options = await COMPACTION_WORKERS.run(
+                    project, current_masker
                 )
-                model_messages, effort_options = route_effort(
-                    active_effort if same_target else None,
-                    model_messages,
-                    adapter=adapter,
-                    model_id=model_id,
-                    fallback=active_thinking_effort if same_target else "",
-                )
+
+                def refresh_projection() -> tuple[list[JsonObject], list[JsonObject]] | None:
+                    nonlocal current_masker
+                    masker = self._secret_masker(session_address)
+                    if masker is current_masker:
+                        return None
+                    current_masker = masker
+                    fresh_messages, fresh_tools, _ = project(masker)
+                    return fresh_messages, fresh_tools
+
                 request_options.update(effort_options)
                 if active_tools is not None:
                     request_options["tools"] = model_tools
@@ -557,6 +573,7 @@ class CompactionService:
                             adapter,
                             model_messages,
                             request_options,
+                            refresh_projection=refresh_projection,
                             usage_recorder=self._usage_recorder,
                             model_reference=reference,
                             input_estimate=model_input.estimated,

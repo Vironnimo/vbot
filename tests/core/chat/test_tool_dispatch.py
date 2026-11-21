@@ -428,17 +428,21 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
         sinks=[sink],
     )
 
-    dispatched = await harness.dispatch([call("echo", content=ref)])
+    dispatched = await harness.dispatch([call("echo", content=ref, note="{{secret:HIDDEN}}")])
 
     [completed] = dispatched.events(TOOL_CALL_RESULT_EVENT)
     persisted = json.dumps([message.to_dict() for message in dispatched.messages])
-    assert completed.payload["result"]["data"] == {"content": f"output {ref}", ref: 1}
+    shown = ref if retirement == "none" else "[redacted]"
+    assert completed.payload["result"]["data"] == {"content": f"output {shown}", shown: 1}
+    [started] = dispatched.events(TOOL_CALL_STARTED_EVENT)
+    assert "HIDDEN" not in json.dumps(started.payload)
     [literal] = used
     assert literal.isdecimal() and len(literal) == 6 if field == "totp" else literal == value
     assert literal not in json.dumps(completed.payload["display"])
     assert literal not in persisted
     name = "totp" if field == "totp" else "value"
-    assert completed.payload["display"]["secrets_used"] == [f"API.{name} ({sink})"]
+    label = "[redacted]" if retirement in {"delete", "once"} else f"API.{name}"
+    assert completed.payload["display"]["secrets_used"] == [f"{label} ({sink})"]
     assert len(secrets.all()) == (0 if retirement in {"once", "delete"} else 1)
 
 

@@ -954,6 +954,8 @@ async def stream_model_response(
     model_id: str,
     on_tool_calls: Callable[[list[JsonObject]], None] | None = None,
     on_usage: Callable[[JsonObject], None] | None = None,
+    project_request: Callable[[list[JsonObject], JsonObject], tuple[list[JsonObject], JsonObject]]
+    | None = None,
     **request_options: Any,
 ) -> JsonObject:
     """Stream one Model request and return its completed, normalized response.
@@ -974,13 +976,23 @@ async def stream_model_response(
 
     Only a Provider that declares this request cannot stream
     (``ProviderStreamingUnsupportedError``, before any output) is asked for a
-    completed response instead.
+    completed response instead. When supplied, `project_request` prepares
+    the wire messages and options for each actual attempt, including that fallback.
     """
     accumulator = StreamingAccumulator()
     chunk_timeout_seconds = stream_stall_timeout(adapter)
     if isinstance(adapter, ProviderAdapter):
         adapter.ensure_available()
-    source = adapter.stream(messages, model_id=model_id, **request_options)
+
+    def attempt() -> tuple[list[JsonObject], JsonObject]:
+        return (
+            project_request(messages, request_options)
+            if project_request
+            else (messages, request_options)
+        )
+
+    shown_messages, shown_options = attempt()
+    source = adapter.stream(shown_messages, model_id=model_id, **shown_options)
     awaiting_delta = True
     completed_response = False
     try:
@@ -1017,7 +1029,8 @@ async def stream_model_response(
             raise
         if isinstance(adapter, ProviderAdapter):
             adapter.ensure_available()
-        response = await adapter.send(messages, model_id=model_id, **request_options)
+        shown_messages, shown_options = attempt()
+        response = await adapter.send(shown_messages, model_id=model_id, **shown_options)
         normalized = finalize_model_response(
             adapter.normalize_response(response, model_id=model_id)
         )

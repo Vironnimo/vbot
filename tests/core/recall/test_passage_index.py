@@ -39,8 +39,9 @@ from core.recall._passage_catalog import (
 )
 from core.recall.canonical import RecallScope
 from core.recall.passage_index import IndexSpent, SpentMeasure
-from core.recall.passages import PASSAGE_POLICY_VERSION, Passage
+from core.recall.passages import PASSAGE_POLICY_VERSION, Passage, build_session_passages
 from core.runs import RunKind
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.recall.recall_test_support import (
     HybridBackendFactory,
@@ -320,6 +321,26 @@ async def test_each_text_is_embedded_once_for_every_passage_that_shows_it(
         ("one", "alpha")
     ]
     index.close()
+
+
+async def test_waiting_embeddings_mask_secrets_crossing_passage_boundaries(tmp_path: Path) -> None:
+    value = "password-across-many-windows"
+    source = "🔍 search " + value + " or {{secret:OLD_PRIVATE_KEY}} in here"
+    masker = SecretMasker({value: "[redacted]"}, filter_references=True)
+    index = PassageIndex(tmp_path, secret_masker=lambda: masker)
+    passages = build_session_passages([ChatMessage.user(source)], target_chars=24, overlap_chars=4)
+    try:
+        await index.use_space(HEADER)
+        await _apply(index, _change("one", passages))
+        pending = dict(await index.pending_texts(limit=10))
+        assert [pending[text_hash(p.text)] for p in passages] == [
+            "🔍 search [redacted]",
+            "[redacted] or [redacted]",
+            " [redacted]",
+            "[redacted] in here",
+        ]
+    finally:
+        index.close()
 
 
 async def test_waiting_texts_are_newest_first_and_skipped_texts_never_wait(

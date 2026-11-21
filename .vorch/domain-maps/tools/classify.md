@@ -45,3 +45,5 @@ Tests: `tests/core/tools/test_classify.py` (registry dispatch: item preservation
 | `options`: `Include an unknown option for insufficient information and a separate catch-all label for cases outside your categories.` | Keeps missing evidence distinct from observed evidence outside the categories, instead of forcing a wrong label. |
 | `levels`: `Required for score: what each level means, lowest first; 2 to 10.` | Order and the canonical level count limit; a selected Model can impose a tighter bound. |
 | Result: `not answered: the model declined this question` | Makes a native refusal visible without inventing a numeric judgment or discarding other answers. |
+| `Use question IDs and choice labels that contain no private Secret data.` | The Decision protocol uses these fields as answer keys. Replacing a protected key could silently assign an answer to a different question or choice. |
+| `Secret access changed before the decision was sent. Repeat the call.` | An intervening grant change invalidated the prepared evidence. A new call uses the receiving Session's current access. |

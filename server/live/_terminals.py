@@ -40,6 +40,8 @@ from server.live._context import (
     LiveToolError,
     count_phrase,
     join_words,
+    live_layout_text,
+    live_slice,
     text_field,
 )
 from server.live._programs import (
@@ -121,6 +123,7 @@ class TerminalTimings:
 @dataclass(frozen=True)
 class _Snapshot:
     screen: str
+    display: str
     revision: int | None
     bracketed_paste: bool
     finished: bool
@@ -317,8 +320,11 @@ class LiveTerminals:
                 return _Outcome("prompt", prompt=prompt)
             if stable and program_ready(program, snapshot.screen):
                 return _Outcome("ready")
-            if stable and (shown := program_start_failure(program, snapshot.screen)) is not None:
-                return _Outcome("not_started", detail=shown)
+            if stable and program_start_failure(program, snapshot.screen) is not None:
+                return _Outcome(
+                    "not_started",
+                    detail=program_start_failure(program, snapshot.display) or "(no output)",
+                )
             if now >= deadline:
                 return _Outcome("not_ready", prompt=prompt)
             await self._sleep(timings.poll_seconds)
@@ -387,10 +393,10 @@ class LiveTerminals:
         """The coding Terminal's screen as quoted text."""
         ref, program = self._coding(terminal, TOOL_READ_OUTPUT)
         snapshot = await self._read(str(terminal["terminal_id"]))
-        lines = snapshot.screen.rstrip().splitlines()
+        lines = live_layout_text(snapshot.display).rstrip().splitlines()
         screen = "\n".join(line.rstrip() for line in lines)
         truncated = len(screen) > _MAX_SCREEN_CHARS
-        screen = screen[-_MAX_SCREEN_CHARS:]
+        screen = live_slice(screen, -_MAX_SCREEN_CHARS, len(screen))
         state = "exited" if snapshot.finished else terminal_state(terminal)
         quoted = "\n".join(f"> {line}" if line else ">" for line in screen.splitlines())
         head = f"{ref} ({program.label}), {state}. Screen"
@@ -458,7 +464,7 @@ class LiveTerminals:
             snapshot = await self._read(terminal_id)
             if snapshot.finished:
                 raise LiveToolError("terminal_exited", f"{ref} has exited; no key was pressed.")
-            if key == "enter" and (refusal := _unconfirmed_answer(program, ref, snapshot.screen)):
+            if key == "enter" and (refusal := _unconfirmed_answer(program, ref, snapshot)):
                 return refusal
             try:
                 await self._input(terminal_id, KEY_SEQUENCES[key], snapshot.revision, program)
@@ -544,6 +550,7 @@ class LiveTerminals:
         revision = summary.get("screen_revision")
         return _Snapshot(
             screen=str(snapshot.get("screen") or ""),
+            display=str(snapshot.get("live_screen", snapshot.get("screen")) or ""),
             revision=revision
             if isinstance(revision, int) and not isinstance(revision, bool)
             else None,
@@ -566,19 +573,20 @@ class LiveTerminals:
         await self._ctx.call("terminal.input", params)
 
 
-def _unconfirmed_answer(program: CodingProgram, ref: str, screen: str) -> JsonObject | None:
+def _unconfirmed_answer(program: CodingProgram, ref: str, snapshot: _Snapshot) -> JsonObject | None:
     """Why Enter must not confirm the startup question on screen, or ``None``.
 
     Live's guidance selects one answer by keys; Enter confirms it only while it
     is the selected one, never an answer that moved there by position.
     """
-    prompt = program_prompt(program, screen)
+    prompt = program_prompt(program, snapshot.screen)
     if prompt is None:
         return None
-    answer = selected_answer(program, screen)
+    answer = selected_answer(program, snapshot.screen)
     if answer is not None and answer.startswith(prompt.choice):
         return None
-    selected = f'"{answer}" selected' if answer else "no visible answer selected"
+    shown = selected_answer(program, snapshot.display, display=True)
+    selected = f'"{shown}" selected' if shown else "no visible answer selected"
     return live_failure(
         "answer_not_selected",
         f'{program.label} in {ref} has {selected}, not "{prompt.choice}", so Enter was not '

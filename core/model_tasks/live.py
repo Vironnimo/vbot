@@ -43,7 +43,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from core.agents import LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
@@ -120,6 +120,10 @@ __all__ = [
     "live_result_text",
     "live_success",
 ]
+
+if TYPE_CHECKING:
+    from core.chat import ExternalRun
+    from core.secrets.agent_secrets import AgentSecrets
 
 _LOGGER = get_logger(__name__)
 
@@ -273,6 +277,9 @@ class LiveRuntime(Protocol):
 
     @property
     def chat_loop(self) -> Any: ...
+
+    @property
+    def agent_secrets(self) -> AgentSecrets: ...
 
     @property
     def chat_sessions(self) -> Any: ...
@@ -503,8 +510,7 @@ class LiveVoiceService:
                 )
                 raise LiveStartRejected("not_configured", str(exc)) from exc
             try:
-                setup = self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
-                wire = await self._open_wire(plan, label, offer_sdp, setup)
+                wire = await self._open_wire(plan, label, offer_sdp, voice, host)
                 attempt.seal()
             except BaseException:
                 await settle_before_cancelling(voice.discard())
@@ -518,6 +524,8 @@ class LiveVoiceService:
                         lambda session_host, on_session: LiveBackend(
                             chat=chat,
                             sessions=self._runtime.chat_sessions,
+                            secrets=self._runtime.agent_secrets,
+                            voice_masker=lambda: voice.secret_masker,
                             hosts=self._hosts,
                             host=session_host,
                             title=title,
@@ -576,7 +584,12 @@ class LiveVoiceService:
         )
 
     async def _open_wire(
-        self, plan: _CallPlan, label: str, offer_sdp: str | None, setup: _VoiceSetup
+        self,
+        plan: _CallPlan,
+        label: str,
+        offer_sdp: str | None,
+        voice: ExternalRun,
+        host: LiveCallHost,
     ) -> _OpenedWire:
         target_ref = plan.target_ref
         accounting = TaskUsage(self._usage_recorder, TASK_LIVE_VOICE, target_ref)
@@ -585,6 +598,10 @@ class LiveVoiceService:
         status: Literal["failed", "cancelled"] = "failed"
         failure: BaseException | None = None
         try:
+            masker = voice.secret_masker
+            setup = self._voice_setup(
+                plan, voice.tool_definitions, [masker.mask(phrase) for phrase in host.wake_phrases]
+            )
             wire = await plan.wire.open(
                 self._runtime,
                 target_ref,

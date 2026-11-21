@@ -138,7 +138,7 @@ class ProgrammaticTools(_EmittingToolRegistry):
         call_id = new_id("pcall")
         call = ToolCall(id=call_id, name=name, arguments=arguments)
         # Persist only masked text, as ordinary dispatch does for its events/results.
-        safe_arguments = _leaving_call(self._secret_masker(), arguments)
+        safe_arguments = _leaving_call(self.secret_masker_for(self._parent), arguments)
         declaration = replace(
             ChatMessage.assistant(
                 model=context.agent.model,
@@ -168,7 +168,10 @@ class ProgrammaticTools(_EmittingToolRegistry):
         if activated:
             self._skill_notes[call_id] = replace(
                 ChatMessage.note(
-                    _leaving_call(self._secret_masker(), _skill_context_note_content(name, content))
+                    _leaving_call(
+                        self.secret_masker_for(self._parent),
+                        _skill_context_note_content(name, content),
+                    )
                 ),
                 skill_package=package,
             )

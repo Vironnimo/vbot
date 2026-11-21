@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -57,6 +57,7 @@ from core.recall.passages import (
     PASSAGE_TARGET_CHARS,
 )
 from core.recall.recall import RecallSearchRequest
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions.search_content import LiteralSearchQuery
 from core.utils.timestamps import format_canonical_timestamp, parse_canonical_timestamp
 
@@ -360,11 +361,63 @@ def passage_index_database_spec(path: Path) -> DatabaseSpec:
     )
 
 
+def _masked_embedding_texts(
+    connection: sqlite3.Connection, rows: list[sqlite3.Row], masker: SecretMasker
+) -> list[tuple[str, str]]:
+    """Mask before cutting a Message into passages, retaining its original vector keys."""
+    result: dict[str, str] = {}
+    split: dict[tuple[int, int | None, str, int], list[sqlite3.Row]] = {}
+    for row in rows:
+        text = row["text"]
+        if row["start_offset"] == 0 and len(text) == row["source_length"]:
+            result[row["text_hash"]] = masker.mask(text)
+            continue
+        # A fork can share a Passage. One actual view of it gives all the windows
+        # from this version of the Message, including windows already embedded.
+        view = connection.execute(
+            "SELECT session_ref FROM passage_views WHERE passage_ref = ? LIMIT 1",
+            (row["passage_ref"],),
+        ).fetchone()
+        if view is None:
+            raise DatabaseCorruptError("recall_index: pending Passage has no Session view")
+        key = (view[0], row["message_index"], row["start_message_id"], row["source_length"])
+        split.setdefault(key, []).append(row)
+
+    for key, windows in split.items():
+        parts: list[str] = []
+        covered = 0
+        previous = ""
+        for offset, text in connection.execute(
+            "SELECT p.start_offset, p.text FROM passage_views v "
+            "JOIN passages p ON p.passage_ref = v.passage_ref "
+            "WHERE v.session_ref = ? AND p.message_index IS ? AND p.start_message_id = ? "
+            "AND p.source_length = ? ORDER BY p.start_offset",
+            key,
+        ):
+            overlap = covered - offset
+            if not 0 <= overlap <= len(text) or not previous.endswith(text[:overlap]):
+                raise DatabaseCorruptError("recall_index: inconsistent Message windows")
+            parts.append(text[overlap:])
+            covered = offset + len(text)
+            previous = text
+        if covered != key[-1]:
+            raise DatabaseCorruptError("recall_index: incomplete Message windows")
+        source = "".join(parts)
+        project = masker.slice_projector(source)
+        for row in windows:
+            start = row["start_offset"]
+            result[row["text_hash"]] = project(start, start + len(row["text"]))
+    return [(row["text_hash"], result[row["text_hash"]]) for row in rows]
+
+
 class PassageIndex(PassageCatalog):
     """The Passage catalog with literal FTS and vectors in one pinned embedding space."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self, data_dir: Path, *, secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER
+    ) -> None:
         self.data_dir = data_dir
+        self._secret_masker = secret_masker
         super().__init__(passage_index_database_spec(index_path(data_dir)))
 
     # -- Embedding space -----------------------------------------------------------
@@ -447,13 +500,17 @@ class PassageIndex(PassageCatalog):
                     ORDER BY newest DESC, p.text_hash
                     LIMIT ?
                 )
-                SELECT n.text_hash, p.text FROM next_texts AS n
+                SELECT n.text_hash, p.text, p.start_offset, p.source_length, p.message_index,
+                       p.start_message_id, p.passage_ref FROM next_texts AS n
                 JOIN passages AS p ON p.passage_ref = n.passage_ref
                 ORDER BY n.newest DESC, n.text_hash
                 """,
                 (limit,),
             ).fetchall()
-            return [(str(row["text_hash"]), str(row["text"])) for row in rows]
+            masker = self._secret_masker()
+            if not masker:
+                return [(row["text_hash"], row["text"]) for row in rows]
+            return _masked_embedding_texts(connection, rows, masker)
 
         return await self.read(select)
 

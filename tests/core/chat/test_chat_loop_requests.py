@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, override
 
@@ -21,13 +22,18 @@ from core.chat import (
     MessageSender,
     ReplySurface,
 )
+from core.chat._secret_history import with_secret_catalog
 from core.chat.content_blocks import ContentBlock, FileBlock
 from core.chat.messages import SubAgentMessage
 from core.extensions import ExtensionRegistry
-from core.providers.errors import ProviderStreamingUnsupportedError
-from core.runs import MODEL_STEP_USAGE_EVENT, SUBAGENT_MESSAGE_RECORDED_EVENT
+from core.prompts import BlockCatalog, RenderedBlock
+from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
+from core.runs import MODEL_STEP_USAGE_EVENT, SUBAGENT_MESSAGE_RECORDED_EVENT, RunKind
+from core.secrets.agent_secrets import AgentSecrets
+from core.sessions import SUBAGENT_PARENT_META_KEY
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
+from core.tools.secrets import SECRETS_PROMPT_BLOCK_HEAD, secret_line
 from tests.core.chat.chat_loop_support import (
     BlockingStubAdapter,
     StubAdapter,
@@ -41,6 +47,7 @@ from tests.core.chat.chat_loop_support import (
     persisted_roles,
     session_address,
 )
+from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.sessions.history_fixtures import history_revision
 
 JsonObject = dict[str, Any]
@@ -153,6 +160,158 @@ async def test_send_persists_the_exchange_and_sends_the_agent_request(tmp_path: 
     assert events[1].payload["message"]["content"] == "Hi"
     output = next(event for event in events if event.type == "assistant_output")
     assert output.payload["message"]["content"] == "Hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subagent", [False, True])
+async def test_inherited_history_and_new_context_use_the_receiving_sessions_grants(
+    tmp_path: Path, subagent: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path, [NetworkError("retry"), *_answers(1)])
+    secrets = AgentSecrets(
+        open_store(tmp_path, data_directory(tmp_path)), clock=lambda: datetime.now(UTC)
+    )
+    secrets.reload()
+    value = "private-test-token"
+    secret = secrets.create(
+        name="PRIVATE",
+        kind="token",
+        values={"value": value},
+        actor="user",
+        agents=["coder"],
+        description="Documentation for the integration test.",
+    )
+
+    async def withdraw(_delay: float) -> None:
+        secrets.update(secret.id, actor="user", agents=["reader"])
+
+    monkeypatch.setattr("core.chat.recovery._sleep", withdraw)
+    reference = "{{secret:PRIVATE}}"
+    expected = "[redacted]" if subagent else reference
+    runtime.agent_secrets = secrets
+    row = secret_line(secret)
+    catalog = RenderedBlock(
+        SECRETS_PROMPT_BLOCK_HEAD + "\n" + row,
+        BlockCatalog("Secrets", (("PRIVATE", row),), SECRETS_PROMPT_BLOCK_HEAD),
+    )
+    # The stub prompt manager omits pinned Tool blocks. Give its prompt the catalog
+    # from before a takeover, including for the child that cannot read the entry.
+    original_prompt = runtime.system_prompts.build_system_prompt
+
+    def build_prompt(*args: Any, **kwargs: Any) -> str:
+        return with_secret_catalog(original_prompt(*args, **kwargs) + "\n" + catalog.text, catalog)
+
+    monkeypatch.setattr(runtime.system_prompts, "build_system_prompt", build_prompt)
+
+    def rewrite_prompt(_context: Any, *, messages: list[JsonObject]) -> list[JsonObject]:
+        assert value not in json.dumps(messages)
+        assert ("integration test." in messages[0]["content"]) is (not subagent)
+        messages[0]["content"] += "\nA context hook appended this line."
+        return messages
+
+    runtime.extensions = ExtensionRegistry()
+    runtime.extensions.install_handler("test", "context", rewrite_prompt)
+    session = runtime.chat_sessions.get(SESSION)
+    session.append(ChatMessage.user(f"Prior {value} and {reference}"))
+    if subagent:
+        runtime.chat_sessions.mutate_metadata(
+            SESSION,
+            lambda data: data.update(
+                {
+                    SUBAGENT_PARENT_META_KEY: {
+                        "id": "sub_aaaaaaaaaaaa",
+                        "agent_id": "lead",
+                        "session_id": "parent",
+                        "run_id": "parent-run",
+                        "project_id": None,
+                    },
+                }
+            ),
+        )
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run(
+        "coder",
+        f"Current {value} and {reference}",
+        session_id=SESSION.session_id,
+        context_note="Pending " + value,
+        context_note_factory=lambda: "At start " + value,
+    )
+    await run.wait()
+    sent = _request_text(runtime.adapter.requests[0])
+    assert f"Prior {expected} and {expected}" in sent
+    assert f"Current {expected} and {expected}" in sent
+    assert value not in sent
+    assert ("PRIVATE" in sent) is (not subagent)
+    assert "A context hook appended this line." in sent
+    assert ("{{secret:NAME.field}}" in sent) is (not subagent)
+    assert f"At start {expected}" in sent
+    retried = _request_text(runtime.adapter.requests[1])
+    assert "PRIVATE" not in retried and value not in retried
+    assert "integration test." not in retried
+    assert "Prior [redacted] and [redacted]" in retried
+    assert "Current [redacted] and [redacted]" in retried
+    stored = [message.content for message in session.load()]
+    assert f"Prior {value} and {reference}" in stored
+    assert f"Current {expected} and {expected}" in stored
+    assert f"At start {expected}" in stored
+
+
+@pytest.mark.asyncio
+async def test_cron_approval_belongs_only_to_its_original_input(tmp_path: Path) -> None:
+    adapter = BlockingStubAdapter()
+    runtime = _runtime(tmp_path, [], adapter=adapter)
+    loop = build_chat_loop(runtime)
+    trigger = TriggerService(loop, runtime.chat_runs, runtime)
+    prompt = "Inspect {{secret:STATUS}}"
+    scope = "e" * 64
+    first = await trigger.trigger_run(
+        "coder", prompt, run_kind=RunKind.CRON, schedule_id="cron-check", cron_approval_scope=scope
+    )
+    await adapter.request_started.wait()
+    address = session_address("coder", first.session_id)
+    queued = await loop.queue_run(
+        "coder",
+        prompt,
+        session_id=first.session_id,
+        run_kind=RunKind.CRON,
+        schedule_id="cron-check",
+        cron_approval_scope=scope,
+    )
+    try:
+        # Even an edit indistinguishable from the masked original has a different source.
+        session_id, executor, display = await loop.build_queue_update(
+            "coder", first.session_id, prompt, queued
+        )
+        assert runtime.chat_runs.update_queued(
+            "coder", session_id, queued.item_id, executor, display, project_id=None
+        )
+        # Caller-supplied JSON cannot stamp a later message of the same Run.
+        message = ChatMessage.from_dict(
+            {**ChatMessage.user(prompt).to_dict(), "cron_approval_scope": scope}
+        )
+        runtime.chat_sessions.get(address).for_run(first.id).append(message)
+        unchanged = await loop.queue_run(
+            "coder",
+            prompt,
+            session_id=first.session_id,
+            run_kind=RunKind.CRON,
+            schedule_id="cron-check",
+            cron_approval_scope=scope,
+        )
+    finally:
+        adapter.release.set()
+    await first.wait()
+    await (await queued.future).wait()
+    await (await unchanged.future).wait()
+    session = runtime.chat_sessions.get(address)
+    page = runtime.chat_sessions.conversation_page(
+        address, expected_generation_id=session.generation_id
+    )
+    assert [
+        (entry.text, entry.cron_approval_scope) for entry in page.messages if entry.role == "user"
+    ] == [(prompt, scope), (prompt, None), (prompt, None), (prompt, scope)]
+    assert scope not in json.dumps([message.to_dict() for message in session.load()])
+    assert all(scope not in json.dumps(request["messages"]) for request in adapter.requests)
 
 
 @pytest.mark.asyncio

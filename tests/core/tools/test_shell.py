@@ -364,7 +364,7 @@ async def test_agent_secrets_reach_only_the_command_environment(
             assert checked_env["DOC"] == "{{secret:A}} b"
 
     assert shell.live_output[-1]["output"] == (
-        "found {{secret:GITHUB_TOKEN}}\ngot {{secret:GITHUB.password}}\nnext "
+        "found {{secret:GITHUB_TOKEN}}\ngot [redacted]\nnext "
     )
     environment = secrets.environment(OWNER, "GITHUB_TOKEN")
     assert environment is not None and environment[0]["GITHUB_TOKEN"] == discovered
@@ -379,7 +379,7 @@ async def test_agent_secrets_reach_only_the_command_environment(
     )
     assert env["DOC"] == "{{secret:A}} b"
     # A credential a command received is masked from then on, like a Secret.
-    assert secrets.masker.mask("value-of-API_TOKEN") == "{{secret:API_TOKEN}}"
+    assert secrets.masker.mask("value-of-API_TOKEN") == "[redacted]"
 
 
 @pytest.mark.asyncio
@@ -444,7 +444,8 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
         if failure == "launch":
             assert secrets.get(secret.id) is None
             assert result["error"]["retryable"] is False
-            assert "ONE_TIME" in result["error"]["message"]
+            assert "ONE_TIME" not in result["error"]["message"]
+            assert "provide them again before retrying" in result["error"]["message"]
         else:
             assert secrets.get(secret.id) == secret
         assert "one-time-test-value" not in str(result)
@@ -484,7 +485,7 @@ async def test_bootstrap_refusal_reports_spent_one_time_secrets(
             texts = [failure["message"]]
         else:
             report = await shell.commands.finish(command_id)
-            assert report.consumed_once_secrets == ("ONE_TIME",)
+            assert report.consumed_once_secrets
             register_background_tasks_tool(shell.registry, shell.manager)
             status = data(
                 await dispatch_as_executor(
@@ -497,7 +498,7 @@ async def test_bootstrap_refusal_reports_spent_one_time_secrets(
             assert status["status"] == "not_run"
             texts = [status["not_run_because"], shell.sink.bodies[0]]
         for text in texts:
-            assert "ONE_TIME" in text and "provide them again before retrying" in text
+            assert "ONE_TIME" not in text and "provide them again before retrying" in text
             assert shell_results.RUN_AGAIN not in text
             assert "one-time-test-value" not in text
 

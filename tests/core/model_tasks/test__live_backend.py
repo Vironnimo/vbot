@@ -14,6 +14,7 @@ from core.model_tasks._live_backend import (
     LiveBackend,
 )
 from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError, RunKind
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.tools.live import LiveToolHosts
 
 EFFECTS = "vBot changes for this request (from the Tool results):"
@@ -86,7 +87,9 @@ class FakeSessions:
         return SimpleNamespace(id=f"backend-{len(self.created)}")
 
 
-def _backend(**options: Any) -> tuple[LiveBackend, FakeChat, FakeSessions, LiveToolHosts, list]:
+def _backend(
+    *, masker: SecretMasker = EMPTY_MASKER, **options: Any
+) -> tuple[LiveBackend, FakeChat, FakeSessions, LiveToolHosts, list]:
     chat, sessions, hosts = FakeChat(), FakeSessions(), LiveToolHosts()
     created: list[str | None] = []
     host: Any = object()
@@ -95,6 +98,8 @@ def _backend(**options: Any) -> tuple[LiveBackend, FakeChat, FakeSessions, LiveT
         sessions=sessions,
         hosts=hosts,
         host=host,
+        secrets=SimpleNamespace(masker_for=lambda address: EMPTY_MASKER),  # type: ignore[arg-type]
+        voice_masker=lambda: masker,
         title="Live call · 2026-10-07 12:30",
         voice_session_id="voice-1",
         on_session=lambda: created.append(backend.session_id),
@@ -163,12 +168,15 @@ async def test_the_first_request_creates_the_backend_session_and_each_runs_in_it
 
 @pytest.mark.asyncio
 async def test_the_answer_ends_with_what_the_tools_changed() -> None:
-    backend, chat, *_ = _backend()
+    raw = " private test phrase  "
+    backend, chat, *_ = _backend(masker=SecretMasker({raw: "[redacted]"}, filter_references=True))
+    chat.answer = "Started Coder on the task." + raw
     chat.events = [
         _result("overview", _ok("Agents: Coder")),
         _result("web_search", _ok("results")),
         _result("start_agent_session", _ok("Started s2 at Coder.")),
         _result("cron", _ok()),
+        _result("secrets", _ok("The user stored PRIVATE for this Session.")),
         _result("send_message", {"ok": False, "error": {"message": "s9 does not exist."}}),
         *(_result("stop", _ok(f"Stopped s{index}.")) for index in range(8)),
     ]
@@ -184,11 +192,12 @@ async def test_the_answer_ends_with_what_the_tools_changed() -> None:
 
     # Lookups change nothing; at most 8 effects are named.
     assert answer == (
-        f"Started Coder on the task.\n{EFFECTS} Started s2 at Coder. | Ran cron. | "
-        "send_message failed: s9 does not exist. | Stopped s0. | Stopped s1. | Stopped s2. | "
-        "Stopped s3. | Stopped s4. | and 3 more"
+        f"Started Coder on the task.[redacted]\n{EFFECTS} Started s2 at Coder. | Ran cron. | "
+        "[redacted] | send_message failed: s9 does not exist. | Stopped s0. | "
+        "Stopped s1. | Stopped s2. | Stopped s3. | and 4 more"
     )
-    assert len(progress) == 11
+    assert len(progress) == 12
+    assert all("PRIVATE" not in text for text in progress)
     assert all(text.startswith(EFFECTS) for text in progress)
     assert "Started s2" in progress[0]
 

@@ -45,6 +45,7 @@ from core.tools.live import (
 from core.utils.paths import model_path
 from server.live._arguments import PreparedLiveCall, prepare_live_call
 from server.live._context import (
+    LIVE_OUTPUT_MASKER,
     NAVIGATION_NOT_APPLIED,
     OPERATION_FAILED,
     UI_ACTION_OPEN,
@@ -52,6 +53,7 @@ from server.live._context import (
     AppContext,
     JsonObject,
     LiveContext,
+    LiveMasker,
     LiveToolError,
     LiveUiError,
     RpcInvoker,
@@ -126,11 +128,13 @@ class LiveToolExecutor:
         timings: TerminalTimings | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
+        output_masker: LiveMasker | None = None,
     ) -> None:
         self._ctx = LiveContext(rpc=rpc, ui=ui, app_context=app_context, is_active=is_active)
         self._refs = LiveRefs()
         self._teams = TeamCache(clock=clock)
         self._end_call = end_call
+        self._output_masker = output_masker
         self._report = report
         self._terminals = LiveTerminals(
             self._ctx, self._refs, timings=timings or TerminalTimings(), sleep=sleep, clock=clock
@@ -187,9 +191,10 @@ class LiveToolExecutor:
             )
         catalog = LiveCatalog(self._ctx, self._refs, self._teams)
         try:
-            async with self._ctx.exclusive():
-                self._ctx.ensure_active()
-                return await handler(dict(arguments), catalog)
+            with LIVE_OUTPUT_MASKER.set(self._output_masker):
+                async with self._ctx.exclusive():
+                    self._ctx.ensure_active()
+                    return await handler(dict(arguments), catalog)
         except LiveToolError as exc:
             return live_failure(exc.code, exc.message)
         except LiveUiError as exc:

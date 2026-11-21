@@ -24,7 +24,14 @@ from typing import Any
 from core.model_tasks.live import LiveCall, PlaybackReceipt
 from core.utils.ids import new_id
 from server.events import ServerEventBus
-from server.live._context import UI_BUSY, UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
+from server.live._context import (
+    UI_BUSY,
+    UI_TIMEOUT,
+    UI_UNAVAILABLE,
+    LiveMasker,
+    LiveUiError,
+    RpcInvoker,
+)
 from server.live._feed import LiveRunFeed
 from server.live._tools import LiveToolExecutor
 from server.live.owner import (
@@ -100,6 +107,7 @@ class LiveCallEntry:
         started_at: datetime,
         after_sequence: int,
         wake_phrases: tuple[str, ...] = (),
+        output_masker: LiveMasker | None = None,
     ) -> None:
         self._limits = limits
         self._wake_phrases = wake_phrases
@@ -129,6 +137,7 @@ class LiveCallEntry:
             started_at=started_at,
             end_call=self.end_soon,
             report=self.publish,
+            output_masker=output_masker,
         )
         self._ending = False
         # Why vBot ended the call, when it did (hung up, idle).

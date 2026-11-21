@@ -807,7 +807,7 @@ class GroupTestChat:
         self.release = asyncio.Event()
         self.release.set()
 
-    def mask_user_input(self, content):
+    async def mask_user_input(self, address, content):
         return content
 
     async def start_temporary_run(

@@ -90,11 +90,22 @@ def masked_content(
 def _masked_block(block: ContentBlock, masker: SecretMasker) -> ContentBlock:
     if isinstance(block, TextBlock):
         return replace(block, text=masker.mask(block.text))
-    if isinstance(block, MediaBlock) and block.transcription:
-        return replace(block, transcription=masker.mask(block.transcription))
-    if isinstance(block, FileMentionBlock) and block.text:
-        return replace(block, text=masker.mask(block.text))
-    return block
+    if isinstance(block, MediaBlock):
+        return replace(
+            block,
+            filename=masker.mask(block.filename),
+            media_type=masker.mask(block.media_type),
+            transcription=masker.mask(block.transcription) if block.transcription else None,
+        )
+    if isinstance(block, FileBlock):
+        return replace(
+            block, filename=masker.mask(block.filename), media_type=masker.mask(block.media_type)
+        )
+    return replace(
+        block,
+        path=masker.mask(block.path),
+        text=masker.mask(block.text) if block.text is not None else None,
+    )
 
 
 def content_block_to_dict(block: ContentBlock) -> dict[str, Any]:

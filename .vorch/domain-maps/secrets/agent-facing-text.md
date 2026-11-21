@@ -39,6 +39,7 @@ The texts were written with the design of 2026-10-21 and have not yet been check
 
 | Text | Reason |
 |---|---|
+| Historical Secret catalog result or reminder: `[redacted]` | A revoked grant or a same-named replacement must keep the prior Secret's name, fields, account and source out of a later Model request. Old formatted rows lack record IDs. A current `secrets` list can supply the recipient's available records. |
 | `The call's output was withheld because vBot could not securely store an API key it contains.` (`secret_capture_failed`, `core/chat/_tool_registry.py`) | Explains why an executed Tool's content is unavailable instead of leaking the value or presenting an unusable Secret reference (F4). |
 | `The call may have taken effect; check its outcome before repeating it.` | Secret capture happens after execution, so retrying a mutation can duplicate an effect (F3, F5). |
 | list: `You have no Secrets. Use action request to ask the user for one.` | The empty result names the next call (F4). |
@@ -62,16 +63,15 @@ Every refusal starts with `<tool> was not run:` like the other dispatch refusals
 
 | Text | Reason |
 |---|---|
-| `No Secret named <NAME>. Your Secrets: <names>. Use the secrets Tool to request one from the user.` | A misspelled reference gets the valid names; a missing one gets the way to obtain it (F5). |
-| `<NAME> is not granted to you. Your Secrets: ... Ask the user to grant it in Settings -> Secrets if you need it.` | User decision: grants per Agent. Names the real state instead of "unknown", so the Agent does not request a duplicate. |
-| In a Sub-Agent Session: `<NAME> was not passed to you. Your Secrets: ... If you need it, say so in your report; your Parent Agent can pass it.` | User decision 2026-10-21: Sub-Agents use only passed Secrets. A Sub-Agent would otherwise ask the user for a grant that does not help it, or request a duplicate; only the Parent can pass, at the next start. |
-| `<NAME> is a vBot credential, not a Secret you can use here.` | Provider keys and other data-directory credentials share the name space of environment variables; Agents guessed them as Secret names. |
-| Last sentence of the four refusals above: `If you meant the text {{secret:NAME}} itself, write {{!secret:NAME}}.` | User decision 2026-10-22: an Agent writing documentation or tests that contain reference text (this repository has dozens of such files) was refused with no way to write it. The refusal is where the Agent first meets the case; `If you meant` keeps an Agent with a misspelled real reference from escaping it. |
+| `<NAME> is unavailable in this Session. Your Secrets: <names>.` | A caller receives the same state for absent names, ungranted names and system credentials. It can correct a misspelling from its own catalog. |
+| `Use the secrets Tool to request it from the user.` / `If you need it, ask your Parent Agent to pass it.` | Suggests a way to obtain the value that fits the receiving Session's grant rules. |
+| `To write the reference as literal text, use {{!secret:NAME}}.` | An Agent writing documentation or tests needs the escaped form (user decision 2026-10-22). |
 | `<NAME> has no field <field>; use <references>.` | Lists the valid references (F5). |
 | `<NAME> may not be used in <place> (allowed: ...). Tell the user if this use is needed; they can allow it in Settings -> Secrets.` | The user restricts sinks; the Agent must not work around the restriction, only report it. |
 | `<source> did not deliver <NAME>.<field>: <error> Tell the user to unlock it ...` / `Tell the user what failed.` | A locked or failing password manager has a remedy only the user can apply. |
 
-| `NAME changed, expired or was used while this call was prepared.` | A concurrent use or grant/value change invalidates a prepared call; no handler ran. Listing available Secrets avoids repeating a stale one-time reference. |
+| `A Secret changed, expired or was used while this call was prepared.` / `A Secret changed while this call was waiting.` | Reports a stale prepared call without disclosing a name after revocation. Listing available Secrets avoids repeating a stale reference. |
+| `That Secret name is unavailable here. Choose another name.` | Creation refuses a colliding name without distinguishing another Agent's Secret from a reserved credential. |
 
 ## Session notes
 

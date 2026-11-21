@@ -754,8 +754,8 @@ def test_event_redaction_handles_json_escaping_without_corrupting_events(host, s
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encoded", [True, False])
-async def test_stderr_redacts_keys_and_encoded_credentials_across_reads(host, tmp_path, encoded):
+@pytest.mark.parametrize("kind", ["encoded", "key", "long_reference"])
+async def test_stderr_redacts_keys_and_encoded_credentials_across_reads(host, tmp_path, kind):
     secret = "test-only/quoted:credential"
     host.set_credential("TEST_CREDENTIAL", secret)
     runner = ConnectionRunner(
@@ -773,9 +773,11 @@ async def test_stderr_redacts_keys_and_encoded_credentials_across_reads(host, tm
     )
     value = (
         base64.b64encode(secret.encode()).decode()
-        if encoded
+        if kind == "encoded"
         else "ghp_" + "0123456789abcdefghijklmnopqrstuvwxyz"
     )
+    if kind == "long_reference":
+        value = "{{" + " " * (20 * STDERR_CHUNK_SIZE) + "secret:PRIVATE_ENV}}"
     path = tmp_path / "stderr.txt"
     path.write_bytes(
         (" " * (STDERR_CHUNK_SIZE - 6) + "\n" + value + "\n" + " " * STDERR_CHUNK_SIZE).encode()

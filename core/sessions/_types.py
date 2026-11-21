@@ -521,6 +521,7 @@ class SessionConversationMessage:
     schedule_id: str | None = None
     input_source_id: str | None = None
     run_id: str | None = None
+    cron_approval_scope: str | None = None
 
 
 @dataclass(frozen=True)

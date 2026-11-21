@@ -41,6 +41,7 @@ from core.model_tasks.embeddings_providers import (
     ProviderEmbeddingResponse,
 )
 from core.providers.errors import ProviderAuthError
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.utils.errors import ConfigError
 
 OPENROUTER_TARGET = "openrouter/google/gemini-embedding-2::api-key"
@@ -134,6 +135,7 @@ def _service(
     *,
     local: _LocalEngine | None = None,
     recorder: Any = None,
+    masker: SecretMasker = EMPTY_MASKER,
     **options: Any,
 ) -> EmbeddingService:
     return EmbeddingService(
@@ -141,6 +143,7 @@ def _service(
         MagicMock(name="runtime"),
         usage_recorder=recorder,
         local_executor=cast(Any, local),
+        secret_masker=lambda: masker,
     )
 
 
@@ -211,9 +214,11 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
         vectors=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], model_id=response_model_id, usage=usage
     )
     provider_factory.return_value = client
-    service = _service(dimensions=3)
+    service = _service(
+        dimensions=3, masker=SecretMasker({"private-token": "[redacted]"}, filter_references=True)
+    )
 
-    result = await service.embed(["alpha", "beta"], purpose="query")
+    result = await service.embed(["alpha private-token", "beta {{secret:OLD}}"], purpose="query")
 
     assert result.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     assert (result.provider_id, result.model_id, result.dimension) == (
@@ -228,7 +233,10 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
     # Inputs travel with the binding's effective options and the family's query prefix.
     assert client.embed_calls == [
         (
-            ["task: search result | query: alpha", "task: search result | query: beta"],
+            [
+                "task: search result | query: alpha [redacted]",
+                "task: search result | query: beta [redacted]",
+            ],
             {"dimensions": 3},
             None,
         )

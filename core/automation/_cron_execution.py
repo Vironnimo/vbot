@@ -216,6 +216,8 @@ class CronExecution:
                 result: Any = None
                 firing_once_at = latest.run_at if latest.schedule_type == "once" else None
                 start_options: dict[str, Any] = {}
+                if latest.operator_approved:
+                    start_options["cron_approval_scope"] = latest.operator_approval
                 if event_claim is not None and event_due is not None:
                     start_options["context_note_factory"] = partial(
                         self._event_context_at_start, *event_claim, event_due
@@ -237,7 +239,7 @@ class CronExecution:
                             else "muted"
                         ),
                         contributes_to_agent_activity=False,
-                        context_note=self._owner._secret_masker().mask(context),
+                        context_note=context,
                         completion_activity=_delivery.completion_activity(
                             partial(self._owner._jobs.get, job.id)
                         ),
@@ -458,13 +460,14 @@ class CronExecution:
             raise _EventFireInvalidatedError("The calendar occurrence no longer permits this Run")
         latest, current = ready
         late = _context.late_fire(_schedule.OwedFire(due_at=current.due_at), self._owner._timezone)
-        return self._owner._secret_masker().mask(
-            _context.run_context(latest, self._owner._timezone, late=late, event_due=current)
-        )
+        return _context.run_context(latest, self._owner._timezone, late=late, event_due=current)
 
     async def _record_run_failure(self, job_id: str, error: BaseException) -> None:
         if self._note_run_failure(job_id, error):
             await self._save_jobs_after_fire(job_id)
+
+    def _masked_error(self, message: str) -> str:
+        return _truncate_error(self._owner._secret_masker().mask(message))
 
     def _note_run_failure(self, job_id: str, error: BaseException) -> bool:
         """Account one failed execution in memory; ``False`` when the job is gone."""
@@ -473,7 +476,7 @@ class CronExecution:
             return False
         job.last_completed_at = _timing._utc_now_iso()
         job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
-        job.last_error = _truncate_error(str(error) or type(error).__name__)
+        job.last_error = self._masked_error(str(error) or type(error).__name__)
         job.last_run_silent = False
         _count_consecutive_failure(job)
         self._owner._jobs[job_id] = job
@@ -508,7 +511,7 @@ class CronExecution:
                 error, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
             )
         job.last_outcome = "failed"
-        job.last_error = _truncate_error(reason)
+        job.last_error = self._masked_error(reason)
         job.last_run_silent = False
         _LOGGER.warning(
             "Cron job could not start its Run (job=%s reason=%s)", job_id, job.last_error
@@ -531,7 +534,7 @@ class CronExecution:
         if job is None:
             return
         job.last_outcome = "failed"
-        job.last_error = _truncate_error(str(error) or type(error).__name__)
+        job.last_error = self._masked_error(str(error) or type(error).__name__)
         job.last_run_silent = False
         self._owner._jobs[job_id] = job
         await self._save_jobs_after_fire(job_id)

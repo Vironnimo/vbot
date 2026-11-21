@@ -22,6 +22,7 @@ from core.chat.content_blocks import (
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions import ChatSessionManager, OwnedSessionSummary, SessionAddress
 from core.sessions.titles import (
     GENERATED_TITLE_MAX_CHARACTERS,
@@ -262,7 +263,7 @@ async def test_closed_session_database_skips_the_title_with_a_warning(
 async def test_configured_title_model_replaces_local_title_with_bounded_request(
     manager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = StubAdapter('Title: "Review report".')
+    adapter = StubAdapter('Title: "Review report private-token".')
     runtime = StubRuntime(
         manager,
         enabled=True,
@@ -271,7 +272,10 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     )
     secret = "must-not-reach-title-model"
     content: list[ContentBlock] = [
-        TextBlock(type="text", text="Please review\n" + "x" * 7000 + "\nand summarize risks"),
+        TextBlock(
+            type="text",
+            text="Please review {{secret:OLD}}\n" + "x" * 7000 + "\nand summarize risks",
+        ),
         FileBlock(
             type="file",
             attachment_id="attachment-one",
@@ -283,7 +287,7 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
             attachment_id="attachment-two",
             filename="voice.ogg",
             media_type="audio/ogg",
-            transcription="also check the budget",
+            transcription="also check the budget private-token",
         ),
         FileMentionBlock(
             type="file_mention",
@@ -294,7 +298,8 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
         ),
     ]
     _append_first_user(runtime, content)
-    service = SessionTitleService(cast(Any, runtime))
+    masker = SecretMasker({"private-token": "[redacted]"}, filter_references=True)
+    service = SessionTitleService(cast(Any, runtime), secret_masker=lambda: masker)
     loop_thread = threading.get_ident()
     original_adapter = runtime.get_adapter
 
@@ -315,7 +320,8 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     # are named, never included.
     title_input = request["messages"][1]["content"]
     assert TITLE_OMISSION_MARKER in title_input
-    assert "also check the budget" in title_input
+    assert "also check the budget [redacted]" in title_input
+    assert "Please review [redacted]" in title_input
     assert "report.pdf (application/pdf)" in title_input
     assert "private.txt (mentioned file, 999 bytes)" in title_input
     assert secret not in title_input
@@ -324,7 +330,7 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert "max_tokens" not in request
     assert request["thinking_effort"] == "none"
     assert "temperature" not in request
-    assert _metadata(runtime)["auto_title"] == "Review report"
+    assert _metadata(runtime)["auto_title"] == "Review report [redacted]"
     assert adapter.closed is True
     assert adapter.debug_context.run_id == "title-run-one"
 
@@ -624,8 +630,11 @@ async def _group_title(
     *participants: OwnedSessionSummary,
     usage_recorder: Any = None,
     source_text: str = "  Rework the\n parser   error recovery  ",
+    masker: SecretMasker = EMPTY_MASKER,
 ) -> str | None:
-    service = SessionTitleService(cast(Any, runtime), usage_recorder=usage_recorder)
+    service = SessionTitleService(
+        cast(Any, runtime), usage_recorder=usage_recorder, secret_masker=lambda: masker
+    )
     return await service.generate_group_title(
         owner_name="swarm",
         group_id="swr_one",
@@ -648,7 +657,13 @@ async def test_group_title_uses_configured_title_model_for_the_group(manager) ->
         manager, enabled=True, configured_model="openai/title::cheap", adapters=[adapter]
     )
 
-    title = await _group_title(runtime, _participant("ada", "anthropic/big::main"))
+    title = await _group_title(
+        runtime,
+        _participant("ada", "anthropic/big::main"),
+        source_text="Rework {{secret:PRIVATE}}",
+        masker=SecretMasker({}, filter_references=True),
+    )
+    assert "Rework [redacted]" in adapter.requests[0]["messages"][1]["content"]
 
     assert title == "Parser recovery rework"
     assert await _stored_group_title(runtime) == "Parser recovery rework"

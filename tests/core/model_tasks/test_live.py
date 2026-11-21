@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,8 +48,10 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
+from core.tools import called_tool_name
 from core.tools.live import LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
@@ -130,6 +133,7 @@ class FakeVoice:
     """The voice Agent's Run: Tool calls reach the call the way the registry routes them."""
 
     agent_id = "live-voice"
+    secret_masker = EMPTY_MASKER
 
     def __init__(self, hosts: LiveToolHosts, *, tools: Any = VOICE_TOOLS) -> None:
         self.hosts = hosts
@@ -140,6 +144,12 @@ class FakeVoice:
         self.finished: list[str | None] = []
         self.discarded = False
         self.on_cancel: Callable[[], None] | None = None
+
+    def tool_name(self, name: str) -> str:
+        return called_tool_name(name, [tool["name"] for tool in self.tool_definitions])
+
+    def model_tool_result(self, name: str, result: dict[str, Any]) -> dict[str, Any]:
+        return self.secret_masker.mask_value(result, include_keys=True)
 
     async def record_user(self, text: str) -> None:
         self.records.append(("user", text))
@@ -169,6 +179,8 @@ class FakeVoice:
 class FakeBackend:
     """Answers requests one at a time, like the backend Agent's Session."""
 
+    secret_masker = EMPTY_MASKER
+
     def __init__(self) -> None:
         self.requests: list[BackendRequest] = []
         self.release = asyncio.Event()
@@ -178,6 +190,7 @@ class FakeBackend:
         self.session_id: str | None = None
         self.on_session: Callable[[], None] | None = None
         self.progress: str | None = None
+        self.answer_text: str | None = None
         self._turn = asyncio.Lock()
 
     async def answer(
@@ -197,7 +210,7 @@ class FakeBackend:
         if on_progress is not None and self.progress is not None:
             await on_progress(self.progress)
         await self.release.wait()
-        return f"answer {index}"
+        return self.answer_text or f"answer {index}"
 
     async def aclose(self, *, finish_request: bool = False) -> None:
         if finish_request:
@@ -692,6 +705,50 @@ async def test_run_notices_are_spoken_once_live_and_reach_later_requests():
 
 
 @pytest.mark.asyncio
+async def test_live_model_inputs_follow_each_receiving_sessions_current_grants():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    call, voice = _call(wire, host, backend)
+    ref, raw = "{{secret:EXAMPLE}}", 'sample-"quoted"-secret'
+    hidden = SecretMasker({raw: "[redacted]"}, filter_references=True)
+    visible = SecretMasker({raw: ref}).for_session(
+        {raw: ref}, {"EXAMPLE": frozenset({None})}, frozenset(), lambda *_: True
+    )
+    voice.secret_masker = visible
+    backend.secret_masker = visible
+    notice = replace(_notice("early"), excerpt=f"Run said {raw} and {ref}")
+    call.announce_run(notice)
+    voice.secret_masker = (
+        hidden  # revoked before a queued announcement and later results go on the wire
+    )
+    backend.progress = f"Progress {raw} {ref}"
+    backend.answer_text = f"Answer {ref}"
+    host.state = f"State {raw}"
+    host.tool_result = live_success(f"Result {raw} {ref}")
+    wire.push(
+        WireStarted(None),
+        WireCaption("user", f"User {ref}", final=True),
+        WireDelegation("request", f"Read {raw}"),
+        WireToolCall("tool", "overview", {}),
+    )
+    await _until(
+        lambda: wire.results().get("request") == "Answer [redacted]" and "tool" in wire.results()
+    )
+    await call.close()
+    assert wire.results()["tool"] == "Result [redacted] [redacted]"
+    assert any(
+        item[0] == "announce" and "Run said [redacted] and [redacted]" in item[1]
+        for item in wire.sent
+    )
+    assert any(
+        item[0] == "result" and "Progress [redacted] [redacted]" in item[2] for item in wire.sent
+    )
+    assert backend.requests[0].conversation == f"User: User {ref}"
+    assert backend.requests[0].request == f"Read {ref}"
+    assert backend.requests[0].state == f"State {ref}"
+    assert f"Run said {ref} and {ref}" in backend.requests[0].updates
+
+
+@pytest.mark.asyncio
 async def test_run_notices_omit_the_excerpt_where_announcements_count_as_user_input():
     wire, host, backend = FakeWire(announces_as_user_input=True), FakeHost(), FakeBackend()
     call, _voice = _call(wire, host, backend)
@@ -1084,6 +1141,7 @@ def _service(
         models=object(),
         chat_loop=chat,
         chat_sessions=object(),
+        agent_secrets=SimpleNamespace(masker_for=lambda address: EMPTY_MASKER),
         agents=SimpleNamespace(get=lambda agent_id: backend_agent),
         timezone_name=timezone_name,
     )
@@ -1256,6 +1314,11 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     host = FakeHost()
     caplog.set_level(logging.DEBUG)
     service, chat = _service()
+    monkeypatch.setattr(
+        FakeVoice,
+        "secret_masker",
+        SecretMasker({WAKE_PHRASES[0]: "[redacted]"}, filter_references=True),
+    )
 
     call = await service.start_call(media="webrtc", offer_sdp=OFFER, host=host)
 
@@ -1269,6 +1332,10 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     ]
     assert opened[0]["target"] == OPENAI_TARGET
     assert opened[0]["voice"] == "cove"
+    assert (
+        "[redacted]" in opened[0]["instructions"]
+        and WAKE_PHRASES[0] not in opened[0]["instructions"]
+    )
     assert opened[0]["offer_sdp"] == OFFER
     assert call.id == "rtc_1"
     assert host.updates == [

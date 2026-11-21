@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
@@ -58,6 +58,8 @@ async def _send_streaming_model_request(
     messages: list[dict[str, Any]],
     request_options: dict[str, Any],
     *,
+    refresh_projection: Callable[[], tuple[list[dict[str, Any]], list[dict[str, Any]]] | None]
+    | None = None,
     usage_recorder: UsageRecorder | None = None,
     model_reference: str | None = None,
     input_estimate: int | None = None,
@@ -96,6 +98,49 @@ async def _send_streaming_model_request(
     recovery_budget: RequestInput | None = None
     reduction = 0
     omitted_exchanges = 0
+
+    def reduce_request(
+        characters: int, omit_old_exchanges: bool
+    ) -> tuple[OverflowProjection, _ModelRequestInput, bool]:
+        def estimate(request: Sequence[dict[str, Any]]) -> int:
+            return estimate_wire_request_input_tokens(
+                adapter,
+                request,
+                model_id=model_id,
+                tools=request_options.get("tools"),
+            )
+
+        initial = (
+            original_estimate if original_estimate is not None else estimate(original_messages)
+        )
+        capacity = _reported_input_capacity(adapter, model_id, request_options)
+        target = round(initial * OVERFLOW_TARGET_RATIO)
+
+        def within_target(request: Sequence[dict[str, Any]]) -> bool:
+            tokens = estimate(request)
+            return tokens <= target and (
+                capacity is None or round(tokens * estimate_factor) <= capacity
+            )
+
+        projected = smaller_compaction_request(
+            original_messages,
+            tool_characters=characters,
+            omit_old_exchanges=omit_old_exchanges,
+            within_target=within_target,
+        )
+        counted = _model_request_input_budget(
+            adapter,
+            model_id,
+            projected.messages,
+            request_options.get("tools"),
+            factor=estimate_factor,
+        )
+        return (
+            projected,
+            counted,
+            capacity is None or counted.budget.tokens <= capacity,
+        )
+
     budget = asyncio.timeout(MODEL_REQUEST_TIMEOUT_SECONDS)
     try:
         async with budget:
@@ -103,6 +148,31 @@ async def _send_streaming_model_request(
             while True:
                 if _budget_exhausted(budget):
                     raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
+                if refresh_projection is not None:
+                    fresh = await COMPACTION_WORKERS.run(refresh_projection)
+                    if fresh is not None:
+                        original_messages, fresh_tools = fresh
+                        if "tools" in request_options:
+                            request_options = {**request_options, "tools": fresh_tools}
+                        counted = await COMPACTION_WORKERS.run(
+                            _model_request_input_budget,
+                            adapter,
+                            model_id,
+                            original_messages,
+                            request_options.get("tools"),
+                            factor=estimate_factor,
+                        )
+                        original_estimate = counted.estimated
+                        messages = original_messages
+                        if reduction:
+                            projected, counted, _ = await COMPACTION_WORKERS.run(
+                                reduce_request,
+                                OVERFLOW_TOOL_CHARACTERS[reduction - 1],
+                                reduction == len(OVERFLOW_TOOL_CHARACTERS),
+                            )
+                            messages = projected.messages
+                            omitted_exchanges = projected.omitted_exchanges
+                        input_estimate, recovery_budget = counted.estimated, counted.budget
                 try:
                     scope = (
                         request_input_budget(model_id, recovery_budget)
@@ -133,51 +203,6 @@ async def _send_streaming_model_request(
                         response["_compaction_omitted_exchanges"] = omitted_exchanges
                     return response
                 except ProviderContextOverflowError:
-
-                    def reduce_request(
-                        characters: int, omit_old_exchanges: bool
-                    ) -> tuple[OverflowProjection, _ModelRequestInput, bool]:
-                        def estimate(request: Sequence[dict[str, Any]]) -> int:
-                            return estimate_wire_request_input_tokens(
-                                adapter,
-                                request,
-                                model_id=model_id,
-                                tools=request_options.get("tools"),
-                            )
-
-                        initial = (
-                            original_estimate
-                            if original_estimate is not None
-                            else estimate(original_messages)
-                        )
-                        capacity = _reported_input_capacity(adapter, model_id, request_options)
-                        target = round(initial * OVERFLOW_TARGET_RATIO)
-
-                        def within_target(request: Sequence[dict[str, Any]]) -> bool:
-                            tokens = estimate(request)
-                            return tokens <= target and (
-                                capacity is None or round(tokens * estimate_factor) <= capacity
-                            )
-
-                        projected = smaller_compaction_request(
-                            original_messages,
-                            tool_characters=characters,
-                            omit_old_exchanges=omit_old_exchanges,
-                            within_target=within_target,
-                        )
-                        counted = _model_request_input_budget(
-                            adapter,
-                            model_id,
-                            projected.messages,
-                            request_options.get("tools"),
-                            factor=estimate_factor,
-                        )
-                        return (
-                            projected,
-                            counted,
-                            capacity is None or counted.budget.tokens <= capacity,
-                        )
-
                     while reduction < len(OVERFLOW_TOOL_CHARACTERS):
                         characters = OVERFLOW_TOOL_CHARACTERS[reduction]
                         reduction += 1

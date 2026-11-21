@@ -133,17 +133,18 @@ def test_names_are_unique_and_never_take_a_system_credential_name(tmp_path: Path
     secrets.reload()
     _login(secrets)
 
-    with pytest.raises(SecretRecordError):
+    with pytest.raises(SecretRecordError) as existing:
         _login(secrets)
-    with pytest.raises(SecretRecordError):
+    with pytest.raises(SecretRecordError) as reserved:
         secrets.create(name="gh", kind="token", values={"value": TOKEN}, actor="user")
+    assert str(existing.value) == str(reserved.value)
 
 
 @pytest.mark.parametrize(
     ("agent_id", "session_id", "text", "sink", "code"),
     [
         ("main", "s1", "{{secret:GITHUB.password}}", "files", "sink_not_allowed"),
-        ("other", "s1", "{{secret:GITHUB.password}}", "terminal", "not_granted"),
+        ("other", "s1", "{{secret:GITHUB.password}}", "terminal", "unknown_secret"),
         ("main", "s1", "{{secret:GITLAB}}", "terminal", "unknown_secret"),
         ("main", "s1", "{{secret:GITHUB.pin}}", "terminal", "unknown_field"),
     ],
@@ -250,10 +251,15 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
     # A Session Secret exists only in its Session, and only for its Agent.
     assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s2"))] == ["TEMP"]
     assert secrets.usable(SessionAddress(None, "other", "s1")) == []
+    address = SessionAddress(None, "main", "s1")
+    assert secrets.masker_for(address).mask("temporary-value") == "{{secret:TEMP}}"
     clock.now += timedelta(hours=2)
+    assert secrets.masker_for(address).mask("temporary-value {{secret:TEMP}} otp-12345678") == (
+        "[redacted] [redacted] [redacted]"
+    )
     assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s1"))] == ["API"]
     assert secrets.sweep() == 1
-    assert secrets.masker.mask("temporary-value") == "{{secret:TEMP}}"
+    assert secrets.masker.mask("temporary-value") == "[redacted]"
     changes.clear()
     secrets.remove_session(SessionAddress(None, "main", "s1"))
     assert [item.name for item in _secrets(tmp_path, clock).all()] == []
@@ -313,8 +319,7 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
     assert secrets.lookup(owner, "LOCAL", passed_only=True) is None
 
     assert refused.value.code == "unknown_secret"
-    assert unpassed.value.code == "not_granted"
-    assert "not passed to you" in str(unpassed.value)
+    assert unpassed.value.code == "unknown_secret"
     # A permanent Secret given in a Session stays usable there.
     assert secrets.usable(SessionAddress(None, "main", "other-child"), passed_only=True) == [
         requested
@@ -355,6 +360,10 @@ def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
     assert one is not None and one[0] == {"GITHUB_PASSWORD": PASSWORD}
     assert secrets.environment(SessionAddress(None, "main", "s1"), "PATH") is None
     assert "GITHUB_PASSWORD" in secrets.environment_names(SessionAddress(None, "main", "s1"))
+    masker = secrets.masker_for(SessionAddress(None, "main", "s1"))
+    assert masker.project_prepared("287082", "{{secret:GITHUB.totp}}") == "{{secret:GITHUB.totp}}"
+    clock.now += timedelta(seconds=30)
+    assert masker.project_prepared("287082", "{{secret:GITHUB.totp}}") == "[redacted]"
 
 
 def test_source_environment_skips_only_absent_optional_fields(tmp_path: Path) -> None:
@@ -408,7 +417,23 @@ def test_source_bound_secrets_resolve_at_use_and_stay_masked(tmp_path: Path) -> 
     assert secrets.substitute(
         SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal"
     )[0] == ("from-the-vault-123")
-    assert secrets.masker.mask("printed from-the-vault-123") == "printed {{secret:DB.password}}"
+    address = SessionAddress(None, "main", "s1")
+    assert secrets.masker.mask("printed from-the-vault-123") == "printed [redacted]"
+    assert secrets.masker_for(address).mask("from-the-vault-123") == "{{secret:DB.password}}"
+    assert secrets.masker_for(address, passed_only=True).mask("from-the-vault-123") == "[redacted]"
+    assert secrets.masker_for(address).catalog_source_label("db") == source.label
+    source.values["Password"] = "rotated-vault-password"
+    secrets.substitute(address, "{{secret:DB.password}}", "terminal")
+    assert secrets.masker_for(address).mask("from-the-vault-123 rotated-vault-password") == (
+        "[redacted] {{secret:DB.password}}"
+    )
+    for short in ("123", "456"):
+        source.values["Password"] = short
+        secrets.substitute(address, "{{secret:DB.password}}", "terminal")
+        assert (
+            secrets.masker_for(address).project_prepared(short, "{{secret:DB}}") == "{{secret:DB}}"
+        )
+    assert secrets.masker_for(address).project_prepared("123", "{{secret:DB}}") == "[redacted]"
     source.locked = True
     with pytest.raises(SecretUseError) as raised:
         secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal")
@@ -416,6 +441,8 @@ def test_source_bound_secrets_resolve_at_use_and_stay_masked(tmp_path: Path) -> 
     source.locked = False
     secrets.replace_sources([])
     assert source.lock_calls == 1
+    assert secrets.masker_for(address).catalog_source_label("db") == "vault"
+    assert secrets.masker_for(address).project_prepared("456", "{{secret:DB}}") == "[redacted]"
     with pytest.raises(SecretUseError):
         secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal")
 
@@ -427,13 +454,14 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     _login(secrets)
     secrets.create(name="short", kind="token", values={"value": "abc"}, actor="user")
     secrets.set_system_values({"OPENAI_API_KEY": TOKEN})
-    masker = secrets.masker
+    address = SessionAddress(None, "main", "s1")
+    masker = secrets.masker_for(address)
     encoded = base64.b64encode(b"user:" + PASSWORD.encode()).decode()
     untouched = {"text": "nothing to see"}
 
     # A visible field, such as the username, stays readable.
     assert masker.mask(f"julian: pw {PASSWORD}, key {TOKEN}") == (
-        "julian: pw {{secret:GITHUB.password}}, key {{secret:OPENAI_API_KEY}}"
+        "julian: pw {{secret:GITHUB.password}}, key [redacted]"
     )
     assert "{{secret:GITHUB.password}}" in masker.mask(json.dumps({"p": PASSWORD + '"'}))
     assert masker.mask(quote(PASSWORD + "/", safe="")) == "{{secret:GITHUB.password}}%2F"
@@ -464,7 +492,7 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     assert secrets.masker.mask(PASSWORD) == PASSWORD
     secrets.update(login.id, concealed={"password": True}, actor="user")
     secrets.update(login.id, values={"password": "rotated-credential"}, actor="user")
-    assert secrets.masker.mask(PASSWORD) == "{{secret:GITHUB.password}}"
+    assert secrets.masker_for(address).mask(PASSWORD) == "[redacted]"
     secrets.update(
         login.id, values={"password": PASSWORD}, concealed={"password": False}, actor="user"
     )
@@ -472,10 +500,11 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     duplicate = secrets.create(
         name="SHARED", kind="token", values={"value": PASSWORD}, actor="user"
     )
-    assert secrets.masker.mask(PASSWORD) == duplicate.reference()
+    assert secrets.masker_for(address).mask(PASSWORD) == "[redacted]"
     secrets.update(duplicate.id, concealed={"value": False}, actor="user")
     secrets.set_system_values({"SYSTEM_TOKEN": PASSWORD})
-    assert secrets.masker.mask(PASSWORD) == "{{secret:SYSTEM_TOKEN}}"
+    assert secrets.masker.mask(PASSWORD) == "[redacted]"
+    assert secrets.masker.mask(TOKEN) == "[redacted]"  # the replaced system credential
 
 
 def test_reads_and_masking_never_wait_for_a_store_write(
@@ -496,8 +525,11 @@ def test_reads_and_masking_never_wait_for_a_store_write(
     monkeypatch.setattr(store, "update", slow_update)
 
     def read() -> tuple[str, list[str]]:
-        secrets.remember_value("runtime-value-123", "{{secret:RUNTIME}}")
-        return secrets.masker.mask(PASSWORD), [item.name for item in secrets.all()]
+        secrets.remember_value("runtime-value-123")
+        return (
+            secrets.masker_for(SessionAddress(None, "main", "s1")).mask(PASSWORD),
+            [item.name for item in secrets.all()],
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         created = pool.submit(
@@ -511,9 +543,90 @@ def test_reads_and_masking_never_wait_for_a_store_write(
         created.result(timeout=5)
 
     assert (masked, names) == ("{{secret:GITHUB.password}}", ["GITHUB"])
-    assert secrets.masker.mask(f"{TOKEN} runtime-value-123") == (
-        "{{secret:API}} {{secret:RUNTIME}}"
+    assert secrets.masker.mask(f"{TOKEN} runtime-value-123") == "[redacted] [redacted]"
+
+
+def test_stored_references_are_projected_for_the_receiving_session(tmp_path: Path) -> None:
+    secrets = _secrets(tmp_path)
+    address = SessionAddress(None, "main", "conversation")
+    assert secrets.masker_for(address).mask("{{secret:NEVER_CREATED}}") == "[redacted]"
+    _login(secrets)
+    owned = secrets.masker_for(address)
+    child = secrets.masker_for(address, passed_only=True)
+    ref = "{{ secret:github.Password }}"
+    text = f"Before {ref} after"
+    assert owned.allows_name("github") and owned.allows_reference("github", "PASSWORD")
+    assert not owned.allows_reference("github", "missing")
+    assert not child.allows_name("GITHUB")
+    catalog = owned.catalog_record("github")
+    assert catalog is not None and [(field.name, field.value) for field in catalog.fields] == [
+        ("username", "julian"),
+        ("password", None),
+    ]
+    assert child.catalog_record("github") is None
+    assert owned.allows_environment_name("github_password") and not child.allows_environment_name(
+        "GITHUB_PASSWORD"
     )
+    assert owned.mask(text) == text and not owned.contains(ref)
+    assert child.contains(ref) and child.mask(text) == "Before [redacted] after"
+    for masker in (child, secrets.masker):
+        assert masker.mask("{{secret:NEVER_CREATED}} {{!secret:DOC_EXAMPLE}}") == (
+            "[redacted] {{!secret:DOC_EXAMPLE}}"
+        )
+        assert masker.mask_value({ref: {"value": PASSWORD}}, include_keys=True) == {
+            "[redacted]": {"value": "[redacted]"}
+        }
+        assert masker.mask_growing("Before {{ secret:GITH") == "Before "
+        assert masker.stream_boundary(text + "Z" * 200, text.index("github") + 4) == len("Before ")
+        assert (
+            masker.mask_slice(text, text.index("github"), text.index("Password") + 3)
+            == "[redacted]"
+        )
+        assert masker.mask_slice("start" + PASSWORD + "end", 7, 11) == "[redacted]"
+        assert masker.mask_slice(text, 0, 3) == "Bef"
+        project = masker.slice_projector(text)
+        assert [project(*window) for window in [(0, 1), (8, 15), (10, 12), (10, 10), (-6, -1)]] == [
+            "B",
+            "[redacted]",
+            "[redacted]",
+            "",
+            " afte",
+        ]
+    assert owned.mask_slice(text, text.index("github"), text.index("Password") + 3) == ref
+    assert owned.mask_growing(PASSWORD) == owned.mask(PASSWORD)
+    assert child.mask_growing(PASSWORD) == "[redacted]"
+    long_value = PASSWORD + "\n" + "0123456789" * 120 + "-suffix"
+    streaming = SecretMasker({PASSWORD: ref, long_value: ref})
+    assert streaming.mask_growing("hi " + PASSWORD[:2]) == "hi " + PASSWORD[:2]
+    assert streaming.mask_growing("hi " + PASSWORD[:3]) == "hi "
+    assert streaming.mask_growing("hi " + long_value[:-2]) == "hi " + ref
+    assert streaming.mask_growing("hi " + long_value) == "hi " + ref
+
+    def refusal() -> tuple[str, str]:
+        with pytest.raises(SecretUseError) as caught:
+            secrets.substitute(address, "{{secret:GUESS}}", "files")
+        return caught.value.code, str(caught.value)
+
+    absent = refusal()
+    secrets.create(
+        name="GUESS", kind="token", actor="user", values={"value": TOKEN}, agents=["other"]
+    )
+    assert refusal() == absent
+    for number, literal in enumerate(
+        ("suffix}}after", "before{{secret:", "{{secret:GUESS}}tail", "redacted")
+    ):
+        secrets.create(
+            name=f"RAW_{number}",
+            kind="text",
+            actor="user",
+            values={"value": literal},
+            agents=["main"],
+        )
+    masker = secrets.masker_for(address)
+    for overlap in ("{{secret:suffix}}after", "before{{secret:GUESS}}"):
+        assert masker.mask(overlap) == masker.mask_slice(overlap, 3, 6) == "[redacted]"
+    assert masker.mask("{{secret:GUESS}}tail") == "{{secret:RAW_2}}"
+    assert masker.mask("[redacted]") == "[redacted]"
 
 
 @pytest.mark.parametrize("lifetime", ["permanent", "session", "once"])
@@ -543,6 +656,7 @@ def test_grants_use_full_addresses_and_revocation_reaches_descendants(
         assert secrets.lookup(owner, "API") is not None
     secrets.pass_to_session(owner, ["API"], child)
     secrets.pass_to_session(child, ["API"], descendant, passed_only=True)
+    assert secrets.masker_for(descendant, passed_only=True).mask(TOKEN) == "{{secret:API}}"
     secrets = _secrets(tmp_path)
     assert secrets.lookup(child, "API", passed_only=True) is not None
     assert secrets.lookup(descendant, "API", passed_only=True) is not None
@@ -552,6 +666,9 @@ def test_grants_use_full_addresses_and_revocation_reaches_descendants(
     else:
         secrets.remove_session(owner)
     assert secrets.usable(child, passed_only=True) == []
+    assert secrets.masker_for(descendant, passed_only=True).mask(TOKEN + " {{secret:API}}") == (
+        "[redacted] [redacted]"
+    )
     assert _secrets(tmp_path).usable(descendant, passed_only=True) == []
 
 
@@ -572,7 +689,7 @@ def test_capture_api_keys_is_atomic_idempotent_and_never_replaces(
     other = "different-value-123456789"
     secrets.capture_api_keys(address, [("API_KEY", other), ("API_KEY", other), ("API_KEY", TOKEN)])
     assert [item.name for item in secrets.usable(address)] == ["API_KEY", "API_KEY_2"]
-    assert secrets.masker.mask(other) == "{{secret:API_KEY_2}}"
+    assert secrets.masker_for(address).mask(other) == "{{secret:API_KEY_2}}"
     secrets.capture_api_keys(address, [("API_KEY", other)])
     unrelated = SessionAddress(None, "other", "s2")
     secrets.capture_api_keys(unrelated, [("API_KEY", other)])
@@ -604,7 +721,9 @@ def test_tool_capture_grants_only_the_session_that_independently_read_the_value(
     assert not secrets.usable(second, passed_only=True)
 
     other_references = secrets.capture_api_keys(second, candidates, source="tool", passed_only=True)
-    assert other_references == {TOKEN: "{{secret:API_KEY_2}}"}
+    assert other_references == {TOKEN: "{{secret:API_KEY}}"}
+    assert secrets.masker_for(first).mask(TOKEN) == "{{secret:API_KEY}}"
+    assert secrets.masker_for(second, passed_only=True).mask(TOKEN) == "{{secret:API_KEY}}"
     assert secrets.capture_api_keys(first, candidates, source="tool") == references
     assert len(secrets.all()) == 2
     assert (

@@ -217,11 +217,6 @@ class ChatLoopDependencies:
     # ``None`` (or a runner of ``None``) runs none.
     get_context_command_runner: Callable[[], ContextCommandRunner | None] | None = None
 
-    @property
-    def secret_masker(self) -> SecretMasker:
-        """Masks every known Secret value; empty without Agent Secrets."""
-        return self.secrets.masker if self.secrets is not None else EMPTY_MASKER
-
     # Called when a persisted user input switches a Sub-Agent's answer destination.
     subagent_reply_to_user: Callable[[SessionAddress, str, str | None], None] | None = None
     # The vBot server's own port, which restricted Runs may not reach on loopback;
@@ -235,6 +230,21 @@ class ChatLoopDependencies:
     # ``None`` offers the Tool to every Session whose Agent allows it.
     subagent_tool_usable: Callable[[SessionAddress], bool] | None = None
     subagent_ancestors: Callable[[SessionAddress], Awaitable[list[SessionAddress]]] | None = None
+
+    async def input_passed_only(self, address: SessionAddress) -> bool:
+        return self.secrets is not None and isinstance(
+            await self.sessions.metadata_value_async(address, SUBAGENT_PARENT_META_KEY), dict
+        )
+
+    def secret_masker_for(
+        self, address: SessionAddress, *, passed_only: bool | None = None
+    ) -> SecretMasker:
+        """The receiving Session's view. Reading its parent when omitted is blocking."""
+        if self.secrets is None:
+            return EMPTY_MASKER
+        if passed_only is None:
+            passed_only = is_subagent_session(self.sessions, address)
+        return self.secrets.masker_for(address, passed_only=passed_only)
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:
@@ -321,6 +331,8 @@ class _RunRequest:
     context_note: str | ChatMessage | None = None
     # The user's view at submission, including when this input steers another Run.
     app_view: ChatMessage | None = None
+    # A Cron fire attests the original task before masking its visible text.
+    cron_approval_scope: str | None = None
     # Resolve this operator input's immutable Extension profile again as it leaves the Queue.
     extension_app_chat: bool = False
 

@@ -81,7 +81,7 @@ class RecallIntegration:
         self._extensions = extensions
         self.logger = logger
         self._remove_stale_recall_files(storage.data_dir / INDEX_DIR_NAME)
-        self.index = PassageIndex(storage.data_dir)
+        self.index = PassageIndex(storage.data_dir, secret_masker=lambda: self._tools.secret_masker)
         self.indexer = SemanticIndexer(
             index=self.index,
             sessions=sessions,

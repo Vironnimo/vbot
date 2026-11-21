@@ -163,8 +163,11 @@ class TerminalOutput:
         ``log_end_line`` the first history line it lacks when known. ``screen_behind``
         is the rendering error while the screen misses output.
         """
-        page = await self.screen.page(start_line=start_line, limit=lines)
-        observation = await self.screen.observe()
+        masker = self._services.masker
+        page = await self.screen.page(
+            start_line=start_line, limit=lines, masker=masker, running=not info.finished
+        )
+        observation = await self.screen.observe(masker, running=not info.finished)
         data: dict[str, Any] = {
             "terminal_id": self.terminal_id,
             "computer_id": info.computer_id,

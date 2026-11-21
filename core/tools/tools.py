@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 from functools import partial
 from typing import Any, cast
 
-from core.secrets._references import iter_strings
+from core.secrets._references import REDACTED, iter_strings
 from core.secrets.agent_secrets import (
     EMPTY_MASKER,
     AgentSecrets,
@@ -314,6 +314,18 @@ def _detail_blocks(
     return blocks
 
 
+def project_secret_use_labels(labels: Sequence[str], masker: SecretMasker) -> list[str]:
+    """Project the typed `NAME.field (sink)` display labels for the recipient."""
+    shown = []
+    for label in labels:
+        path, _, sink = label.partition(" ")
+        name, _, field = path.partition(".")
+        shown.append(
+            label if masker.allows_reference(name, field or None) else f"{REDACTED} {sink}"
+        )
+    return shown
+
+
 class ToolRegistry:
     """Register, filter, describe, and dispatch agent tools."""
 
@@ -347,8 +359,17 @@ class ToolRegistry:
 
     @property
     def secret_masker(self) -> SecretMasker:
-        """Masks known Secret values in what Tools return (Chat applies it)."""
+        """Neutral masking for shared diagnostics without a receiving Session."""
         return self._secrets.masker if self._secrets is not None else EMPTY_MASKER
+
+    def secret_masker_for(self, context: ToolContext) -> SecretMasker:
+        """Project Tool output using the receiving Session's current Secret grants."""
+        if self._secrets is None:
+            return self.secret_masker
+        return self._secrets.masker_for(
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            passed_only=context.subagent_session,
+        )
 
     async def capture_output_secrets(self, context: ToolContext, value: Any) -> SecretMasker:
         """Capture new API keys before Chat publishes a Tool result or its display."""
@@ -528,6 +549,14 @@ class ToolRegistry:
     ) -> JsonObject:
         """Return display metadata for a concrete tool invocation."""
         facts = context.presentation_facts if context is not None else ()
+        if context is not None:
+            masker = self.secret_masker_for(context)
+            arguments = masker.mask_value(
+                context.mask_prepared_secrets(arguments, include_keys=True), include_keys=True
+            )
+            result = masker.mask_value(
+                context.mask_prepared_secrets(result, include_keys=True), include_keys=True
+            )
         display = self.get(name).display
         payload = display.to_payload(
             arguments,
@@ -538,7 +567,10 @@ class ToolRegistry:
         if context is not None and context.presentation_media:
             payload["media_files"] = [dict(item) for item in context.presentation_media]
         if context is not None and context.presentation_secret_uses:
-            payload["secrets_used"] = list(context.presentation_secret_uses)
+            masker = self.secret_masker_for(context)
+            payload["secrets_used"] = project_secret_use_labels(
+                context.presentation_secret_uses, masker
+            )
         if context is not None and context.presentation_widget:
             payload["widget_reference"] = dict(context.presentation_widget)
         if context is not None and context.presentation_portal:
@@ -833,6 +865,7 @@ class ToolRegistry:
                 raise ToolAuthorityUnavailableError(unavailable)
 
         object.__setattr__(context, "authority_recheck", recheck_authority)
+        object.__setattr__(context, "_output_secret_masker", self.secret_masker_for)
         if tool.preflight is not None:
             await tool.preflight(context, normalized_arguments)
             if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):

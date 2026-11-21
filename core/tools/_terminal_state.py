@@ -10,6 +10,7 @@ from core.utils.log_conditions import LoggedConditions
 
 if TYPE_CHECKING:
     from core.permissions.commands.commands import ShellKind
+    from core.secrets.agent_secrets import SecretMasker
 
     from ._command_types import CompletionSink
     from ._terminal_render_host import TerminalScreen
@@ -353,6 +354,11 @@ class TerminalSessionServices:
     # Whether current Permission Rules allow delivering a screen to the
     # attached Session, independent of the Computer grant.
     output_allowed: Callable[[SessionAddress, TerminalInfo], Awaitable[bool]] | None = None
+    output_masker: Callable[[], SecretMasker] | None = None
+
+    @property
+    def masker(self) -> SecretMasker | None:
+        return self.output_masker() if self.output_masker else None
 
 
 @dataclass(frozen=True, slots=True)

@@ -498,12 +498,14 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
             "content": [
                 {"type": "text", "text": value},
                 {"type": "media", "media_type": "image/png", "base64": "aW1n"},
+                {"type": "document", "filename": f"{value}.pdf", "base64": "cGRm"},
             ],
         },
         {
             "role": "assistant",
             "content": value,
             "reasoning": value,
+            "reasoning_meta": {"signed_block": {"text": value, "signature": "opaque"}},
             "tool_calls": [{"id": "call_one", "name": "probe", "arguments": arguments}],
         },
         {
@@ -518,12 +520,20 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
     ]
     before = json.dumps(messages)
 
-    projected, _ = model_facing_request(messages, [], masker)
+    schema = {"name": "probe", "description": value, "parameters": {"properties": {value: {}}}}
+    projected, tools = model_facing_request(messages, [schema], masker)
 
     assert json.dumps(messages) == before
     assert value not in json.dumps(projected)
+    assert value not in json.dumps(tools) and schema["description"] == value
+    assert projected[3]["reasoning_meta"] is None
     assert projected[1] is clean
     assert projected[2]["content"][1] == messages[2]["content"][1]
+    assert projected[2]["content"][2] == {
+        "type": "document",
+        "filename": "{{secret:GITHUB.password}}.pdf",
+        "base64": "cGRm",
+    }
     assert projected[3]["tool_calls"][0]["arguments"] == {"text": "echo {{secret:GITHUB.password}}"}
     assert tool_result_text(projected[4]["content"]) == "{{secret:GITHUB.password}}"
     # A masked reminder is still Chat's own context, real tags and all.
@@ -536,6 +546,193 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
     assert (
         projected[6]["content"]
         == "&lt;system-reminder>{{secret:GITHUB.password}}&lt;/system-reminder>"
+    )
+
+
+def test_masked_tool_ids_keep_distinct_provider_valid_call_result_pairs() -> None:
+    private = ["first-private-token", "second-private-token"]
+    masker = SecretMasker(dict.fromkeys(private, "[redacted]"))
+    calls = [{"id": item, "name": "demo", "arguments": {}} for item in [*private, "stable"]]
+    messages: list[dict[str, Any]] = [
+        {"role": "assistant", "tool_calls": calls, "reasoning_meta": {"signature": "opaque"}},
+        *[
+            {"role": "tool", "name": "demo", "tool_call_id": call["id"], "content": "ok"}
+            for call in reversed(calls)
+        ],
+    ]
+    projected, _ = model_facing_request(messages, [], masker)
+    ids = [call["id"] for call in projected[0]["tool_calls"]]
+    assert len(set(ids)) == 3 and ids[-1] == "stable"
+    assert all(item.isascii() and item.isalnum() and len(item) == 9 for item in ids[:2])
+    assert [entry["tool_call_id"] for entry in projected[1:]] == ids[::-1]
+    assert all(value not in json.dumps(projected) for value in private)
+    assert projected[0].get("reasoning_meta") is None and messages[0].get("reasoning_meta")
+    assert model_facing_request(messages, [], masker)[0] == projected
+
+
+def test_request_filters_historical_broker_names_using_current_grants() -> None:
+    from core.chat._secret_history import with_secret_catalog
+    from core.chat.wire_shaping import system_reminder_request_message
+    from core.prompts import BlockCatalog, RenderedBlock
+    from core.secrets._agent_secret_model import AgentSecret, SecretField
+    from core.tools import tool_failure
+    from core.tools.secrets import SECRET_USE_HINT, SECRETS_PROMPT_BLOCK_HEAD, secret_line
+
+    current = AgentSecret(
+        id="current",
+        name="KEPT",
+        kind="login",
+        lifetime="permanent",
+        created_at=FIXED_TIMESTAMP,
+        created_by="test",
+        fields=(SecretField("username", False, "current-account"), SecretField("password", True)),
+        sinks=frozenset({"environment"}),
+    )
+    masker = SecretMasker({}, filter_references=True).for_session(
+        {},
+        {"KEPT": frozenset({None, "password"})},
+        frozenset({"KEPT", "KEPT_PASSWORD"}),
+        catalog={"KEPT": current},
+    )
+    kept = secret_line(current)
+    stale = kept.replace("current-account", "prior-account")
+    old = (
+        "- OLD (login): unrelated description\nand private account. "
+        'Usable in: shell env_keys ["OLD"] (OLD_PASSWORD).'
+    )
+    block = RenderedBlock(
+        "\n".join((SECRETS_PROMPT_BLOCK_HEAD, stale, old)),
+        BlockCatalog("Secrets", (("KEPT", stale), ("OLD", old)), SECRETS_PROMPT_BLOCK_HEAD),
+    )
+    prompt = with_secret_catalog("Before {{secret:NAME}}\n" + block.text + "\nAfter", block)
+    given = "The user gave you a Secret for this session: OLD (login): private account."
+    passed = "Your Parent Agent passed you these Secrets for this session:\n" + old
+    change = "Secrets changed since your System Prompt listed them.\nRemoved:\n" + old
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": prompt},
+        system_reminder_request_message(given, passed, change, "Keep this neighboring reminder."),
+        {"role": "user", "content": given},
+        {
+            "role": "assistant",
+            "content": "OLD is also an ordinary word.",
+            "tool_calls": [
+                {"name": "secrets", "arguments": {"action": "request", "secret_name": "OLD"}},
+                {"name": "subagent", "arguments": {"secrets": "KEPT,OLD", "task": "OLD"}},
+                {"name": "bash", "arguments": {"env_keys": ["KEPT_PASSWORD", "OLD_PASSWORD"]}},
+                {"name": "another_tool", "arguments": {"name": "OLD"}},
+                {"name": "bash", "arguments": {"request": '{"Env-Keys":["OLD_PASSWORD"]}'}},
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "secrets",
+            "content": json.dumps(tool_success({"content": "Your Secrets:\n" + old})),
+        },
+        {
+            "role": "tool",
+            "name": "secrets",
+            "content": json.dumps(tool_success({"content": "Your Secrets:\n" + kept})),
+        },
+        {
+            "role": "tool",
+            "name": "bash",
+            "content": json.dumps(
+                tool_failure(
+                    "secret_unavailable",
+                    "OLD is unavailable in this Session. Your Secrets: OLD, KEPT. "
+                    "To write the reference as literal text, use {{!secret:OLD}}.",
+                )
+            ),
+        },
+        {
+            "role": "tool",
+            "name": "write",
+            "content": json.dumps(
+                tool_failure(
+                    "secret_unavailable",
+                    "KEPT may not be used in file contents (allowed: typing). "
+                    "Tell the user if this use is needed.",
+                )
+            ),
+        },
+        {
+            "role": "tool",
+            "name": "bash",
+            "content": json.dumps(
+                tool_failure(
+                    "command_failed",
+                    "Launch failed. One-time Secrets OLD, SPENT were used up while preparing "
+                    "this launch. Ask the user to provide them again before retrying.",
+                )
+            ),
+        },
+    ]
+    before = json.dumps(messages)
+    projected, _ = model_facing_request(messages, [], masker)
+
+    assert json.dumps(messages) == before
+    assert (
+        projected[0]["content"]
+        == "Before [redacted]\n" + SECRETS_PROMPT_BLOCK_HEAD + "\n" + kept + "\nAfter"
+    )
+    assert is_request_context_message(projected[1])
+    assert "OLD" not in projected[1]["content"] and "private account" not in projected[1]["content"]
+    assert projected[1]["content"].count("[redacted]") == 3
+    assert "Keep this neighboring reminder." in projected[1]["content"]
+    assert projected[2] is messages[2]
+    assert projected[3]["content"] == messages[3]["content"]
+    assert [call["arguments"] for call in projected[3]["tool_calls"]] == [
+        {"action": "request", "secret_name": "[redacted]"},
+        {"secrets": "KEPT,[redacted]", "task": "OLD"},
+        {"env_keys": ["KEPT_PASSWORD", "[redacted]"]},
+        {"name": "OLD"},
+        {"request": '{"Env-Keys": ["[redacted]"]}'},
+    ]
+    assert json.loads(projected[4]["content"])["data"] == {"content": "[redacted]"}
+    assert projected[5] is messages[5]
+    assert json.loads(projected[6]["content"])["error"]["message"] == (
+        "[redacted] is unavailable in this Session. Your Secrets: [redacted], KEPT. "
+        "To write the reference as literal text, use [redacted]."
+    )
+    assert projected[7] is messages[7]
+    assert json.loads(projected[8]["content"])["error"]["message"] == (
+        "Launch failed. This launch used up its one-time Secrets. "
+        "Ask the user to provide them again before retrying."
+    )
+
+    # A new same-named record grants no access to the previous account's metadata.
+    stale_reminders = system_reminder_request_message(
+        "The user replaced the Secret: " + stale[2:],
+        "Your Parent Agent passed you these Secrets for this session:\n"
+        + stale
+        + "\n"
+        + SECRET_USE_HINT,
+        "Secrets changed since your System Prompt listed them.\nChanged to:\n" + stale,
+    )
+    current_reminder = system_reminder_request_message("The user replaced the Secret: " + kept[2:])
+    stale_result = {
+        **messages[5],
+        "content": json.dumps(tool_success({"content": "Your Secrets:\n" + stale})),
+    }
+    remasked, _ = model_facing_request(
+        [stale_reminders, current_reminder, stale_result, projected[0]], [], masker
+    )
+    assert "prior-account" not in json.dumps(remasked)
+    assert remasked[0]["content"].count("[redacted]") == 3
+    assert remasked[1] is current_reminder
+    assert json.loads(remasked[2]["content"])["data"] == {"content": "[redacted]"}
+    assert remasked[3]["content"] == projected[0]["content"]
+
+    old_reason = json.loads(messages[8]["content"])["error"]["message"]
+    task = {
+        "role": "tool",
+        "name": "background_tasks",
+        "content": json.dumps(tool_success({"status": "not_run", "not_run_because": old_reason})),
+    }
+    [task_result], _ = model_facing_request([task], [], masker)
+    assert (
+        json.loads(task_result["content"])["data"]["not_run_because"]
+        == (json.loads(projected[8]["content"])["error"]["message"])
     )
 
 

@@ -260,6 +260,7 @@ class TriggerService:
         context_note_factory: Callable[[], str] | None = None,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
+        cron_approval_scope: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
@@ -296,6 +297,8 @@ class TriggerService:
             schedule_id,
             notification_policy,
         )
+        if cron_approval_scope is not None:
+            run_kwargs["cron_approval_scope"] = cron_approval_scope
         if context_note_factory is not None:
             run_kwargs["context_note_factory"] = context_note_factory
         if run_overrides is not None and not run_overrides.is_empty:

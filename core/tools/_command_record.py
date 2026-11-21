@@ -120,7 +120,7 @@ class CommandRecord:
         log_lease: TemporaryFileLease | None,
         services: CommandServices,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
-        consumed_once_secrets: tuple[str, ...] = (),
+        consumed_once_secrets: bool = False,
     ) -> None:
         self.command_id = command_id
         self.owner = owner

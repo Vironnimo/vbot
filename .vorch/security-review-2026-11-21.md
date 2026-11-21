@@ -26,7 +26,7 @@ The five items from 17 November were rechecked separately. POSIX Debug and Speec
 | 3.2 | Fixed for new calls. Substituted short values and generated codes are masked in Tool results and display data. The original call's masking information also protects MCP previews, stored result attachments, background completions and later reads after restart. An old six-digit value stored without its original mapping cannot reliably be identified retrospectively. |
 | 3.3 | Fixed. Sampling is sanitized before the approval preview and Provider call, including Tool schemas. Elicitation protects the operator input surface and refuses a request if masking would invalidate its actionable structure. |
 | 3.4 | Fixed. MCP encrypts background and Task recovery payloads using Extension-, receipt- and field-bound identities. The first activation migrates existing rows. The original Session receipt continues to control reads. Previously created snapshots, external backups and old SQLite remnants have no retroactive erasure guarantee. An older vBot needs a pre-migration snapshot to use the old MCP database. |
-| 3.5 | Partial, fixed. Background completion uses the receiving Session's actual grant scope for Secret capture. An inaccessible, recognized API key receives a neutral marker. The global known-value masker on other surfaces still uses reference names. |
+| 3.5 | Fixed. Background completion uses the receiving Session's grant scope for Secret capture. The follow-up extends recipient-aware masking to Agent and Model output surfaces. Shared surfaces use a neutral marker. |
 | 3.6 | Partial, fixed for call diagnostics. Agents see events attributable to their Session. Unattributed diagnostics remain operator-only. Recognized credentials and their supported encodings are masked. Catalog changes and explicit resource subscriptions retain their documented connection-wide scope. |
 | 3.7 | Fixed. Making a field public takes effect immediately. An independently protected occurrence of the same value still masks it. |
 
@@ -54,11 +54,11 @@ The five items from 17 November were rechecked separately. POSIX Debug and Speec
 | 5.4 | Partial. Rotation now retires receipts for the old secret and preserves queued work. Body-based replay protection for the whole active key lifetime is intentional. The delivery header is outside the GitHub signature. Bearer idempotency would be a separate delivery feature. |
 | 5.5 | Intended. The Email setting for authenticated conversations has a documented scope. Cron can accept automatic mail and can filter unverified From addresses when no trusted authentication server is configured. Sender-restricted jobs use verified authentication results when trusted servers are configured. |
 
-## Follow-up choices
+## Decisions accepted on 2026-11-21
 
-- **Cron replay and storage.** Keep receipts for the lifetime of the signing key and use distinct signed event IDs in independent events. A bounded acceptance window would lower storage use while allowing sufficiently old signatures to replay.
-- **Secret names.** Prefer a neutral marker for inaccessible references on all Agent-facing surfaces if names must also stay private. That requires an explicit change to the global masking contract beyond the corrected API-key completion path.
-- **MCP subscriptions.** Keep connection-wide sharing for catalogs and deliberately shared subscriptions. Separate connections can be used where resource visibility must differ. Session-private subscriptions would require ownership and reconnect semantics for the subscriptions themselves.
+- **Cron replay and storage.** An accepted signing key retains one receipt per distinct signed body for its lifetime. A sender that needs two independent events to run should include a distinct event ID in each signed body. Rotation retires old receipts and preserves queued work.
+- **Secret names.** Only the receiving Session with a current grant may see an actionable Secret reference. Mask known values and stored references as `[redacted]` when access is absent or the output is shared. Permanent Secret names remain unique. An explicit create attempt can therefore reveal that a name is unavailable, while the refusal discloses neither its owner nor its contents.
+- **MCP subscriptions.** Catalog changes and explicit resource subscriptions are shared within a connection. Use separate connections for different trust domains. Per-call diagnostics remain scoped to the calling Session.
 
 The current Extension model trusts installed Python code. The Host exposes supported Computer routing and rechecks registration, while Session policy applies at Agent-initiated resolution. Treating third-party code as hostile would require an isolation boundary beyond these fixes.
 
@@ -66,8 +66,9 @@ The current Extension model trusts installed Python code. The Host exposes suppo
 
 - A restricted shell refusal gives the correction at the failed call: `Run vbot in its own shell call with literal arguments and file paths.`
 - The MCP events operation formerly said `Read progress, logs, and change events.` It now says `Read events from this Session's calls and shared resource and catalog changes.`
+- A Session with a current grant can see a reference such as `{{secret:BUILD_TOKEN}}`. An inaccessible value or stored reference is shown as `[redacted]`. After a failed shell launch that consumed a one-time Secret, the recovery instruction reads `This launch used up its one-time Secrets. Ask the user to provide them again before retrying.`
 
-## Verification
+## Verification of the original review
 
 The independent review included stored data, denial and cancellation paths, previous client versions and asynchronous delivery. Its corrections covered normalized Portal origins, quoted group Secret commands, the full shell syntax before issuing CLI credentials, multi-line diff truncation, delayed MCP reads and restart, connection-wide event metadata, and native replies and pushes during Desktop navigation.
 
@@ -77,3 +78,11 @@ The independent review included stored data, denial and cancellation paths, prev
 - The three WebUI suites covering the Desktop bridge, Computer Sharing and Live voice passed all 80 tests.
 - All changed backend test files were run together again on the final implementation. 1,371 tests passed and two were skipped. The complete Desktop suite passed 1,210 tests with one skip. Static checks covered the Windows and Linux targets.
 - The full Windows backend suite passed 25,190 tests with 76 skips. Its 19 warnings came from the duplicate ZIP-member fixture and the Telegram library's `retry_after` deprecation.
+
+## Verification of the accepted changes
+
+The follow-up review traced the receiving Session's grants through Chat, Compaction, Live, MCP recovery, Shell, Recall, and auxiliary Model calls. Tests cover revocation between attempts, replacement with a different record of the same name, one-time Secret consumption, and output boundaries in excerpts and terminal rows. Historical broker records are projected when read. Existing transcripts and backups were not rewritten. In growing output, the partial-value check starts at three matching characters. The existing minimum length for ambient raw-value matching still applies. Explicitly substituted short credentials have a separate per-call mask.
+
+Shell Review grants authority to a Cron input only with the scheduler's proof for that original input and the current approved job. A later or edited input, imported data or a historical entry without that proof cannot inherit the approval. Independent review also confirmed the existing webhook replay and MCP subscription contracts.
+
+The complete Windows backend suite on `cfb55653e` passed 25,213 tests with 76 skips and 19 warnings. Ruff, both mypy platform targets, the domain-map checks and the public Extension SDK contract passed. The independent reviewer closed every finding from the follow-up.

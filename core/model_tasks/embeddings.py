@@ -39,6 +39,7 @@ from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbedd
 from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_target_id
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.task_client import TaskClientRuntime
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
@@ -131,10 +132,12 @@ class EmbeddingService:
         *,
         usage_recorder: UsageRecorder | None = None,
         local_executor: LocalEmbeddingExecutor | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
         self._runtime = runtime
         self._usage_recorder = usage_recorder
         self._local = local_executor
+        self._secret_masker = secret_masker
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=EmbeddingConfigurationError
         )
@@ -175,6 +178,8 @@ class EmbeddingService:
             raise EmbeddingConfigurationError(f"Unsupported embedding purpose: {purpose}")
 
         _binding, options, target_ref = await self._resolver.resolve_async(TASK_TEXT_EMBEDDING)
+        masker = self._secret_masker()
+        texts = [masker.mask(text) for text in texts]
 
         if target_ref.kind == "local":
             return await self._embed_local(texts, purpose, options, target_ref)

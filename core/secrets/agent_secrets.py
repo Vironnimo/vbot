@@ -7,14 +7,14 @@ Session, and the set of known values that masking replaces with references.
 
 Tools never resolve values themselves: the Tool registry substitutes references
 in declared sink arguments (:meth:`AgentSecrets.substitute`), and Chat masks
-every Tool result, user message and Provider request with :attr:`masker`.
+every Tool result, user message and Provider request for its receiving Session.
 """
 
 from __future__ import annotations
 
 import secrets as _random
 import string
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
@@ -53,6 +53,7 @@ from core.secrets._agent_secret_model import (
 from core.secrets._references import (
     EMPTY_MASKER,
     MIN_MASKED_LENGTH,
+    REDACTED,
     REFERENCE_PATTERN,
     Reference,
     SecretMasker,
@@ -196,13 +197,18 @@ class AgentSecrets:
         # take no lock.
         self._records: dict[str, AgentSecret] = {}
         self._sources: dict[str, SecretSource] = {}
-        # Values known only in memory: system credentials and values a source
-        # delivered in this process, each with the reference that masks it.
-        self._runtime_values: dict[str, str] = {}
-        self._retired_values: dict[str, str] = {}
+        self._source_labels: dict[str, str] = {}
+        # External values stay masked for this process. Only the latest
+        # observed value of a live source field can identify its reference.
+        self._runtime_values: set[str] = set()
+        self._source_values: dict[tuple[str, str], str] = {}
+        self._retired_values: set[str] = set()
         self._system_values: dict[str, str] = {}
         # Rebuilt after every change of the known values; read without a lock.
-        self._masker: SecretMasker = EMPTY_MASKER
+        self._masker = SecretMasker({}, filter_references=True)
+        self._session_maskers: OrderedDict[
+            tuple[SessionAddress, bool], tuple[datetime | None, SecretMasker]
+        ] = OrderedDict()
         self._listeners: list[ChangeListener] = []
         self._loaded = False
         # The latest uses of each Secret since this process started, newest last.
@@ -246,11 +252,22 @@ class AgentSecrets:
     def replace_sources(self, sources: Iterable[SecretSource]) -> None:
         """Offer exactly ``sources``; a source that goes away is locked first."""
         offered = {source.name: source for source in sources}
+        labels = {name: source.label for name, source in offered.items()}
         with self._memory_lock:
             removed = [
                 source for name, source in self._sources.items() if offered.get(name) is not source
             ]
             self._sources = offered
+            if self._source_labels != labels:
+                self._source_labels = labels
+                self._session_maskers.clear()
+            if removed:
+                removed_names = {source.name for source in removed}
+                for secret in self._records.values():
+                    if secret.source is not None and secret.source.source in removed_names:
+                        for item in secret.fields:
+                            self._source_values.pop((secret.id, item.name), None)
+                self._session_maskers.clear()
         for source in removed:
             try:
                 source.lock()
@@ -473,13 +490,14 @@ class AgentSecrets:
             if not candidates:
                 return {}
             actor = f"agent:{address.agent_id}" if source == "tool" else "user"
+            available = self.usable(address, passed_only=passed_only)
             usable_values = {
                 field.value: secret.reference(field.name)
-                for secret in self.usable(address, passed_only=passed_only)
+                for secret in available
                 for field in secret.fields
                 if field.concealed and field.value is not None
             }
-            names = {item.name for item in self.all()}
+            names = {item.name for item in available}
             names.update(credential_name_key(item).upper() for item in self._credential_names())
             values: set[str] = set()
             for base, value in candidates:
@@ -496,8 +514,6 @@ class AgentSecrets:
                         for secret in self.all()
                     )
                     if not rediscovered:
-                        if passed_only and source == "tool":
-                            references[value] = "[redacted API key]"
                         continue
                 base = normalize_secret_name(base)
                 name = base
@@ -563,15 +579,27 @@ class AgentSecrets:
         if growing:
             text = complete_output_prefix(text)
         candidates = [(item.name, item.value) for item in detect_api_keys(text)]
-        references = self.capture_api_keys(
-            address,
-            candidates,
-            source="tool",
-            passed_only=passed_only,
-            resolve_scope=resolve_scope,
-        )
-        text = SecretMasker(references).mask(text)
-        return self.masker.mask_growing(text) if growing else self.masker.mask(text)
+        if candidates:
+            self.capture_api_keys(
+                address,
+                candidates,
+                source="tool",
+                passed_only=passed_only,
+                resolve_scope=resolve_scope,
+            )
+        if resolve_scope is None:
+            masker = self.masker_for(address, passed_only=passed_only)
+        else:
+            # Capture may have notified listeners or yielded the write lock.
+            # Resolve again when taking the projection so another generation
+            # cannot supply names through a reused address.
+            with self._lock:
+                scope = resolve_scope()
+                if scope is None:
+                    raise SessionNotFoundError("The output's Session no longer exists")
+                address, passed_only = scope
+                masker = self.masker_for(address, passed_only=passed_only)
+        return masker.mask_growing(text) if growing else masker.mask(text)
 
     def update(
         self,
@@ -943,7 +971,7 @@ class AgentSecrets:
             if target is None or use.value is None or self.field_value(secret, target) != use.value:
                 raise SecretUseError(
                     "not_granted",
-                    f"{use.label} changed while this call was waiting. Nothing was run. "
+                    "A Secret changed while this call was waiting. Nothing was run. "
                     "List the available Secrets before trying again.",
                 )
 
@@ -967,7 +995,7 @@ class AgentSecrets:
                 if secret is None or current != secret:
                     raise SecretUseError(
                         "not_granted",
-                        f"{use.name} changed, expired or was used while this call was prepared. "
+                        "A Secret changed, expired or was used while this call was prepared. "
                         "Nothing was run. List the available Secrets before trying again.",
                     )
                 if secret.lifetime == "once":
@@ -1136,8 +1164,90 @@ class AgentSecrets:
 
     @property
     def masker(self) -> SecretMasker:
-        """Masks every value vBot knows; rebuilt after each change, read without a lock."""
+        """Anonymous projection for recipients without a Session grant."""
         return self._masker
+
+    def masker_for(self, address: SessionAddress, *, passed_only: bool = False) -> SecretMasker:
+        """A read-only projection of the receiving Session's current grants."""
+        key = (address, passed_only)
+        with self._memory_lock:
+            cached = self._session_maskers.get(key)
+            if cached is not None and (cached[0] is None or self._clock() < cached[0]):
+                self._session_maskers.move_to_end(key)
+                return cached[1]
+            values: dict[str, str] = {}
+            allowed: dict[str, frozenset[str | None]] = {}
+            prepared: dict[tuple[str, str | None], tuple[str, bool]] = {}
+            catalog: dict[str, AgentSecret] = {}
+            source_labels: dict[str, str] = {}
+            environment = set()
+            expires = None
+            for secret in self.usable(address, passed_only=passed_only):
+                if secret.source is not None:
+                    source = secret.source.source
+                    source_labels[secret.name] = self._source_labels.get(source, source)
+                catalog[secret.name] = replace(
+                    secret,
+                    fields=tuple(
+                        replace(
+                            item, value=None if item.concealed else item.value, source_field=None
+                        )
+                        for item in secret.fields
+                    ),
+                    source=None,
+                    extra={},
+                )
+                fields: set[str | None] = set()
+                default = secret.default_field()
+                if default is not None:
+                    fields.add(None)
+                for item in secret.fields:
+                    fields.add(item.name)
+                    value = (
+                        self._source_values.get((secret.id, item.name))
+                        if secret.source is not None
+                        else item.value
+                    )
+                    if value:
+                        entry = (value, item.name == TOTP_FIELD)
+                        prepared[(secret.name, item.name)] = entry
+                        if item == default:
+                            prepared[(secret.name, None)] = entry
+                        if item.concealed or secret.source is not None:
+                            values.setdefault(value, secret.reference(item.name))
+                allowed[secret.name] = frozenset(fields)
+                if "environment" in secret.sinks:
+                    environment.add(secret.name)
+                    environment.update(secret.environment_names().values())
+                if secret.expires_at is not None and (
+                    expires is None or secret.expires_at < expires
+                ):
+                    expires = secret.expires_at
+
+            def matches(name: str, field: str | None, literal: str) -> bool:
+                entry = prepared.get((name, field))
+                if entry is None:
+                    return False
+                value, is_totp = entry
+                if is_totp:
+                    try:
+                        return totp_code(value, self._clock()) == literal
+                    except TotpSeedError:
+                        return False
+                return value == literal
+
+            masker = (
+                self._masker.for_session(
+                    values, allowed, frozenset(environment), matches, catalog, source_labels
+                )
+                if allowed
+                else self._masker
+            )
+            self._session_maskers[key] = (expires, masker)
+            self._session_maskers.move_to_end(key)
+            if len(self._session_maskers) > 128:
+                self._session_maskers.popitem(last=False)
+            return masker
 
     def _publish_masker(self) -> None:
         """Build the masker over the current values; the caller holds ``_memory_lock``."""
@@ -1147,34 +1257,35 @@ class AgentSecrets:
             for item in secret.fields
             if not item.concealed
         }
-        known = {value: ref for value, ref in self._retired_values.items() if value not in visible}
-        for name, value in self._system_values.items():
-            known[value] = f"{{{{secret:{name}}}}}"
-        known.update(self._runtime_values)
+        known = self._retired_values.difference(visible)
+        known.update(self._system_values.values(), self._runtime_values)
         for secret in self._records.values():
             for item in secret.fields:
                 if item.value is not None and item.concealed:
-                    known[item.value] = secret.reference(item.name)
-        self._masker = SecretMasker(known) if known else EMPTY_MASKER
+                    known.add(item.value)
+        self._masker = SecretMasker(dict.fromkeys(known, REDACTED), filter_references=True)
+        self._session_maskers.clear()
 
     def set_system_values(self, values: Mapping[str, str]) -> None:
-        """Replace the system credential values masked as ``{{secret:<ENV_NAME>}}``."""
+        """Replace the system credentials whose values are masked anonymously."""
         with self._memory_lock:
+            old_values = set(self._system_values.values())
             self._system_values = {
                 credential_name_key(name).upper(): value
                 for name, value in values.items()
                 if isinstance(value, str) and len(value) >= MIN_MASKED_LENGTH
             }
+            self._retired_values.update(old_values.difference(self._system_values.values()))
             self._publish_masker()
 
-    def remember_value(self, value: str, reference: str) -> None:
+    def remember_value(self, value: str) -> None:
         """Mask a value that reached a process from outside the store (a source, the shell)."""
         if len(value) < MIN_MASKED_LENGTH:
             return
         with self._memory_lock:
-            if self._runtime_values.get(value) == reference:
+            if value in self._runtime_values:
                 return
-            self._runtime_values[value] = reference
+            self._runtime_values.add(value)
             self._publish_masker()
 
     # -- internals -------------------------------------------------------------
@@ -1202,41 +1313,35 @@ class AgentSecrets:
                 else "source_failed",
                 f"{source.label} did not deliver {secret.name}.{target.name}: {error} {hint}",
             ) from None
-        self.remember_value(value, secret.reference(target.name))
+        key = (secret.id, target.name)
+        with self._memory_lock:
+            current = self._records.get(secret.id)
+            if (
+                current is not None
+                and current.source == secret.source
+                and current.field_named(target.name) == target
+                and self.source(secret.source.source) is source
+                and self._source_values.get(key) != value
+            ):
+                self._source_values[key] = value
+                self._session_maskers.clear()
+            self.remember_value(value)
         return value
 
     def _unknown(
         self, address: SessionAddress, reference: Reference, passed_only: bool
     ) -> SecretUseError:
-        exists = any(item.name == reference.name for item in self.all())
         names = self._names_text(address, passed_only)
-        literal = (
-            f" If you meant the text {{{{secret:{reference.text_name}}}}} itself, "
-            f"write {{{{!secret:{reference.text_name}}}}}."
+        next_step = (
+            "If you need it, ask your Parent Agent to pass it."
+            if passed_only
+            else "Use the secrets Tool to request it from the user."
         )
-        if exists and passed_only:
-            return SecretUseError(
-                "not_granted",
-                f"{reference.name} was not passed to you. Your Secrets: {names}. "
-                "If you need it, say so in your report; your Parent Agent can pass it." + literal,
-            )
-        if exists:
-            return SecretUseError(
-                "not_granted",
-                f"{reference.name} is not granted to you. Your Secrets: {names}. "
-                "Ask the user to grant it in Settings -> Secrets if you need it." + literal,
-            )
-        system = {credential_name_key(item).upper() for item in self._credential_names()}
-        if reference.name in system:
-            return SecretUseError(
-                "not_granted",
-                f"{reference.name} is a vBot credential, not a Secret you can use here. "
-                f"Your Secrets: {names}." + literal,
-            )
         return SecretUseError(
             "unknown_secret",
-            f"No Secret named {reference.name}. Your Secrets: {names}. "
-            "Use the secrets Tool to request one from the user." + literal,
+            f"{reference.name} is unavailable in this Session. Your Secrets: {names}. "
+            f"{next_step} To write the reference as literal text, use "
+            f"{{{{!secret:{reference.text_name}}}}}.",
         )
 
     def _names_text(self, address: SessionAddress, passed_only: bool) -> str:
@@ -1253,9 +1358,7 @@ class AgentSecrets:
     def _check_name_free(self, secret: AgentSecret, *, passed_only: bool) -> None:
         system = {credential_name_key(item).upper() for item in self._credential_names()}
         if secret.name in system:
-            raise SecretRecordError(
-                f"{secret.name} is already a vBot credential name; choose another name."
-            )
+            raise SecretRecordError("That Secret name is unavailable here. Choose another name.")
         now = self._clock()
         for other in self._records.values():
             if other.id == secret.id or other.name != secret.name or other.expired(now):
@@ -1269,7 +1372,9 @@ class AgentSecrets:
                 other.session_id is None or passed_only
             )
             if same_session or occupied_agent_name:
-                raise SecretRecordError(f"A Secret named {secret.name} already exists.")
+                raise SecretRecordError(
+                    "That Secret name is unavailable here. Choose another name."
+                )
 
     def _write_many(self, changed: Sequence[AgentSecret]) -> None:
         """Commit records as a unit before publishing the new grants."""
@@ -1315,10 +1420,14 @@ class AgentSecrets:
         """
         for item in secret.fields:
             active = current.field_named(item.name) if current is not None else None
+            if secret.source is not None and (
+                current is None or current.source != secret.source or active != item
+            ):
+                self._source_values.pop((secret.id, item.name), None)
             if active is not None and active.value == item.value:
                 continue
             if item.concealed and item.value is not None and len(item.value) >= MIN_MASKED_LENGTH:
-                self._retired_values[item.value] = secret.reference(item.name)
+                self._retired_values.add(item.value)
 
 
 _SINK_WORDS: Final[Mapping[SinkClass, str]] = {

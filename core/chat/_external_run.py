@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from core.agents.app_chats import app_chat_tool_grants
 from core.chat._run_permissions import RunPermissions, live_run_permission_boundary
 from core.chat._run_state import _resolve_working_project
+from core.chat._secret_history import project_secret_result
 from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import masked_content
@@ -58,6 +59,7 @@ from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
     from core.chat._run_state import ChatLoopDependencies
+    from core.secrets.agent_secrets import SecretMasker
     from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
@@ -142,9 +144,29 @@ class ExternalRun:
         return self._require_run()
 
     @property
+    def secret_masker(self) -> SecretMasker:
+        """The external Model's current Secret grants, including revocations during a call."""
+        return self._dependencies.secret_masker_for(self._session.address, passed_only=False)
+
+    @property
     def tool_definitions(self) -> tuple[JsonObject, ...]:
         """The Tools the Model can call: ``name``, ``description``, ``parameters`` each."""
-        return tuple(dict(definition) for definition in self._tool_definitions)
+        masker = self.secret_masker
+        return tuple(
+            masker.mask_value(dict(tool), include_keys=True) for tool in self._tool_definitions
+        )
+
+    def tool_name(self, name: str) -> str:
+        """Resolve an incoming name against the Tools admitted to this Run."""
+        return called_tool_name(
+            name, self._allowed_tools, registered=_RegisteredNames(self._dependencies.tools)
+        )
+
+    def model_tool_result(self, name: str, result: JsonObject) -> JsonObject:
+        """Project structured broker metadata and values when returning a result to this Model."""
+        masker = self.secret_masker
+        result = project_secret_result(result, self.tool_name(name), masker)
+        return masker.mask_value(result, include_keys=True)
 
     @property
     def ended(self) -> bool:
@@ -155,7 +177,10 @@ class ExternalRun:
         """Store what the user said."""
         if text.strip():
             message = ChatMessage.user(
-                masked_content(replace_lone_surrogates(text), self._dependencies.secret_masker),
+                masked_content(
+                    replace_lone_surrogates(text),
+                    self.secret_masker,
+                ),
                 input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
             )
             if await self._append([message]):
@@ -201,11 +226,7 @@ class ExternalRun:
             without_lone_surrogates(
                 normalize_tool_call_candidate(
                     tool_call_id=call_id,
-                    name=called_tool_name(
-                        name,
-                        self._allowed_tools,
-                        registered=_RegisteredNames(self._dependencies.tools),
-                    ),
+                    name=self.tool_name(name),
                     arguments=arguments,
                     fallback_id=new_id("call"),
                 )

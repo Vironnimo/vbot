@@ -21,9 +21,16 @@ async def sample_extension(
     from core.chat.model_resolution import resolve_agent_model_target
 
     agent = await runtime._extension_tool_agent_async(context)
-    # Sampling can originate from any Extension. Protect the complete request,
-    # including schema strings and stop sequences, before any Provider trace.
-    request = runtime.agent_secrets.masker.mask_value(request, include_keys=True)
+    tools = runtime.tools
+
+    def project_request(
+        messages: list[dict[str, Any]], options: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        masker = tools.secret_masker_for(context)
+        return masker.mask_value(messages, include_keys=True), masker.mask_value(
+            options, include_keys=True
+        )
+
     adapter: ProviderAdapter | None = None
 
     def prepare() -> tuple[str, str, str]:
@@ -68,6 +75,7 @@ async def sample_extension(
             if request.get("temperature") is not None
             else agent.temperature,
             on_usage=reported.update,
+            project_request=project_request,
             **options,
             **adapter.request_context_kwargs(
                 agent_id=context.agent_id,
@@ -107,4 +115,6 @@ async def sample_extension(
         finally:
             if adapter is not None:
                 await adapter.aclose()
-    return {"model": f"{provider_id}/{model_id}", **normalized}
+    return tools.secret_masker_for(context).mask_value(
+        {"model": f"{provider_id}/{model_id}", **normalized}, include_keys=True
+    )

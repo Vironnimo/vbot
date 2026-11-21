@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.secrets.agent_secrets import SecretMasker
 
 from core.tools.terminal_emulator import (
     ScreenObservation,
@@ -27,6 +31,7 @@ def _attention_body(
     unseen: str | None,
     idle_seconds: float,
     behind: str | None = None,
+    masker: SecretMasker | None = None,
 ) -> str:
     """The message that tells the attached Agent its interactive program needs a look.
 
@@ -54,7 +59,8 @@ def _attention_body(
         left_out += 1
     if len(body) <= TERMINAL_NOTICE_MESSAGE_CAP_CHARS:
         return body
-    return body[:TERMINAL_NOTICE_MESSAGE_CAP_CHARS] + "\n[message cut]"
+    end = TERMINAL_NOTICE_MESSAGE_CAP_CHARS
+    return (masker.guard_slice(body, 0, end) if masker else body[:end]) + "\n[message cut]"
 
 
 def _compose_attention(

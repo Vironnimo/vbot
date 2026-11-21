@@ -246,14 +246,20 @@ async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path
     trigger_service.trigger_run.return_value = run
     job = await service.create_job(
         agent_id="agent-one",
-        prompt="Health check",
+        prompt="Health check with {{secret:STATUS}}",
         schedule_type="cron",
         cron_expression="0 9 * * *",
+        actor="rpc",
     )
 
     succeeded = await service._execution._trigger_job_run(job)
 
     assert succeeded.succeeded is True
+    assert job.operator_approved
+    assert (
+        trigger_service.trigger_run.await_args.kwargs["cron_approval_scope"]
+        == job.operator_approval
+    )
     run.wait.assert_awaited_once_with()
     updated = service.get_job(job.id)
     assert updated.last_attempt_at is not None
@@ -598,6 +604,11 @@ async def test_recurring_job_stops_after_consecutive_failures(
     ("error", "last_error"),
     [
         pytest.param(RuntimeError("queue limit reached"), "queue limit reached", id="capacity"),
+        pytest.param(
+            RuntimeError("x" * 490 + "credential-crossing-the-limit"),
+            "x" * 490 + "[redacted]",
+            id="secret-before-truncation",
+        ),
         # A target that exists but cannot run can recover without editing the job.
         pytest.param(
             AgentResolutionError("no usable Model"),
@@ -616,7 +627,8 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     recurring job that never ran at all. The error must stay visible without
     burning the fatal budget.
     """
-    service, trigger_service = make_service(tmp_path)
+    masker = SecretMasker({"credential-crossing-the-limit": "[redacted]"})
+    service, trigger_service = make_service(tmp_path, secret_masker=lambda: masker)
     monkeypatch.setattr(cron_execution, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
     trigger_service.trigger_run.side_effect = error
     job = await service.create_job(

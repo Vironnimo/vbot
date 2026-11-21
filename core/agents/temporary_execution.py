@@ -399,12 +399,11 @@ class TemporaryExecutionGroups:
                         "This Session is no longer available. "
                         "Check its state through its Extension."
                     )
+                content = await self._chat.mask_user_input(binding.address, input.content)
                 message = (
-                    ChatMessage.user(
-                        self._chat.mask_user_input(input.content), input_origin="extension"
-                    )
+                    ChatMessage.user(content, input_origin="extension")
                     if input.kind == "initial"
-                    else ChatMessage.note(input.content)
+                    else ChatMessage.note(content)
                 )
                 await self._sessions.append_messages_with_receipts_async(
                     binding.address,

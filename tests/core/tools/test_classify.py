@@ -11,6 +11,7 @@ from core.model_tasks.decision_types import DecisionError, json_copy, validate_q
 from core.model_tasks.decisions import DecisionService
 from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
+from core.secrets.agent_secrets import SecretMasker
 from core.tools.classify import register_classify_tool
 from core.tools.tools import ToolContext, ToolRegistry
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -58,7 +59,9 @@ class Classify:
         self.received: list[tuple[Any, list[dict[str, Any]]]] = []
         self.calls: list[dict[str, Any]] = []
 
-        async def classify(items, questions, *, context=None, usage_context=None):
+        async def classify(
+            items, questions, *, context=None, usage_context=None, secret_masker=None
+        ):
             self.calls.append({"context": context, "usage_context": usage_context})
             outcomes: list[dict[str, Any] | DecisionError] = []
             for index, item in enumerate(items):
@@ -111,11 +114,18 @@ async def test_dispatch_preserves_item_data_attributes_usage_and_enforces_readin
 
 
 @pytest.mark.asyncio
-async def test_each_item_is_judged_with_the_shared_context_and_read_back_in_order(tmp_path):
+async def test_each_item_is_judged_with_the_shared_context_and_read_back_in_order(
+    tmp_path, monkeypatch
+):
     tool = Classify(tmp_path)
+    masker = SecretMasker({"private-component": "[redacted]"}, filter_references=True)
+    masker = masker.for_session({}, {"OWN": frozenset({None})}, frozenset())
+    monkeypatch.setattr(tool.registry, "secret_masker_for", lambda _context: masker)
     files = [
         "core/sessions/export.py\n\ndef export(session): ...",
-        "webui/src/components/a/very/long/path/that/goes/on/and/on/Component.svelte",
+        "webui/src/components/a/very/long/path/private-component/on/Component.svelte",
+        "file " + "x" * 40 + "{{secret:OWN}} and more",
+        "left {{secret:\nOWN}} farther",
     ]
 
     result, text = await tool.call(
@@ -132,7 +142,11 @@ async def test_each_item_is_judged_with_the_shared_context_and_read_back_in_orde
     ]
     assert text == (
         "item 1 (core/sessions/export.py): probability of yes 0.82\n"
-        "item 2 (webui/src/components/a/very/long/path/that/goes...): probability of yes 0.82"
+        "item 2 (webui/src/components/a/very/long/path/...): probability of yes 0.82\n"
+        + "item 3 (file "
+        + "x" * 40
+        + "...): probability of yes 0.82\n"
+        + "item 4 (left [redacted] farther): probability of yes 0.82"
     )
 
 
@@ -254,9 +268,13 @@ class TestOtherShapes:
         assert tool.calls[0]["context"] == "task"
 
     @pytest.mark.asyncio
-    async def test_question_spellings_and_label_lists(self, tmp_path):
+    async def test_question_spellings_and_label_lists(self, tmp_path, monkeypatch):
         tool = Classify(tmp_path)
-        fix = "Fix the crash first: it is small, confirmed three times and blocks " + "x" * 80
+        masker = SecretMasker({}, filter_references=True).for_session(
+            {}, {"OWN": frozenset({None})}, frozenset()
+        )
+        monkeypatch.setattr(tool.registry, "secret_masker_for", lambda _context: masker)
+        fix = "x" * 74 + "{{secret:OWN}}" + " and more" * 8
 
         result, text = await tool.call(
             {
@@ -289,7 +307,7 @@ class TestOtherShapes:
         )
 
         assert result["ok"] is True
-        assert f"next: 1 '{fix[:77]}...' (confidence 0.9; 1 0.9, 2 0.1)" in text
+        assert f"next: 1 '{'x' * 74}...' (confidence 0.9; 1 0.9, 2 0.1)" in text
         assert tool.received[0][1] == [
             {
                 "id": "category",

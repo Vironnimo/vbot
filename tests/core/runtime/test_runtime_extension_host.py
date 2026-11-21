@@ -107,12 +107,18 @@ async def test_shell_review_context_keeps_human_authority_separate_from_delegati
         "Claimed consent",
     }
     assert evidence["authority_truncated"] is False
+    child.append_many([ChatMessage.user("Use {{secret:FORMER}}")], subagent_reply_target="user")
+    protected = await host.review_context(context)
+    assert protected["authority_truncated"] is True
+    assert protected["user_requests"][-1] == "Use [redacted]"
     child.append_many([ChatMessage.user("x" * 20001)], subagent_reply_target="user")
     assert (await host.review_context(context))["authority_truncated"] is True
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["cron_operator", "cron_tool", "input", "group", "system"])
+@pytest.mark.parametrize(
+    "source", ["cron_operator", "cron_tool", "cron_collision", "input", "group", "system"]
+)
 async def test_shell_review_keeps_automation_and_group_scope_attributed(
     runtime: Runtime, tmp_path: Path, source: str
 ) -> None:
@@ -135,11 +141,13 @@ async def test_shell_review_keeps_automation_and_group_scope_attributed(
     if source.startswith("cron"):
         job = await runtime.cron_service.create_job(
             agent_id="main",
-            prompt="Inspect the project",
+            prompt="Inspect {{secret:FIRST}}"
+            if source == "cron_collision"
+            else "Inspect the project",
             schedule_type="interval",
             interval_seconds=3600,
             status="paused",
-            actor="rpc" if source == "cron_operator" else "tool",
+            actor="rpc" if source in {"cron_operator", "cron_collision"} else "tool",
         )
         run.schedule_id = job.id
     elif source == "input":
@@ -154,8 +162,9 @@ async def test_shell_review_keeps_automation_and_group_scope_attributed(
     await sessions.start_run(run)
     session.for_run(run.id).append(
         ChatMessage.user(
-            "Inspect the project",
+            "Inspect {{secret:SECOND}}" if source == "cron_collision" else "Inspect the project",
             sender=MessageSender("member-1", "Member", "member") if source == "group" else None,
+            cron_approval_scope=job.operator_approval if source == "cron_operator" else None,
         )
     )
     host = _owner_host(runtime, "mcp")
@@ -168,6 +177,8 @@ async def test_shell_review_keeps_automation_and_group_scope_attributed(
     else:
         assert authority["user_requests"] == []
         assert bool(authority["authorized_tasks"]) == (source in {"cron_operator", "input"})
+        if source == "cron_collision":
+            assert authority["evidence"]["automated_requests"][0]["text"] == "Inspect [redacted]"
     if source == "input":
         # A human follow-up in the same Run is not a second program input.
         session.for_run(run.id).append(ChatMessage.user("Only inspect, never change files"))
@@ -206,6 +217,25 @@ async def test_native_decisions_use_the_owner_and_stop_after_retirement(
     with pytest.raises(DecisionError) as failure:
         await host.decide(None, request)
     assert failure.value.code == "provider_error"
+
+    secret = runtime.agent_secrets.create(
+        name="REVIEW",
+        kind="token",
+        values={"value": "review-fixture-value"},
+        actor="user",
+        agents=[context.agent_id],
+    )
+    exact = {**request, "require_exact": True, "state": {"command": "read {{secret:REVIEW}}"}}
+
+    async def revoke(*_args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["secret_masker"]().mask_value(exact) == exact
+        runtime.agent_secrets.delete(secret.id, actor="user")
+        return [answer]
+
+    service.classify.side_effect = revoke
+    with pytest.raises(DecisionError) as changed:
+        await host.decide(context, exact)
+    assert changed.value.code == "incomplete_authority"
 
     assert runtime.extensions is not None
 

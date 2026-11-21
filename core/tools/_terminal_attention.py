@@ -117,6 +117,7 @@ class TerminalNotices:
             unseen=unseen,
             behind=behind,
             idle_seconds=self._services.idle_seconds,
+            masker=self._services.masker,
         )
         self.seen_line = (
             _seen_through(observation, alternate=self._info().alternate_screen)
@@ -134,9 +135,12 @@ class TerminalNotices:
 
     def _notice_label(self) -> str:
         info = self._info()
-        label = " ".join(info.program.split())
+        masker = self._services.masker
+        program = masker.guard_layout(info.program) if masker else info.program
+        label = " ".join(program.split())
         if len(label) > _NOTICE_LABEL_CHARS:
-            label = label[: _NOTICE_LABEL_CHARS - 3] + "..."
+            end = _NOTICE_LABEL_CHARS - 3
+            label = (masker.guard_slice(label, 0, end) if masker else label[:end]) + "..."
         return f"{info.call_name}, {label}" if info.call_name else label
 
     def schedule(

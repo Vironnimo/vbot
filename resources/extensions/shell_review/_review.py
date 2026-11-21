@@ -134,6 +134,7 @@ class ShellReview:
                     context,
                     {
                         "state": state,
+                        "require_exact": True,
                         "questions": [
                             {
                                 "id": "allow",

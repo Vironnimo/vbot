@@ -30,10 +30,12 @@ from core.providers.errors import NetworkError, ProviderContextOverflowError
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import RequestInput
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import SessionAddress
 from core.utils.errors import ProviderError
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
 from tests.core.compaction.compaction_test_support import (
+    SESSION,
     StubAdapter,
     assistant,
     compact,
@@ -89,6 +91,57 @@ async def test_compaction_consumes_canonical_stream_without_raw_wire_normalizati
     assert result.role == "compaction_checkpoint"
     assert "SUMMARY SENTINEL" in str(result.content)
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+async def test_compaction_refreshes_session_visibility_after_a_retry_wait(
+    strategy: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = "session-private-token"
+    granted = "{{secret:PRIVATE}}"
+    masker = SecretMasker({value: granted})
+
+    def masker_for(address: SessionAddress) -> SecretMasker:
+        assert address == SESSION
+        return masker
+
+    async def withdraw_grant(_delay: float) -> None:
+        nonlocal masker
+        masker = SecretMasker({value: "[redacted]", granted: "[redacted]"})
+
+    class Adapter(StubAdapter):
+        @override
+        async def stream(self, messages, **kwargs):
+            self.requests.append({"messages": messages, **kwargs})
+            if len(self.requests) == 1:
+                raise NetworkError("interrupted")
+            yield {"type": "content_delta", "text": "Summary"}
+            yield {"type": "finish", "reason": "stop"}
+
+    adapter = Adapter()
+    monkeypatch.setattr("core.compaction._model_request._sleep", withdraw_grant)
+    messages = [
+        user("u1", value),
+        assistant("a1", "Old"),
+        user("u2", "New"),
+        assistant("a2", "Done"),
+    ]
+    await compact(
+        messages,
+        service=CompactionService(secret_masker=masker_for),
+        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+        request_messages=provider_request(messages),
+        summary_adapter=adapter,
+        summary_model_id="active",
+        active_adapter=adapter,
+        active_model_id="active",
+        active_tools=[{"name": "demo", "description": value, "parameters": {}}],
+    )
+    for request, expected in zip(adapter.requests, [granted, "[redacted]"], strict=True):
+        assert value not in json.dumps(request)
+        assert expected in json.dumps(request["messages"])
+        assert request["tools"][0]["description"] == expected
 
 
 _PARTIAL = "Partial summary"

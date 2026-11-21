@@ -1062,6 +1062,11 @@ class ExtensionRegistry:
         for extension_name, handler in self._handlers.get("run_end", []):
             await self._invoke_hook("run_end", extension_name, handler, ctx, payload)
 
+    @property
+    def has_context_handlers(self) -> bool:
+        """Whether a Context hook can read or rewrite the request."""
+        return bool(self._handlers.get("context"))
+
     async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list:
         """Pipeline event: each handler may replace the running message list.
 

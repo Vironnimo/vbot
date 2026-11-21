@@ -1,6 +1,7 @@
 """Session search: conversation-only hits, bounded context and visibility."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import override
 
@@ -18,9 +19,11 @@ from core.recall import (
     VectorRecallBackend,
 )
 from core.runs import RunKind
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSession, ChatSessionManager
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
 from tests.core.recall.recall_test_support import StubEmbeddings, embed_documents
+from tests.core.secrets.secrets_test_support import open_store
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_test_support import search, success
 
@@ -237,6 +240,53 @@ async def test_passage_excerpts_keep_source_positions_and_truncation(
     assert any(not item["leading_truncated"] for item in excerpts)
     assert any(not item["trailing_truncated"] for item in excerpts)
     assert any(item["leading_truncated"] and item["trailing_truncated"] for item in excerpts)
+
+
+async def test_search_masks_original_message_ranges_for_the_receiving_session(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="source")
+    secrets = AgentSecrets(open_store(tmp_path, tmp_path), clock=lambda: datetime.now(UTC))
+    secrets.reload()
+    for name, value, session_id in (
+        ("SOURCE_ONLY", "origin-private-token", session.id),
+        ("READER", "reader-private-token", "current-session"),
+    ):
+        secrets.create(
+            name=name,
+            kind="token",
+            values={"value": value},
+            actor="user",
+            agents=["coder"],
+            lifetime="session",
+            session_id=session_id,
+        )
+    sessions.set_title(session.address, "x" * 193 + "{{secret:SOURCE_ONLY}}")
+    text = "needle " * 213 + "origin-private-token " + "needle " * 30 + "reader-private-token"
+    question = ChatMessage.user(text)
+    session.append_many(
+        [
+            question,
+            ChatMessage.assistant(model="test", content="a" * 789 + "{{secret:SOURCE_ONLY}}"),
+        ]
+    )
+    backend = HybridRecallBackend(RecallBackendContext(tmp_path, sessions))
+    try:
+        data = success(await search(tmp_path, {"query": "needle"}, backend, secrets=secrets))
+    finally:
+        backend.close()
+    hits = data["items"]
+    assert len(hits) == 2
+    assert {item["message_id"] for item in hits} == {question.id}
+    excerpts = sorted((item["excerpt"] for item in hits), key=lambda item: item["start_char"])
+    assert "origin" not in excerpts[0]["text"]
+    assert excerpts[0]["end_char"] <= 1500
+    assert "[redacted] needle" in excerpts[1]["text"]
+    assert excerpts[1]["text"].endswith("{{secret:READER}}")
+    assert hits[0]["context"][0]["text"] == "a" * 789 + "[redacted]"
+    assert hits[0]["context"][0]["truncated"]
+    assert "SOURCE" not in data["sessions"][0]["title"]
 
 
 async def test_hybrid_query_keeps_partial_keyword_evidence_ahead_of_semantic_only_hits(

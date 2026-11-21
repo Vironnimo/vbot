@@ -182,9 +182,8 @@ class CommandReport:
     # PowerShell background jobs (``&``, ``Start-Job``) the shell ended as it
     # exited; their hosts are no failed programs (Windows only).
     jobs_ended: bool = False
-    # Names only: one-time Secrets consumed for this launch, including a shell
-    # bootstrap that never ran the command. Kept for honest retry guidance.
-    consumed_once_secrets: tuple[str, ...] = ()
+    # A bootstrap failure after Secret consumption needs fresh credentials for retry.
+    consumed_once_secrets: bool = False
     # Capture failed or an open pipe had to be closed after the process tree ended.
     output_incomplete: bool = False
 

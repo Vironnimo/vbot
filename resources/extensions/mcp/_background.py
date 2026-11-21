@@ -15,6 +15,7 @@ from core.tools.tools import ToolContext, tool_failure, tool_success
 
 from ._invocation import CANONICAL_CONTEXT, RETAIN_CALL
 from ._recovery import TaskRecovery, _decode, configuration_hash
+from .content import outcome_preview
 
 if TYPE_CHECKING:
     from .client import ConnectionRunner
@@ -224,16 +225,10 @@ class BackgroundCalls:
             if original is None:
                 await self._forget(receipt)
                 return
-            encoded = json.dumps(outcome, ensure_ascii=True)
-            result = (
-                {"result": outcome}
-                if len(encoded) <= 6000
-                else {"preview": encoded[:3000], "complete": False}
-            )
             data = {
                 "tool": original.tool_name,
                 "result_id": receipt,
-                **result,
+                **outcome_preview(outcome),
                 "read": {"tool": f"mcp_{connection}", "action": "read", "result_id": receipt},
             }
             quoted = (

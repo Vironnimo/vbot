@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, replace
@@ -17,7 +16,7 @@ from core.agents.temporary_execution import (
     TemporaryExecutionGroups,
     release_temporary_group,
 )
-from core.automation.cron import CronJobNotFoundError, CronService
+from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.computers.computers import ComputerRegistry, ExtensionComputers
 from core.extensions import ExtensionRegistry
@@ -439,12 +438,21 @@ class ExtensionHostFactory:
         self._require_registration(identity)
         if self._decisions is None:
             raise DecisionError("The Decision Model is unavailable.", code="not_configured")
-        if set(request) - {"state", "questions", "context"} or "state" not in request:
-            raise DecisionError("Supply state, questions and optional context.")
+        if (
+            set(request) - {"state", "questions", "context", "require_exact"}
+            or "state" not in request
+        ):
+            raise DecisionError("Supply state, questions and optional context or require_exact.")
+        if not isinstance(request.get("require_exact", False), bool):
+            raise DecisionError("require_exact must be a boolean.")
         outcomes = await self._decisions.classify(
             [request["state"]],
             request.get("questions"),
             context=request.get("context"),
+            secret_masker=lambda: (
+                self.tools.secret_masker_for(context) if context else self.tools.secret_masker
+            ),
+            require_exact=request.get("require_exact", False),
             usage_context=TaskUsageContext(
                 owner_name=identity.name,
                 agent_id=context.agent_id if context else None,
@@ -462,35 +470,30 @@ class ExtensionHostFactory:
         result = outcomes[0]
         if isinstance(result, DecisionError):
             raise result
+        if request.get("require_exact"):
+            # The Model evaluated a snapshot. Its answer cannot authorize a
+            # command whose exact evidence is no longer visible to this Session.
+            masker = self.tools.secret_masker_for(context) if context else self.tools.secret_masker
+            if masker.mask_value(request, include_keys=True) != request:
+                raise DecisionError(
+                    "The exact request contains protected Secret data.", code="incomplete_authority"
+                )
         return result
 
     async def _review_context(self, identity: Any, context: ToolContext) -> dict[str, Any]:
         self._require_registration(identity)
         result = await self.chat_sessions.run_async(
-            shell_review_context, self.chat_sessions, context, self.tools.secret_masker
+            shell_review_context,
+            self.chat_sessions,
+            context,
+            self.tools.secret_masker_for(context),
+            self._cron,
         )
-        # A stored job is authority only when the operator approved its current
-        # scope. Unknown/Tool-authored jobs remain evidence for the human task.
-        if self._cron is not None:
-            unverified = []
-            for task in result["evidence"]["automated_requests"]:
-                job = None
-                if task["source"] == "cron" and task["schedule_id"]:
-                    with suppress(CronJobNotFoundError):
-                        job = self._cron.get_job(task["schedule_id"])
-                if (
-                    job is not None
-                    and job.operator_approved
-                    and job.agent_id == task["agent_id"]
-                    and job.project_id == task["project_id"]
-                    and self.tools.secret_masker.mask(job.prompt) == task["text"]
-                ):
-                    result["authorized_tasks"].append(json.dumps(task, ensure_ascii=False))
-                else:
-                    unverified.append(task)
-            result["evidence"]["automated_requests"] = unverified
         self._require_registration(identity)
-        return result
+        shown = self.tools.secret_masker_for(context).mask_value(result, include_keys=True)
+        if any(shown[key] != result[key] for key in ("user_requests", "authorized_tasks")):
+            shown["authority_truncated"] = True
+        return shown
 
     async def _input_authority(
         self, identity: Any, context: ToolContext
@@ -501,7 +504,7 @@ class ExtensionHostFactory:
         except RunNotFoundError:
             run = None
         authority = await current_input_authority(
-            self.chat_sessions, context, run=run, cron=self._cron, masker=self.tools.secret_masker
+            self.chat_sessions, context, run=run, cron=self._cron
         )
         self._require_registration(identity)
         return authority

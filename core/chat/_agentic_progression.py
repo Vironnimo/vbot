@@ -566,6 +566,7 @@ class AgenticProgression:
                             messages_for_request,
                             tools,
                             run,
+                            passed_only=context.subagent_session,
                             finish_response=partial(
                                 self._model_step.finish_response,
                                 context=context,
