@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -206,18 +206,17 @@ class ComputerRegistry:
                 raise ComputerError(
                     "computer_registration_failed", "Computer registration could not be saved."
                 )
-            saved = False
+            computer_id: str | None = None
 
             def claim() -> None:
-                nonlocal saved
-                store.claim(description, key, actor)
-                saved = True
+                nonlocal computer_id
+                computer_id = store.claim(description, key, actor)
 
             cancelled: asyncio.CancelledError | None = None
             try:
                 await _STORE_WORKER.run(claim)
             except asyncio.CancelledError as error:
-                if not saved:
+                if computer_id is None:
                     raise
                 cancelled = error
             except PermissionError as error:
@@ -231,7 +230,7 @@ class ComputerRegistry:
                 raise ComputerError(
                     "computer_registration_failed", "Computer registration could not be saved."
                 ) from error
-            computer_id = description["id"]
+            assert computer_id is not None
             previous = self._infos.get(computer_id)
             old = self._connections.get(computer_id)
             if old is not None:
@@ -461,6 +460,16 @@ class ComputerRegistry:
         timeout: float = 30,
         instance_id: str | None = None,
     ) -> dict[str, Any]:
+        return self._on_loop(
+            lambda: self.call(
+                computer_id, capability, operation, params, timeout=timeout, instance_id=instance_id
+            ),
+            timeout,
+        )
+
+    def _on_loop(
+        self, request: Callable[[], Coroutine[Any, Any, dict[str, Any]]], timeout: float
+    ) -> dict[str, Any]:
         loop = self._loop
         if loop is None or loop.is_closed():
             raise ComputerError(
@@ -472,12 +481,7 @@ class ComputerRegistry:
             current = None
         if current is loop:
             raise RuntimeError("call_sync cannot block the computer connection's Event Loop")
-        future = asyncio.run_coroutine_threadsafe(
-            self.call(
-                computer_id, capability, operation, params, timeout=timeout, instance_id=instance_id
-            ),
-            loop,
-        )
+        future = asyncio.run_coroutine_threadsafe(request(), loop)
         try:
             return future.result(timeout + 5)
         except BaseException:
@@ -492,3 +496,91 @@ class ComputerRegistry:
 
     async def aclose(self) -> None:
         self.close()
+
+
+class ExtensionComputers:
+    """The routing surface of one current Extension registration."""
+
+    def __init__(self, registry: ComputerRegistry, require_current: Callable[[], None]) -> None:
+        self._registry = registry
+        self._require_current = require_current
+        self._retired = False
+        self._subscriptions: set[Callable[[], None]] = set()
+
+    def _check(self) -> None:
+        if self._retired:
+            raise ValueError("Extension registration is no longer current")
+        self._require_current()
+
+    def list(self) -> list[ComputerInfo]:
+        self._check()
+        return self._registry.list()
+
+    def get(self, computer_id: str) -> ComputerInfo:
+        self._check()
+        return self._registry.get(computer_id)
+
+    def resolve(
+        self, context: ToolContext, requested_id: str | None, capability: str
+    ) -> ComputerInfo:
+        self._check()
+        return self._registry.resolve(context, requested_id, capability)
+
+    def subscribe(self, callback: Callable[[str, str, dict[str, Any]], None]) -> Callable[[], None]:
+        self._check()
+
+        def deliver(computer_id: str, event: str, data: dict[str, Any]) -> None:
+            try:
+                self._check()
+            except ValueError:
+                unsubscribe()
+                return
+            callback(computer_id, event, data)
+
+        remove = self._registry.subscribe(deliver)
+        self._subscriptions.add(remove)
+
+        def unsubscribe() -> None:
+            self._subscriptions.discard(remove)
+            remove()
+
+        return unsubscribe
+
+    def _retire(self) -> None:
+        self._retired = True
+        for remove in self._subscriptions:
+            remove()
+        self._subscriptions.clear()
+
+    async def call(
+        self,
+        computer_id: str,
+        capability: str,
+        operation: str,
+        params: dict[str, Any],
+        *,
+        timeout: float = 30,
+        instance_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._check()
+        return await self._registry.call(
+            computer_id, capability, operation, params, timeout=timeout, instance_id=instance_id
+        )
+
+    def call_sync(
+        self,
+        computer_id: str,
+        capability: str,
+        operation: str,
+        params: dict[str, Any],
+        *,
+        timeout: float = 30,
+        instance_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._check()
+        return self._registry._on_loop(
+            lambda: self.call(
+                computer_id, capability, operation, params, timeout=timeout, instance_id=instance_id
+            ),
+            timeout,
+        )

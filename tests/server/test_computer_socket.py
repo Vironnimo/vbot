@@ -30,6 +30,8 @@ class _EventBus:
 
 
 class _Socket:
+    computer_id: str
+
     def __init__(self, *, principal: Principal | None = HOST, origin: str | None = None) -> None:
         self.scope: dict[str, Any] = {PRINCIPAL_SCOPE_KEY: principal}
         self.headers = {} if origin is None else {"origin": origin}
@@ -106,7 +108,10 @@ async def _connected(
     serving = asyncio.create_task(serve_computer_socket(socket, registry))
     try:
         welcome = await _output(socket, serving)
+        socket.computer_id = welcome["registered_id"]
+        assert socket.computer_id != computer_id
         assert welcome == {
+            "registered_id": socket.computer_id,
             "type": "welcome",
             "protocol": 1,
             "computer_id": computer_id,
@@ -173,7 +178,7 @@ async def test_link_correlates_replies_to_the_computer_that_received_the_request
     processed = asyncio.Event()
     unsubscribe = registry.subscribe(
         lambda computer, event, data: (
-            processed.set() if computer == "pc_other" and event == "stopped" else None
+            processed.set() if event == "stopped" and computer == other.computer_id else None
         )
     )
     try:
@@ -182,7 +187,7 @@ async def test_link_correlates_replies_to_the_computer_that_received_the_request
             _connected(registry, "pc_other") as (other, _),
         ):
             call = asyncio.create_task(
-                registry.call("pc_laptop", "terminal", "write", {"text": "task"})
+                registry.call(socket.computer_id, "terminal", "write", {"text": "task"})
             )
             request = await _output(socket, serving)
             assert request["type"] == "call"
@@ -205,11 +210,11 @@ async def test_link_correlates_replies_to_the_computer_that_received_the_request
                 {"type": "result", "id": request["id"], "ok": True, "result": {"written": True}}
             )
             assert await call == {"written": True}
-            assert registry.get("pc_laptop").capabilities == (
+            assert registry.get(socket.computer_id).capabilities == (
                 "terminal",
                 "extension:office:printer",
             )
-            assert registry.get("pc_laptop").instance_id == "inst_running_app"
+            assert registry.get(socket.computer_id).instance_id == "inst_running_app"
             assert not socket.close_codes
             assert ("resource_changed", {"kind": "computers"}) in socket.event_bus.events
     finally:
@@ -223,7 +228,7 @@ async def test_disconnect_marks_computer_offline_and_does_not_replay_uncertain_i
     try:
         async with _connected(registry) as (socket, serving):
             call = asyncio.create_task(
-                registry.call("pc_laptop", "terminal", "write", {"text": "one input"})
+                registry.call(socket.computer_id, "terminal", "write", {"text": "one input"})
             )
             request = await _output(socket, serving)
             socket.incoming.put_nowait({"type": "websocket.disconnect", "code": 1006})
@@ -232,14 +237,17 @@ async def test_disconnect_marks_computer_offline_and_does_not_replay_uncertain_i
             with pytest.raises(ComputerError) as failure:
                 await call
             assert failure.value.code == "computer_connection_lost"
-            assert not registry.get("pc_laptop").online
+            assert not registry.get(socket.computer_id).online
             assert socket.event_bus.events == [
                 ("resource_changed", {"kind": "computers"}),
                 ("resource_changed", {"kind": "computers"}),
             ]
         async with _connected(registry) as (reconnected, serving):
+            assert reconnected.computer_id == socket.computer_id
             status = asyncio.create_task(
-                registry.call("pc_laptop", "terminal", "status", {"process_id": "proc_existing"})
+                registry.call(
+                    socket.computer_id, "terminal", "status", {"process_id": "proc_existing"}
+                )
             )
             next_request = await _output(reconnected, serving)
             assert next_request["operation"] == "status"
@@ -258,7 +266,7 @@ async def test_replaced_link_closes_even_if_its_send_is_blocked() -> None:
     try:
         async with _connected(registry) as (old, serving):
             old.call_send_gate.clear()
-            call = asyncio.create_task(registry.call("pc_laptop", "terminal", "status", {}))
+            call = asyncio.create_task(registry.call(old.computer_id, "terminal", "status", {}))
             await old.send_started.get()
             async with _connected(registry):
                 with pytest.raises(ComputerError) as failure:
@@ -267,7 +275,7 @@ async def test_replaced_link_closes_even_if_its_send_is_blocked() -> None:
                 await asyncio.wait_for(serving, timeout=2)
                 assert old.close_codes == [1000]
                 assert [message["type"] for message in old.sent] == ["welcome"]
-                assert registry.get("pc_laptop").online
+                assert registry.get(old.computer_id).online
     finally:
         registry.close()
 
@@ -279,14 +287,16 @@ async def test_cancelled_queued_request_is_not_sent_after_an_earlier_write_unblo
         async with _connected(registry) as (socket, serving):
             socket.call_send_gate.clear()
             first = asyncio.create_task(
-                registry.call("pc_laptop", "terminal", "write", {"text": "first"})
+                registry.call(socket.computer_id, "terminal", "write", {"text": "first"})
             )
             await socket.send_started.get()
             admitted = asyncio.Event()
 
             async def second_call() -> dict[str, Any]:
                 admitted.set()
-                return await registry.call("pc_laptop", "terminal", "write", {"text": "cancelled"})
+                return await registry.call(
+                    socket.computer_id, "terminal", "write", {"text": "cancelled"}
+                )
 
             second = asyncio.create_task(second_call())
             await admitted.wait()
@@ -315,15 +325,17 @@ async def test_cancelled_queued_request_is_not_sent_after_an_earlier_write_unblo
 async def test_wrong_registration_key_cannot_replace_an_existing_computer_link() -> None:
     registry = ComputerRegistry()
     try:
-        async with _connected(registry):
+        async with _connected(registry) as (socket, _):
             attacker = _Socket()
             attacker.send_to_server(
-                _hello(key="another-registration-key-with-at-least-32-characters")
+                _hello(
+                    socket.computer_id, key="another-registration-key-with-at-least-32-characters"
+                )
             )
             await serve_computer_socket(attacker, registry)
             assert attacker.close_codes == [4403]
             assert attacker.sent[0]["error"]["code"] == "computer_identity_conflict"
-            assert registry.get("pc_laptop").online
+            assert registry.get(socket.computer_id).online
     finally:
         registry.close()
 
@@ -342,10 +354,10 @@ async def test_cancelled_socket_registration_publishes_the_offline_identity(
     started = loop.create_future()
     release = threading.Event()
 
-    def delayed_claim(*args: Any) -> None:
+    def delayed_claim(*args: Any) -> str:
         loop.call_soon_threadsafe(started.set_result, None)
         assert release.wait(5)
-        claim(*args)
+        return claim(*args)
 
     monkeypatch.setattr(registry._store, "claim", delayed_claim)
     socket.send_to_server(_hello())
@@ -357,7 +369,8 @@ async def test_cancelled_socket_registration_publishes_the_offline_identity(
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await serving
-    assert not registry.get("pc_laptop").online
+    _, laptop = registry.list()
+    assert not laptop.online
     assert socket.event_bus.events == [("resource_changed", {"kind": "computers"})]
     unsubscribe()
     registry.close()
@@ -374,6 +387,6 @@ async def test_a_reconnect_of_the_same_installation_closes_the_replaced_link() -
             await old_serving
             assert old.close_codes == [1000]
             assert new.close_codes == []
-            assert registry.get("pc_laptop").online
+            assert registry.get(new.computer_id).online
     finally:
         registry.close()

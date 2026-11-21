@@ -25,7 +25,7 @@ from pathlib import Path
 from types import CodeType, ModuleType
 from typing import Any, Protocol, override
 
-from core.utils.file_status import is_dir_strict, is_file_strict, is_link_status
+from core.utils.file_status import is_dir_strict, is_link_status
 from core.utils.native_capabilities import (
     MAX_CAPABILITY_CATALOG_BYTES,
     qualified_capability_id,
@@ -415,14 +415,45 @@ class _SourceLoader(importlib.machinery.SourceFileLoader):
         return compile(self.get_data(self.path), self.path, "exec", dont_inherit=True)
 
 
+def _check_import_path(root: Path, path: Path, *, directory: bool = False) -> None:
+    """Apply the package fingerprint's inclusion and link rules to imports."""
+    # On Windows an 8.3 alias can name a directory the scanner excluded.
+    resolved_parts = path.resolve(strict=True).relative_to(root).parts
+    if any(part.casefold() in _PACKAGE_IGNORED_NAMES for part in resolved_parts):
+        raise ValueError("Desktop Extension imports must stay in the fingerprinted package")
+    current = root
+    parts = path.relative_to(root).parts
+    for part in parts:
+        current /= part
+        if part == ".." or is_link_status(current.lstat()):
+            raise ValueError("Desktop Extension imports must stay in the fingerprinted package")
+    mode = path.lstat().st_mode
+    if directory and stat.S_ISDIR(mode):
+        return
+    if directory or not stat.S_ISREG(mode) or path.suffix.casefold() in {".pyc", ".pyo"}:
+        raise ValueError("Desktop Extension modules must be fingerprinted package files")
+
+
 class _SourceFinder(importlib.abc.MetaPathFinder):
     @override
     def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
-        if not fullname.startswith("vbot_desktop_ext_"):
+        namespace, _, _ = fullname.partition(".")
+        if not namespace.startswith("vbot_desktop_ext_") or namespace not in sys.modules:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
-        if spec is not None and isinstance(spec.loader, importlib.machinery.SourceFileLoader):
+        if spec is None:
+            raise ModuleNotFoundError(fullname)
+        root = Path(sys.modules[namespace].__path__[0])
+        for directory in spec.submodule_search_locations or ():
+            _check_import_path(root, Path(directory), directory=True)
+        if spec.origin is not None:
+            _check_import_path(root, Path(spec.origin))
+        if isinstance(spec.loader, importlib.machinery.SourceFileLoader):
             spec.loader = _SourceLoader(fullname, spec.loader.path)
+        elif spec.loader is not None and not isinstance(
+            spec.loader, importlib.machinery.ExtensionFileLoader
+        ):
+            raise ImportError("Unsupported Desktop Extension module loader")
         return spec
 
 
@@ -455,9 +486,10 @@ def _load_declarations(
         or not entry.endswith(".py")
     ):
         raise ValueError("A Desktop entry must be a relative Python file")
-    path = (root / entry).resolve(strict=True)
-    if not path.is_relative_to(root.resolve()) or not is_file_strict(path):
-        raise ValueError("A Desktop entry must stay inside its Extension")
+    owner_name = root.name
+    root = root.resolve(strict=True)
+    path = root / entry
+    _check_import_path(root, path)
     # A fresh package namespace allows relative imports without executing a
     # server-side __init__.py, or mixing edited modules with an earlier load.
     digest = hashlib.sha256(f"{root.resolve()}:{revision}".encode()).hexdigest()[:16]
@@ -484,7 +516,7 @@ def _load_declarations(
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
-        api = DesktopExtensionAPI(root.name, source=source, revision=revision, legacy=legacy)
+        api = DesktopExtensionAPI(owner_name, source=source, revision=revision, legacy=legacy)
         register = getattr(module, "register", None)
         if not callable(register):
             raise ValueError("The Desktop entry needs a register function")

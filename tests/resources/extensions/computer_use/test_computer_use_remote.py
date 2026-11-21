@@ -64,6 +64,7 @@ class NativeLink:
             },
             actor="test",
         )
+        self.computer_id = self.connection.info.id
         self.pump = asyncio.create_task(self._pump(self.connection))
 
     def _emit(self, event: str, data: dict[str, Any]) -> None:
@@ -109,10 +110,13 @@ class NativeLink:
         await self.native.close()
 
 
-def remote_context(computer: Harness, **changes: Any):
+def remote_context(computer: Harness, link: NativeLink, **changes: Any):
     return computer.context_for(
         "computer",
-        execution={"computer_id": "pc_laptop", "allowed_computer_ids": ["server", "pc_laptop"]},
+        execution={
+            "computer_id": link.computer_id,
+            "allowed_computer_ids": ["server", link.computer_id],
+        },
         **changes,
     )
 
@@ -128,25 +132,25 @@ async def test_remote_calls_keep_policy_images_and_input_on_the_selected_compute
         server_context = computer.context_for("computer")
         assert (await computer.call("computer", {"action": "screenshot"}, server_context))["ok"]
         server_image = server_context.result_media[-1]["filename"].removesuffix(".png")
-        remote = remote_context(computer)
+        remote = remote_context(computer, link)
         result = await computer.call("computer", {"action": "screenshot"}, remote)
         assert result["ok"] and images(remote)
         status = await computer.api.operations.invoke("control", {"action": "status"})
-        assert status["computer_id"] == "pc_laptop"
+        assert status["computer_id"] == link.computer_id
         assert status["hotkey_available"] is hotkey_available
         remote_image = remote.result_media[-1]["filename"].removesuffix(".png")
         assert remote_image != server_image
         wrong = await computer.call(
             "computer",
             {"action": "left_click", "coordinate": [10, 10], "screenshot_id": server_image},
-            remote_context(computer),
+            remote_context(computer, link),
         )
         assert wrong["error"]["code"] == "invalid_arguments"
         assert link.target.inputs == computer.target.inputs == []
         result = await computer.call(
             "computer",
             {"action": "left_click", "coordinate": [10, 10], "screenshot_id": remote_image},
-            remote_context(computer),
+            remote_context(computer, link),
         )
         assert result["ok"]
         assert link.target.inputs[0][:3] == ("click", 110, 110)
@@ -162,12 +166,14 @@ async def test_remote_calls_keep_policy_images_and_input_on_the_selected_compute
         computer.service._unready = "No interactive server desktop"
         assert computer.service.ready()
         assert (
-            await computer.call("computer", {"action": "screenshot"}, remote_context(computer))
+            await computer.call(
+                "computer", {"action": "screenshot"}, remote_context(computer, link)
+            )
         )["ok"]
         status = await computer.api.operations.invoke("control", {})
         assert {item["computer_id"] for item in status["controls"] if item["active"]} == {
             "server",
-            "pc_laptop",
+            link.computer_id,
         }
         stopped = await computer.api.operations.invoke(
             "control", {"action": "stop", "control_id": status["control_id"]}
@@ -194,14 +200,18 @@ async def test_remote_readiness_recovers_without_reconnecting(
                 raise TargetError("temporary native request failure", "computer_timeout")
 
             monkeypatch.setattr(link.target, "readiness", unavailable)
-        result = await computer.call("computer", {"action": "screenshot"}, remote_context(computer))
+        result = await computer.call(
+            "computer", {"action": "screenshot"}, remote_context(computer, link)
+        )
         assert result["error"]["code"] == (
             "computer_timeout" if transient else "computer_use_unavailable"
         )
         link.target.reason = None
         if transient:
             monkeypatch.setattr(link.target, "readiness", readiness)
-        result = await computer.call("computer", {"action": "screenshot"}, remote_context(computer))
+        result = await computer.call(
+            "computer", {"action": "screenshot"}, remote_context(computer, link)
+        )
         assert result["ok"]
     finally:
         await link.close(computer)
@@ -225,12 +235,15 @@ async def test_slow_native_start_does_not_block_another_computer(
     await slow.connect()
     await fast.connect()
     context = computer.context_for(
-        "computer", execution={"computer_id": "pc_slow", "allowed_computer_ids": ["pc_slow"]}
+        "computer",
+        execution={"computer_id": slow.computer_id, "allowed_computer_ids": [slow.computer_id]},
     )
     pending = asyncio.create_task(computer.call("computer", {"action": "screenshot"}, context))
     try:
         await entered.wait()
-        result = await computer.call("computer", {"action": "screenshot"}, remote_context(computer))
+        result = await computer.call(
+            "computer", {"action": "screenshot"}, remote_context(computer, fast)
+        )
         assert result["ok"] and not pending.done()
     finally:
         release.set()
@@ -247,14 +260,16 @@ async def test_lost_native_stop_is_reconciled_before_a_new_control(
     await link.connect()
     try:
         assert (
-            await computer.call("computer", {"action": "screenshot"}, remote_context(computer))
+            await computer.call(
+                "computer", {"action": "screenshot"}, remote_context(computer, link)
+            )
         )["ok"]
         link.native._emit = lambda *_: None
         assert link.native._hotkey is not None
         link.native._stop_from_hotkey(link.native._owner)
         # Simulate idle expiry before another reply/event can reach the server.
         assert computer.service._routing is not None
-        service = computer.service._routing._remotes["pc_laptop"].service
+        service = computer.service._routing._remotes[link.computer_id].service
         service._end_control()
         if late_reply:
             execute = link.native.execute
@@ -267,12 +282,14 @@ async def test_lost_native_stop_is_reconciled_before_a_new_control(
 
             monkeypatch.setattr(link.native, "execute", delay_notification)
         result = await computer.call(
-            "computer", {"action": "type", "text": "must not arrive"}, remote_context(computer)
+            "computer",
+            {"action": "type", "text": "must not arrive"},
+            remote_context(computer, link),
         )
         assert result["error"]["code"] == "computer_use_interrupted"
         assert link.target.inputs == []
         fresh = await computer.call(
-            "computer", {"action": "screenshot"}, remote_context(computer, run_id="next_run")
+            "computer", {"action": "screenshot"}, remote_context(computer, link, run_id="next_run")
         )
         assert fresh["ok"]
     finally:
@@ -292,7 +309,7 @@ async def test_remote_drag_batches_hit_tests_and_capture_is_bounded(
     monkeypatch.setattr(link.target, "capture", lambda _: Image.new("RGB", (5120, 2880), "white"))
     await link.connect()
     try:
-        context = remote_context(computer)
+        context = remote_context(computer, link)
         result = await computer.call(
             "computer", {"action": "screenshot", "view": "display"}, context
         )
@@ -302,7 +319,7 @@ async def test_remote_drag_batches_hit_tests_and_capture_is_bounded(
         result = await computer.call(
             "computer",
             {"action": "left_click_drag", "path": [[40 + i % 20, 40] for i in range(200)]},
-            remote_context(computer),
+            remote_context(computer, link),
         )
         assert result["ok"]
         assert link.operations.count("snapshot") <= 3
@@ -318,11 +335,11 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
     link = NativeLink(computer.computers)
     await link.connect()
     try:
-        context = remote_context(computer)
+        context = remote_context(computer, link)
         assert (await computer.call("computer", {"action": "screenshot"}, context))["ok"]
         screenshot_id = context.result_media[-1]["filename"].removesuffix(".png")
         assert computer.service._routing is not None
-        service = computer.service._routing._remotes["pc_laptop"].service
+        service = computer.service._routing._remotes[link.computer_id].service
         queued = asyncio.Event()
         active_call = service._active_call
 
@@ -338,13 +355,13 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
             computer.call(
                 "computer",
                 {"action": "type", "text": "must not survive reconnect"},
-                remote_context(computer, run_id="queued_run"),
+                remote_context(computer, link, run_id="queued_run"),
             )
         )
         try:
             await queued.wait()
             await link.disconnect()
-            await computer.service._routing._remotes["pc_laptop"].target.drain()
+            await computer.service._routing._remotes[link.computer_id].target.drain()
         finally:
             # Hold admission until the same native instance has reconnected.
             await link.connect()
@@ -358,30 +375,30 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
         assert listed["ok"], listed
         await link.disconnect()
         offline = await computer.call(
-            "computer", {"action": "type", "text": "no"}, remote_context(computer)
+            "computer", {"action": "type", "text": "no"}, remote_context(computer, link)
         )
         assert offline["error"]["code"] == "computer_offline"
         await link.connect()
         stopped = await computer.call(
-            "computer", {"action": "type", "text": "no"}, remote_context(computer)
+            "computer", {"action": "type", "text": "no"}, remote_context(computer, link)
         )
         assert stopped["error"]["code"] == "computer_use_interrupted"
         stale = await computer.call(
             "computer",
             {"action": "left_click", "coordinate": [10, 10], "screenshot_id": screenshot_id},
-            remote_context(computer, run_id="next_run"),
+            remote_context(computer, link, run_id="next_run"),
         )
         assert stale["error"]["code"] == "invalid_arguments"
         assert link.target.inputs == []
         fresh = await computer.call(
-            "computer", {"action": "screenshot"}, remote_context(computer, run_id="next_run")
+            "computer", {"action": "screenshot"}, remote_context(computer, link, run_id="next_run")
         )
         assert fresh["ok"]
         await link.disconnect()
-        await computer.computers.forget("pc_laptop")
+        await computer.computers.forget(link.computer_id)
         routing = computer.service._routing
         await asyncio.gather(*tuple(routing._closing))
-        assert "pc_laptop" not in routing._remotes
+        assert link.computer_id not in routing._remotes
         assert service._closed
         assert service._executor is not None and service._executor._shutdown
     finally:

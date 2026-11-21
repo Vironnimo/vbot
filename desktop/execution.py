@@ -339,6 +339,7 @@ class ComputerSharing:
         changes: Any,
         *,
         expected_server: str,
+        authorize: Callable[[str, list[str], str | None], None] | None = None,
         confirm: Callable[[str, str], bool] | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
@@ -355,13 +356,16 @@ class ComputerSharing:
                     "computer_catalog_changed",
                     "The local Extensions changed; review their sharing choices again",
                 )
-            return self._update(changes, expected_server=expected_server, confirm=confirm)
+            return self._update(
+                changes, expected_server=expected_server, authorize=authorize, confirm=confirm
+            )
 
     def _update(
         self,
         changes: Any,
         *,
         expected_server: str,
+        authorize: Callable[[str, list[str], str | None], None] | None,
         confirm: Callable[[str, str], bool] | None,
     ) -> dict[str, Any]:
         if not isinstance(changes, dict) or set(changes) - {"name", *self._capabilities}:
@@ -390,6 +394,8 @@ class ComputerSharing:
                     "computer_name_invalid", "Use a computer name of 1 to 80 printable characters"
                 )
             normalized["name"] = name.strip()
+            if name.strip().casefold() == "server":
+                raise SharingError("computer_name_reserved", "Choose a name other than Server")
         with self._lock:
             if not self._origin or expected_server != self._server_url or self._closed:
                 raise SharingError(
@@ -397,9 +403,16 @@ class ComputerSharing:
                     "The selected server changed; open the settings again",
                 )
             origin = self._origin
-            stopping = normalized.get("terminal") is False and _grants(
-                self._settings, origin, self._capabilities
-            ).get("terminal", False)
+            grants = _grants(self._settings, origin, self._capabilities)
+            enabling = [
+                item
+                for name, item in self._capabilities.items()
+                if normalized.get(name) is True and not grants[name]
+            ]
+            renamed_to = normalized.get("name")
+            if renamed_to == _computer_name(self._settings.get("name")):
+                renamed_to = None
+            stopping = normalized.get("terminal") is False and grants.get("terminal", False)
             if stopping:
                 self._disabling_terminal = True
         try:
@@ -418,6 +431,12 @@ class ComputerSharing:
                     allowed = False
                 if not allowed:
                     raise SharingError("declined", "Terminal sharing stays on")
+            if authorize is not None:
+                summaries = [
+                    f"{item.label}: {item.description}" if item.description else item.label
+                    for item in enabling
+                ]
+                authorize(expected_server, summaries, renamed_to)
             with self._lock:
                 if not self._origin or expected_server != self._server_url or self._closed:
                     raise SharingError(
@@ -914,6 +933,13 @@ class ComputerSharing:
                     )
                 with self._lock:
                     server_instance = welcome["server_instance"]
+                    registered_id = welcome.get("registered_id", scope.identity.computer_id)
+                    if registered_id != scope.identity.computer_id:
+                        scope.identity = self._identities.assign_computer_id(
+                            scope.origin, scope.identity, registered_id
+                        )
+                        if scope.server_instance is not None:
+                            raise _ServerRestartedError()
                     if (
                         scope.server_instance is not None
                         and scope.server_instance != server_instance

@@ -97,9 +97,10 @@ async def test_selection_requires_exact_identity_grant_capability_and_connection
 ) -> None:
     registry = ComputerRegistry()
     connection = await registry.connect(hello(), actor="host")
-    selected = context(tmp_path, computer_id="pc_laptop", allowed_computer_ids=["pc_laptop"])
-    assert registry.resolve(selected, None, "terminal").id == "pc_laptop"
-    assert registry.resolve(selected, "Laptop", "computer_use").id == "pc_laptop"
+    computer_id = connection.info.id
+    selected = context(tmp_path, computer_id=computer_id, allowed_computer_ids=[computer_id])
+    assert registry.resolve(selected, None, "terminal").id == computer_id
+    assert registry.resolve(selected, "Laptop", "computer_use").id == computer_id
     for value, code in (("server", "computer_not_allowed"), ("Laptp", "computer_not_found")):
         with pytest.raises(ComputerError) as refused:
             registry.resolve(selected, value, "terminal")
@@ -111,15 +112,21 @@ async def test_selection_requires_exact_identity_grant_capability_and_connection
     with pytest.raises(ComputerError) as refused:
         registry.resolve(selected, None, "terminal")
     assert refused.value.code == "computer_offline"
-    await registry.forget("pc_laptop")
-    await registry.connect(hello("pc_workstation", name="pc_laptop"), actor="host")
+    await registry.forget(computer_id)
+    replacement = await registry.connect(
+        hello(computer_id, name=computer_id, key="b" * 40), actor="host"
+    )
+    assert replacement.info.id != computer_id
+    with pytest.raises(ComputerError) as refused:
+        registry.resolve(selected, computer_id, "terminal")
+    assert refused.value.code == "computer_not_allowed"
     selected = context(
-        tmp_path, computer_id="pc_laptop", allowed_computer_ids=["pc_laptop", "pc_workstation"]
+        tmp_path, computer_id=computer_id, allowed_computer_ids=[computer_id, replacement.info.id]
     )
     with pytest.raises(ComputerError) as refused:
         registry.resolve(selected, None, "terminal")
     assert refused.value.code == "computer_not_found"
-    assert registry.resolve(selected, "pc_laptop", "terminal").id == "pc_workstation"
+    assert registry.resolve(selected, computer_id, "terminal").id == replacement.info.id
     registry.close()
 
 
@@ -136,21 +143,21 @@ async def test_worker_can_resolve_a_name_during_registration_removal(tmp_path: P
             return super().casefold()
 
     registry = ComputerRegistry()
-    await registry.connect(hello(name=PausedName("Laptop")), actor="host")
+    laptop = await registry.connect(hello(name=PausedName("Laptop")), actor="host")
     other = await registry.connect(hello("pc_other", name="Workstation"), actor="host")
     registry.disconnect(other)
-    selected = context(tmp_path, computer_id="pc_laptop", allowed_computer_ids=["pc_laptop"])
+    selected = context(tmp_path, computer_id=laptop.info.id, allowed_computer_ids=[laptop.info.id])
     selecting = asyncio.create_task(
         asyncio.to_thread(registry.resolve, selected, "Laptop", "terminal")
     )
     try:
         assert await asyncio.to_thread(entered.wait, 2)
-        await registry.forget("pc_other")
+        await registry.forget(other.info.id)
     finally:
         resume.set()
         info = await selecting
         registry.close()
-    assert info.id == "pc_laptop"
+    assert info.id == laptop.info.id
 
 
 @pytest.mark.asyncio
@@ -159,11 +166,19 @@ async def test_registration_ownership_survives_restart_and_preserves_future_fiel
 ) -> None:
     registry = ComputerRegistry(tmp_path)
     capabilities = ["terminal", *[f"extension:office:device_{number}" for number in range(64)]]
-    await registry.connect(hello(capabilities=capabilities), actor="dev_owner")
+    first = await registry.connect(hello(capabilities=capabilities), actor="dev_owner")
     registry.close()
     path = tmp_path / COMPUTERS_PATH
+    # A protocol-1 Desktop that never received its first welcome retries its original id.
+    retry = ComputerRegistry(tmp_path)
+    recovered = await retry.connect(hello(capabilities=capabilities), actor="dev_owner")
+    assert recovered.info.id == first.info.id != hello()["computer_id"]
+    assert len(retry.list()) == 2
+    retry.close()
     saved = json.loads(path.read_text())
     assert hello()["key"] not in path.read_text()
+    # The Generation 1 registration written before server-assigned ids keeps its identity.
+    saved["computers"][0]["id"] = saved["computers"][0].pop("registration_id")
     saved["future_root"] = 1
     saved["computers"][0]["future_entry"] = 2
     path.write_text(json.dumps(saved))
@@ -226,17 +241,17 @@ async def test_registration_needs_a_free_name_and_room_and_offline_computers_can
 
     for computer_id, code in (
         ("server", "computer_not_removable"),
-        ("pc_laptop", "computer_online"),
+        (laptop.info.id, "computer_online"),
         ("pc_missing", "computer_not_found"),
     ):
         with pytest.raises(ComputerError) as refused:
             await registry.forget(computer_id)
         assert refused.value.code == code
     registry.disconnect(laptop)
-    await registry.forget("pc_laptop")
-    assert "pc_laptop" not in json.dumps(json.loads((tmp_path / COMPUTERS_PATH).read_text()))
+    await registry.forget(laptop.info.id)
+    assert laptop.info.id not in json.dumps(json.loads((tmp_path / COMPUTERS_PATH).read_text()))
     with pytest.raises(ComputerError) as refused:
-        registry.get("pc_laptop")
+        registry.get(laptop.info.id)
     assert refused.value.code == "computer_not_found"
     # Its name and its place are free again.
     await registry.connect(hello("pc_extra", name="Laptop"), actor="host")
@@ -258,10 +273,10 @@ async def test_interrupted_registration_keeps_the_saved_identity_offline(
     release = threading.Event()
     loop = asyncio.get_running_loop()
 
-    def delayed_claim(*args: Any) -> None:
+    def delayed_claim(*args: Any) -> str:
         loop.call_soon_threadsafe(started.set_result, None)
         assert release.wait(5)
-        original_claim(*args)
+        return original_claim(*args)
 
     monkeypatch.setattr(registry._store, "claim", delayed_claim)
     task = asyncio.create_task(registry.connect(hello(name="Renamed"), actor="host"))
@@ -281,18 +296,19 @@ async def test_interrupted_registration_keeps_the_saved_identity_offline(
         with pytest.raises(asyncio.CancelledError) as cancelled:
             await task
         assert cancelled.value.args == ("connection closed",)
-    info = registry.get("pc_laptop")
+    _, info = registry.list()
     assert info.name == "Renamed"
     assert not info.online
     assert old is None or old.closed
     if case != "shutdown":
-        assert ("pc_laptop", "disconnected") in events
+        assert (info.id, "disconnected") in events
     saved = json.loads((tmp_path / COMPUTERS_PATH).read_text())
     assert saved["computers"][0]["name"] == info.name
     if case != "shutdown":
         monkeypatch.setattr(registry._store, "claim", original_claim)
         connection = await registry.connect(hello(name="Renamed"), actor="host")
-        assert registry.get("pc_laptop").online
+        assert connection.info.id == info.id
+        assert registry.get(info.id).online
         registry.disconnect(connection)
     registry.close()
 
@@ -318,7 +334,7 @@ async def test_cancelled_removal_publishes_the_saved_removal(
         original_forget(computer_id)
 
     monkeypatch.setattr(registry._store, "forget", delayed_forget)
-    task = asyncio.create_task(registry.forget("pc_laptop"))
+    task = asyncio.create_task(registry.forget(connection.info.id))
     try:
         await asyncio.wait_for(started, 2)
         task.cancel()
@@ -327,9 +343,9 @@ async def test_cancelled_removal_publishes_the_saved_removal(
     with pytest.raises(asyncio.CancelledError):
         await task
     with pytest.raises(ComputerError) as missing:
-        registry.get("pc_laptop")
+        registry.get(connection.info.id)
     assert missing.value.code == "computer_not_found"
-    assert ("pc_laptop", "removed") in events
+    assert (connection.info.id, "removed") in events
     assert json.loads((tmp_path / COMPUTERS_PATH).read_text())["computers"] == []
     monkeypatch.setattr(registry._store, "forget", original_forget)
     await registry.connect(hello(), actor="host")
@@ -341,15 +357,17 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
     registry = ComputerRegistry()
     connection = await registry.connect(hello(), actor="host")
     other = await registry.connect(hello("pc_other", name="Other"), actor="host")
-    call = asyncio.create_task(registry.call("pc_laptop", "terminal", "write", {"text": "test"}))
+    call = asyncio.create_task(
+        registry.call(connection.info.id, "terminal", "write", {"text": "test"})
+    )
     sent = await connection.outgoing.get()
     assert sent is not None
     registry.receive(
         connection,
         {"type": "capabilities", "capabilities": ["terminal", "extension:office:printer"]},
     )
-    assert registry.get("pc_laptop").capabilities == ("terminal", "extension:office:printer")
-    assert not connection.closed and registry.get("pc_laptop").instance_id == "inst_one"
+    assert registry.get(connection.info.id).capabilities == ("terminal", "extension:office:printer")
+    assert not connection.closed and registry.get(connection.info.id).instance_id == "inst_one"
     assert sent["id"] in connection.pending
     registry.receive(
         other, {"type": "result", "id": sent["id"], "ok": True, "result": {"forged": True}}
@@ -360,7 +378,7 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
     )
     assert await call == {"written": True}
     pending = asyncio.create_task(
-        registry.call("pc_laptop", "terminal", "write", {"text": "second"})
+        registry.call(connection.info.id, "terminal", "write", {"text": "second"})
     )
     assert await connection.outgoing.get() is not None
     registry.disconnect(connection)
@@ -369,10 +387,10 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
     assert refused.value.code == "computer_connection_lost"
     reconnected = await registry.connect(hello(), actor="host")
     assert reconnected.outgoing.empty()
-    assert registry.get("pc_laptop").instance_id == "inst_one"
+    assert registry.get(connection.info.id).instance_id == "inst_one"
     restarted = await registry.connect(hello(instance_id="inst_two"), actor="host")
     with pytest.raises(ComputerError) as refused:
-        await registry.call("pc_laptop", "terminal", "write", {}, instance_id="inst_one")
+        await registry.call(connection.info.id, "terminal", "write", {}, instance_id="inst_one")
     assert refused.value.code == "computer_instance_changed"
     assert restarted.outgoing.empty()
     registry.close()
@@ -382,7 +400,7 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
 async def test_cancellation_and_timeout_drop_pending_calls_without_replaying() -> None:
     registry = ComputerRegistry()
     connection = await registry.connect(hello(), actor="host")
-    call = asyncio.create_task(registry.call("pc_laptop", "terminal", "read", {}))
+    call = asyncio.create_task(registry.call(connection.info.id, "terminal", "read", {}))
     request = await connection.outgoing.get()
     assert request is not None
     call.cancel()
@@ -390,7 +408,7 @@ async def test_cancellation_and_timeout_drop_pending_calls_without_replaying() -
         await call
     assert not connection.pending
     with pytest.raises(ComputerError) as refused:
-        await registry.call("pc_laptop", "terminal", "status", {}, timeout=0)
+        await registry.call(connection.info.id, "terminal", "status", {}, timeout=0)
     assert refused.value.code == "computer_timeout"
     assert not connection.pending
     registry.close()
