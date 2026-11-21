@@ -199,6 +199,11 @@ def project_timeline_history(
 
 async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> JsonObject:
     """Read exactly one Run, including unretained live output or durable completion."""
+    snapshot = await _timeline_snapshot(state, run, child_limit=child_limit)
+    return await _public_frame(state, snapshot, include_file_urls=False)
+
+
+async def _timeline_snapshot(state: Any, run: Run, *, child_limit: int) -> JsonObject:
     snapshot = capture_run_timeline(run)
     if snapshot is None:
         address = SessionAddress(run.project_id, run.agent_id, run.session_id)
@@ -261,7 +266,7 @@ async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> Js
             "items": window_timeline_items(snapshot["items"], child_limit),
             "windowed": True,
         }
-    return await _public_frame(state, snapshot, include_file_urls=False)
+    return snapshot
 
 
 async def timeline_children(
@@ -520,7 +525,7 @@ async def sse_timeline(
     projection = run.timeline
     previous = capture_run_timeline(run, projection)
     if previous is None:
-        initial = await timeline_snapshot(state, run, child_limit=child_limit)
+        initial = await _timeline_snapshot(state, run, child_limit=child_limit)
     else:
         previous.update(
             timeline_version=TIMELINE_VERSION, history_generation=run.expected_session_generation_id

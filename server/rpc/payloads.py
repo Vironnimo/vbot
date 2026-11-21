@@ -6,6 +6,7 @@ import copy
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import cache, partial
 from typing import Any, cast
 
 from core.chat import ChatMessage
@@ -70,8 +71,8 @@ async def _run_response(
     final_message: ChatMessage | None = None,
     sse_url: str | None = None,
     file_delivery: Any | None = None,
+    include_events: bool = True,
 ) -> JsonObject:
-    events = run.events
     response: JsonObject = {
         "run_id": run.id,
         "agent_id": run.agent_id,
@@ -82,9 +83,10 @@ async def _run_response(
         "iteration_count": run.iteration_count,
         "controls": run.controls(),
         "controls_sequence": run.last_sequence,
-        "events": [event.to_dict() for event in events],
         "timeline_url": f"/api/runs/{run.id}/timeline",
     }
+    if include_events:
+        response["events"] = [event.to_dict() for event in run.events]
     if final_message is not None:
         response["message"] = final_message.to_dict()
     if sse_url is not None:
@@ -174,14 +176,14 @@ def _agent_context_window(state: Any, agent: Any) -> int | None:
     credential state.
     """
     return resolve_agent_context_window(
-        state.runtime, agent, local_context_windows=_local_context_windows(state)
+        state.runtime, agent, local_context_windows=partial(_local_context_windows, state)
     )
 
 
-def _local_context_windows(state: Any) -> Any:
+def _local_context_windows(state: Any) -> Mapping[str, Any]:
     """Return the Runtime's live local-model window map, or empty."""
     try:
-        return state.runtime.local_context_windows()
+        return cast(Mapping[str, Any], state.runtime.local_context_windows())
     except AttributeError:
         return {}
 
@@ -213,7 +215,7 @@ class AgentResponseDefaults:
     tool_loading: JsonObject
     permission_rules: JsonObject | None
     compaction: Callable[[], JsonObject]
-    local_windows: Mapping[str, Any]
+    local_windows: Callable[[], Mapping[str, Any]]
 
     @classmethod
     def read(cls, state: Any) -> AgentResponseDefaults:
@@ -224,7 +226,7 @@ class AgentResponseDefaults:
             resolver.inherited_tool_loading(defaults=defaults),
             resolver.inherited_permission_rules(defaults=defaults),
             _global_compaction_policy_loader(state),
-            _local_context_windows(state),
+            cache(partial(_local_context_windows, state)),
         )
 
 
