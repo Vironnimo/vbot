@@ -67,21 +67,19 @@ async def _exchange(
     sender = asyncio.create_task(
         _send(websocket, connection), name=f"computer-link:{connection.info.id}"
     )
+    receiver = asyncio.create_task(_receive_messages(websocket, computers, connection))
     try:
-        while not connection.closed:
-            incoming = asyncio.create_task(_receive(websocket))
-            try:
-                done, _ = await asyncio.wait(
-                    (incoming, sender), return_when=asyncio.FIRST_COMPLETED
-                )
-                if sender in done:
-                    await sender
-                    return
-                computers.receive(connection, incoming.result())
-            finally:
-                await cancel_and_wait(incoming)
+        done, _ = await asyncio.wait((receiver, sender), return_when=asyncio.FIRST_COMPLETED)
+        await (sender if sender in done else receiver)
     finally:
-        await cancel_and_wait(sender)
+        await cancel_and_wait(sender, receiver)
+
+
+async def _receive_messages(
+    websocket: Any, computers: ComputerRegistry, connection: ComputerConnection
+) -> None:
+    while not connection.closed:
+        computers.receive(connection, await _receive(websocket))
 
 
 async def _receive(websocket: Any) -> Any:
@@ -91,7 +89,13 @@ async def _receive(websocket: Any) -> Any:
     raw = frame.get("text")
     if not isinstance(raw, str):
         raise ValueError("Expected a text frame")
-    if len(raw.encode("utf-8")) > MAX_FRAME_BYTES:
+    # Valid WebSocket text uses at most four UTF-8 bytes per code point.
+    length = len(raw)
+    if length > MAX_FRAME_BYTES or (
+        length > MAX_FRAME_BYTES // 4
+        and not raw.isascii()
+        and len(raw.encode("utf-8")) > MAX_FRAME_BYTES
+    ):
         raise ValueError("Computer frame too large")
     return json.loads(raw)
 

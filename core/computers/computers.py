@@ -424,7 +424,7 @@ class ComputerRegistry:
             "operation": operation,
             "params": params,
         }
-        if len(json.dumps(request, ensure_ascii=True).encode()) > MAX_FRAME_BYTES:
+        if len(json.dumps(request, ensure_ascii=True)) > MAX_FRAME_BYTES:
             raise ComputerError(
                 "computer_request_too_large",
                 "The computer request is too large. Nothing was sent; split it into smaller calls.",
