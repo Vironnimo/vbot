@@ -19,6 +19,7 @@ from core.agents.temporary_execution import (
 )
 from core.automation.cron import CronJobNotFoundError, CronService
 from core.chat import ChatLoop
+from core.computers.computers import ComputerRegistry, ExtensionComputers
 from core.extensions import ExtensionRegistry
 from core.extensions.databases import ExtensionDatabases
 from core.extensions.notifications import (
@@ -57,7 +58,12 @@ from core.runtime.interfaces import (
     LoggerProtocol,
     ProviderCredentialResolverProtocol,
 )
-from core.sessions import ChatSessionManager, SessionAddress, SessionNotFoundError
+from core.sessions import (
+    SUBAGENT_PARENT_META_KEY,
+    ChatSessionManager,
+    SessionAddress,
+    SessionNotFoundError,
+)
 from core.sessions.titles import SessionTitleService
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex, StatisticsService
@@ -85,6 +91,7 @@ from core.utils.timestamps import utc_now_timestamp
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.secrets.agent_secrets import AgentSecrets
+    from core.secrets.store import SecretStore
 
 
 def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
@@ -162,6 +169,7 @@ class ExtensionHostFactory:
         self,
         *,
         host: ExtensionHost,
+        computers: ComputerRegistry,
         ensure_started: Callable[[], None],
         agent_resolver: AgentResolver,
         chat_loop: ChatLoop,
@@ -171,6 +179,7 @@ class ExtensionHostFactory:
         agents: AgentStore,
         sessions: ChatSessionManager,
         secrets: AgentSecrets,
+        secret_store: SecretStore,
         statistics_index: StatisticsIndex,
         usage_recorder: UsageRecorder,
         tools: ToolRegistry,
@@ -197,6 +206,8 @@ class ExtensionHostFactory:
         cron: CronService | None = None,
     ) -> None:
         self._host = host
+        self._computers = computers
+        self._computer_hosts: dict[Any, ExtensionComputers] = {}
         self._ensure_started = ensure_started
         self.agent_resolver = agent_resolver
         self.chat_loop = chat_loop
@@ -206,6 +217,7 @@ class ExtensionHostFactory:
         self.agents = agents
         self.chat_sessions = sessions
         self._secrets = secrets
+        self._secret_store = secret_store
         self._statistics_index = statistics_index
         self._usage_recorder = usage_recorder
         self.tools = tools
@@ -267,6 +279,9 @@ class ExtensionHostFactory:
         )
 
     def close_services(self) -> None:
+        for computers in self._computer_hosts.values():
+            computers._retire()
+        self._computer_hosts.clear()
         for unsubscribe in self._service_observers:
             unsubscribe()
         self._service_observers.clear()
@@ -286,6 +301,8 @@ class ExtensionHostFactory:
         )
 
     async def _release_owner(self, identity: Any) -> None:
+        if computers := self._computer_hosts.pop(identity, None):
+            computers._retire()
         await self.services.release_owner(identity)
         for key in tuple(self._deferred_runs):
             if key[0] == identity:
@@ -320,8 +337,15 @@ class ExtensionHostFactory:
         self._temporary_groups.append(groups)
         state_dir = self._host.data_dir / "extension-data" / identity.name
         state_dir.mkdir(parents=True, exist_ok=True)
+        computers = self._computer_hosts.get(identity)
+        if computers is None:
+            computers = ExtensionComputers(
+                self._computers, partial(self._require_registration, identity)
+            )
+            self._computer_hosts[identity] = computers
         return replace(
             self._host,
+            computers=computers,
             decide=lambda context, request: self._decide(identity, context, request),
             review_context=lambda context: self._review_context(identity, context),
             input_authority=lambda context: self._input_authority(identity, context),
@@ -361,6 +385,7 @@ class ExtensionHostFactory:
                 identity, partial(self._require_registration, identity)
             ),
             open_database=self.databases.opener(identity),
+            protected_data=self.databases.protection(identity, self._secret_store),
             capture_tool_call=lambda context: self._capture_tool_call(identity, context),
             defer_tool_call=lambda context: self._capture_tool_call(
                 identity, context, deferred=True
@@ -901,10 +926,13 @@ class ExtensionHostFactory:
 
     async def _restored_tool_context(self, record: dict[str, Any]) -> ToolContext:
         """Resolve a receipt snapshot; the caller revalidates it after this async work."""
+        address = SessionAddress(record["project_id"], record["agent_id"], record["session_id"])
+        parent = await self.chat_sessions.metadata_value_async(address, SUBAGENT_PARENT_META_KEY)
         context = ToolContext(
             agent_id=record["agent_id"],
             session_id=record["session_id"],
             session_generation_id=record["generation_id"],
+            subagent_session=isinstance(parent, dict),
             project_id=record["project_id"],
             run_id=record["run_id"],
             tool_call_id=record["tool_call_id"],
@@ -922,7 +950,6 @@ class ExtensionHostFactory:
         )
         assert self._host.resolve_tool_agent_async is not None
         agent = await self._host.resolve_tool_agent_async(context)
-        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
         working_project = await self.agent_resolver.resolve_working_project_async(
             context.project_id, agent, session_id=context.session_id
         )
@@ -964,8 +991,8 @@ class ExtensionHostFactory:
                     self._secrets.protect_output,
                     SessionAddress(record["project_id"], record["agent_id"], record["session_id"]),
                     content,
-                    resolve_address=partial(
-                        self.chat_sessions.generation_address, record["generation_id"]
+                    resolve_scope=partial(
+                        self.chat_sessions.generation_scope, record["generation_id"]
                     ),
                 )
             except SessionNotFoundError:

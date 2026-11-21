@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-40.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-41.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-40.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-41.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,14 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `40.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 40` in `extension.json` for Extensions using the new
+The SDK version is `41.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 41` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 41 adds `host.protected_data` to seal and open opaque bytes by Extension and record identity. Call these blocking methods on a worker and seal before opening a write transaction. A cached Computer capability checks the current Extension registration on use. `write_profile_assignment` coordinates Extension-owned Permission Profile assignments with profile deletion.
 
 API 40 adds live Permission Profile references to `TemporaryAgentConfig`. Choose a name from `host.catalog()["permission_profiles"]` as `permission_ceiling_profile` to limit the participant alongside its own rules and any existing ceiling. A participant without an Agent profile or inline rules can select its own `permission_profile` or set `inherit_permission_defaults=True` to use the global Agent rules.
 

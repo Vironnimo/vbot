@@ -10,6 +10,10 @@ An owner-bound host offers `await host.open_database(name, schema_sql, migration
 
 The returned `Database` carries the kernel's `read_async`/`write_async`/`run_async`, so an Extension runs its blocking work on that database's own worker pool instead of a private one. Extensions import `Database`, `Migration` and `DatabaseError` from `core.extensions.databases` and never open SQLite files, `core.database` internals or `core.sessions` storage themselves.
 
+API 41 supplies `host.protected_data.seal(identity, content)` and `open(identity, ciphertext)` on the owner-bound host. Its database lifetime includes the shutdown handler and ends on owner release. Both methods block. The shared Secret Store authenticates the Extension identity and its chosen record identity. Bind the record and field to that identity. Seal on a worker before entering the database write transaction because creating the data key touches a snapshot document. Opening only uses an existing key.
+
+API 41's SDK helper `write_profile_assignment(database, names, write)` validates named Permission Profiles and commits the assignment on the writer's worker under the data-store operation lock. The host's offline deletion check understands the bundled Swarm and Factory stores (`archive/operations.md` -> Permission Profile references).
+
 ## Startup and opening point
 
 The owner-bound host is bound only when `ExtensionRuntime.startup` fires startup handlers from the server lifespan after Runtime bootstrap (and again after a reload), so the earliest open is an `api.operations.startup` handler (the Swarm Extension opens there). Safe startup modes (`--verification-only`, test instances) load no Extensions (`core/runtime/_bootstrap.py`) and fire no startup handlers, so an updater's candidate verification never opens, migrates or auto-restores an Extension database, and an Extension open failure never triggers the automatic data rollback. Startup handlers are fail-open: an open failure is logged as the handler's error and the server still starts healthy, with that Extension lacking its database.

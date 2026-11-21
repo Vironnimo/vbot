@@ -5,8 +5,8 @@ from typing import Any
 from ._exports import HostUnavailableError as HostUnavailableError
 from ._exports import exports_for, resolve
 
-SDK_VERSION = "40.0.0"
-API_VERSION = 40
+SDK_VERSION = "41.0.0"
+API_VERSION = 41
 
 _EXPORTS = exports_for(
     **{
@@ -43,7 +43,13 @@ _EXPORTS = exports_for(
             "InteractionResponder",
         ),
         "core.extensions.settings_schema": ("SettingsFieldDeclaration",),
-        "core.extensions.databases": ("Database", "DatabaseError", "Migration"),
+        "core.extensions.profile_references": ("write_profile_assignment",),
+        "core.extensions.databases": (
+            "Database",
+            "DatabaseError",
+            "ExtensionDataProtection",
+            "Migration",
+        ),
     }
 )
 

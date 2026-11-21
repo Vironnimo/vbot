@@ -98,7 +98,9 @@ API 11: `host.oauth_redirects` is the Runtime's `OAuthRedirects` (`core/extensio
 
 ## Computer routing
 
-API 21: `host.computers` is the Runtime's shared `ComputerRegistry`, or `None` without that service. Extensions resolve a Tool context's selected Computer with `resolve(context, requested_id, capability)` before execution. Local `server` execution stays with the capability owner; remote operations use `call`, or `call_sync` from a native worker, with instance fencing for retained process or desktop state. The host supplies no additional Computer grant: exact Session policy, durable identity, availability and no mutation replay remain the registry's contract (`computers.md`). The bundled Computer Use Extension consumes this service without importing Runtime or transport code (`extensions/computer-use.md`).
+API 21 exposes `host.computers` for Computer routing. In API 41 its owner-bound view supports discovery, selection, events and remote calls. Retiring the registration closes its subscriptions and rejects new operations, including worker calls waiting for Event Loop admission. Registry and transport administration belong to Runtime.
+
+For each Agent-initiated Tool invocation the Extension must call `resolve(context, requested_id, capability)` with that invocation's Tool context before executing, even when it retains a target from an earlier invocation. This checks the Session's allowed Computers. Local `server` execution stays with the capability owner. Remote `call` and worker `call_sync` accept a Computer id directly and enforce registration, availability, capability sharing and optional instance fencing. They have no Session argument and perform no Session-grant check themselves. This also supports actions outside a Run, such as an operator stopping remote Computer Use, releasing held input at shutdown and reconnect cleanup. The bundled Computer Use router checks `resolve` on every Agent invocation before handing it to a retained service (`extensions/computer-use.md`, `computers.md`).
 
 ## Triggers
 

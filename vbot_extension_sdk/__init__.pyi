@@ -24,8 +24,8 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 40
-SDK_VERSION: Final[str] = "40.0.0"
+API_VERSION: Final[int] = 41
+SDK_VERSION: Final[str] = "41.0.0"
 
 def require_api(minimum: int = API_VERSION, *, maximum: int | None = None) -> int: ...
 
@@ -219,6 +219,10 @@ class IdentityAgentProfiles(typing.Protocol):
         self, agent_id: str, *, expected_incarnation: str, **changes: Any
     ) -> dict[str, Any]: ...
 
+class ExtensionDataProtection(typing.Protocol):
+    def seal(self, identity: str, content: bytes) -> str: ...
+    def open(self, identity: str, ciphertext: str) -> bytes: ...
+
 @dataclass(frozen=True)
 class ExtensionHost:
     data_dir: Path
@@ -259,6 +263,7 @@ class ExtensionHost:
     triggers: Any | None = None
     services: ExtensionServices | None = None
     execution_usage_changes: Any | None = None
+    protected_data: ExtensionDataProtection | None = None
 
 class ExtensionOperations:
     # Supplied by ExtensionAPI; private host wiring is not an authoring constructor.
@@ -462,6 +467,10 @@ class Database:
     def close(self) -> None: ...
 
 class DatabaseError(Exception): ...
+
+def write_profile_assignment[T](
+    database: Database, names: Iterable[str | None], write: Callable[[sqlite3.Connection], T]
+) -> T: ...
 
 @dataclass(frozen=True)
 class Migration:

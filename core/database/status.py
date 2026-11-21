@@ -7,12 +7,12 @@ it as ``secrets`` when the caller passes it; this kernel module never opens it.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Mapping
-from contextlib import closing
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.database._connections import classified_error, readonly_sqlite_uri
+from core.database._connections import classified_error, connect_tracked, readonly_sqlite_uri
 from core.database.config_backups import config_backup_summary
 from core.database.errors import DatabaseError, DatabaseUnavailableError
 from core.database.marker import (
@@ -152,24 +152,41 @@ def _file_state(
     if not present:
         return "unavailable", missing_database_reason(name), {}
     try:
-        with closing(sqlite3.connect(readonly_sqlite_uri(path), uri=True)) as connection:
-            application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
-            generation = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            identity = dict(connection.execute("SELECT key, value FROM kernel_meta").fetchall())
-            if (
-                (spec is not None and application_id != spec.application_id)
-                or identity.get("database_name") != name
-                or identity.get("database_id") != entry.database_id
-            ):
-                return "unavailable", "the database file has another identity", {}
-            if generation != entry.format_generation:
-                return "unavailable", f"the database file is format generation {generation}", {}
+        with inspect_registered_database(
+            data_dir, name, entry, application_id=spec.application_id if spec else None
+        ) as connection:
             if spec is None or spec.health is None:
                 return "healthy", None, {}
             health: DatabaseHealth = spec.health(connection)
             return health.state, health.reason, dict(health.details)
+    except DatabaseUnavailableError as exc:
+        return "unavailable", str(exc), {}
     except (sqlite3.Error, OSError) as exc:
         translated = classified_error(exc, "") if isinstance(exc, sqlite3.Error) else None
         if isinstance(translated, DatabaseUnavailableError) or isinstance(exc, OSError):
             return "unavailable", f"the database file cannot be read: {exc}", {}
         return "unavailable", f"the database file is damaged: {exc}", {}
+
+
+@contextmanager
+def inspect_registered_database(
+    data_dir: Path, name: str, entry: MarkerEntry, *, application_id: int | None
+) -> Iterator[sqlite3.Connection]:
+    """Read the marker member in one transaction without creating, evolving or restoring it."""
+    path = canonical_database_path(data_dir, name)
+    with closing(connect_tracked(readonly_sqlite_uri(path), uri=True, tracking_path=path)) as db:
+        db.execute("BEGIN")
+        application = int(db.execute("PRAGMA application_id").fetchone()[0])
+        generation = int(db.execute("PRAGMA user_version").fetchone()[0])
+        identity = dict(db.execute("SELECT key, value FROM kernel_meta"))
+        if (
+            (application_id is not None and application != application_id)
+            or identity.get("database_name") != name
+            or identity.get("database_id") != entry.database_id
+        ):
+            raise DatabaseUnavailableError("the database file has another identity")
+        if generation != entry.format_generation or identity.get("format_generation") != str(
+            generation
+        ):
+            raise DatabaseUnavailableError(f"the database file is format generation {generation}")
+        yield db

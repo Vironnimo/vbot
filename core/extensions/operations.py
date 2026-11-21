@@ -19,7 +19,8 @@ from core.tools.tools import Tool, ToolContext, ToolRegistry
 JsonObject = dict[str, Any]
 
 if TYPE_CHECKING:
-    from core.computers import ComputerRegistry
+    from core.computers.computers import ExtensionComputers
+    from core.extensions.databases import ExtensionDataProtection
     from core.extensions.services import ExtensionServices
 
 # The ``resource`` of the change an Extension that declares
@@ -117,7 +118,7 @@ class ExtensionHost:
     # that Agent outside any Session (MCP management ``invoke``).
     resolve_permissions: Callable[[str | None, str], Awaitable[PermissionBoundary]] | None = None
     # API v21: shared native capability routing; no Runtime or transport access.
-    computers: ComputerRegistry | None = None
+    computers: ExtensionComputers | None = None
     # API v23: one native judgment through the configured Decision Model.
     # The owner-bound implementation records Usage and rejects retired hosts.
     decide: Callable[[ToolContext | None, JsonObject], Awaitable[JsonObject]] | None = None
@@ -137,6 +138,7 @@ class ExtensionHost:
     services: ExtensionServices | None = None
     # API v34: revisioned settled group totals for incremental owner projections.
     execution_usage_changes: ExecutionUsageChanges | None = None
+    protected_data: ExtensionDataProtection | None = None
 
 
 @dataclass(frozen=True)
