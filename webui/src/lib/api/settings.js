@@ -13,7 +13,7 @@ import {
 import {
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
-} from '../settingsView.js';
+} from '../settingsView/providers.js';
 import { WEBUI_BUILD_FILE, servedWebuiBuild } from '../webuiBuild.js';
 
 export function getSettings(options = {}) {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import string
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -346,7 +346,7 @@ def tool_result_content_blocks(message: Mapping[str, Any]) -> list[JsonObject]:
 
 
 def project_tool_result_content_fallbacks(
-    messages: list[JsonObject],
+    messages: Sequence[Mapping[str, Any]],
 ) -> list[JsonObject]:
     """Project rich Tool Results onto text-only Tool wires.
 

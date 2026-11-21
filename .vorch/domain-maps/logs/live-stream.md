@@ -4,7 +4,7 @@ Supplementary to `logs.md`. Covers how `LogViewer` follows a log file for `/ws/l
 
 ## Directory watcher
 
-`watchfiles` - `awatch` watches every existing registered logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers a targeted tail advance or catalog reconciliation. Live append/reset events are derived by advancing the file's tail (below), while a changed sorted filename tuple emits a catalog event even when the selected file did not change - this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
+`watchfiles` - `awatch` watches every existing registered logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=500`, `debounce=100`), not the single selected file. Half-second timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers a targeted tail advance or catalog reconciliation. Live append/reset events are derived by advancing the file's tail (below), while a changed sorted filename tuple emits a catalog event even when the selected file did not change - this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
 
 Windows watcher events may duplicate or coalesce changes; derive append/reset events from the file's tail state rather than raw watcher event counts.
 

@@ -37,8 +37,8 @@ from core.chat._run_state import (
 from core.chat._scratch_context import (
     SCRATCH_ANNOUNCED_META_KEY,
     SCRATCH_RUN_KINDS,
+    history_for_scratch_announcement,
     scratch_note,
-    scratch_note_visible,
     uses_scratch,
 )
 from core.chat._skill_activation import _activate_triggered_skills
@@ -74,7 +74,7 @@ from core.chat.usage import (
     aggregate_session_usage,
     latest_session_context_usage,
 )
-from core.chat.wire_shaping import _strip_assistant_reasoning_fields
+from core.chat.wire_shaping import _strip_assistant_reasoning_fields, extend_request_with_notes
 from core.extensions import HookContext, SessionRequestContext
 from core.performance import measure, session_track
 from core.runs import (
@@ -772,6 +772,8 @@ class RunExecution:
         if not uses_scratch(context.run.run_kind, tool_names):
             return False
         session = context.session
+        history = context.session_snapshot.active_lineage
+        history_length = len(history)
         folder = await scratch.folder_for(session.address)
         sessions = self._dependencies.sessions
         async with sessions.write_lock(session.address):
@@ -786,28 +788,45 @@ class RunExecution:
                 or prior.get("own") != own
                 or prior.get("incarnation") != folder.incarnation
             )
-            visible = await _CHAT_TRANSFORM_WORKERS.run(
-                scratch_note_visible,
+            effective = await _CHAT_TRANSFORM_WORKERS.run(
+                history_for_scratch_announcement,
                 context.session_snapshot.active_messages,
-                prior.get("note_id"),
+                prior.get("note_id") if not changed else None,
             )
-            if prior and not changed and visible:
+            if effective is None:
                 return True
             note = scratch_note(folder)
-            await context.session_snapshot.append(session, [note])
-            await sessions.run_async(
-                sessions.mutate_metadata,
-                session.address,
-                lambda metadata: metadata.update(
-                    {
+            await context.session_snapshot.commit(
+                session,
+                partial(
+                    session.append_many_async,
+                    [note],
+                    metadata_update={
                         SCRATCH_ANNOUNCED_META_KEY: {
                             "own": own,
                             "incarnation": folder.incarnation,
                             "note_id": note.id,
                         }
-                    }
+                    },
                 ),
+                written=[note],
             )
+        # In the ordinary case the built request already covers everything but
+        # this note. A replaced lineage or concurrent append needs a full replay.
+        if (
+            context.session_snapshot.active_lineage is history
+            and len(history) == history_length + 1
+            and history[-1].id == note.id
+        ):
+            effective.append(note)
+            extend_request_with_notes(
+                state.messages,
+                [note],
+                effective,
+                replay_policy=context.primary_target.replay_policy,
+                agent_model=context.primary_target.model_reference,
+            )
+            return True
         context.request_state = await self._requests.rebuild_live_request_state(
             context.agent,
             session,

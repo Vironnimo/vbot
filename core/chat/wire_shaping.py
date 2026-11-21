@@ -207,32 +207,24 @@ def _message_to_request_dict(
     replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     agent_model: str | None = None,
 ) -> JsonObject:
-    data = message.to_dict()
-    data.pop("run_id", None)
-    data.pop("thinking_effort", None)
-    data.pop("subagent_reply_target", None)
-    data.pop("skill_package", None)
-    data.pop("external_history", None)
-    if data.get("role") == "assistant":
+    if message.role in {"user", "assistant", "system", "tool"}:
+        data = message.request_fields()
+    else:
+        # Accounting may also project a checkpoint or history edit.
+        data = message.to_dict()
+        for key in (
+            "run_id",
+            "subagent_reply_target",
+            "skill_package",
+            "external_history",
+            "sender",
+        ):
+            data.pop(key, None)
+    if message.role == "assistant":
         if not _replays_assistant_reasoning(message, replay_policy, agent_model):
             data.pop("reasoning", None)
             data.pop("reasoning_meta", None)
-        data.pop("reasoning_scope", None)
         _carry_reported_reasoning_tokens(message, data)
-        data.pop("usage", None)
-        # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
-        data.pop("interrupted", None)
-        data.pop("interruption_cause", None)
-        data.pop("output_files", None)
-    data.pop("timing", None)
-    data.pop("tool_display", None)
-    data.pop("tool_media", None)
-    # Reasoning duration is presentation metadata, never a wire field.
-    data.pop("reasoning_timing", None)
-    data.pop("reasoning_summary", None)
-    # Sender attribution exists only in the provider request: persisted content stays
-    # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
-    data.pop("sender", None)
     if message.role == "user" and message.sender is not None:
         _apply_sender_attribution(data, message.sender)
     return data

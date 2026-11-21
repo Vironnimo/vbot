@@ -4,6 +4,7 @@ import {
   loadTimelineItems,
   mergeTimelineItems,
   visibleTimelineItemsForRender,
+  timelineToolRuns,
   timelineRowsForViewport,
   mergeRunChildPage,
 } from '../chatTimeline.js';
@@ -150,6 +151,17 @@ describe('server Timeline projection', () => {
     expect(session.timelineItems[0].items.map((item) => item.position)).toEqual(
       [-1, 10],
     );
+  });
+
+  it('keeps the work rows through text deltas and replaces them on Tool updates', () => {
+    const tool = toolItem();
+    const run = (call, text) => assistantRun('one', [call, outputItem(text)]);
+    const initial = timelineToolRuns([run(tool, 'First')], []);
+    expect(timelineToolRuns([run(tool, 'More text')], initial)).toBe(initial);
+    const finished = { ...tool, finished: true };
+    expect(
+      timelineToolRuns([run(finished, 'More text')], initial)[0].items,
+    ).toEqual([finished]);
   });
 
   it('gives the viewport bounded parts of a single long Run with stable identities', () => {

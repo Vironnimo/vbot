@@ -6,6 +6,7 @@ import json
 from collections.abc import AsyncGenerator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, tzinfo
+from io import StringIO
 from typing import Any
 
 import httpx
@@ -65,12 +66,13 @@ class ResponsesStreamState:
     item_id_to_call_id: dict[str, str] = field(default_factory=dict)
     tool_call_order: list[str] = field(default_factory=list)
     emitted_tool_names: dict[str, str] = field(default_factory=dict)
-    emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
+    emitted_tool_arguments: dict[str, StringIO] = field(default_factory=dict)
+    pending_replay_arguments: set[str] = field(default_factory=set)
     started_tool_argument_deltas: set[str] = field(default_factory=set)
-    emitted_output_text: str = ""
+    emitted_output_text: StringIO = field(default_factory=StringIO)
     refusal_sections: dict[tuple[Any, Any], str] = field(default_factory=dict)
-    emitted_reasoning_text: str = ""
-    summary_sections: dict[tuple[int, int], str] = field(default_factory=dict)
+    emitted_reasoning_text: StringIO = field(default_factory=StringIO)
+    summary_sections: dict[tuple[int, int], tuple[int, StringIO]] = field(default_factory=dict)
     reasoning_meta: dict[str, Any] | None = None
     output_items_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
     usage: dict[str, int] | None = None
@@ -85,18 +87,19 @@ class ResponsesStreamState:
             *self.emitted_tool_arguments,
         ]
         for position, tool_call_id in enumerate(dict.fromkeys(known_tool_ids)):
+            arguments = self.emitted_tool_arguments.get(tool_call_id)
             tool_calls.extend(
                 normalize_tool_call_candidates(
                     tool_call_id=tool_call_id,
                     name=self.emitted_tool_names.get(tool_call_id),
-                    arguments=self.emitted_tool_arguments.get(tool_call_id),
+                    arguments=arguments.getvalue() if arguments is not None else None,
                     fallback_id=f"tool_call_{position}",
                 )
             )
         result: dict[str, Any] = {
             "role": "assistant",
-            "content": self.emitted_output_text or None,
-            "reasoning": self.emitted_reasoning_text or None,
+            "content": self.emitted_output_text.getvalue() or None,
+            "reasoning": self.emitted_reasoning_text.getvalue() or None,
             "reasoning_meta": (
                 dict(self.reasoning_meta) if self.reasoning_meta is not None else None
             ),
@@ -104,7 +107,9 @@ class ResponsesStreamState:
         }
         phase = _assistant_phase_from_output(_response_output_from_meta(self.reasoning_meta))
         if self.summary_sections:
-            result["reasoning_summary"] = list(self.summary_sections.values())
+            result["reasoning_summary"] = [
+                text.getvalue() for _, text in self.summary_sections.values()
+            ]
         if phase is not None:
             result["phase"] = phase
         if self.usage is not None:
@@ -291,7 +296,7 @@ def _output_text_delta(
 ) -> list[dict[str, Any]]:
     deltas = _text_delta(event_data, "content_delta")
     if deltas:
-        state.emitted_output_text += deltas[0]["text"]
+        state.emitted_output_text.write(deltas[0]["text"])
     return deltas
 
 
@@ -310,7 +315,7 @@ def _refusal_delta(
     if not text:
         return []
     state.refusal_sections[key] = previous + text
-    state.emitted_output_text += text
+    state.emitted_output_text.write(text)
     return [{"type": "content_delta", "text": text}]
 
 
@@ -320,7 +325,7 @@ def _reasoning_delta(
 ) -> list[dict[str, Any]]:
     deltas = _text_delta(event_data, "reasoning_delta")
     if deltas:
-        state.emitted_reasoning_text += deltas[0]["text"]
+        state.emitted_reasoning_text.write(deltas[0]["text"])
     return deltas
 
 
@@ -351,21 +356,25 @@ def _summary_delta(
     if not isinstance(summary_index, int) or isinstance(summary_index, bool) or summary_index < 0:
         return []
     key = (output_index, summary_index)
-    previous = state.summary_sections.get(key, "")
+    section = state.summary_sections.get(key)
+    if section is None:
+        section = (len(state.summary_sections), StringIO())
+        state.summary_sections[key] = section
+    position, parts = section
     if snapshot:
-        if text == previous:
+        if not text.startswith(parts.getvalue()):
             return []
-        if not text.startswith(previous):
+        text = text[parts.tell() :]
+        if not text:
             return []
-        text = text[len(previous) :]
-    separator = "\n\n" if not previous and state.emitted_reasoning_text else ""
-    state.summary_sections[key] = previous + text
-    state.emitted_reasoning_text += separator + text
+    separator = "\n\n" if not parts.tell() and state.emitted_reasoning_text.tell() else ""
+    parts.write(text)
+    state.emitted_reasoning_text.write(separator + text)
     return [
         {
             "type": "reasoning_delta",
             "text": separator + text,
-            "summary_index": list(state.summary_sections).index(key),
+            "summary_index": position,
             "summary_text": text,
         }
     ]
@@ -409,19 +418,13 @@ def _function_arguments_delta(
     # equal (or start with) everything accumulated so far.
     arguments_delta: str | None
     if tool_call_id in state.started_tool_argument_deltas:
-        state.emitted_tool_arguments[tool_call_id] += delta
+        state.emitted_tool_arguments[tool_call_id].write(delta)
         arguments_delta = delta
     else:
         arguments_delta = _first_tool_argument_delta(tool_call_id, delta, state)
         state.started_tool_argument_deltas.add(tool_call_id)
-    # The durable Responses replay carrier must agree with the canonical Call,
-    # even when the terminal event omits its output array.
-    for item in state.output_items_by_index.values():
-        if item.get("type") == "function_call" and _function_call_id(item) == tool_call_id:
-            item["arguments"] = state.emitted_tool_arguments[tool_call_id]
-            function = item.get("function")
-            if isinstance(function, Mapping):
-                item["function"] = {**function, "arguments": item["arguments"]}
+    # If no newer item snapshot arrives, replay uses these streamed arguments.
+    state.pending_replay_arguments.add(tool_call_id)
     if arguments_delta is None:
         return []
     return [
@@ -458,6 +461,7 @@ def _output_item_event_deltas(
     if item.get("type") != "function_call":
         return []
     tool_call_id = _function_call_id(item)
+    state.pending_replay_arguments.discard(tool_call_id)
     _remember_stream_tool_call_id(event_data, tool_call_id, state)
     item_own_id = _non_empty_string_or_none(item.get("id"))
     if item_own_id is not None and item_own_id != tool_call_id:
@@ -499,9 +503,9 @@ def _first_tool_argument_delta(
     continues it as an ordinary fragment.
     """
 
-    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
-    if emitted_arguments and not delta.startswith(emitted_arguments):
-        state.emitted_tool_arguments[tool_call_id] = emitted_arguments + delta
+    parts = state.emitted_tool_arguments.get(tool_call_id)
+    if parts is not None and not delta.startswith(parts.getvalue()):
+        parts.write(delta)
         return delta
     return _record_tool_argument_snapshot(tool_call_id, delta, state)
 
@@ -523,11 +527,14 @@ def _record_tool_argument_snapshot(
     so where a snapshot contradicts them the streamed arguments stand.
     """
 
-    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
-    if not snapshot.startswith(emitted_arguments):
+    parts = state.emitted_tool_arguments.get(tool_call_id)
+    if parts is None:
+        parts = state.emitted_tool_arguments[tool_call_id] = StringIO()
+    if not snapshot.startswith(parts.getvalue()):
         return None
-    state.emitted_tool_arguments[tool_call_id] = snapshot
-    return snapshot[len(emitted_arguments) :] or None
+    suffix = snapshot[parts.tell() :]
+    parts.write(suffix)
+    return suffix or None
 
 
 def _completed_event_deltas(
@@ -556,9 +563,9 @@ def _completed_event_deltas(
     if reasoning_backfill is not None:
         deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
     content = _joined_or_none(_extract_output_text_parts(output_items))
-    content_backfill = _text_backfill_delta(content, state.emitted_output_text)
+    content_backfill = _text_backfill_delta(content, state.emitted_output_text.getvalue())
     if content_backfill is not None:
-        state.emitted_output_text += content_backfill
+        state.emitted_output_text.write(content_backfill)
         deltas.append({"type": "content_delta", "text": content_backfill})
     reasoning_meta = _extract_reasoning_meta(response, output_items)
     if reasoning_meta is not None:
@@ -601,7 +608,19 @@ def _record_stream_output_item(
 
 
 def _ordered_stream_output_items(state: ResponsesStreamState) -> list[Mapping[str, Any]]:
-    return [state.output_items_by_index[index] for index in sorted(state.output_items_by_index)]
+    items: list[Mapping[str, Any]] = []
+    for index in sorted(state.output_items_by_index):
+        item = state.output_items_by_index[index]
+        if item.get("type") == "function_call":
+            call_id = _function_call_id(item)
+            if call_id in state.pending_replay_arguments:
+                arguments = state.emitted_tool_arguments[call_id].getvalue()
+                item = {**item, "arguments": arguments}
+                function = item.get("function")
+                if isinstance(function, Mapping):
+                    item["function"] = {**function, "arguments": arguments}
+        items.append(item)
+    return items
 
 
 def _record_reasoning_meta(meta: Mapping[str, Any], state: ResponsesStreamState) -> None:
@@ -627,23 +646,10 @@ def _reasoning_backfill_delta(
 ) -> str | None:
     if reasoning is None:
         return None
-    emitted_reasoning = state.emitted_reasoning_text
-    if not emitted_reasoning:
-        state.emitted_reasoning_text = reasoning
-        return reasoning
-    if reasoning == emitted_reasoning or emitted_reasoning.endswith(reasoning):
-        return None
-    if reasoning.startswith(emitted_reasoning):
-        backfill = reasoning[len(emitted_reasoning) :]
-        state.emitted_reasoning_text = reasoning
-        return backfill or None
-
-    overlap = _suffix_prefix_overlap(emitted_reasoning, reasoning)
-    if overlap > 0:
-        backfill = reasoning[overlap:]
-        state.emitted_reasoning_text += backfill
-        return backfill or None
-    return None
+    backfill = _text_backfill_delta(reasoning, state.emitted_reasoning_text.getvalue())
+    if backfill:
+        state.emitted_reasoning_text.write(backfill)
+    return backfill
 
 
 def _suffix_prefix_overlap(left: str, right: str) -> int:

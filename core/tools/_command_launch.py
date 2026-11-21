@@ -302,7 +302,7 @@ async def launch_pipe_process(
     return PipeCommandProcess(process, trees[0], writer, child_exit)
 
 
-class _Shell(CommandProcess, Protocol):
+class ShellProcess(CommandProcess, Protocol):
     """A process ``PipeLauncher`` started (``PipeCommandProcess``)."""
 
     def running(self) -> bool: ...
@@ -313,7 +313,7 @@ class _Shell(CommandProcess, Protocol):
 
 
 # Starts a process on pipes, with a request pipe when asked: ``launch_pipe_process``.
-ShellStart = Callable[..., Awaitable[_Shell]]
+ShellStart = Callable[..., Awaitable[ShellProcess]]
 
 
 @dataclass(eq=False)
@@ -321,7 +321,7 @@ class _WarmShell:
     argv: tuple[str, ...]
     env: dict[str, str]
     tracker: ProcessTreeTracker
-    task: asyncio.Future[_Shell]
+    task: asyncio.Future[ShellProcess]
     expiry: asyncio.Future[None] | None = field(default=None)
 
     def serves(self, argv: Sequence[str], env: Mapping[str, str], tracker: object) -> bool:
@@ -374,7 +374,7 @@ class PipeLauncher:
         request: bytes | None = None,
         *,
         warm: bool = True,
-    ) -> CommandProcess:
+    ) -> ShellProcess:
         """Start *argv* in *cwd* with exactly *env*, tracked by *tracker* from creation.
 
         *request*, when given, is written to the process's stdin, which then
@@ -416,7 +416,7 @@ class PipeLauncher:
 
     def _claim(
         self, argv: Sequence[str], env: Mapping[str, str], tracker: ProcessTreeTracker
-    ) -> _Shell | None:
+    ) -> ShellProcess | None:
         warm = self._warm
         if warm is None:
             return None
@@ -456,7 +456,7 @@ class PipeLauncher:
         task.add_done_callback(partial(self._started, warm))
         warm.expiry = asyncio.ensure_future(self._expire(warm))
 
-    def _started(self, warm: _WarmShell, task: asyncio.Future[_Shell]) -> None:
+    def _started(self, warm: _WarmShell, task: asyncio.Future[ShellProcess]) -> None:
         if task.cancelled() or task.exception() is None:
             return
         self._warn("start", "A warm shell could not start: %s", task.exception())
@@ -494,5 +494,6 @@ __all__ = [
     "WARM_SHELL_IDLE_SECONDS",
     "PipeCommandProcess",
     "PipeLauncher",
+    "ShellProcess",
     "launch_pipe_process",
 ]

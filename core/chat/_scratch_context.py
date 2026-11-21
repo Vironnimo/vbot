@@ -33,11 +33,16 @@ def uses_scratch(run_kind: RunKind, tool_names: Collection[str]) -> bool:
     return run_kind in SCRATCH_RUN_KINDS and not _FILE_TOOLS.isdisjoint(tool_names)
 
 
-def scratch_note_visible(messages: list[ChatMessage], note_id: object) -> bool:
-    return any(
-        message.role == "note" and message.id == note_id
-        for message in effective_compaction_messages(messages)
-    )
+def history_for_scratch_announcement(
+    messages: list[ChatMessage], current_note_id: object
+) -> list[ChatMessage] | None:
+    """Return the Model's projected history when it needs a new folder announcement."""
+    effective = effective_compaction_messages(messages)
+    if current_note_id is not None and any(
+        message.role == "note" and message.id == current_note_id for message in effective
+    ):
+        return None
+    return effective
 
 
 def scratch_note(folder: ScratchFolder) -> ChatMessage:

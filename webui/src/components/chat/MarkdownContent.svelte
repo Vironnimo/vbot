@@ -3,9 +3,9 @@
   import { t } from '$lib/i18n.js';
   import {
     renderMarkdownDocument,
-    renderMarkdownStreamingDocument,
+    createMarkdownStreamRenderer,
     renderReasoningMarkdownDocument,
-    renderReasoningMarkdownStreamingDocument,
+    reasoningMarkdownSource,
   } from '$lib/markdown.js';
   import { renderMarkdownDom } from './markdownDom.js';
 
@@ -22,15 +22,19 @@
   const message = $derived(
     !reasoning && className.split(/\s+/).includes('msg-markdown'),
   );
+  let streamRenderer;
   let renderedDocument = $derived.by(() => {
     const options = { plainLanguageLabel: t('chat.codeLanguagePlain') };
-    if (reasoning) {
-      return streaming
-        ? renderReasoningMarkdownStreamingDocument(source, options)
-        : renderReasoningMarkdownDocument(source, options);
+    if (streaming) {
+      streamRenderer ??= createMarkdownStreamRenderer();
+      return streamRenderer(
+        reasoning ? reasoningMarkdownSource(source) : source,
+        options,
+      );
     }
-    return streaming
-      ? renderMarkdownStreamingDocument(source, options)
+    streamRenderer = null;
+    return reasoning
+      ? renderReasoningMarkdownDocument(source, options)
       : renderMarkdownDocument(source, options);
   });
 </script>

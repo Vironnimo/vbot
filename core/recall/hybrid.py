@@ -16,7 +16,11 @@ import hashlib
 from collections.abc import Callable
 from typing import Protocol, override
 
-from core.recall._literal_search import LITERAL_ONLY_REASON, PreparedLiteralSearch
+from core.recall._literal_search import (
+    LITERAL_ONLY_REASON,
+    PreparedLiteralSearch,
+    highlight_literal_hits,
+)
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     RecallScope,
@@ -179,7 +183,11 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         else:
             has_more = request.offset + len(selected) < len(fused) or arms_have_more
         return RecallSearchPage(
-            hits=tuple(selected),
+            hits=(
+                await self.sessions.run_async(highlight_literal_hits, selected, request)
+                if any("literal" in hit.sources for hit in selected)
+                else tuple(selected)
+            ),
             result_type="passage",
             ranking="reciprocal_rank_fusion",
             snapshot_id=snapshot_id,

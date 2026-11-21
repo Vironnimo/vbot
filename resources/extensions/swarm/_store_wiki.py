@@ -14,10 +14,11 @@ from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
-    ALIASED_WIKI_REVISION_COLUMNS,
+    WIKI_METADATA_COLUMNS,
     WIKI_PAGE_COLUMNS,
     WIKI_REVISION_COLUMNS,
     SwarmDatabase,
+    qualified,
 )
 from ._store_records import _assert_epoch, _assert_mutable, _participant
 from ._store_values import (
@@ -401,26 +402,43 @@ def wiki(
         if call.get("cursor"):
             offset, high = db._cursor(call["cursor"], "wiki", scope, high)
         limit = call.get("limit", 20)
+        terms: list[str] = []
         if action == "history":
             rows = connection.execute(
-                f"SELECT {WIKI_REVISION_COLUMNS} FROM wiki_revisions "
+                f"SELECT {WIKI_METADATA_COLUMNS} FROM wiki_revisions "
                 "WHERE swarm_id=? AND page_id=? AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (swarm_id, call["page_id"], high, limit + 1, offset),
             ).fetchall()
         else:
-            latest = connection.execute(
-                f"SELECT {ALIASED_WIKI_REVISION_COLUMNS} FROM wiki_revisions r "
+            query = arguments.get("query", "")
+            # SQLite text substr stops at an embedded NUL. Take a bounded prefix
+            # in bytes instead; four UTF-8 bytes suffice for each excerpt character.
+            content_column = (
+                "r.content" if query else "substr(CAST(r.content AS BLOB),1,1280) AS prefix"
+            )
+            latest_sql = (
+                f"SELECT {qualified(WIKI_METADATA_COLUMNS, 'r')},{content_column} "
+                "FROM wiki_revisions r "
                 "JOIN (SELECT page_id,MAX(id) AS latest FROM wiki_revisions "
                 "WHERE swarm_id=? AND id<=? GROUP BY page_id) p ON r.id=p.latest "
-                "WHERE (? OR r.deleted=0) ORDER BY r.id DESC",
-                (swarm_id, high, arguments.get("include_deleted", False)),
-            ).fetchall()
-            terms, matches = _search(latest, arguments.get("query", ""))
-            rows = list(islice(matches, offset, offset + limit + 1))
+                "WHERE (? OR r.deleted=0) ORDER BY r.id DESC"
+            )
+            params = (swarm_id, high, arguments.get("include_deleted", False))
+            if query:
+                latest = connection.execute(latest_sql, params).fetchall()
+                terms, matches = _search(latest, query)
+                rows = list(islice(matches, offset, offset + limit + 1))
+            else:
+                rows = connection.execute(
+                    latest_sql + " LIMIT ? OFFSET ?", (*params, limit + 1, offset)
+                ).fetchall()
         entries = []
         for row in rows[:limit]:
             value = _metadata(row, numbers)
-            if action == "list":
+            if action == "list" and not terms:
+                # Only the final UTF-8 character could be cut by the byte limit.
+                value["excerpt"] = row["prefix"].decode("utf-8", errors="ignore")[:320]
+            elif terms:
                 content = row["content"].casefold()
                 found = [index for index in map(content.find, terms) if index >= 0]
                 start = min(found) if found else 0

@@ -219,8 +219,11 @@ class _InlineSessionPool:
     def __init__(self) -> None:
         self.metadata: JsonObject = {}
 
-    async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
+    def get_metadata(self, address: SessionAddress) -> JsonObject:
         return self.metadata
+
+    async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
+        return self.get_metadata(address)
 
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
         return self.metadata.get(key)
@@ -245,6 +248,8 @@ class CurrentSessionAgents:
 
     def get(self, agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id=self.current_session_id)
+
+    get_raw = get
 
     def update(self, agent_id: str, **changes: Any) -> None:
         self.updates.append((agent_id, changes["current_session_id"]))

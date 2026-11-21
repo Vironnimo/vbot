@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
 
+def retained_event_size(value: object) -> int:
+    """Conservative retained Python payload size, including Unicode storage."""
+    size = sys.getsizeof(value)
+    if isinstance(value, dict):
+        size += sum(
+            retained_event_size(key) + retained_event_size(item) for key, item in value.items()
+        )
+    elif isinstance(value, (list, tuple)):
+        size += sum(retained_event_size(item) for item in value)
+    return size
+
+
 @dataclass
 class _Subscriber[EventT]:
-    queue: asyncio.Queue[EventT]
+    queue: asyncio.Queue[tuple[EventT, int]]
     closed: bool = False
     queued_bytes: int = 0
     # While True, publish drops on a full queue instead of evicting. Catch-up
@@ -72,6 +85,10 @@ class ReplayEventStream[EventT]:
         return [event for event, _size in self._events]
 
     @property
+    def oldest_sequence(self) -> int | None:
+        return self._sequence_of(self._events[0][0]) if self._events else None
+
+    @property
     def subscriber_count(self) -> int:
         """Return the number of active live subscribers."""
 
@@ -89,7 +106,7 @@ class ReplayEventStream[EventT]:
             _old, old_size = self._events.popleft()
             self._retained_bytes -= old_size
         for subscriber in list(self._subscribers):
-            self._publish_to_subscriber(subscriber, event)
+            self._publish_to_subscriber(subscriber, event, size)
 
     def compact(self, *, limit: int, keep: Callable[[EventT], bool]) -> None:
         """Shrink retention to the newest events a settled stream still replays.
@@ -194,10 +211,10 @@ class ReplayEventStream[EventT]:
 
             while True:
                 try:
-                    event = await subscriber.queue.get()
+                    event, size = await subscriber.queue.get()
                 except asyncio.QueueShutDown:
                     return
-                subscriber.queued_bytes -= self._size_of(event)
+                subscriber.queued_bytes -= size
                 sequence = self._sequence_of(event)
                 if sequence <= after_sequence:
                     continue
@@ -219,14 +236,17 @@ class ReplayEventStream[EventT]:
         after_sequence: int,
         subscriber: _Subscriber[EventT] | None = None,
     ) -> AsyncGenerator[EventT]:
-        for event, _size in list(self._events):
+        # Take a stable slice before yielding. Reconnect cursors usually need
+        # only the newest few events, and a caught-up reader needs none.
+        recent = []
+        for event, _size in reversed(self._events):
+            if self._sequence_of(event) <= after_sequence:
+                break
+            recent.append(event)
+        for event in reversed(recent):
             if subscriber is not None and subscriber.closed:
                 return
-            sequence = self._sequence_of(event)
-            if sequence <= after_sequence:
-                continue
             yield event
-            after_sequence = sequence
             if self._is_terminal(event):
                 return
 
@@ -234,28 +254,29 @@ class ReplayEventStream[EventT]:
         drained: list[EventT] = []
         while True:
             try:
-                event = subscriber.queue.get_nowait()
+                event, size = subscriber.queue.get_nowait()
             except asyncio.QueueEmpty:
                 return drained
             except asyncio.QueueShutDown:
                 # A byte-budget eviction can also close a catch-up subscriber.
                 subscriber.closed = True
                 return drained
-            subscriber.queued_bytes -= self._size_of(event)
+            subscriber.queued_bytes -= size
             drained.append(event)
 
     def _is_terminal(self, event: EventT) -> bool:
         return self._terminal_when is not None and self._terminal_when(event)
 
-    def _publish_to_subscriber(self, subscriber: _Subscriber[EventT], event: EventT) -> None:
+    def _publish_to_subscriber(
+        self, subscriber: _Subscriber[EventT], event: EventT, size: int
+    ) -> None:
         if subscriber.closed:
             return
-        size = self._size_of(event)
         if self._byte_limit is not None and subscriber.queued_bytes + size > self._byte_limit:
             self._evict_lagging_subscriber(subscriber)
             return
         try:
-            subscriber.queue.put_nowait(event)
+            subscriber.queue.put_nowait((event, size))
             subscriber.queued_bytes += size
         except asyncio.QueueFull:
             if subscriber.catching_up:

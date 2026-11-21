@@ -331,11 +331,13 @@ def _is_language_list(node: Tag) -> bool:
     )
 
 
-def _drop_navigation(root: Tag, selectors: str) -> None:
+def _drop_navigation(root: Tag, selectors: str) -> bool:
     """Remove navigation and language lists from a main view in progress."""
+    removed = False
     for node in list(root.select(selectors)):
         if node.attrs is not None:  # not already removed with an ancestor
             node.decompose()
+            removed = True
     lists = {
         id(parent): parent
         for link in root.select("a[hreflang]")
@@ -344,6 +346,8 @@ def _drop_navigation(root: Tag, selectors: str) -> None:
     for node in lists.values():
         if node.attrs is not None and _is_language_list(node):
             node.decompose()
+            removed = True
+    return removed
 
 
 def extract_views(
@@ -409,10 +413,12 @@ def extract_views(
     # searchable there.
     for node in selected:
         _drop_navigation(node, _NAVIGATION)
-    main = converter.convert_view(selected)
+    main = converter.convert_view(selected) if selected else ""
     if not main:
-        _drop_navigation(body, _PAGE_FURNITURE)
-        main = converter.convert_view([body]) or page
+        changed = _drop_navigation(body, _PAGE_FURNITURE)
+        main = page
+        if selected or changed:
+            main = converter.convert_view([body]) or page
     if "[Embedded " in page:
         warnings.append(
             "Embedded or interactive content is represented by labels/links, not rendered."

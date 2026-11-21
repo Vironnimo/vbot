@@ -270,6 +270,9 @@ CREATE TABLE runs (
 -- Runs of one Session in start order (Run boundaries, reflection Runs, recovery).
 CREATE INDEX runs_by_session ON runs (session_key, start_seq);
 
+-- Restart recovery visits only unfinished local Runs, in admission order.
+CREATE INDEX runs_running ON runs (run_key) WHERE status = 'running' AND inherited = 0;
+
 -- Read state is independent of eligibility for counters and native notifications.
 -- A source is bound at admission, so a crash cannot orphan a Scheduled Run.
 CREATE TABLE run_notifications (

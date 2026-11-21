@@ -25,7 +25,11 @@ from typing import override
 
 from core.database import DatabaseError
 from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingUsage
-from core.recall._literal_search import LITERAL_ONLY_REASON, PreparedLiteralSearch
+from core.recall._literal_search import (
+    LITERAL_ONLY_REASON,
+    PreparedLiteralSearch,
+    highlight_literal_hits,
+)
 from core.recall._passage_catalog import Candidates
 from core.recall.canonical import CanonicalSessionRecallBackend, RecallScope
 from core.recall.passage_index import (
@@ -153,7 +157,11 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         prepared = PreparedLiteralSearch(self.index, request, scope, literal_query(request))
         page = await prepared.page(request.offset, request.limit)
         return replace(
-            page, snapshot_id=snapshot_id, degraded=True, degradation_reason=LITERAL_ONLY_REASON
+            page,
+            hits=await self.sessions.run_async(highlight_literal_hits, page.hits, request),
+            snapshot_id=snapshot_id,
+            degraded=True,
+            degradation_reason=LITERAL_ONLY_REASON,
         )
 
     async def prepare_search(

@@ -147,6 +147,7 @@ describe('Extension requests', () => {
     // Other Extension changes, such as a Swarm's, cannot alter the list.
     invalidate('swarm', 'swarms');
     invalidate('computer_use', 'control');
+    invalidate(null, 'sessions');
     await vi.advanceTimersByTimeAsync(0);
     expect(listRequests).toHaveBeenCalledOnce();
 

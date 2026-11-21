@@ -49,6 +49,7 @@ _CAPABILITY_URL = re.compile(
     "(" + "|".join(re.escape(prefix) for prefix in _CAPABILITY_DOMAINS) + ")"
     r"([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"
 )
+_SIGNED_TOKEN = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}")
 _ABSOLUTE_URL = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*://|//)")
 _FORMATTED_REFERENCE = re.compile(
     # Match complete destinations/attributes, so an absolute URL's path or
@@ -192,16 +193,33 @@ class FileDelivery:
 
         def project(item: Any) -> Any:
             if isinstance(item, dict):
-                return {key: project(child) for key, child in item.items()}
+                mapping = item
+                for key, child in item.items():
+                    projected = project(child)
+                    if projected is not child:
+                        if mapping is item:
+                            mapping = item.copy()
+                        mapping[key] = projected
+                return mapping
             if isinstance(item, list):
-                return [project(child) for child in item]
+                sequence = item
+                for index, child in enumerate(item):
+                    projected = project(child)
+                    if projected is not child:
+                        if sequence is item:
+                            sequence = item.copy()
+                        sequence[index] = projected
+                return sequence
             if isinstance(item, str):
                 # Bare token fields and recognized local URLs only. The HMAC
                 # check excludes unrelated text, links and user-supplied paths.
-                bound = bind(item)
-                if bound != item:
-                    return bound
-                if _ABSOLUTE_URL.match(item):
+                if (
+                    45 <= len(item) <= MAX_FILE_TOKEN_LENGTH
+                    and item[-44] == "."
+                    and _SIGNED_TOKEN.fullmatch(item)
+                ):
+                    return bind(item)
+                if "/api/" not in item or _ABSOLUTE_URL.match(item):
                     return item
                 if _CAPABILITY_URL.match(item):
                     return bind_url(item)
@@ -212,7 +230,9 @@ class FileDelivery:
             match = _CAPABILITY_URL.match(url)
             if match is None:
                 return url
-            return match[1] + bind(match[2], _CAPABILITY_DOMAINS[match[1]]) + url[match.end() :]
+            token = match[2]
+            bound = bind(token, _CAPABILITY_DOMAINS[match[1]])
+            return url if bound == token else match[1] + bound + url[match.end() :]
 
         def bind_formatted(content: str) -> str:
             parts: list[str] = []
@@ -265,7 +285,7 @@ class FileDelivery:
         return claims
 
     def _valid_signature(self, token: str, domain: bytes) -> bool:
-        if not token or len(token) > MAX_FILE_TOKEN_LENGTH:
+        if not token or not 45 <= len(token) <= MAX_FILE_TOKEN_LENGTH or token[-44] != ".":
             return False
         try:
             encoded, signature = token.split(".")

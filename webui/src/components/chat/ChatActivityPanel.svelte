@@ -12,7 +12,7 @@
     formatCost,
     formatPercent,
     formatTokens,
-  } from '$lib/statisticsView.js';
+  } from '$lib/statisticsView/formatting.js';
   import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
   import { tooltip } from '$lib/tooltip.js';
 

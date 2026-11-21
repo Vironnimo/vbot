@@ -21,6 +21,7 @@ from ._participant_names import (
 from ._store_database import (
     SWARM_COLUMNS,
     SwarmDatabase,
+    qualified,
 )
 from ._store_lifecycle import (
     _refresh_swarm_state,
@@ -366,8 +367,18 @@ def _existing_swarm_ids(db: SwarmDatabase, swarm_ids: Sequence[str]) -> set[str]
 
 def _get_swarm(db: SwarmDatabase, swarm_id: str, include_snapshot: bool = True) -> Json:
     with db._read() as connection:
-        columns = SWARM_COLUMNS if include_snapshot else "id,state,created_at"
-        row = connection.execute(f"SELECT {columns} FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+        columns = qualified(SWARM_COLUMNS if include_snapshot else "state,created_at", "s")
+        row = connection.execute(
+            f"SELECT {columns},t.delivery_json,t.revision AS settings_revision,"
+            "e.epoch,(SELECT execution_epoch FROM swarm_execution_epochs WHERE swarm_id=s.id "
+            "ORDER BY epoch DESC LIMIT 1) AS execution_epoch,d.id AS main_discussion_id,"
+            "g.post_id AS goal_post_id,p.sequence AS goal_post_sequence FROM swarms s "
+            "JOIN swarm_settings t ON t.swarm_id=s.id JOIN swarm_epochs e ON e.swarm_id=s.id "
+            "JOIN discussions d ON d.swarm_id=s.id AND d.is_main=1 "
+            "LEFT JOIN swarm_goals g ON g.swarm_id=s.id LEFT JOIN posts p ON p.id=g.post_id "
+            "WHERE s.id=?",
+            (swarm_id,),
+        ).fetchone()
         if row is None:
             raise SwarmStoreError("swarm_not_found")
         participants = connection.execute(
@@ -386,9 +397,6 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str, include_snapshot: bool = True) 
             memberships.setdefault(membership["participant_id"], []).append(
                 membership["discussion_id"]
             )
-        main = connection.execute(
-            "SELECT id FROM discussions WHERE swarm_id=? AND is_main=1", (swarm_id,)
-        ).fetchone()
         return {
             "id": swarm_id,
             **(
@@ -402,40 +410,13 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str, include_snapshot: bool = True) 
             ),
             "state": row["state"],
             "created_at": str(row["created_at"]),
-            "delivery": _load(
-                connection.execute(
-                    "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-                ).fetchone()[0]
-            ),
-            "settings_revision": int(
-                connection.execute(
-                    "SELECT revision FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
-                ).fetchone()[0]
-            ),
-            "main_discussion_id": main["id"],
-            **(
-                lambda goal: {
-                    "goal_post_id": goal[0] if goal else None,
-                    "goal_post_sequence": goal[1] if goal else None,
-                }
-            )(
-                connection.execute(
-                    "SELECT g.post_id,p.sequence FROM swarm_goals g JOIN posts p ON p.id=g.post_id "
-                    "WHERE g.swarm_id=?",
-                    (swarm_id,),
-                ).fetchone()
-            ),
-            "epoch": int(
-                connection.execute(
-                    "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
-                ).fetchone()[0]
-            ),
-            "execution_epoch": (lambda value: value[0] if value else None)(
-                connection.execute(
-                    "SELECT execution_epoch FROM swarm_execution_epochs WHERE swarm_id=? ORDER BY epoch DESC LIMIT 1",
-                    (swarm_id,),
-                ).fetchone()
-            ),
+            "delivery": _load(row["delivery_json"]),
+            "settings_revision": row["settings_revision"],
+            "main_discussion_id": row["main_discussion_id"],
+            "goal_post_id": row["goal_post_id"],
+            "goal_post_sequence": row["goal_post_sequence"],
+            "epoch": row["epoch"],
+            "execution_epoch": row["execution_epoch"],
             "participants": [
                 {**dict(value), "discussion_ids": memberships.get(value["id"], [])}
                 for value in participants

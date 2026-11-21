@@ -19,6 +19,7 @@ import respx
 from core.database import write_bootstrap_marker
 from core.models import discovery
 from core.models.database import (
+    MODEL_DB_WORKERS,
     ModelDatabaseRefresh,
     read_model_database_manifest,
     write_model_database_manifest,
@@ -353,7 +354,7 @@ async def test_provider_reload_waits_for_admitted_catalog_publication(
     entered, release = asyncio.Event(), asyncio.Event()
     worker_release = threading.Event()
     loop = asyncio.get_running_loop()
-    worker_run = _catalog_refresh._MODEL_DB_WORKERS.run
+    worker_run = MODEL_DB_WORKERS.run
     commit = ModelDatabaseRefresh.commit
     reload_registry = _catalog_refresh._reload_runtime_model_registry
 
@@ -375,7 +376,7 @@ async def test_provider_reload_waits_for_admitted_catalog_publication(
             await release.wait()
         return await reload_registry(*args, **kwargs)
 
-    monkeypatch.setattr(_catalog_refresh._MODEL_DB_WORKERS, "run", queued)
+    monkeypatch.setattr(MODEL_DB_WORKERS, "run", queued)
     monkeypatch.setattr(ModelDatabaseRefresh, "commit", committing)
     monkeypatch.setattr(_catalog_refresh, "_reload_runtime_model_registry", reloading)
     refresh = asyncio.create_task(runtime.refresh_model_database(provider_id="openrouter"))

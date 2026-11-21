@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, override
 
 import pytest
+import watchfiles
 from watchfiles import Change
 
 from core.utils import _log_reader as log_reader_module
@@ -381,7 +382,7 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
         yield {(change, str(other_file))}
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    monkeypatch.setattr(watchfiles, "awatch", fake_awatch)
     viewer = LogViewer(tmp_path)
 
     async with aclosing(viewer.subscribe(selected_file.name)) as stream:
@@ -452,7 +453,7 @@ class _LiveFile:
         self.path.write_bytes(text.encode("utf-8"))
         self.watch = _FakeWatch()
         self.viewer = LogViewer(tmp_path)
-        monkeypatch.setattr(log_viewer_module, "awatch", self.watch.awatch)
+        monkeypatch.setattr(watchfiles, "awatch", self.watch.awatch)
         monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
 
     def changed(self) -> None:
@@ -490,7 +491,7 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
     watch = _FakeWatch()
-    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(watchfiles, "awatch", watch.awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     viewer = LogViewer(tmp_path)
     history = _text(*(_line(second % 60, f"History {second}") for second in range(100)))
@@ -590,7 +591,7 @@ async def test_subscribe_resets_when_the_file_no_longer_starts_with_the_read(
 ) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
-    monkeypatch.setattr(log_viewer_module, "awatch", _FakeWatch().awatch)
+    monkeypatch.setattr(watchfiles, "awatch", _FakeWatch().awatch)
     viewer = LogViewer(tmp_path)
     (logs_dir / read_name).write_bytes(read_text.encode())
     cursor = (await viewer.read_file(read_name))["cursor"]
@@ -741,7 +742,7 @@ async def test_subscribe_joins_a_live_watcher_when_the_last_subscriber_leaves_me
         while True:
             yield await changes.get()
 
-    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    monkeypatch.setattr(watchfiles, "awatch", fake_awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     viewer = LogViewer(tmp_path)
     lock = _ObservedLock()
@@ -826,7 +827,7 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
 
     monkeypatch.setattr(log_reader_module, "_advance_tails", count_file_reads)
     monkeypatch.setattr(viewer._reader, "list_files", count_catalog_reads)
-    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    monkeypatch.setattr(watchfiles, "awatch", fake_awatch)
 
     await viewer._watch_file(watcher)
 
@@ -877,7 +878,7 @@ async def test_a_failed_subscribe_leaves_no_watcher(
         encoding="utf-8",
     )
     watch = _FakeWatch()
-    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(watchfiles, "awatch", watch.awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     if start_read_error is not None:
 
@@ -979,7 +980,7 @@ async def test_an_ended_watcher_ends_its_streams_and_the_next_subscriber_gets_a_
     log_file = logs_dir / "2026-05-11"
     log_file.write_bytes(_text(_line(0, "Ready")).encode())
     watch = _FakeWatch()
-    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(watchfiles, "awatch", watch.awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
     viewer = LogViewer(tmp_path)
@@ -1085,7 +1086,7 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
 
     monkeypatch.setattr(viewer._reader, "metadata_changes", locked_metadata_changes)
     monkeypatch.setattr(log_reader_module, "_advance_tails", locked_advance_tails)
-    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    monkeypatch.setattr(watchfiles, "awatch", fake_awatch)
     caplog.set_level(logging.INFO, logger="vbot.log_viewer")
 
     await viewer._watch_file(watcher)

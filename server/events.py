@@ -10,12 +10,13 @@ from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Any
 
-from core.event_stream import ReplayEventStream
+from core.event_stream import ReplayEventStream, retained_event_size
 from core.performance import count
 
 JsonObject = dict[str, Any]
 DEFAULT_SERVER_EVENT_RETENTION_LIMIT = 4096
 DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT = 1024
+DEFAULT_SERVER_EVENT_BYTE_LIMIT = 32 * 1024 * 1024
 _LOGGER = logging.getLogger("vbot.server.events")
 EVENTS_TRACK = "events"
 
@@ -157,11 +158,14 @@ class ServerEventBus:
         *,
         event_retention_limit: int = DEFAULT_SERVER_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT,
+        byte_limit: int = DEFAULT_SERVER_EVENT_BYTE_LIMIT,
     ) -> None:
         self._event_stream = ReplayEventStream[JsonObject](
             event_retention_limit=event_retention_limit,
             subscriber_queue_limit=subscriber_queue_limit,
             sequence_of=_event_sequence,
+            byte_limit=byte_limit,
+            size_of=retained_event_size,
             on_lagged=lambda: _LOGGER.warning("Evicted lagging server event subscriber"),
         )
         self._next_sequence = 1
@@ -175,6 +179,10 @@ class ServerEventBus:
     def epoch(self) -> str:
         """Return this bus instance's generation identifier."""
         return self._epoch
+
+    @property
+    def oldest_sequence(self) -> int | None:
+        return self._event_stream.oldest_sequence
 
     @property
     def last_sequence(self) -> int:

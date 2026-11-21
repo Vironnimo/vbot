@@ -229,6 +229,7 @@ class ExtensionServiceCatalog:
         services: Iterable[ExtensionService],
         *,
         resources: Iterable[str] = (),
+        static_application_schemas: bool = False,
         exclusions: Mapping[str, str] | None = None,
         publish_export: Callable[[JsonObject], None] | None = None,
         export_context: Callable[[], AbstractContextManager[None]] | None = None,
@@ -243,7 +244,8 @@ class ExtensionServiceCatalog:
                 or service.kind not in {"query", "execute"}
             ):
                 raise ValueError("Service names must be unique and kinds must be query or execute")
-            Draft202012Validator.check_schema(service.parameters)
+            if not static_application_schemas:
+                Draft202012Validator.check_schema(service.parameters)
             declared = ExtensionService(
                 service.name,
                 service.kind,

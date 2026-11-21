@@ -48,12 +48,12 @@
   const RUN_PREVIEW_COUNT = 10;
 
   let range = $state('7d');
-  let historyReport = $state(null);
+  let historyReport = $state.raw(null);
   let historyLoading = $state(false);
   let historyError = $state('');
   let historyNotice = $state('');
   let selectedIntervalId = $state(null);
-  let activityReport = $state(null);
+  let activityReport = $state.raw(null);
   let activityLoading = $state(false);
   let activityError = $state('');
   let clearConfirmOpen = $state(false);
@@ -111,15 +111,21 @@
     return () => clearInterval(timer);
   });
 
+  const activitySince = $derived(selectedInterval?.from.sampledAt);
+  const activityUntil = $derived(selectedInterval?.to.sampledAt);
+
   $effect(() => {
-    const interval = selectedInterval;
+    const since = activitySince;
+    const until = activityUntil;
     showAllRuns = false;
-    if (!interval) {
+    if (!since || !until) {
+      ++activityGeneration;
+      activityLoading = false;
       activityReport = null;
       activityError = '';
       return;
     }
-    loadRunActivity(interval);
+    loadRunActivity(since, until);
   });
 
   async function loadHistory(selectedRange) {
@@ -137,9 +143,7 @@
       historyReport = result;
       if (
         selectedIntervalId &&
-        !usageHistoryIntervals(
-          buildUsageHistorySeries(result?.samples ?? []),
-        ).some((interval) => interval.id === selectedIntervalId)
+        !intervals.some((interval) => interval.id === selectedIntervalId)
       ) {
         selectedIntervalId = null;
       }
@@ -158,15 +162,12 @@
     }
   }
 
-  async function loadRunActivity(interval) {
+  async function loadRunActivity(since, until) {
     const generation = ++activityGeneration;
     activityLoading = true;
     activityError = '';
     try {
-      const result = await getStatisticsRunActivity({
-        since: interval.from.sampledAt,
-        until: interval.to.sampledAt,
-      });
+      const result = await getStatisticsRunActivity({ since, until });
       if (destroyed || generation !== activityGeneration) {
         return;
       }

@@ -136,6 +136,20 @@ class NativeDispatchStore(NativeRecordStore):
 
         return await self.database.read_async(read)
 
+    async def active_execution_counts(
+        self, factory_id: str | None = None, member_id: str | None = None
+    ) -> tuple[int, int, int]:
+        def read(connection: sqlite3.Connection) -> tuple[int, int, int]:
+            row = connection.execute(
+                "SELECT COUNT(*), COUNT(*) FILTER (WHERE factory_id=?), "
+                "COUNT(*) FILTER (WHERE member_id=?) FROM native_executions "
+                "WHERE state IN ('admitting','running','draining')",
+                (factory_id, member_id),
+            ).fetchone()
+            return row[0], row[1], row[2]
+
+        return await self.database.read_async(read)
+
     async def list_executions(
         self,
         factory_id: str | None = None,

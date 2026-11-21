@@ -148,7 +148,8 @@ including a Tool enabled since the prompt epoch was pinned. Manual Compaction do
 not enter the Agentic executor.
 
 Open Session metadata `scratch_announced` records the own path, incarnation and
-note id. A missing record, changed path/incarnation, recreated folder, or absent
+note id in the same transaction as the note. Chat extends the prepared request
+with that note when it is the only history change. A missing record, changed path/incarnation, recreated folder, or absent
 note in the effective Compaction view causes an announcement of the current path.
 Forks strip this metadata, so inherited announcements cannot suppress the fork's
 own paths. The Compaction finalizer identifies the current note by the metadata's

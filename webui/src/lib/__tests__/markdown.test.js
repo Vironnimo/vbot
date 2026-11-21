@@ -6,6 +6,7 @@ import {
   reasoningMarkdownSource,
   renderMarkdown,
   renderMarkdownDocument,
+  createMarkdownStreamRenderer,
   renderMarkdownStreamingDocument,
   renderReasoningMarkdownDocument,
   renderReasoningMarkdownStreamingDocument,
@@ -191,6 +192,11 @@ describe('renderMarkdown()', () => {
     // Streaming drafts never enter or evict the finished-document cache,
     // including the rendered prefix preceding an unfinished code fence.
     const saved = renderMarkdownDocument(source);
+    const render = createMarkdownStreamRenderer();
+    render('First prefix\n\n```js\nconst');
+    const inFence = render('First prefix\n\n```js\nconst x = 1');
+    expect(renderSpy).toHaveBeenCalledTimes(2);
+    expect(inFence.codeBlocks.at(-1).text).toBe('const x = 1');
     for (let index = 0; index < 350; index += 1) {
       renderMarkdownStreamingDocument(
         `Draft ${index}\n\n${'text '.repeat(index % 5)}`,

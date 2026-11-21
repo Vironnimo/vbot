@@ -9,7 +9,7 @@ commands of a Project or an Identity Agent when a Session starts
 Command. The shell Tool's host shell: PowerShell 7 with the shell Tool's
 bootstrap on Windows (UTF-8 console, English messages, plain text), bash
 elsewhere (``host_shell_start``), started on pipes and contained in its process
-tree (``launch_pipe_process``). It runs in the job's working directory: the
+tree by the shell Tool's ``PipeLauncher``. It runs in the job's working directory: the
 selected Working Project's directory, or the Agent's Workspace, with
 a command's start environment (``unattended_command_environment``). Its output
 is stdout and stderr together, as the shell Tool shows them, decoded as UTF-8,
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Container, Iterable, Sequence
+from collections.abc import Callable, Container, Iterable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -59,7 +59,7 @@ from core.permissions import (
     PermissionRefusal,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
-from core.tools._command_launch import PipeCommandProcess, launch_pipe_process
+from core.tools._command_launch import PipeLauncher, ShellProcess
 from core.tools._public_http import PublicFetchError, _decoded, fetch_public
 from core.tools.process_tree import ProcessTreeTracker, track_process_tree
 from core.tools.shell import (
@@ -97,7 +97,6 @@ _WORKERS = BoundedWorkerPool(name="watch-checks", max_workers=2)
 
 _LOGGER = get_logger("tools.watch_checks")
 
-Launch = Callable[..., Awaitable[PipeCommandProcess]]
 # The boundary of a job's ceiling for a check of the job's Agent and Project
 # (no Agent: a URL check); blocking.
 CeilingBoundary = Callable[
@@ -119,7 +118,7 @@ class WatchCheckRunner:
         sessions: ChatSessionManager,
         projects: _Projects,
         data_root: Path,
-        launch: Launch = launch_pipe_process,
+        launcher: PipeLauncher,
         tracker: ProcessTreeTracker = track_process_tree,
         transport: httpx.AsyncBaseTransport | None = None,
         command_checker: CommandChecker | None = None,
@@ -133,7 +132,7 @@ class WatchCheckRunner:
         self._credential_names = credential_names
         self._projects = projects
         self._data_root = data_root
-        self._launch = launch
+        self._launcher = launcher
         self._tracker = tracker
         self._transport = transport
         self._checker = command_checker
@@ -233,20 +232,19 @@ class WatchCheckRunner:
         except HostShellMissingError as error:
             raise WatchCheckError(f"The {noun} did not run: {error}") from error
         try:
-            process = await self._launch(
+            process = await self._launcher.launch(
                 start.argv,
                 workdir,
                 start.env,
                 self._tracker,
-                request_pipe=start.request is not None,
+                start.request.data if start.request is not None else None,
+                warm=start.warm and withheld is None,
             )
         except OSError as error:
             raise WatchCheckError(f"The {noun} could not start: {error}") from error
         output = _CappedOutput(COMMAND_OUTPUT_MAX_BYTES)
         reader = asyncio.create_task(_read_into(process, output))
         try:
-            if start.request is not None:
-                process.send(start.request.data)
             try:
                 async with asyncio.timeout(COMMAND_TIMEOUT_SECONDS):
                     code = await process.wait()
@@ -449,12 +447,12 @@ class _CappedOutput:
         return self._data.decode("utf-8", errors="replace")
 
 
-async def _read_into(process: PipeCommandProcess, output: _CappedOutput) -> None:
+async def _read_into(process: ShellProcess, output: _CappedOutput) -> None:
     while chunk := await process.read():
         output.add(chunk)
 
 
-def _release(process: PipeCommandProcess) -> None:
+def _release(process: ShellProcess) -> None:
     """End the command's process tree and release its pipes and tracking; blocking."""
     try:
         process.kill()

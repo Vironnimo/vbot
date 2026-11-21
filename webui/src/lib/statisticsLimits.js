@@ -4,7 +4,11 @@
 // local Statistics report sections live in statisticsView.js.
 
 import { t } from './i18n.js';
-import { formatCost, formatDateTime, formatInteger } from './statisticsView.js';
+import {
+  formatCost,
+  formatDateTime,
+  formatInteger,
+} from './statisticsView/formatting.js';
 import { formatAbsoluteTime, formatMoment } from './timeText.js';
 
 export const USAGE_HISTORY_RANGES = Object.freeze(['24h', '7d', '30d', 'all']);

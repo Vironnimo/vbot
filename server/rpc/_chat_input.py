@@ -335,33 +335,27 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
     """
     runtime = state.runtime
     agents = runtime.agents
-    # Agent reads verify, and updates validate, the pointer against Sessions.
     chat_sessions = runtime.chat_sessions
-    try:
-        agent = await chat_sessions.run_async(agents.get, address.agent_id)
-    except AgentNotFoundError:
-        # Extension-owned Sessions use a temporary Agent without a roster pointer.
-        return
-    except Exception as exc:
-        _LOGGER.warning(
-            "Failed to read agent for current-session mark (agent=%s): %s",
-            address.agent_id,
-            exc,
-        )
-        return
-    if app_chat_profile(agent) is not None or agent.current_session_id == address.session_id:
-        return
-    try:
-        metadata = await chat_sessions.get_metadata_async(address)
+
+    def mark() -> bool:
+        # Only the stored pointer and built-in identity matter. The update
+        # validates the destination, so the old pointer needs no Session lookup.
+        agent = agents.get_raw(address.agent_id)
+        if app_chat_profile(agent) is not None or agent.current_session_id == address.session_id:
+            return False
+        metadata = chat_sessions.get_metadata(address)
         if (
             metadata.get(SESSION_EPHEMERAL_META_KEY) is True
             or metadata.get(SESSION_SIDE_CHAT_META_KEY) is True
         ):
-            return
-        await chat_sessions.run_async(
-            agents.update, address.agent_id, current_session_id=address.session_id
-        )
-    except SessionNotFoundError:
+            return False
+        agents.update(address.agent_id, current_session_id=address.session_id)
+        return True
+
+    try:
+        changed = await chat_sessions.run_async(mark)
+    except AgentNotFoundError, SessionNotFoundError:
+        # Extension-owned Sessions may use a temporary Agent without a roster pointer.
         return
     except Exception as exc:
         _LOGGER.warning(
@@ -370,7 +364,8 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
             address.session_id,
             exc,
         )
-    else:
+        return
+    if changed:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
         _LOGGER.debug(
             "Current session marked (agent=%s session=%s)",

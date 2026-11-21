@@ -202,6 +202,17 @@ class ToolContract:
     result_validator: Draft202012Validator | None
     parallel_safe: bool
     schema_fingerprint: str
+    _direct_parameters: frozenset[str] | None = None
+
+    def accepts_without_repair(self, arguments: Any) -> bool:
+        """Recognize calls whose received JSON can go straight to the handler."""
+        return (
+            self._direct_parameters is not None
+            and isinstance(arguments, dict)
+            and arguments.keys() <= self._direct_parameters
+            and not _has_float(arguments)
+            and self.input_validator.is_valid(arguments)
+        )
 
     def normalize_arguments(self, arguments: Any) -> Any:
         """Repair common unambiguous model encodings in a copied argument value.
@@ -415,6 +426,25 @@ def _contract_cache_key(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _has_float(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_float(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_float(item) for item in value)
+    return isinstance(value, float)
+
+
+def _plain_repair_schema(node: Any) -> bool:
+    """In these schemas every child that repair visits is already validated by its parent."""
+    if isinstance(node, list):
+        return all(_plain_repair_schema(item) for item in node)
+    if not isinstance(node, dict):
+        return True
+    return not ({"$ref", "$schema", "patternProperties"} & node.keys()) and all(
+        _plain_repair_schema(item) for item in node.values()
+    )
+
+
 def _is_plain_json(value: Any) -> bool:
     if isinstance(value, dict):
         return all(isinstance(key, str) and _is_plain_json(item) for key, item in value.items())
@@ -464,7 +494,13 @@ def _compile_tool_contract(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+    parameters = _closed_root_parameters(canonical_input)
     return ToolContract(
+        _direct_parameters=(
+            frozenset(parameters)
+            if parameters is not None and _plain_repair_schema(canonical_input)
+            else None
+        ),
         name=name,
         input_schema=canonical_input,
         input_validator=Draft202012Validator(canonical_input),

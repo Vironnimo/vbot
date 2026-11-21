@@ -4,6 +4,8 @@ Task-gated depth for `core/tools/change_tracker.py` - the Run-scoped
 tracker behind the WebUI's git-style change statistics (`N files changed,
 +A -R` per Run and Session).
 
+External Runs release their tracked text when the conversation ends, including after a late Tool finishes.
+
 ## What it counts
 
 A Run's statistics cover only the lines the Run itself changed through

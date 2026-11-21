@@ -457,11 +457,12 @@ def _long_path_name(path: str) -> str | None:
         import ctypes
 
         function = _get_long_path_name()
-        size = function(path, None, 0)
-        if size != 0:
-            buffer = ctypes.create_unicode_buffer(size)
-            if function(path, buffer, size) != 0:
-                return buffer.value
+        buffer = ctypes.create_unicode_buffer(512)
+        while (length := function(path, buffer, len(buffer))) >= len(buffer):
+            # Too small: Win32 returns the required size including the terminator.
+            buffer = ctypes.create_unicode_buffer(length)
+        if length:
+            return buffer.value
     return None
 
 

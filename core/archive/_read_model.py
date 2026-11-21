@@ -12,7 +12,6 @@ from core.archive.errors import ArchiveRetentionUnknownError
 from core.projects import PROJECT_FORMAT_VERSION, AgentOverrides
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
-    ARCHIVE_KIND_OWNER_GROUP,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_KIND_SESSION,
     ARCHIVE_STATE_ARCHIVED,
@@ -125,30 +124,20 @@ def listing(
     reason = _not_restorable_reason(services, entry)
     return ArchiveListing(
         entry,
-        _label(services, entry),
+        _label(entry),
         reason is None,
         reason,
         _retention.purge_at(entry, retention_days),
         _retention.may_hold_user_folders(entry),
-        _restore.accepts_target_id(services, entry),
+        _restore.accepts_target_id(entry),
     )
 
 
-def _label(services: ArchiveServices, entry: ArchiveEntry) -> str:
+def _label(entry: ArchiveEntry) -> str:
     name = entry.facts.get("name")
     if entry.kind in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT) and isinstance(name, str) and name:
         return name
-    if entry.kind == ARCHIVE_KIND_SESSION:
-        members = services.sessions.archive_ledger.members(entry.entry_key, limit=1)
-        if members and members[0].title:
-            return members[0].title
-    if entry.kind == ARCHIVE_KIND_OWNER_GROUP and entry.owner_name is not None:
-        titles = services.sessions.temporary_group_titles(
-            owner_name=entry.owner_name, group_ids=(entry.subject_id,)
-        )
-        if title := titles.get(entry.subject_id):
-            return title
-    return entry.subject_id
+    return entry.subject_title or entry.subject_id
 
 
 def _not_restorable_reason(services: ArchiveServices, entry: ArchiveEntry) -> str | None:

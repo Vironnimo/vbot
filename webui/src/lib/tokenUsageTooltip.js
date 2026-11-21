@@ -10,7 +10,10 @@
 // figure or vBot estimated it is not shown here; Statistics diagnostics keep
 // that distinction.
 import { activeLocaleTag, t } from './i18n.js';
-import { formatPercent, formatTokensExact } from './statisticsView.js';
+import {
+  formatPercent,
+  formatTokensExact,
+} from './statisticsView/formatting.js';
 
 // Context fill share at which the window counts as nearly exhausted.
 const CONTEXT_CRITICAL_RATIO = 0.9;

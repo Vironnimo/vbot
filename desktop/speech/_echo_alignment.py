@@ -225,9 +225,12 @@ class _StreamClock:
         offsets = self._offsets
         if end - self._times[0] >= self._confirm:
             lowest = min(recent)
-            jitter = sorted(self._jitter)[len(self._jitter) // 2]
             slipping = self._deadband + min(self._since_step, _CLOCK_WINDOW_BLOCKS)
-            if lowest > slipping + max(self._deadband, _CLOCK_JITTER_MARGIN * jitter):
+            # Stable clocks cannot step, irrespective of the jitter median.
+            if lowest > slipping + self._deadband and (
+                lowest
+                > slipping + _CLOCK_JITTER_MARGIN * sorted(self._jitter)[len(self._jitter) // 2]
+            ):
                 self._shift(lowest)
                 self._since_step = 0
                 self.stats.steps += 1

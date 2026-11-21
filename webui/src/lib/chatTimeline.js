@@ -16,6 +16,34 @@ export function visibleTimelineItemsForRender(sessionState) {
   );
 }
 
+// The Activity panel and Sub-Agent reconciliation follow Tool calls only.
+// Retain their input while a Run's text grows or an unrelated row changes.
+export function timelineToolRuns(items, previous) {
+  const runs = items.filter(
+    (item) => item.type === 'assistant_run' && item.tools?.length,
+  );
+  if (
+    runs.length === previous.length &&
+    runs.every((run, index) => {
+      const row = previous[index];
+      return (
+        run.id === row.id &&
+        run.runId === row.runId &&
+        (run.tools === row.items ||
+          (run.tools.length === row.items.length &&
+            run.tools.every((tool, n) => tool === row.items[n])))
+      );
+    })
+  )
+    return previous;
+  return runs.map(({ id, runId, tools }) => ({
+    id,
+    runId,
+    type: 'assistant_run',
+    items: tools,
+  }));
+}
+
 // Parts of each long Run, per Run object and Working mode. Patches replace a
 // changed Run and keep unchanged ones, so an unchanged Run keeps its part
 // objects and their rows do not render again while another Run streams.

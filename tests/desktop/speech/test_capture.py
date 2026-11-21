@@ -10,6 +10,7 @@ import wave
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import count
 from types import SimpleNamespace
 from typing import Any
 
@@ -384,7 +385,11 @@ def test_a_microphone_delivering_digital_silence_is_reopened_rarely(
     sd.idle_level = idle_level
     subscriptions: list[CaptureSubscription] = []
 
-    run = start_capture(sd, subscribe=subscribe_to(subscriptions), **options)
+    # Advance wall time without making the test wait for activity polls.
+    now = count()
+    run = start_capture(
+        sd, subscribe=subscribe_to(subscriptions), clock=lambda: next(now) / 4, **options
+    )
     items = read_items(subscriptions[0], 12)
 
     if reopened:

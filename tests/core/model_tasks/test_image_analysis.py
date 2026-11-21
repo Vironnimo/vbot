@@ -419,7 +419,13 @@ async def test_analysis_converts_for_the_actual_target_without_changing_original
     tmp_path: Path, format
 ):
     source = tmp_path / "diagram.input"
-    Image.new("RGB", (12, 8), "blue").save(source, format=format)
+    image = Image.new("RGB", (12, 8), "blue")
+    if format == "HEIF":
+        from pillow_heif import from_pillow
+
+        from_pillow(image).save(source)
+    else:
+        image.save(source, format=format)
     original = source.read_bytes()
     adapter = _UnderstandingAdapter()
     service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))

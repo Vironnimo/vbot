@@ -16,14 +16,13 @@ if TYPE_CHECKING:
 
 
 import asyncio
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from core.event_stream import ReplayEventStream
+from core.event_stream import ReplayEventStream, retained_event_size
 from core.sessions import SessionAddress
 from core.storage.temp_files import TERMINAL_TEMPORARY_CATEGORY as TERMINAL_TEMPORARY_CATEGORY
 from core.utils.errors import VBotError
@@ -116,24 +115,12 @@ TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 
 
-def _stream_event_size(value: Any) -> int:
-    """Conservative retained Python payload size, including Unicode storage."""
-    size = sys.getsizeof(value)
-    if isinstance(value, dict):
-        size += sum(
-            _stream_event_size(key) + _stream_event_size(item) for key, item in value.items()
-        )
-    elif isinstance(value, (list, tuple)):
-        size += sum(_stream_event_size(item) for item in value)
-    return size
-
-
 def _new_terminal_stream() -> ReplayEventStream[TerminalStreamEvent]:
     return ReplayEventStream(
         event_retention_limit=TERMINAL_STREAM_RETENTION_EVENTS,
         subscriber_queue_limit=TERMINAL_STREAM_SUBSCRIBER_QUEUE_EVENTS,
         byte_limit=TERMINAL_STREAM_BYTE_LIMIT,
-        size_of=_stream_event_size,
+        size_of=retained_event_size,
         sequence_of=lambda event: int(event.get("sequence", 0)),
         terminal_when=lambda event: (
             event.get("type") == "terminal_state"

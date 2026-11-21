@@ -222,6 +222,14 @@ async def test_event_bus_replay_window_is_bounded_without_reusing_sequences() ->
         (3, RUN_COMPLETED_SERVER_EVENT),
     ]
 
+    small = ServerEventBus(byte_limit=8192)
+    small.publish(RUN_OUTPUT_SERVER_EVENT, {"text": "a" * 5000})
+    small.publish(RUN_OUTPUT_SERVER_EVENT, {"text": "b" * 5000})
+    assert small.oldest_sequence == 2
+    small.publish(RUN_OUTPUT_SERVER_EVENT, {"text": "c" * 8192})
+    assert small.oldest_sequence is None
+    assert small.last_sequence == 3
+
 
 @pytest.mark.asyncio
 async def test_event_bus_evicts_lagging_live_subscriber() -> None:

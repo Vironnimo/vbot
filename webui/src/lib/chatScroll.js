@@ -127,6 +127,7 @@ export function createChatScrollController(
   let publishQueued = false;
   let destroyed = false;
 
+  let contentWidth = content?.getBoundingClientRect().width;
   const resizeObserver =
     typeof ResizeObserver === 'function'
       ? new ResizeObserver(handleResize)
@@ -692,7 +693,8 @@ export function createChatScrollController(
   function renderPlan(items, sessionId = currentSessionId) {
     const { model, window: rowWindow } = layoutFor(sessionId || '');
     model.sync(items);
-    if (model.setWidth(content?.getBoundingClientRect().width)) {
+    if (!resizeObserver) contentWidth = content?.getBoundingClientRect().width;
+    if (model.setWidth(contentWidth)) {
       releaseReservedRows();
       measureMountedRows(model);
       const viewport = viewportFor(sessionId);
@@ -837,9 +839,13 @@ export function createChatScrollController(
 
   function handleResize(entries) {
     const layoutReady = hasLayout();
-    const widthChanged =
-      layoutReady &&
-      layout.model.setWidth(content?.getBoundingClientRect().width);
+    const column = entries.find((entry) => entry.target === content);
+    if (column) {
+      contentWidth =
+        column.borderBoxSize?.[0]?.inlineSize ??
+        content.getBoundingClientRect().width;
+    }
+    const widthChanged = layoutReady && layout.model.setWidth(contentWidth);
     if (widthChanged) {
       releaseReservedRows();
       // ResizeObserver need not include every row in this delivery. Seed the

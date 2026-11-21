@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.chat.errors import ChatError
@@ -317,7 +317,7 @@ def resolve_route_context_window(
     connection_id: str | None,
     model_id: str,
     *,
-    local_context_windows: Mapping[str, Any] | None,
+    local_context_windows: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None,
 ) -> int | None:
     """Return the effective Context window of one Model route.
 
@@ -355,7 +355,7 @@ def resolve_agent_context_window(
     dependencies: ModelResolutionDependencies,
     agent: Any,
     *,
-    local_context_windows: Mapping[str, Any] | None,
+    local_context_windows: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None,
 ) -> int | None:
     """Return the effective Context window of the route an Agent's Model resolves to.
 

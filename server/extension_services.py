@@ -129,6 +129,9 @@ def bind_application_services(
     state.extension_resource_observer = catalog.publish
     unbind = catalog.bind(
         services,
+        # The catalog contract test meta-validates these shipped RPC declarations.
+        # Extension exports and ordinary catalog bindings validate at registration.
+        static_application_schemas=True,
         resources=ALLOWED_RESOURCE_KINDS,
         exclusions=SERVICE_EXCLUSIONS,
         export_context=extension_service_context,

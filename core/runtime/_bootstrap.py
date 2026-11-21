@@ -148,6 +148,7 @@ from core.tools import (
     register_web_fetch_tool,
     register_web_search_tool,
 )
+from core.tools._command_launch import PipeLauncher
 from core.tools.calendar import register_calendar_tool
 from core.tools.call_tool import register_call_tool
 from core.tools.classify import register_classify_tool
@@ -836,8 +837,10 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._terminal_manager = _build_terminal_manager(runtime)
         if runtime._operational_producers == "enabled":
             runtime._start_terminal_manager()
+        pipe_launcher = PipeLauncher()
         runtime._command_manager = CommandManager(
             runtime._trigger_service,
+            launcher=pipe_launcher,
             temporary_files=runtime._storage.temporary_files,
             checkpoint_store=runtime._chat_sessions,
             secrets=runtime._agent_secrets,
@@ -935,6 +938,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._channel_service.set_mail_sink(runtime._cron_service)
         runtime._watch_checks = WatchCheckRunner(
+            launcher=pipe_launcher,
             agent_resolver=runtime._agent_resolver,
             sessions=runtime._chat_sessions,
             projects=runtime._projects,

@@ -211,6 +211,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
             await _run_response(
                 active_run_object,
                 sse_url=f"/api/runs/{active_run_object.id}/events",
+                include_events=not timeline,
                 file_delivery=state.file_delivery,
             )
             if active_run_object is not None
@@ -296,10 +297,8 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
             live_timeline = await remove_opaque_provider_metadata_async(
                 live_timeline, file_delivery=state.file_delivery
             )
-        if active_run is not None:
-            active_run.pop("events", None)
-            if child_limit:
-                active_run["timeline_url"] += f"?child_limit={child_limit}"
+        if active_run is not None and child_limit:
+            active_run["timeline_url"] += f"?child_limit={child_limit}"
         return await _CHAT_RPC_WORKERS.run(
             project_timeline_history, response, live_timeline, child_limit
         )

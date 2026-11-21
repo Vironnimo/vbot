@@ -18,6 +18,7 @@ from core.permissions import BoundaryContext, PermissionBoundary, PermissionCeil
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.tools import _public_http as public_http
 from core.tools import shell_environment, watch_checks
+from core.tools._command_launch import PipeLauncher
 from core.tools._powershell import PowerShellRequest
 from core.tools.shell import HostShellStart
 from core.tools.shell_environment import CommandEnvironment
@@ -72,6 +73,7 @@ def _runner(
     launches: _Launches | None = None,
     *,
     default_project: str | None = None,
+    warm: bool = False,
     **kwargs: Any,
 ) -> WatchCheckRunner:
     project_dir = tmp_path / "project"
@@ -115,7 +117,9 @@ def _runner(
         sessions=cast(Any, SimpleNamespace(get_async=session)),
         projects=SimpleNamespace(get=lambda _project_id: SimpleNamespace(cwd=str(project_dir))),
         data_root=tmp_path / "data",
-        launch=cast(Any, launches if launches is not None else _Launches(lambda _shell: None)),
+        launcher=PipeLauncher(
+            warm=warm, start=cast(Any, launches or _Launches(lambda _shell: None))
+        ),
         tracker=cast(Any, None),
         **kwargs,
     )
@@ -368,6 +372,7 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
         launches,
         command_checker=fake_checker(analyzer),
         ceiling_boundary=boundary,
+        warm=True,
         credential_names=lambda: frozenset({"OPENAI_API_KEY"}),
     )
 
@@ -404,6 +409,8 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
         ceiling=ceiling,
     )
     assert output == ""
+    # A confined check must not prepare a spare shell with its environment.
+    assert len(launches.calls) == 1
     line, _shell, cwd, environment = analyzer.lines[-1]
     assert (line, cwd) == ("Get-Content status.txt", project)
     started = _host_shell[-1].complete()

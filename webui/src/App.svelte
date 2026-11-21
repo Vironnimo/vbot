@@ -1,4 +1,6 @@
 <script module>
+  const loadContributionPreferences = () =>
+    import('./components/extensions/ContributionPreferences.svelte');
   import { t } from '$lib/i18n.js';
 
   const loadChangelogDialog = () => import('./app/ChangelogDialog.svelte');
@@ -85,7 +87,6 @@
   } from '$lib/api.js';
   import { readSpeechPlayback, resolvePermissionApproval } from '$lib/api.js';
   import AppShell from './components/AppShell.svelte';
-  import ContributionPreferences from './components/extensions/ContributionPreferences.svelte';
   import Button from './components/ui/Button.svelte';
   import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
@@ -1130,7 +1131,13 @@
   >
     {#snippet body()}
       <div class="modal-body">
-        <div class="s-group"><ContributionPreferences /></div>
+        <div class="s-group">
+          <LazyContent load={loadContributionPreferences}>
+            {#snippet children(Component)}
+              <Component />
+            {/snippet}
+          </LazyContent>
+        </div>
       </div>
     {/snippet}
   </Modal>

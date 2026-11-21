@@ -590,7 +590,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       return () => searchListeners.delete(listener);
     },
     // Listeners receive `{reason, change}`; `change` is `{resource, ids,
-    // revision}` from the Extension's `publish_change`, or null.
+    // revision}` or null. Public core changes have reason `public_resource_changed`.
     onInvalidation(listener) {
       invalidationListeners.add(listener);
       return () => invalidationListeners.delete(listener);

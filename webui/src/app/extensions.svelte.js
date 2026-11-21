@@ -55,8 +55,8 @@ export function createAppExtensions(context) {
       })),
   ]);
 
-  // `owner` null means anything Extension-backed can have changed, so every
-  // subscriber refreshes everything it shows. An owner names the Extension
+  // A global reset has neither owner nor change. A named change without an
+  // owner identifies public core data. An owner names the Extension
   // whose data changed, and `change` the records (`{resource, ids,
   // revision}` from `ExtensionHost.publish_change`).
   function invalidate(owner, change = null, serviceResource = null) {

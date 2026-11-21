@@ -627,6 +627,11 @@ describe('ExtensionPage frame bridge', () => {
     component.invalidate({ owner: 'other', change, revision: 1 });
     expect(invalidations()).toEqual([]);
     component.invalidate({ owner: 'alpha', change, revision: 2 });
+    component.invalidate({
+      owner: null,
+      change: { ...change, resource: 'sessions' },
+      revision: 3,
+    });
     // After an Extension reload every open page refreshes everything.
     component.invalidate({ owner: null, change: null, revision: 3 });
     // A change the bridge cannot carry still refreshes the page.
@@ -641,6 +646,10 @@ describe('ExtensionPage frame bridge', () => {
         epoch: 'epoch-a',
         revision: 2,
         change,
+      }),
+      expect.objectContaining({
+        reason: 'public_resource_changed',
+        change: { ...change, resource: 'sessions' },
       }),
       expect.not.objectContaining({ change: expect.anything() }),
       expect.not.objectContaining({ change: expect.anything() }),

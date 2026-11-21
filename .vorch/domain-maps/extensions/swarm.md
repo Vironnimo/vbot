@@ -1372,6 +1372,7 @@ Discussion Post pages and the page's reads after a post number likewise select
 `posts_discussion_page`, so a page of one Discussion does not walk the whole
 Swarm's Posts by sequence. Every index in
 `SCHEMA_SQL` names its reader in the comment above it.
+A Wiki list without a search query pages the frozen revisions in SQLite. Swarm snapshots read settings, epochs, goal and main Discussion together; participant Tool calls omit the stored Profile and effective configuration.
 The regression fixture checks
 bounded SQLite work with 12 peers, 22,000 delivered recipient rows and 2,000
 acknowledged delivery batches

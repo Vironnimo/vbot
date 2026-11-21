@@ -415,11 +415,11 @@ class ArchiveService:
         reviews = tuple(address for address in addresses if not _in_scope(address, scope))
         guard = services.runs.session_admission_guard(*reviews) if reviews else nullcontext()
         async with guard:
-            references = [
-                reference
-                for address in reviews
-                for reference in services.automation.session_references(address)
-            ]
+            references = (
+                await services.sessions.run_async(services.automation.session_references, *reviews)
+                if reviews
+                else ()
+            )
             if references:
                 raise ArchiveSubjectInUseError(
                     ARCHIVE_KIND_PROJECT if scope.project_id else ARCHIVE_KIND_AGENT,
@@ -487,11 +487,7 @@ class ArchiveService:
         sessions = services.sessions
         members = (address, *await sessions.run_async(sessions.review_forks, address))
         async with services.runs.session_admission_guard(*members):
-            references = [
-                reference
-                for member in members
-                for reference in services.automation.session_references(member)
-            ]
+            references = await sessions.run_async(services.automation.session_references, *members)
             if references:
                 raise ArchiveSubjectInUseError(
                     ARCHIVE_KIND_SESSION,

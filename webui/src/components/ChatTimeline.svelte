@@ -8,7 +8,7 @@
     formatDate,
     groupTransientCards,
     labelForEvent,
-    liveClockCadenceMs,
+    latestLiveClockStart,
     runFooterGroups,
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
@@ -204,27 +204,17 @@
   // and user-scroll classification. Created once the scroll container binds.
   let controller = null;
 
+  const clockStart = $derived(
+    latestLiveClockStart(
+      presentedItems,
+      subAgentStatuses,
+      backgroundCommandStatuses,
+      commandStatuses,
+    ),
+  );
   $effect(() => {
-    const visibleItems = timelineItems;
-    const statuses = subAgentStatuses;
-    const durableCommandStatuses = backgroundCommandStatuses;
-    const liveCommandStatuses = commandStatuses;
-    const waiting = sessionWaiting;
-    // A waiting Session's latest Run footer keeps running, so the clock ticks
-    // at least every second while nothing else on screen needs it.
-    const cadenceMs = () => {
-      const delay = liveClockCadenceMs(
-        visibleItems,
-        statuses,
-        Date.now(),
-        durableCommandStatuses,
-        liveCommandStatuses,
-      );
-      return waiting && delay === 0 ? 1000 : delay;
-    };
-    if (cadenceMs() === 0) {
-      return undefined;
-    }
+    const latestStart = clockStart;
+    if (latestStart === null && !sessionWaiting) return;
 
     let timeoutId = null;
     let disposed = false;
@@ -239,10 +229,8 @@
       if (disposed || document.hidden) {
         return;
       }
-      const delay = cadenceMs();
-      if (delay === 0) {
-        return;
-      }
+      const delay =
+        latestStart !== null && Date.now() - latestStart < 10_000 ? 100 : 1000;
       timeoutId = setTimeout(() => {
         timeoutId = null;
         nowMs = Date.now();

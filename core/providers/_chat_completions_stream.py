@@ -70,7 +70,12 @@ def _normalize_openai_stream_chunk(
                     {
                         "type": "reasoning_meta",
                         "reasoning_meta": {
-                            "content_chunks": [dict(item) for item in state["content_chunks"]]
+                            "content_chunks": [
+                                {"type": "text", "text": item}
+                                if isinstance(item, str)
+                                else dict(item)
+                                for item in state["content_chunks"]
+                            ]
                         },
                     }
                 )
@@ -111,7 +116,9 @@ def _normalize_openai_message_delta(
     content = delta.get("content")
     if isinstance(content, str) and content:
         normalized_deltas.append({"type": "content_delta", "text": content})
-        state.setdefault("content_chunks", []).append({"type": "text", "text": content})
+        # Later typed blocks may need to replay this prefix exactly. Retain
+        # the fragment itself until we know it needs a wire dictionary.
+        state.setdefault("content_chunks", []).append(content)
     elif isinstance(content, list):
         state["has_typed_content"] = True
         chunks = state.setdefault("content_chunks", [])

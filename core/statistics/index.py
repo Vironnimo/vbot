@@ -135,6 +135,7 @@ CREATE TABLE stat_records (
     run_id TEXT,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+CREATE INDEX stat_records_instant ON stat_records(instant);
 CREATE INDEX stat_records_run
     ON stat_records(session_key, run_id, seq, role, instant)
     WHERE run_id IS NOT NULL;
@@ -158,6 +159,7 @@ CREATE TABLE stat_tools (
     latency_bucket INTEGER,
     PRIMARY KEY (session_key, invocation_key)
 ) WITHOUT ROWID;
+CREATE INDEX stat_tools_instant ON stat_tools(instant);
 CREATE INDEX stat_tools_rejected ON stat_tools(instant) WHERE outcome = 0;
 CREATE INDEX stat_tools_run ON stat_tools(session_key, run_id);
 CREATE INDEX stat_tools_hour ON stat_tools(session_key, name, instant);
@@ -170,6 +172,7 @@ CREATE TABLE stat_errors (
     kind TEXT NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+CREATE INDEX stat_errors_instant ON stat_errors(instant);
 CREATE TABLE stat_checkpoints (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,

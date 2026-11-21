@@ -100,8 +100,10 @@ def test_websocket_forwards_run_lifecycle_without_deltas_or_provider_metadata(
         "finished",
     ]
     events = [event for event in events if event not in status_events]
+    resources = [event for event in events if event["type"] == "resource_changed"]
+    assert [event["payload"]["kind"] for event in resources] == ["agents"]
+    events = [event for event in events if event["type"] != "resource_changed"]
     assert [event["type"] for event in events] == [
-        "resource_changed",
         "run_started",
         "run_output",
         "run_output",
@@ -109,8 +111,7 @@ def test_websocket_forwards_run_lifecycle_without_deltas_or_provider_metadata(
         "run_output",
         "run_completed",
     ]
-    assert events[0]["payload"]["kind"] == "agents"
-    assert [event["payload"]["run_event_type"] for event in events[1:]] == [
+    assert [event["payload"]["run_event_type"] for event in events] == [
         "run_started",
         "user_message_persisted",
         "reasoning",
@@ -118,7 +119,7 @@ def test_websocket_forwards_run_lifecycle_without_deltas_or_provider_metadata(
         "model_step_usage",
         "run_completed",
     ]
-    assert all(event["payload"]["run_id"] == run_id for event in events[1:])
+    assert all(event["payload"]["run_id"] == run_id for event in events)
     # Streaming deltas stay on the Run's SSE stream; opaque provider metadata never leaves.
     hidden = ("reasoning_delta", "assistant_output_delta", "tool_call_delta", "reasoning_meta")
     assert [fragment for fragment in hidden if fragment in str(events)] == []

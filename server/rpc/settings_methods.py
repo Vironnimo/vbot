@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("server.rpc.settings")
-_SETTINGS_READS = BoundedWorkerPool(name="settings-rpc", max_workers=2)
+SETTINGS_RPC_WORKERS = BoundedWorkerPool(name="settings-rpc", max_workers=2)
 
 _MISSING = object()
 
@@ -81,7 +81,7 @@ SUBAGENT_SETTING_FIELDS = (
 
 async def _get_settings_raw(state: Any, params: JsonObject) -> JsonObject:
     try:
-        settings = await _SETTINGS_READS.run(state.runtime.storage.load_settings)
+        settings = await SETTINGS_RPC_WORKERS.run(state.runtime.storage.load_settings)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"settings": dict(settings)}
@@ -91,7 +91,7 @@ async def _get_public_settings(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, rpc_request_fields("settings.values"), "settings.values")
     try:
         values = build_effective_settings(
-            await _SETTINGS_READS.run(state.runtime.storage.load_settings)
+            await SETTINGS_RPC_WORKERS.run(state.runtime.storage.load_settings)
         )
         _apply_runtime_values(state, values)
         return {"settings": values}
@@ -106,11 +106,11 @@ async def _settings_catalog(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.prefix must be a string")
     try:
         entries = catalog_payload(prefix)
-        raw_settings = await _SETTINGS_READS.run(state.runtime.storage.load_settings)
+        raw_settings = await SETTINGS_RPC_WORKERS.run(state.runtime.storage.load_settings)
         for entry in entries:
             if "<" in str(entry.get("path", "")):
                 continue
-            details = await _SETTINGS_READS.run(
+            details = await SETTINGS_RPC_WORKERS.run(
                 _runtime_setting_details, state, raw_settings, str(entry["path"]), True
             )
             entry.update(
@@ -128,7 +128,7 @@ async def _settings_catalog(state: Any, params: JsonObject) -> JsonObject:
                 }
             )
         entries.extend(
-            await _SETTINGS_READS.run(_dynamic_catalog_entries, state, raw_settings, prefix)
+            await SETTINGS_RPC_WORKERS.run(_dynamic_catalog_entries, state, raw_settings, prefix)
         )
         if prefix and not entries:
             raise SettingsPathError(f"no settings paths match {prefix!r}")
@@ -147,10 +147,10 @@ async def _get_setting_path(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.allow_missing must be a boolean")
     try:
         return {
-            "setting": await _SETTINGS_READS.run(
+            "setting": await SETTINGS_RPC_WORKERS.run(
                 _runtime_setting_details,
                 state,
-                await _SETTINGS_READS.run(state.runtime.storage.load_settings),
+                await SETTINGS_RPC_WORKERS.run(state.runtime.storage.load_settings),
                 path,
                 allow_missing,
             )
@@ -174,7 +174,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
         _validate_public_settings_candidate(state.runtime, previous, candidate, operations)
 
     try:
-        previous, saved, changed_paths = await _SETTINGS_READS.run(
+        previous, saved, changed_paths = await SETTINGS_RPC_WORKERS.run(
             storage.patch_settings, operations, validate_candidate=validate_candidate
         )
         effects = await state.runtime.apply_settings_change(
@@ -182,7 +182,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
             saved,
         )
         changes = [
-            await _SETTINGS_READS.run(
+            await SETTINGS_RPC_WORKERS.run(
                 _runtime_setting_details, state, saved, operation.resolved.canonical_path, True
             )
             for operation in operations
@@ -220,7 +220,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     storage = state.runtime.storage
-    previous_settings = await _SETTINGS_READS.run(storage.load_settings)
+    previous_settings = await SETTINGS_RPC_WORKERS.run(storage.load_settings)
 
     if "recall" in settings_update:
         _validate_recall_backend_known(state.runtime, settings_update["recall"]["backend"])
@@ -228,7 +228,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     _validate_model_connections(state.runtime.models, settings_update)
     if "model_tasks" in settings_update:
         try:
-            settings_update["model_tasks"] = await _SETTINGS_READS.run(
+            settings_update["model_tasks"] = await SETTINGS_RPC_WORKERS.run(
                 state.runtime.model_tasks.prepare_update, settings_update["model_tasks"]
             )
         except Exception as exc:
@@ -238,15 +238,15 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     newly_disabled: set[str] = set()
     if "extensions" in settings_update:
         _validate_extension_configs(state.runtime, settings_update["extensions"])
-        previous = await _SETTINGS_READS.run(storage.load_extensions_settings)
+        previous = await SETTINGS_RPC_WORKERS.run(storage.load_extensions_settings)
         old_disabled = set(previous.get("disabled", []))
         new_disabled = set(settings_update["extensions"].get("disabled", []))
         newly_enabled = old_disabled - new_disabled
         newly_disabled = new_disabled - old_disabled
 
     try:
-        await _SETTINGS_READS.run(storage.update_settings_sections, settings_update, base=base)
-        saved_settings = await _SETTINGS_READS.run(storage.load_settings)
+        await SETTINGS_RPC_WORKERS.run(storage.update_settings_sections, settings_update, base=base)
+        saved_settings = await SETTINGS_RPC_WORKERS.run(storage.load_settings)
         effects = await state.runtime.apply_settings_change(
             previous_settings,
             saved_settings,
@@ -654,7 +654,7 @@ def _validate_recall_backend_known(runtime: Any, backend: str) -> None:
 
 
 async def _settings_response(state: Any) -> JsonObject:
-    response = await _SETTINGS_READS.run(_settings_response_payload, state)
+    response = await SETTINGS_RPC_WORKERS.run(_settings_response_payload, state)
     response["debug"]["trace_count"] = await _trace_count(
         state.runtime, response["debug"]["trace_limit"]
     )
@@ -784,13 +784,15 @@ async def _set_service_key(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a single line")
 
     runtime = state.runtime
-    previous_value = (await _SETTINGS_READS.run(runtime.storage.load_environment)).get(variable)
+    previous_value = (await SETTINGS_RPC_WORKERS.run(runtime.storage.load_environment)).get(
+        variable
+    )
     try:
         if value:
-            await _SETTINGS_READS.run(runtime.storage.set_data_dir_credential, variable, value)
+            await SETTINGS_RPC_WORKERS.run(runtime.storage.set_data_dir_credential, variable, value)
             changed = previous_value != value
         else:
-            changed = await _SETTINGS_READS.run(
+            changed = await SETTINGS_RPC_WORKERS.run(
                 runtime.storage.remove_data_dir_credential, variable
             )
         await runtime.reload_environment_credentials_async()
@@ -817,11 +819,11 @@ async def _restore_service_key(runtime: Any, variable: str, previous_value: str 
     """Put back the credential a failed key write replaced; a blank one is left out."""
     try:
         if previous_value:
-            await _SETTINGS_READS.run(
+            await SETTINGS_RPC_WORKERS.run(
                 runtime.storage.set_data_dir_credential, variable, previous_value
             )
         else:
-            await _SETTINGS_READS.run(runtime.storage.remove_data_dir_credential, variable)
+            await SETTINGS_RPC_WORKERS.run(runtime.storage.remove_data_dir_credential, variable)
         await runtime.reload_environment_credentials_async()
     except Exception as rollback_error:
         _LOGGER.error(

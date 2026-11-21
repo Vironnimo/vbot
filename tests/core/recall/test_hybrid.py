@@ -49,6 +49,8 @@ async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
     assert page.ranking == "reciprocal_rank_fusion"
     assert page.hits[0].session_id == "both"
     assert page.hits[0].sources == ("literal", "semantic")
+    hit = page.hits[0]
+    assert hit.text[hit.match_start : hit.match_end] == "driving"
     assert any(hit.session_id == "semantic" and hit.sources == ("semantic",) for hit in page.hits)
 
 

@@ -182,7 +182,12 @@ class SlackChannelAdapter(NetworkChannelAdapter):
         buttons: Any = None,
     ) -> None:
         self.check_send(message, files, buttons)
-        self.remember(await self._send_operation(self.target_facts, platform_target))
+        known = self._conversations.get(platform_target)
+        # A received message carries its sender and thread. Only the earlier
+        # outbound lookup describes the destination independently of either.
+        if known is None or known.message_id is not None:
+            known = await self._send_operation(self.target_facts, platform_target)
+        self.remember(known)
         with DeliveryProgress() as progress:
             for chunk in self.message_chunks(message):
                 payload: dict[str, Any] = {

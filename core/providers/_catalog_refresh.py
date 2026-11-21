@@ -14,6 +14,7 @@ import httpx
 
 from core.models import discovery
 from core.models.database import (
+    MODEL_DB_WORKERS,
     ModelDatabaseRefresh,
     begin_runtime_model_database_refresh,
     begin_system_model_database_refresh,
@@ -45,7 +46,6 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("providers.catalog_refresh")
-_MODEL_DB_WORKERS = BoundedWorkerPool(name="model-db-refresh", max_workers=1)
 _CATALOG_READ_WORKERS = BoundedWorkerPool(name="catalog-access", max_workers=4)
 # Automatic sweeps make one attempt per Connection, then throttle from completion.
 LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
@@ -414,13 +414,13 @@ async def _publish_model_db_refresh(
 
     async def publish(database_refresh: ModelDatabaseRefresh, outcome: _RefreshOutcome) -> None:
         async with runtime.model_configuration_publication_async():
-            await _MODEL_DB_WORKERS.run(commit, database_refresh, outcome)
+            await MODEL_DB_WORKERS.run(commit, database_refresh, outcome)
             changed = await _reload_runtime_model_registry(runtime, runtime._storage.resources_dir)
         if notify_changed and changed:
             runtime._notify_catalog_changed()
 
     try:
-        await _MODEL_DB_WORKERS.run(stage)
+        await MODEL_DB_WORKERS.run(stage)
         database_refresh = staged[0]
         outcome = await refresh(database_refresh.resources_dir)
         if not outcome.publish:
@@ -428,7 +428,7 @@ async def _publish_model_db_refresh(
         # Validation collects instead of logging: the live reload below logs
         # each entry Load ignores, so the refresh reports it once.
         invalid_entry_count = len(
-            await _MODEL_DB_WORKERS.run(ModelRegistry.validate, database_refresh.resources_dir)
+            await MODEL_DB_WORKERS.run(ModelRegistry.validate, database_refresh.resources_dir)
         )
         # Publication and the in-memory swap are one admitted operation. Once
         # publication starts, cancellation may not leave the registry stale.
@@ -436,7 +436,7 @@ async def _publish_model_db_refresh(
     finally:
         for database_refresh in staged:
             ModelRegistry.invalidate(database_refresh.resources_dir)
-            await _MODEL_DB_WORKERS.run(database_refresh.discard)
+            await MODEL_DB_WORKERS.run(database_refresh.discard)
     return outcome, invalid_entry_count
 
 

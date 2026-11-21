@@ -125,8 +125,9 @@
     return autosave.cancelPendingTimer;
   });
   onMount(() =>
-    client.onInvalidation((invalidation) => {
-      if (active) backgroundRefresh.schedule(invalidation?.change ?? null);
+    client.onInvalidation(({ reason, change }) => {
+      if (active && reason !== 'public_resource_changed')
+        backgroundRefresh.schedule(change);
     }),
   );
   onDestroy(() => {

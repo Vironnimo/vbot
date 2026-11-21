@@ -234,8 +234,11 @@ export function attachableHistoryRun(sessionState, activeRun) {
 
 export function prependHistory(sessionState, messages, options = {}) {
   loadTimelineItems(sessionState, options.items, { ...options, prepend: true });
-  for (const run of options.runs ?? [])
-    sessionState.historyRuns[run.run_id] = run;
+  if (options.runs?.length) {
+    const runs = { ...sessionState.historyRuns };
+    for (const run of options.runs) runs[run.run_id] = run;
+    sessionState.historyRuns = runs;
+  }
   const existingIds = new Set((sessionState.messages ?? []).map(recordKey));
   const olderMessages = Array.isArray(messages)
     ? messages

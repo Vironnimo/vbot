@@ -132,8 +132,19 @@ def test_reload_publishes_immutable_packages_and_startup_discards_only_cache(
     assert not (removed / "references/extensions/demo").exists()
     unrelated = cache / "keep.txt"
     unrelated.write_text("Keep sentinel.", encoding="utf-8")
+    document = removed / "SKILL.md"
+    original = document.read_bytes()
+    original_time = document.stat().st_mtime_ns
+    assert compose_vbot_docs(source, cache, [], bootstrap=True) == removed
+    assert document.stat().st_mtime_ns == original_time
+    assert not first.exists() and not second.exists()
+    document.write_text("stale", encoding="utf-8")
+    (removed / "extra.md").write_text("unexpected", encoding="utf-8")
+    assert compose_vbot_docs(source, cache, [], bootstrap=True) == removed
+    assert document.read_bytes() == original
+    assert not (removed / "extra.md").exists()
     clear_documentation_cache(cache)
-    assert not first.exists() and not second.exists() and not removed.exists()
+    assert not removed.exists()
     assert unrelated.read_text() == "Keep sentinel."
     assert (source / "SKILL.md").is_file()
 

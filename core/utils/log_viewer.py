@@ -21,9 +21,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-from watchfiles import awatch
+from typing import TYPE_CHECKING, Any
 
 from core.utils._log_reader import (
     APPEND_EVENT as APPEND_EVENT,
@@ -67,6 +65,9 @@ from core.utils.logging import (
     get_logger,
 )
 from core.utils.workers import BoundedWorkerPool
+
+if TYPE_CHECKING:
+    from watchfiles import Change
 
 _LOGGER = get_logger("log_viewer")
 
@@ -351,19 +352,27 @@ class LogViewer:
                 async with self._watch_lock:
                     self._retire_locked(watcher)
 
+    def _directory_changes(
+        self, stop_event: asyncio.Event
+    ) -> AsyncGenerator[set[tuple[Change, str]]]:
+        from watchfiles import awatch
+
+        return awatch(
+            *self._reader.watch_directories(),
+            recursive=False,
+            debounce=100,
+            step=50,
+            stop_event=stop_event,
+            rust_timeout=500,
+            yield_on_timeout=True,
+            force_polling=True,
+            poll_delay_ms=500,
+        )
+
     async def _watch_file(self, watcher: _WatcherState) -> None:
         try:
-            async for changes in awatch(
-                *await _LOG_WORKERS.run(self._reader.watch_directories),
-                recursive=False,
-                debounce=100,
-                step=50,
-                stop_event=watcher.stop_event,
-                rust_timeout=100,
-                yield_on_timeout=True,
-                force_polling=True,
-                poll_delay_ms=50,
-            ):
+            changes_stream = await _LOG_WORKERS.run(self._directory_changes, watcher.stop_event)
+            async for changes in changes_stream:
                 if watcher.stop_event.is_set():
                     continue
                 try:

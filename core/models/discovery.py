@@ -40,6 +40,7 @@ from core.models._discovery_projection import (
     _tag_fresh_models,
 )
 from core.models.assembly import load_canonical_layer
+from core.models.database import MODEL_DB_WORKERS
 from core.models.models import (
     Model,
     ModelRegistry,
@@ -53,6 +54,7 @@ from core.providers.adapter_types import discovery_adapter_type
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.utils.atomic import atomic_write_text
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -208,11 +210,6 @@ async def refresh_models(
                         raw_models.append(supplementary_model)
                         seen_ids.add(model_id)
 
-        models_dir = resources_dir / "models"
-        models_dir.mkdir(parents=True, exist_ok=True)
-
-        catalog = models_dev_catalog
-
         normalized_models: dict[str, Model] = {}
         sparse_models: dict[str, Model] = {}
         for raw_model in raw_models:
@@ -314,56 +311,16 @@ async def refresh_models(
             else:
                 normalized_models.update(task_models)
 
-        # Refresh writes the PURE provider projection — NO override baking (that
-        # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
-        # data and enriched with a models.dev canonical pointer / deviating ladder.
-        output_path = models_dir / f"{provider_config.id}.json"
-        existing_models = _read_existing_provider_models(output_path)
-        projected_models = _project_provider_models(
-            normalized_models,
-            provider_config,
-            catalog,
-            _models_for_connection_enrichment(
-                existing_models,
-                credential_connection.id if credential_connection is not None else None,
-            ),
-            previous_canonical=(
-                load_canonical_layer(
-                    models_dir / "models.json", models_dir / "models.overrides.json"
-                )
-                if catalog is None
-                else {}
-            ),
-        )
-        projected_models = _admitted_models(
-            projected_models,
-            normalized_models,
+        count = await MODEL_DB_WORKERS.run(
+            _persist_projection,
+            resources_dir,
             provider_config,
             credential_connection,
+            normalized_models,
+            sparse_models,
+            models_dev_catalog,
             wire_files,
-        )
-        connection_id = credential_connection.id if credential_connection is not None else None
-        tagged_fresh = _tag_fresh_models(projected_models, connection_id)
-        final_models = _merge_models_by_connection(
-            existing_models,
-            tagged_fresh,
-            connection_id,
-            capability_defaults={
-                model_id: _model_to_data(model)["capabilities"]
-                for model_id, model in sparse_models.items()
-                if normalized_models.get(model_id) is model
-            },
-        )
-        output_data = {
-            "provider_id": provider_config.id,
-            "source": "discovery",
-            "fetched_at": fetched_at,
-            "models": final_models,
-        }
-        output_path.write_text(
-            json.dumps(output_data, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
+            fetched_at,
         )
     except (
         httpx.HTTPError,
@@ -379,10 +336,70 @@ async def refresh_models(
             f"Model discovery failed for provider '{provider_config.id}': {exc}"
         ) from exc
 
-    ModelRegistry.invalidate(resources_dir)
-
     return {
         "provider_id": provider_config.id,
-        "model_count": len(final_models),
+        "model_count": count,
         "fetched_at": fetched_at,
     }
+
+
+def _persist_projection(
+    resources_dir: Path,
+    provider_config: ProviderConfig,
+    credential_connection: ConnectionConfig | None,
+    normalized_models: Mapping[str, Model],
+    sparse_models: Mapping[str, Model],
+    catalog: ModelsDevCatalog | None,
+    wire_files: Mapping[str, WireProfileFile] | None,
+    fetched_at: str,
+) -> int:
+    """Merge a Connection's catalog with the current file on the Model DB worker."""
+    models_dir = resources_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    # Refresh writes the PURE provider projection — NO override baking (that
+    # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
+    # data and enriched with a models.dev canonical pointer / deviating ladder.
+    output_path = models_dir / f"{provider_config.id}.json"
+    existing_models = _read_existing_provider_models(output_path)
+    projected_models = _project_provider_models(
+        normalized_models,
+        provider_config,
+        catalog,
+        _models_for_connection_enrichment(
+            existing_models,
+            credential_connection.id if credential_connection is not None else None,
+        ),
+        previous_canonical=(
+            load_canonical_layer(models_dir / "models.json", models_dir / "models.overrides.json")
+            if catalog is None
+            else {}
+        ),
+    )
+    projected_models = _admitted_models(
+        projected_models,
+        normalized_models,
+        provider_config,
+        credential_connection,
+        wire_files,
+    )
+    connection_id = credential_connection.id if credential_connection is not None else None
+    tagged_fresh = _tag_fresh_models(projected_models, connection_id)
+    final_models = _merge_models_by_connection(
+        existing_models,
+        tagged_fresh,
+        connection_id,
+        capability_defaults={
+            model_id: _model_to_data(model)["capabilities"]
+            for model_id, model in sparse_models.items()
+            if normalized_models.get(model_id) is model
+        },
+    )
+    output_data = {
+        "provider_id": provider_config.id,
+        "source": "discovery",
+        "fetched_at": fetched_at,
+        "models": final_models,
+    }
+    atomic_write_text(output_path, json.dumps(output_data, indent=2, sort_keys=True) + "\n")
+    ModelRegistry.invalidate(resources_dir)
+    return len(final_models)

@@ -409,10 +409,19 @@ class PassageIndex(PassageCatalog):
             (json.dumps(passage_refs),),
         ).fetchall():
             queued.setdefault(str(row["text_hash"]), []).append(row)
-        for text_hash, rows in queued.items():
-            embedding = _stored_embedding(connection, text_hash)
-            if embedding is not None:
-                _insert_vectors(connection, rows, embedding)
+        if queued:
+            # Find one indexed exemplar per distinct hash. The unique rowid lookup
+            # into vec0 avoids returning duplicate copies of an embedding.
+            embeddings = connection.execute(
+                f"SELECT hashes.value, v.embedding FROM json_each(?) AS hashes "
+                f"CROSS JOIN {_VECTOR_TABLE} AS v WHERE v.rowid = ("
+                "SELECT p.passage_ref FROM passages AS p WHERE p.text_hash = hashes.value "
+                "AND NOT EXISTS (SELECT 1 FROM pending_vectors WHERE passage_ref = p.passage_ref) "
+                "LIMIT 1)",
+                (json.dumps(list(queued)),),
+            ).fetchall()
+            for text_hash, embedding in embeddings:
+                _insert_vectors(connection, queued[text_hash], embedding)
 
     # -- The embedding queue -------------------------------------------------------
 
@@ -873,21 +882,6 @@ def _use_space(connection: sqlite3.Connection, header: VectorHeader) -> bool:
     return True
 
 
-def _stored_embedding(connection: sqlite3.Connection, text_hash: str) -> bytes | None:
-    """One stored vector for *text_hash*, from any Passage that has one."""
-    row = connection.execute(
-        "SELECT passage_ref FROM passages AS p WHERE text_hash = ? AND NOT EXISTS "
-        "(SELECT 1 FROM pending_vectors WHERE passage_ref = p.passage_ref) LIMIT 1",
-        (text_hash,),
-    ).fetchone()
-    if row is None:
-        return None
-    vector = connection.execute(
-        f"SELECT embedding FROM {_VECTOR_TABLE} WHERE rowid = ?", (int(row[0]),)
-    ).fetchone()
-    return None if vector is None else bytes(vector[0])
-
-
 def _insert_vectors(
     connection: sqlite3.Connection, rows: Sequence[sqlite3.Row], embedding: bytes
 ) -> None:
@@ -1023,11 +1017,12 @@ def _counts(connection: sqlite3.Connection) -> IndexCounts:
         ).fetchone()[0]
     )
     texts, characters = connection.execute(
-        # Materialize lengths before grouping so the queue-first plan sorts
-        # small integers, not the full text of every waiting Passage.
+        # The expression index supplies the character count without
+        # loading Passage text pages. Keep the queue first for sparse backlogs.
         "WITH waiting AS MATERIALIZED ("
         "  SELECT p.text_hash, length(p.text) AS characters FROM pending_vectors AS q "
-        "  CROSS JOIN passages AS p ON p.passage_ref = q.passage_ref "
+        "  CROSS JOIN passages AS p INDEXED BY passages_by_ref_hash_length "
+        "  ON p.passage_ref = q.passage_ref "
         "  WHERE p.text_hash NOT IN (SELECT text_hash FROM skipped_texts) "
         ") SELECT COUNT(*), COALESCE(SUM(characters), 0) FROM ("
         "  SELECT MAX(characters) AS characters FROM waiting GROUP BY text_hash"

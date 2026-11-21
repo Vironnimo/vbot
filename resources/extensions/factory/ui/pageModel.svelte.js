@@ -345,7 +345,8 @@ export function createFactoryPageModel(bridgeClient) {
       clearTimeout(timeout);
       context(next);
     });
-    const offInvalidation = client.onInvalidation(({ change } = {}) => {
+    const offInvalidation = client.onInvalidation(({ reason, change } = {}) => {
+      if (reason === 'public_resource_changed') return;
       if (
         change &&
         ['factories', 'members', 'tasks', 'topics', 'page_badges'].includes(

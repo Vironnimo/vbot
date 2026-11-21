@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
-import io
 import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -15,7 +14,13 @@ from typing import Any, Protocol, cast
 from PIL import Image as PILImage
 
 from core.attachments import sniff_media_type
-from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget, PreparedImage
+from core.attachments.images import (
+    ImageConversionError,
+    ImageConverter,
+    ImageTarget,
+    PreparedImage,
+    open_raster,
+)
 from core.debug import DebugContext
 from core.model_tasks.artifacts import (
     BeforeOutputWrite,
@@ -1031,7 +1036,7 @@ def _pixel_size(payload: bytes) -> tuple[int | None, int | None]:
     """Read pixel dimensions from the image header; vector images have none."""
 
     try:
-        with PILImage.open(io.BytesIO(payload)) as image:
+        with open_raster(payload) as image:
             width, height = image.size
     except OSError, ValueError, PILImage.DecompressionBombError:
         return None, None

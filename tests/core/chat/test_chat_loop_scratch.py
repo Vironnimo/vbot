@@ -11,9 +11,10 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, _run_execution
 from core.chat._message_history import effective_compaction_messages
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.runs import RunCancelledError, RunInterruptedError, RunKind, RunStatus
 from core.sessions import ChatSession, SessionAddress
 from core.tools import ToolRegistry, tool_success
@@ -111,7 +112,31 @@ async def test_scratch_announces_once_and_forks_announce_their_own_folder(tmp_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["folder", "persistence", "request_rebuild"])
+async def test_first_request_keeps_a_note_appended_while_scratch_is_opening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="source")
+    folders = runtime.scratch_areas
+    open_folder = folders.folder_for
+    arrived = ChatMessage.note("An update from another writer")
+
+    async def folder_for(address: SessionAddress) -> Any:
+        await session.append_many_async([arrived])
+        return await open_folder(address)
+
+    monkeypatch.setattr(folders, "folder_for", folder_for)
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id=session.id)
+    await run.wait()
+
+    [scratch_note] = _notes(tmp_path, session.load_active())
+    sent = "\n".join(str(message["content"]) for message in runtime.adapter.requests[0]["messages"])
+    assert sent.count(str(arrived.content)) == 1
+    assert sent.index(str(arrived.content)) < sent.index(str(scratch_note.content))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["folder", "persistence", "request_projection"])
 async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -133,20 +158,20 @@ async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
     )
     loop = build_chat_loop(runtime)
     append = ChatSession.append_many_async
-    rebuild = loop._requests.rebuild_live_request_state
+    project = _run_execution.extend_request_with_notes
 
     async def append_notes(current: ChatSession, messages: list[ChatMessage], **kwargs: Any) -> Any:
         if unavailable and failure_stage == "persistence" and _notes(tmp_path, messages):
             raise RuntimeError("private Scratch failure details")
         return await append(current, messages, **kwargs)
 
-    async def rebuild_request(*args: Any, **kwargs: Any) -> Any:
-        if unavailable and failure_stage == "request_rebuild":
+    def project_note(*args: Any, **kwargs: Any) -> Any:
+        if unavailable and failure_stage == "request_projection":
             raise RuntimeError("private Scratch failure details")
-        return await rebuild(*args, **kwargs)
+        return project(*args, **kwargs)
 
     monkeypatch.setattr(ChatSession, "append_many_async", append_notes)
-    monkeypatch.setattr(loop._requests, "rebuild_live_request_state", rebuild_request)
+    monkeypatch.setattr(_run_execution, "extend_request_with_notes", project_note)
     caplog.set_level(logging.INFO, logger="vbot")
     run = await loop.start_run("coder", "First task", session_id=session.id)
     await run.wait()
@@ -160,7 +185,7 @@ async def test_optional_scratch_failure_keeps_the_run_working_and_recovers(
     assert run.status is RunStatus.COMPLETED
     assert len(runtime.adapter.requests) == 2
     assert session.find_run_summary(run_id=run.id).status == "completed"
-    if failure_stage != "request_rebuild":
+    if failure_stage != "request_projection":
         assert (
             runtime.chat_sessions.metadata_value(session.address, SCRATCH_ANNOUNCED_META_KEY)
             == initial
@@ -341,7 +366,10 @@ async def test_compaction_preserves_exactly_one_current_scratch_announcement(
 
 
 @pytest.mark.asyncio
-async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(tmp_path: Path) -> None:
+@pytest.mark.parametrize("internal", [False, True])
+async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(
+    tmp_path: Path, internal: bool
+) -> None:
     runtime = _runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="source")
     loop = build_chat_loop(runtime)
@@ -349,10 +377,21 @@ async def test_run_reannounces_when_a_checkpoint_omitted_the_scratch_note(tmp_pa
     await run.wait()
     session.append(
         ChatMessage.compaction_checkpoint(
-            summary="Summary", projection=[], compacted_token_count=10
+            summary="Summary",
+            projection=[ChatMessage.user("Previous input"), ChatMessage.note("Previous reminder")],
+            compacted_token_count=10,
         )
     )
-    run = await loop.start_run("coder", "Continue", session_id=session.id)
+    run = await loop.start_run(
+        "coder",
+        "Continue",
+        session_id=session.id,
+        internal=internal,
+        run_kind=RunKind.SYSTEM if internal else RunKind.USER,
+    )
     await run.wait()
     assert len(_notes(tmp_path, session.load())) == 2
-    assert len(_notes(tmp_path, effective_compaction_messages(session.load_active()))) == 1
+    effective = effective_compaction_messages(session.load_active())
+    [scratch] = _notes(tmp_path, effective)
+    replay = _embed_notes_into_request(effective[: effective.index(scratch) + 1])
+    assert runtime.adapter.requests[-1]["messages"][-len(replay) :] == replay

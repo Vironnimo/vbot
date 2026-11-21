@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from core.extensions import ExtensionRegistry
-from core.skills._documentation import clear_documentation_cache, compose_vbot_docs
+from core.skills._documentation import compose_vbot_docs
 from core.skills._packages import PackageError
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL, SkillRegistry
@@ -162,10 +162,11 @@ def load_global_skill_registry(
     cache_root = DataDirectoryLayout(storage.data_dir).skill_documentation
     condition = (source, cache_root)
     try:
-        if reset_documentation_cache:
-            clear_documentation_cache(cache_root)
         docs_path = compose_vbot_docs(
-            source, cache_root, extensions.records() if extensions is not None else ()
+            source,
+            cache_root,
+            extensions.records() if extensions is not None else (),
+            bootstrap=reset_documentation_cache,
         )
     except (OSError, PackageError) as error:
         # A failed build never selects a previous generation. The original

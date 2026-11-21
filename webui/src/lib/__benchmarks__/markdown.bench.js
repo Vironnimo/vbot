@@ -13,7 +13,10 @@
 // code fence) still hit the cache as they do in the app.
 import { bench } from 'vitest';
 
-import { renderMarkdownStreamingDocument } from '../markdown.js';
+import {
+  createMarkdownStreamRenderer,
+  renderMarkdownStreamingDocument,
+} from '../markdown.js';
 import {
   benchName,
   benchOptions,
@@ -46,10 +49,11 @@ for (const [label, size] of SIZES) {
       chunk_chars: CHUNK_CHARS,
     }),
     () => {
+      const render = createMarkdownStreamRenderer();
       const streamed = uniqueSource(source);
       const start = streamed.length - source.length;
       for (let end = start + CHUNK_CHARS; ; end += CHUNK_CHARS) {
-        renderMarkdownStreamingDocument(streamed.slice(0, end));
+        render(streamed.slice(0, end));
         if (end >= streamed.length) break;
       }
     },

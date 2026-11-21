@@ -152,11 +152,25 @@ class TestCreateEvent:
         with pytest.raises(CalendarValidationError, match="IANA"):
             CalendarService(tmp_path, tz="Mars/Olympus")
 
-    def test_events_keep_the_zone_of_their_creation(self, tmp_path: Path) -> None:
+    def test_events_keep_the_zone_of_their_creation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         service = CalendarService(tmp_path, tz="UTC")
-        before = service.create_event(title="Before", start="2026-01-15T09:00:00")
+        input_time = service._input_time
 
-        service.set_timezone("Europe/Berlin")
+        def change_timezone_after_start(value, field_name, *args, **kwargs):
+            result = input_time(value, field_name, *args, **kwargs)
+            if field_name == "start":
+                service.set_timezone("Europe/Berlin")
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "_input_time", change_timezone_after_start)
+            before = service.create_event(
+                title="Before", start="2026-01-15T09:00:00", end="2026-01-15T10:00:00Z"
+            )
+        assert before.end_utc == "2026-01-15T10:00:00+00:00"
+
         after = service.create_event(title="After", start="2026-01-15T09:00:00")
 
         assert service.system_timezone_name() == "Europe/Berlin"

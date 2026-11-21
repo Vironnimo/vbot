@@ -64,6 +64,12 @@ _MEMBER_REVIEW_FORK = (
 _ENTRY_COLUMNS = (
     "e.entry_key, e.entry_id, e.kind, e.state, e.subject_id, e.project_id, e.agent_id, "
     "e.owner_name, e.archived_at, e.retention_start, e.origin, e.cleanup_pending, e.facts_json, "
+    f"CASE e.kind WHEN '{ARCHIVE_KIND_SESSION}' THEN ("
+    "SELECT COALESCE(NULLIF(s.title, ''), s.auto_title) FROM archive_entry_sessions AS m "
+    "JOIN sessions AS s ON s.session_key = m.session_key WHERE m.entry_key = e.entry_key "
+    "ORDER BY m.session_key LIMIT 1) "
+    f"WHEN '{ARCHIVE_KIND_OWNER_GROUP}' THEN (SELECT g.title FROM temporary_group_titles AS g "
+    "WHERE g.owner_name = e.owner_name AND g.group_id = e.subject_id) END AS subject_title, "
     "(SELECT COUNT(*) FROM archive_entry_sessions AS m WHERE m.entry_key = e.entry_key) "
     "AS session_count, "
     "(SELECT COUNT(*) FROM archive_entry_sessions AS m "
@@ -188,6 +194,7 @@ def _entries(
             trees=tuple(trees[int(row["entry_key"])]),
             session_count=int(row["session_count"]),
             review_fork_count=int(row["review_fork_count"]),
+            subject_title=row["subject_title"],
         )
         for row in rows
     )

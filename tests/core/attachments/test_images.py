@@ -18,7 +18,12 @@ from core.attachments.images import ImageConversionError, ImageConverter, ImageT
 def raster(format: str, mode: str = "RGB", **options) -> bytes:
     image = Image.new(mode, (12, 8), (21, 105, 230, 70) if mode == "RGBA" else (21, 105, 230))
     stream = io.BytesIO()
-    image.save(stream, format=format, **options)
+    if format == "HEIF":
+        from pillow_heif import from_pillow
+
+        from_pillow(image).save(stream, **options)
+    else:
+        image.save(stream, format=format, **options)
     return stream.getvalue()
 
 

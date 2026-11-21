@@ -3,6 +3,7 @@ import {
   agentUnreadResults,
   visibleTimelineItemsForRender,
 } from '$lib/chatState.js';
+import { timelineToolRuns } from '$lib/chatTimeline.js';
 import { SESSION_WAITING, agentSessionActivity } from '$lib/sessionActivity.js';
 import {
   backgroundTasks,
@@ -22,6 +23,11 @@ export function createChatViewActivity(context) {
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
+  let previousToolRuns = [];
+  const toolRuns = $derived.by(() => {
+    previousToolRuns = timelineToolRuns(activeTimelineItems, previousToolRuns);
+    return previousToolRuns;
+  });
   // The live state of the displayed Session's own background commands; a
   // fork's History names its source's commands, which never run for it.
   let displayedCommandStatuses = $derived(
@@ -51,7 +57,7 @@ export function createChatViewActivity(context) {
     return (
       Object.keys(displayedSubAgentCommands).length > 0 ||
       backgroundTasks(
-        activeTimelineItems,
+        toolRuns,
         chatState.subAgentStatuses,
         target.activeSessionState?.backgroundCommandStatuses,
         displayedCommandStatuses,
@@ -170,6 +176,9 @@ export function createChatViewActivity(context) {
   return {
     get timelineItems() {
       return activeTimelineItems;
+    },
+    get toolRuns() {
+      return toolRuns;
     },
     get commandStatuses() {
       return displayedCommandStatuses;

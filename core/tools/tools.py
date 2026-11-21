@@ -249,6 +249,13 @@ def _checked_arguments(
             )
         if tool.argument_normalizer is not None:
             arguments = tool.argument_normalizer(copy.deepcopy(arguments))
+        if (
+            tool.coerce_arguments
+            and not tool.handler_validates_arguments
+            and not tool.unadvertised_parameters
+            and contract.accepts_without_repair(arguments)
+        ):
+            return copy.deepcopy(arguments), ()
         normalized = contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
         if not tool.handler_validates_arguments:
             unadvertised = tool.unadvertised_parameters

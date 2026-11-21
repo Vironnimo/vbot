@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
+from functools import partial
 from typing import Any
 
 from core.model_tasks import (
@@ -16,10 +18,11 @@ from core.settings import (
     settings_values_equal,
 )
 from core.utils.logging import get_logger
-from server.rpc._mutations import serialized_mutation
+from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.settings_methods import SETTINGS_RPC_WORKERS
 from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
@@ -29,6 +32,20 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("server.rpc.settings")
+
+
+async def _change_bindings(
+    state: Any, change: Callable[[], JsonObject]
+) -> tuple[JsonObject, JsonObject]:
+    def persist() -> tuple[JsonObject, JsonObject, JsonObject, JsonObject]:
+        before = state.runtime.storage.load_settings()
+        previous = state.runtime.model_tasks.settings()
+        updated = change()
+        return before, previous, updated, state.runtime.storage.load_settings()
+
+    before, previous, updated, after = await SETTINGS_RPC_WORKERS.run(persist)
+    await state.runtime.apply_settings_change(before, after)
+    return previous, updated
 
 
 def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
@@ -55,11 +72,9 @@ async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     try:
-        previous_settings = state.runtime.storage.load_settings()
-        previous = state.runtime.model_tasks.settings()
-        model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"], base=base)
-        await state.runtime.apply_settings_change(
-            previous_settings, state.runtime.storage.load_settings()
+        previous, model_tasks = await _change_bindings(
+            state,
+            partial(state.runtime.model_tasks.update, settings_update["model_tasks"], base=base),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -175,15 +190,14 @@ async def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObjec
     if not set_values and not normalized_unsets:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "at least one option must be set or unset")
     try:
-        previous_settings = state.runtime.storage.load_settings()
-        previous = state.runtime.model_tasks.settings()
-        model_tasks = state.runtime.model_tasks.patch_options(
-            task_type,
-            set_values=set_values,
-            unset_names=normalized_unsets,
-        )
-        await state.runtime.apply_settings_change(
-            previous_settings, state.runtime.storage.load_settings()
+        previous, model_tasks = await _change_bindings(
+            state,
+            partial(
+                state.runtime.model_tasks.patch_options,
+                task_type,
+                set_values=set_values,
+                unset_names=normalized_unsets,
+            ),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -317,6 +331,13 @@ async def _local_unload(state: Any, params: JsonObject) -> JsonObject:
     return {**_local_memory_status(state, {}), "released": result["released"]}
 
 
+def _binding_read(handler: Callable[[Any, JsonObject], JsonObject]) -> RpcMethodHandler:
+    async def read(state: Any, params: JsonObject) -> JsonObject:
+        return await SETTINGS_RPC_WORKERS.run(handler, state, params)
+
+    return serialized_read(read, lock_attribute="_settings_mutation_lock")
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered task-model RPC handlers."""
     return {
@@ -324,13 +345,13 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "speech.local_unload": _local_speech_unload,
         "speech.local_setup_restart": _local_speech_setup_restart,
         "speech.prepare_transcription": _speech_prepare_transcription,
-        "task_model.settings": _task_model_settings,
+        "task_model.settings": _binding_read(_task_model_settings),
         "task_model.update": serialized_mutation(
             _task_model_update, lock_attribute="_settings_mutation_lock"
         ),
-        "task_model.list_targets": _task_model_list_targets,
-        "task_model.status": _task_model_status,
-        "task_model.options": _task_model_options,
+        "task_model.list_targets": _binding_read(_task_model_list_targets),
+        "task_model.status": _binding_read(_task_model_status),
+        "task_model.options": _binding_read(_task_model_options),
         "task_model.patch_options": serialized_mutation(
             _task_model_patch_options, lock_attribute="_settings_mutation_lock"
         ),

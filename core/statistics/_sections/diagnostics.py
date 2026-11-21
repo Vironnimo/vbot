@@ -127,12 +127,18 @@ def _cache(context: ReportContext) -> JsonObject:
     # Worst hit rate first; equal rates surface the bigger Session first.
     sessions.sort(key=lambda row: (row["hit_rate"], -row["input_tokens"], row["session_id"]))
     # Largest read shortfall first, then Session id, time and position.
-    breaks: list[tuple[tuple[int, str, int, int, int], JsonObject]] = []
-    for key, seq, instant, model, previous_input, read in context.query(
+    breaks: list[JsonObject] = []
+    for key, instant, model, previous_input, read in context.query(
         f"""
-        SELECT b.session_key, b.seq, b.instant, b.model_key, b.previous_input_tokens,
+        SELECT b.session_key, b.instant, b.model_key, b.previous_input_tokens,
             b.cache_read_tokens
-        FROM agg_cache_breaks b WHERE {context.instant_condition("b.instant")}
+        FROM agg_cache_breaks b
+        JOIN {context.sessions_table} listed ON listed.session_key = b.session_key
+        JOIN stat_sessions s ON s.session_key = b.session_key
+        WHERE {context.instant_condition("b.instant")}
+        ORDER BY b.cache_read_tokens - b.previous_input_tokens, s.session_id,
+            b.instant, b.session_key, b.seq
+        LIMIT {TOP_CACHE_BREAK_INCIDENTS}
         """
     ):
         session = context.by_key.get(key)
@@ -147,15 +153,13 @@ def _cache(context: ReportContext) -> JsonObject:
             "cache_read_tokens": read,
             "session_title": session.title,
         }
-        order = (read - previous_input, session.address.session_id, instant, key, seq)
-        breaks.append((order, incident))
-    breaks.sort(key=lambda item: item[0])
+        breaks.append(incident)
     return {
         "lowest_hit_rate_sessions": sessions[:TOP_CACHE_SESSIONS],
         "suspected_breaks": {
             "evaluated_turns": evaluated,
             "suspected_turns": suspected,
-            "incidents": [incident for _order, incident in breaks[:TOP_CACHE_BREAK_INCIDENTS]],
+            "incidents": breaks,
         },
     }
 

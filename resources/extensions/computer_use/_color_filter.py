@@ -66,9 +66,15 @@ def measure(references: Iterable[Reference], known: Matrix | None = None) -> Mat
     votes: list[_Pairs] = []
     for reference in references:
         pairs = _pairs(reference)
-        if _weight(pairs) < _MIN_PIXELS or len({drawn for drawn, _, _ in pairs}) < _MIN_COLORS:
+        total = _weight(pairs)
+        if total < _MIN_PIXELS or len({drawn for drawn, _, _ in pairs}) < _MIN_COLORS:
             continue  # too little evidence to vote, for example a window that drew nothing
-        if _share(IDENTITY, pairs) >= _CLEAN_SHARE:
+        unchanged = sum(
+            count
+            for (r, g, b), (sr, sg, sb), count in pairs
+            if abs(r - sr) <= _TOLERANCE and abs(g - sg) <= _TOLERANCE and abs(b - sb) <= _TOLERANCE
+        )
+        if unchanged / total >= _CLEAN_SHARE:
             return None
         votes.append(pairs)
     if not votes:
@@ -99,7 +105,11 @@ def remove(image: Image.Image, matrix: Matrix) -> Image.Image:
 
 def _pairs(reference: Reference) -> _Pairs:
     """Distinct informative (drawn, seen) colour pairs with pixel counts, on a regular grid."""
-    drawn, seen = reference.drawn.convert("RGB"), reference.seen.convert("RGB")
+    drawn, seen = reference.drawn, reference.seen
+    if drawn.mode != "RGB":
+        drawn = drawn.convert("RGB")
+    if seen.mode != "RGB":
+        seen = seen.convert("RGB")
     if drawn.size != seen.size:
         raise ValueError("A reference needs equally sized images.")
     width, height = drawn.size
@@ -109,6 +119,18 @@ def _pairs(reference: Reference) -> _Pairs:
         drawn = drawn.resize(size, Image.Resampling.NEAREST)
         seen = seen.resize(size, Image.Resampling.NEAREST)
     a, b = drawn.tobytes(), seen.tobytes()
+    if a == b:
+        # A sufficient sample of an exact match vetoes correction. A dark or
+        # low-colour reference still needs to abstain so other windows can vote.
+        histogram: Counter[_Color] = Counter()
+        total = 0
+        for color in zip(a[0::3], a[1::3], a[2::3], strict=True):
+            if max(color) >= _INFORMATIVE:
+                histogram[color] += 1
+                total += 1
+                if total >= _MIN_PIXELS and len(histogram) >= _MIN_COLORS:
+                    break
+        return [(color, color, count) for color, count in histogram.items()]
     counts = Counter(zip(a[0::3], a[1::3], a[2::3], b[0::3], b[1::3], b[2::3], strict=True))
     pairs = [
         ((key[0], key[1], key[2]), (key[3], key[4], key[5]), count)

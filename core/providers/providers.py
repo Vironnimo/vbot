@@ -525,7 +525,7 @@ def resolve_effective_context_window(
     *,
     model_metadata: Mapping[str, Any] | None = None,
     model_key: str = "",
-    local_context_windows: Mapping[str, Any] | None = None,
+    local_context_windows: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None = None,
 ) -> int:
     """Resolve the context window vBot actually budgets against.
 
@@ -550,13 +550,14 @@ def resolve_effective_context_window(
         provider_config: The model's provider config (for the default chain).
         model_metadata: The model's ``metadata`` blob (locality flag source).
         model_key: The settings key ``"<provider>/<model_id>"``.
-        local_context_windows: The live ``local_models.context_windows`` map.
+        local_context_windows: Live local Context windows, or a reader called for local Models only.
     """
 
     if not model_is_local(model_metadata):
         return resolve_context_window(model_context_window, provider_config)
 
-    configured = (local_context_windows or {}).get(model_key)
+    windows = local_context_windows() if callable(local_context_windows) else local_context_windows
+    configured = (windows or {}).get(model_key)
     if isinstance(configured, int) and not isinstance(configured, bool) and configured > 0:
         return configured
     return min(

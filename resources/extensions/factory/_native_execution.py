@@ -82,10 +82,8 @@ class NativeFactoryExecution:
         return {item["group_id"] for item in await self.all_executions()}
 
     async def running(self) -> int:
-        return sum(
-            item["state"] in {"admitting", "running", "draining"}
-            for item in await self.all_executions()
-        )
+        total, _, _ = await self.store.active_execution_counts()
+        return int(total)
 
     async def _find(self, group_id: str) -> Json:
         # The opaque execution id is the sole native group suffix, never a
@@ -106,17 +104,20 @@ class NativeFactoryExecution:
         return factory, member, scope
 
     async def _valid(self, execution: Json) -> bool:
+        return await self._current_scope(execution) is not None
+
+    async def _current_scope(self, execution: Json) -> tuple[Json, Json, Json] | None:
         if self.quiescing or execution["state"] in {"closed", "cancelled", "failed", "draining"}:
-            return False
+            return None
         factory, member, scope = await self._scope(execution)
         if factory["state"] != "active" or member["state"] != "active":
-            return False
+            return None
         if execution["runtime"].get("member_revision") != member["revision"]:
-            return False
+            return None
         if execution["runtime"].get("factory_revision") != factory["revision"]:
-            return False
+            return None
         if execution["kind"] in {"task", "review"}:
-            return bool(
+            if not (
                 scope["epoch"] == execution["epoch"]
                 and scope["state"] == ("review" if execution["kind"] == "review" else "working")
                 and (
@@ -125,14 +126,15 @@ class NativeFactoryExecution:
                     else scope["assignee_id"]
                 )
                 == member["id"]
-            )
-        if scope["state"] != "open":
-            return False
-        if scope.get("task_id"):
+            ):
+                return None
+        elif scope["state"] != "open":
+            return None
+        elif scope.get("task_id"):
             task = await self.store.get_task(scope["task_id"])
             if task["state"] in {"paused", "cancelled"}:
-                return False
-        return True
+                return None
+        return factory, member, scope
 
     async def actor(self, context: ToolContext) -> Json:
         owner = context.execution_owner
@@ -143,8 +145,9 @@ class NativeFactoryExecution:
         execution = await self._find(owner.group_id)
         runtime = execution["runtime"]
         address = runtime.get("address", {})
+        current = await self._current_scope(execution)
         if (
-            not await self._valid(execution)
+            current is None
             or execution["state"] != "running"
             or owner.epoch != runtime.get("group_epoch")
             or owner.participant_id != execution["participant_id"]
@@ -154,7 +157,7 @@ class NativeFactoryExecution:
             or context.run_id != runtime.get("run_id")
         ):
             raise FactoryError("stale_run", "This Factory execution is no longer current.")
-        factory, member, scope = await self._scope(execution)
+        factory, member, scope = current
         return {
             "factory": factory,
             "member": member,
@@ -185,8 +188,18 @@ class NativeFactoryExecution:
                 event="scope_changed",
             )
             await self._publish(resource, record)
+        if resource not in {"tasks", "members", "factories", "topics"}:
+            self.service.request_schedule()
+            return
+        factory_id = record["id"] if resource == "factories" else record["factory_id"]
+        executions = await self.all_executions(factory_id)
         if previous is not None and resource in {"factories", "members"}:
-            factory_id = record["id"] if resource == "factories" else record["factory_id"]
+            pending_by_task: dict[tuple[str, int], list[Json]] = {}
+            for execution in executions:
+                pending = execution["runtime"].get("pending")
+                if execution["kind"] == "task" and pending:
+                    key = (execution["scope_id"], execution["epoch"])
+                    pending_by_task.setdefault(key, []).append(pending)
             for task in await self.all_tasks(factory_id):
                 if (
                     resource == "members"
@@ -203,15 +216,9 @@ class NativeFactoryExecution:
                 task_runtime = deepcopy(task["runtime"])
                 wakes = task_runtime.setdefault("wakes", [])
                 transferred = task_runtime.setdefault("transferred_inputs", [])
-                for execution in await self.all_executions(factory_id):
-                    pending = execution["runtime"].get("pending")
-                    if (
-                        execution["kind"] == "task"
-                        and execution["scope_id"] == task["id"]
-                        and execution["epoch"] == task["epoch"]
-                        and pending
-                        and pending["id"] not in transferred
-                        and not any(wake["id"] == pending["id"] for wake in wakes)
+                for pending in pending_by_task.get((task["id"], task["epoch"]), []):
+                    if pending["id"] not in transferred and not any(
+                        wake["id"] == pending["id"] for wake in wakes
                     ):
                         wakes.append({"id": pending["id"], "content": pending["content"]})
                         transferred.append(pending["id"])
@@ -240,35 +247,32 @@ class NativeFactoryExecution:
                         task["id"], patch, actor="factory", event="scope_changed"
                     )
                     await self._publish("tasks", task)
-        if resource in {"tasks", "members", "factories", "topics"}:
-            for execution in await self.all_executions(
-                record.get("factory_id") or (record["id"] if resource == "factories" else None)
+        for execution in executions:
+            archive = (resource == "factories" and record["state"] == "archived") or (
+                resource == "members"
+                and record["state"] == "retired"
+                and execution["member_id"] == record["id"]
+            )
+            if archive or (
+                execution["state"]
+                not in {
+                    "closed",
+                    "cancelled",
+                    "failed",
+                    "draining",
+                }
+                and not await self._valid(execution)
             ):
-                archive = (resource == "factories" and record["state"] == "archived") or (
-                    resource == "members"
-                    and record["state"] == "retired"
-                    and execution["member_id"] == record["id"]
+                await self.store.change_execution(
+                    execution["id"], {"state": "draining"}, actor="factory"
                 )
-                if archive or (
-                    execution["state"]
-                    not in {
-                        "closed",
-                        "cancelled",
-                        "failed",
-                        "draining",
-                    }
-                    and not await self._valid(execution)
-                ):
-                    await self.store.change_execution(
-                        execution["id"], {"state": "draining"}, actor="factory"
+                self.service.spawn(
+                    self.sessions._close(
+                        execution,
+                        archive=archive,
+                        wait=resource == "tasks" and record["state"] in {"done", "review"},
                     )
-                    self.service.spawn(
-                        self.sessions._close(
-                            execution,
-                            archive=archive,
-                            wait=resource == "tasks" and record["state"] in {"done", "review"},
-                        )
-                    )
+                )
         if (
             resource == "tasks"
             and record["state"] == "done"
@@ -489,11 +493,9 @@ class NativeFactoryExecution:
         await self._schedule_topics(limit)
 
     async def _capacity(self, factory: Json, member: Json, limit: int) -> bool:
-        active = [
-            item
-            for item in await self.all_executions()
-            if item["state"] in {"running", "admitting", "draining"}
-        ]
+        total, factory_active, member_active = await self.store.active_execution_counts(
+            factory["id"], member["id"]
+        )
         cards = await self.service.records().list_cards()
         factory_workflows = member_workflows = 0
         for card in cards:
@@ -504,11 +506,9 @@ class NativeFactoryExecution:
                 factory_workflows += 1
                 member_workflows += scope[0]["assignee_id"] == member["id"]
         return bool(
-            len(active) + sum(self.service.execution.running(card) for card in cards) < limit
-            and sum(item["factory_id"] == factory["id"] for item in active) + factory_workflows
-            < factory.get("capacity", limit)
-            and sum(item["member_id"] == member["id"] for item in active) + member_workflows
-            < member.get("capacity", 1)
+            total + sum(self.service.execution.running(card) for card in cards) < limit
+            and factory_active + factory_workflows < factory.get("capacity", limit)
+            and member_active + member_workflows < member.get("capacity", 1)
         )
 
     @property

@@ -103,6 +103,7 @@ class ArchiveEntry:
     trees: tuple[ArchiveTree, ...]
     session_count: int
     review_fork_count: int
+    subject_title: str | None = None
 
     @property
     def ref(self) -> ArchiveEntryRef:

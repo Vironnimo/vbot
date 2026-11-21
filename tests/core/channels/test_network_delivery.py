@@ -49,6 +49,9 @@ async def test_slack_upload_flow_threads_and_auth(tmp_path: Path) -> None:
         ]
         assert json.loads(h.requests[1].content)["thread_ts"] == "111.2"
         assert json.loads(h.requests[-1].content)["thread_ts"] == "111.2"
+        await h.adapter.send("follow-up", "C1")
+        assert [r.url.path for r in h.requests[5:]] == ["/api/chat.postMessage"]
+        assert "thread_ts" not in json.loads(h.requests[-1].content)
     finally:
         await h.adapter.stop()
 

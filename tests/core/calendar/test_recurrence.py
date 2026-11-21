@@ -54,6 +54,11 @@ def test_rule_text_is_stored_in_one_form(
         ("2030-01-10", "FREQ=DAILY;BYHOUR=9", "an all-day event repeats on days"),
         # dateutil alone would look for a 30 February until the year 9999.
         ("2030-01-10T09:00", "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30", "produces no occurrence"),
+        (
+            "2030-01-10T09:00",
+            "FREQ=DAILY;INTERVAL=997;BYMONTH=2;BYMONTHDAY=-30",
+            "produces no occurrence",
+        ),
         ("2030-01-10T09:00", "FREQ=DAILY;UNTIL=20300101", "before its first occurrence"),
         ("2026-03-29T02:30", "FREQ=DAILY;UNTIL=20260329T011500Z", "before its first occurrence"),
         (

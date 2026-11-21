@@ -129,10 +129,12 @@ class AutomationReferences:
             )
         return tuple(sorted(references, key=lambda reference: reference.label))
 
-    def session_references(self, address: SessionAddress) -> tuple[AutomationReference, ...]:
-        """Return the live automations that start their Runs in ``address``."""
-        owner = (address.agent_id, address.project_id, address.session_id)
-        return self._live(lambda agent, project, session: (agent, project, session) == owner)
+    def session_references(
+        self, address: SessionAddress, *related: SessionAddress
+    ) -> tuple[AutomationReference, ...]:
+        """Return live automations targeting any of the named Sessions in one scan."""
+        owners = {(item.agent_id, item.project_id, item.session_id) for item in (address, *related)}
+        return self._live(lambda agent, project, session: (agent, project, session) in owners)
 
     def agent_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
         """Return the Skill names the live automations of the Identity Agent ``agent_id`` trigger.

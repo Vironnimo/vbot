@@ -101,7 +101,7 @@ class _Collector:
         self.files[name] = PackageFile(content, bool(mode & 0o111))
 
 
-def read_directory(root: Path) -> dict[str, PackageFile]:
+def read_directory(root: Path, *, reject_excluded: bool = False) -> dict[str, PackageFile]:
     """Copy only ordinary files; never follow links or recurse into generated trees."""
     collector = _Collector()
     if is_redirect(root):
@@ -113,6 +113,8 @@ def read_directory(root: Path) -> dict[str, PackageFile]:
                 path = Path(entry.path)
                 relative = path.relative_to(root).as_posix()
                 if excluded(relative):
+                    if reject_excluded:
+                        raise PackageError(f"Unexpected generated package path: {relative}")
                     continue
                 if is_redirect(path):
                     raise PackageError(f"Skill source contains a symlink or junction: {relative}")

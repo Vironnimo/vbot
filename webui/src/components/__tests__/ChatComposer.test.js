@@ -131,6 +131,8 @@ describe('ChatComposer', () => {
       expect(getDraft('agent::second')).toBe('second');
       // A page may prepare the local draft, but cannot submit it as human
       // input or run Slash Commands through the native Send callback.
+      await vi.dynamicImportSettled();
+      flushSync();
       const frame = document.querySelector('iframe');
       const child = frame.contentWindow;
       const sent = vi.spyOn(child, 'postMessage');

@@ -16,7 +16,6 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1082,7 +1081,7 @@ async def test_background_commands_are_never_terminals(
     terminal share one Runtime; only the command's process is a fake.
     """
     launcher = FakeLauncher()
-    monkeypatch.setattr(_bootstrap, "CommandManager", partial(CommandManager, launcher=launcher))
+    monkeypatch.setattr(_bootstrap, "PipeLauncher", lambda: launcher)
     runtime = Runtime(Config(data_dir=tmp_path), safe_startup_mode="test")
     runtime.start()
     try:
