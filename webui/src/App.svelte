@@ -842,7 +842,7 @@
         {...sessionViewEvents}
         onToast={desktop.showToast}
         active={activeViewId === 'chat'}
-        sharedAgents={selection.agents}
+        sharedRoster={selection}
         sharedSelectedAgentId={selection.selectedAgentId}
         chatWidth={appearancePrefs.chatWidth}
         projects={selection.projects}
@@ -857,6 +857,7 @@
         onAgentsChanged={selection.syncAgents}
         onAgentSelected={selection.selectAgent}
         navigateToSubAgent={chatNavigation.navigateToSubAgent}
+        preloadSession={chatNavigation.linkedSession}
         pendingSessionNavigation={chatNavigation.pendingSessionNavigation}
         onSessionNavigation={chatNavigation.handleSessionNavigation}
         {sessionDeletion}

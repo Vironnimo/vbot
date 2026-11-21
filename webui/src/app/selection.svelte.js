@@ -65,6 +65,7 @@ export function createAppSelection() {
 
   let agents = $state([]);
   let agentsLoaded = $state(false);
+  let agentsError = $state(null);
   let agentsLoadRequestId = 0;
   let agentsSnapshotVersion = 0;
 
@@ -255,6 +256,7 @@ export function createAppSelection() {
     agentsSnapshotVersion += 1;
     agents = Array.isArray(nextAgents) ? nextAgents : [];
     agentsLoaded = true;
+    agentsError = null;
     if (
       selectedAgentId &&
       !agents.some((agent) => agent.id === selectedAgentId)
@@ -298,11 +300,8 @@ export function createAppSelection() {
     agentsRefreshToken += 1;
   };
 
-  // Re-fetch the agent roster after a `resource_changed(kind:"agents")` signal
-  // (the migrated agent-CRUD reload — the channel carries no agent data, so we
-  // re-fetch agent.list). `refreshAgents` bumps `agentsRefreshToken`, so the
-  // Agents and Chat surfaces reload exactly as they did for the old agent.*
-  // events.
+  // Read the canonical roster once for the shell and its Chat areas. Other
+  // Agent settings surfaces use the refresh token to invalidate their details.
   const reloadAgentsFromServer = async () => {
     const requestId = ++agentsLoadRequestId;
     while (requestId === agentsLoadRequestId) {
@@ -318,16 +317,15 @@ export function createAppSelection() {
       } catch (error) {
         if (requestId !== agentsLoadRequestId) return;
         if (snapshotVersion !== agentsSnapshotVersion) continue;
+        agentsError = error?.message || String(error);
         console.warn('Agent list refresh failed:', error);
         return;
       }
     }
   };
 
-  // The first roster, read at app mount. It is no change, so it bumps no
-  // refresh token: the surfaces mounted with the app read their own data. A
-  // roster a child view published meanwhile (Chat reads its own when it
-  // mounts) stands instead of this read.
+  // The shell publishes the first roster to its Chat areas without invalidating
+  // their settings. A roster published while seeding supersedes this read.
   const seedAgentsFromServer = async () => {
     const requestId = ++agentsLoadRequestId;
     const snapshotVersion = agentsSnapshotVersion;
@@ -340,7 +338,11 @@ export function createAppSelection() {
         syncAgents(result.agents);
       }
     } catch (error) {
-      if (requestId === agentsLoadRequestId) {
+      if (
+        requestId === agentsLoadRequestId &&
+        snapshotVersion === agentsSnapshotVersion
+      ) {
+        agentsError = error?.message || String(error);
         console.warn('Agent list load failed:', error);
       }
     }
@@ -357,6 +359,9 @@ export function createAppSelection() {
     },
     get agentsLoaded() {
       return agentsLoaded;
+    },
+    get agentsError() {
+      return agentsError;
     },
     get selectedAgentId() {
       return selectedAgentId;

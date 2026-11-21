@@ -193,6 +193,7 @@ export function createAppController({
   // on every event made each one cost the whole window.
   const runEvents = createRunEventFeed();
   let unavailableNoticeTimer = null;
+  let refreshRosterOnHello = false;
   let restoredNoticeTimer = null;
 
   async function loadBackgroundActivity() {
@@ -302,6 +303,7 @@ export function createAppController({
     ) {
       state.serverNoticeState = SERVER_NOTICE_RESTORED;
       state.serverRecoveryGeneration += 1;
+      refreshRosterOnHello = true;
       restoredNoticeTimer = setTimeout(() => {
         restoredNoticeTimer = null;
         if (state.connectionState.status === CONNECTION_STATUS_CONNECTED) {
@@ -392,8 +394,11 @@ export function createAppController({
         state.skillsRefreshToken += 1;
         state.archiveRefreshToken += 1;
         onPortalsChanged(null);
-        refreshOwners.push(onLoadProjects, onReloadAgents);
+        refreshOwners.push(onLoadProjects);
+        refreshRosterOnHello = true;
       }
+      if (refreshRosterOnHello) refreshOwners.push(onReloadAgents);
+      refreshRosterOnHello = false;
       // Recovery owners are independent. Optional projections cannot hold up
       // resource invalidation or another owner's refresh, even on failure.
       await Promise.all(

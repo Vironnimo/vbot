@@ -89,6 +89,7 @@ export function createChatHistory({
   const runHistoryLoads = new Map();
   const olderHistoryLoads = new Map();
   let displayedHistoryRequest = null;
+  let preparedHistory = null;
 
   // Unchanged immutable records survive page loads, so charge them at their
   // last measured size without serializing the entire transcript again.
@@ -248,14 +249,69 @@ export function createChatHistory({
     return result;
   }
 
-  // Only a read without `after` carries reflection Runs; live Run events keep
-  // them current in between, so an incremental read leaves them alone.
-  async function loadHistoryForSession(agentId, sessionId) {
-    const sessionState = ensureSessionState(chatState, agentId, sessionId);
+  function startHistoryRead(sessionState) {
     const request = beginHistoryRequest(sessionState);
+    // Only a read without `after` carries reflection Runs.
     const reflectionRequest = sessionState.historyAfter
       ? null
       : reflections.beginRequest(sessionState);
+    return {
+      sessionState,
+      request,
+      reflectionRequest,
+      runId: sessionState.currentRun?.runId ?? '',
+      result: readCurrentHistory(sessionState),
+    };
+  }
+
+  // The URL already names the exact Session. Read its first page while the
+  // shell resolves the selectable owner. Only the eventual navigation can
+  // display the result, surface its errors, or attach a Run stream.
+  function prepareLinkedHistory(link) {
+    if (
+      link &&
+      preparedHistory?.sessionState.agentId === link.agentId &&
+      preparedHistory.sessionState.sessionId === link.sessionId
+    )
+      return;
+    preparedHistory = null;
+    if (!link?.preload) return;
+    const session = ensureSessionState(chatState, link.agentId, link.sessionId);
+    if (session.historyLoaded || historyLoadVersions.has(session.key)) return;
+    preparedHistory = startHistoryRead(session);
+    // The destination may be abandoned before the promise is consumed.
+    preparedHistory.result.catch(() => {});
+  }
+
+  // A change to the destination before its owner has been resolved makes the
+  // earlier page obsolete. The eventual navigation reads it again.
+  function invalidatePreparedHistory(target) {
+    if (!preparedHistory) return;
+    const { agentId, sessionId } = preparedHistory.sessionState;
+    if (
+      !target ||
+      target.all ||
+      (target.agentAddress === agentId && target.sessionId === sessionId)
+    ) {
+      preparedHistory = null;
+    }
+  }
+
+  async function loadHistoryForSession(agentId, sessionId) {
+    const sessionState = ensureSessionState(chatState, agentId, sessionId);
+    let read;
+    if (preparedHistory?.sessionState === sessionState) {
+      if (
+        preparedHistory.request.isLatest() &&
+        sessionState.historySnapshotVersion ===
+          preparedHistory.request.snapshotVersion
+      ) {
+        read = preparedHistory;
+      }
+      preparedHistory = null;
+    }
+    read ??= startHistoryRead(sessionState);
+    const { request, reflectionRequest } = read;
     const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
@@ -269,10 +325,15 @@ export function createChatHistory({
     void syncSessionQueue(sessionState);
     try {
       let history;
-      let staleRunId;
+      let staleRunId = read.runId;
+      let result = read.result;
       do {
-        staleRunId = sessionState.currentRun?.runId ?? '';
-        history = await readCurrentHistory(sessionState);
+        if (!result) {
+          staleRunId = sessionState.currentRun?.runId ?? '';
+          result = readCurrentHistory(sessionState);
+        }
+        history = await result;
+        result = null;
         if (
           !isLatestRequest() ||
           sessionState.historySnapshotVersion !== request.snapshotVersion
@@ -505,6 +566,8 @@ export function createChatHistory({
   }
 
   return {
+    prepareLinkedHistory,
+    invalidatePreparedHistory,
     loadHistoryForSession,
     reconcileRunSession,
     loadOlderHistory,
@@ -514,6 +577,7 @@ export function createChatHistory({
       supersedeRenamedSessionKey(historyLoadVersions, oldKey, newKey);
     },
     destroy() {
+      preparedHistory = null;
       historyLoadVersions.clear();
       displayedHistoryRequest = null;
       chatState.loadingHistory = false;

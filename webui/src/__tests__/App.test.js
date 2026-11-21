@@ -409,9 +409,7 @@ describe('App', () => {
     });
     const agentReads = () =>
       rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length;
-    const readsBefore = agentReads();
-    // Chat and the app shell each read the roster once when they mount.
-    expect(readsBefore).toBe(2);
+    expect(agentReads()).toBe(1);
 
     // The event carries no Agent data.
     await handlers.onEvent({
@@ -420,7 +418,8 @@ describe('App', () => {
       payload: { kind: 'agents' },
     });
 
-    expect(agentReads()).toBeGreaterThan(readsBefore);
+    flushSync();
+    expect(agentReads()).toBe(2);
   });
 
   it('refreshes schedule activity for Session changes only while jobs exist', async () => {
@@ -611,7 +610,7 @@ describe('App', () => {
     expect(document.querySelector('.toast.error')).toBe(toast);
   });
 
-  it('shows one global server notice across tabs and refreshes after reconnect', () => {
+  it('shows one global server notice across tabs and refreshes after reconnect', async () => {
     vi.useFakeTimers();
     const initialConnection = mountApp();
     expect(document.querySelector('.server-availability-notice')).toBeNull();
@@ -676,7 +675,12 @@ describe('App', () => {
     expect(
       document.querySelector('.app-shell__content')?.inert,
     ).toBeUndefined();
-    expect(agentReads()).toBeGreaterThan(agentReadsBeforeRecovery);
+    subscribeServerEventsMock.mock.calls.at(-1)[0].onEvent({
+      type: 'connection_ready',
+      active_runs: [],
+    });
+    await Promise.resolve();
+    expect(agentReads()).toBe(agentReadsBeforeRecovery + 1);
 
     vi.advanceTimersByTime(1400);
     flushSync();

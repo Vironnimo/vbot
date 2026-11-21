@@ -15,6 +15,13 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
   let chatRestoreRequestId = 0;
   let lastChatLocation = null;
   let initialChatProjectCatalogSettled = $state(false);
+  let acceptedLink = null;
+  const linkedSession = $derived.by(() => {
+    const { view, place, origin } = navigator.location;
+    return view === 'chat' && place[0] && place[1]
+      ? { agentId: place[0], sessionId: place[1], preload: origin !== 'view' }
+      : null;
+  });
 
   // A copied Project link has no selection metadata. Wait until its Team is
   // known before deciding whether it selects a member or views a hidden owner.
@@ -58,6 +65,7 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
         shown.sessionId === sessionId &&
         shown.subAgent === subAgent
       ) {
+        acceptedLink = linkedSession;
         return;
       }
       chatRestoreRequestId += 1;
@@ -94,9 +102,14 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
     if (
       replace &&
       activeViewId === 'chat' &&
-      chatLinkWaitingForProjects(navigator.location)
+      (chatLinkWaitingForProjects(navigator.location) ||
+        (linkedSession?.preload &&
+          linkedSession !== acceptedLink &&
+          (session.agentId !== linkedSession.agentId ||
+            session.sessionId !== linkedSession.sessionId)))
     )
       return false;
+    acceptedLink = linkedSession;
     const place = [session.agentId, session.sessionId];
     const extra = chatExtra(session.subAgent);
     return replace || activeViewId !== 'chat'
@@ -198,6 +211,9 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
   }
 
   return {
+    get linkedSession() {
+      return linkedSession;
+    },
     get shownSession() {
       return chatShownSession;
     },

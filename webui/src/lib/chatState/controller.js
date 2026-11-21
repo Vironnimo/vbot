@@ -131,13 +131,15 @@ export function createChatController({
   // which no Run event delivers.
   function applySessionInvalidations(entries) {
     activity.applySessionInvalidations(entries);
-    const { targets, lastId } = takeSessionInvalidations(
+    const { targets, lastId, overflowed } = takeSessionInvalidations(
       entries,
       lastHistoryInvalidationId,
     );
     lastHistoryInvalidationId = lastId;
+    if (overflowed) history.invalidatePreparedHistory();
     const reread = new Set();
     for (const target of targets) {
+      history.invalidatePreparedHistory(target);
       if (!target.historyAppended) continue;
       const sessionState =
         chatState.sessions[sessionKey(target.agentAddress, target.sessionId)];
@@ -614,6 +616,7 @@ export function createChatController({
       snapshot.replay_status === 'gap' ||
       snapshot.replay_status === 'epoch_changed';
     if (commandEndsMissed) {
+      history.invalidatePreparedHistory();
       childTasks.forgetLearnedCommandStatuses();
     }
     runStream.applyConnectionSnapshot(snapshot);
@@ -766,6 +769,7 @@ export function createChatController({
     getSubAgentTree: (...args) => operations.getSubAgentTree(...args),
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
+    prepareLinkedHistory: history.prepareLinkedHistory,
     loadAgents,
     loadCommandOutput,
     loadCommands,
