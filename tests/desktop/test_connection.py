@@ -985,6 +985,10 @@ def test_forgetting_a_sign_in_signs_out_without_pairing_again(rig: SignInRig) ->
 
 def test_removing_a_server_forgets_its_sign_in(rig: SignInRig) -> None:
     rig.pair_earlier()
+
+    assert rig.controller.remove_server(CLOUD_HOST, 443) is False
+    assert rig.store.get(CLOUD.origin) is not None
+
     rig.controller.add_server(CLOUD_HOST, 443)
 
     assert rig.controller.remove_server(CLOUD_HOST, 443) is True

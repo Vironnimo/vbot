@@ -497,7 +497,9 @@ class DesktopBridge:
         port = _coerce_port(port)
         display = _display(host, port)
         with self._connection_lock:
-            if display is not None and controller.is_remembered(host, port):
+            if display is not None:
+                if not controller.is_remembered(host, port):
+                    return {"removed": False}
                 self._permissions.remove_server(display)
             removed = controller.remove_server(host, port)
         return {"removed": removed}
