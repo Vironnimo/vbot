@@ -421,6 +421,14 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
     )
     starts: list[tuple[str | None, bool]] = []
     _patch_server_update(monkeypatch, install)
+    restore_snapshot = worker.restore_update_snapshot
+
+    def restore(directory, snapshot, **kwargs):
+        with pytest.raises(RuntimeError), server_control_claim(directory, 9999):
+            pytest.fail("automatic restore must exclude new server claims")
+        return restore_snapshot(directory, snapshot, **kwargs)
+
+    monkeypatch.setattr(worker, "restore_update_snapshot", restore)
 
     def start(_install, *, version_id=None, verification=False, breakaway=True):
         assert breakaway is False
@@ -429,8 +437,9 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
             _candidate_writes(data_dir)
             return SimpleNamespace(ok=False, message="candidate failed")
         # The previous version is probed and started only on the restored data.
-        assert stored_bodies(notes_spec(data_dir)) == ["before the update"]
-        assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
+        with server_control_claim(data_dir, install.server_port):
+            assert stored_bodies(notes_spec(data_dir)) == ["before the update"]
+            assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
         return _ok()
 
     monkeypatch.setattr(worker.processes, "start", start)
@@ -530,13 +539,51 @@ def test_a_candidate_that_changed_nothing_needs_no_restore(
     assert read_incident(data_dir, "notes") is None
 
 
-def _foreign_server_opens_the_data(data_dir: Path, stack: ExitStack) -> dict[str, int]:
-    # Another server on another port opened the same data directory.
-    stack.enter_context(server_control_claim(data_dir, 9999))
-    return {}
+@pytest.mark.parametrize("late_claim", [False, True], ids=["already-live", "after-claim-check"])
+def test_automatic_rollback_preserves_data_and_stays_stopped_with_a_foreign_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, late_claim: bool
+) -> None:
+    install = _install(tmp_path)
+    data_dir = _server_data(install)
+    operation = Operation(
+        id="upd_foreign", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    operation.save(install)
+    _patch_server_update(monkeypatch, install)
+    monkeypatch.setattr(worker, "_CLAIM_SETTLE_SECONDS", 0.0)
+    check_claims = worker._live_servers
+    starts: list[str | None] = []
+    with ExitStack() as stack:
+
+        def start(_install, *, version_id=None, **_kwargs):
+            starts.append(version_id)
+            assert version_id == "rel_new"
+            _candidate_writes(data_dir)
+            if not late_claim:
+                stack.enter_context(server_control_claim(data_dir, 9999))
+            return SimpleNamespace(ok=False, message="candidate failed")
+
+        def check(directory):
+            running = check_claims(directory)
+            if starts and late_claim:
+                stack.enter_context(server_control_claim(data_dir, 9999))
+            return running
+
+        monkeypatch.setattr(worker.processes, "start", start)
+        monkeypatch.setattr(worker, "_live_servers", check)
+        worker.run(install, operation.id)
+
+    saved = load_operation(install, operation.id)
+    assert saved.phase == "needs_attention"
+    assert saved.data_snapshot is not None
+    assert starts == ["rel_new"]
+    assert install.version().name == "rel_old"
+    assert stored_bodies(notes_spec(data_dir)) == ["before the update", "written by the candidate"]
+    assert read_incident(data_dir, "notes") is None
+    assert read_maintenance(data_dir) is None
 
 
-def _tamper_with_a_snapshot_document(data_dir: Path, _stack: ExitStack) -> dict[str, int]:
+def _tamper_with_a_snapshot_document(data_dir: Path) -> dict[str, int]:
     snapshot_id = find_update_snapshot(data_dir, "upd_refused")
     assert snapshot_id is not None
     copy = snapshot_root(data_dir) / snapshot_id / "documents" / "settings.json"
@@ -544,7 +591,7 @@ def _tamper_with_a_snapshot_document(data_dir: Path, _stack: ExitStack) -> dict[
     return {}
 
 
-def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str, int]:
+def _alter_a_recorded_owner_fact(data_dir: Path) -> dict[str, int]:
     snapshot_id = find_update_snapshot(data_dir, "upd_refused")
     assert snapshot_id is not None
     manifest_path = snapshot_root(data_dir) / snapshot_id / SNAPSHOT_MANIFEST_NAME
@@ -558,14 +605,12 @@ def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str,
 
 
 @pytest.mark.parametrize(
-    ("interfere", "reason", "recorded_facts"),
+    ("interfere", "recorded_facts"),
     [
-        pytest.param(_foreign_server_opens_the_data, "port 9999", {}, id="foreign-server"),
-        pytest.param(_tamper_with_a_snapshot_document, "", {}, id="tampered-document"),
+        pytest.param(_tamper_with_a_snapshot_document, {}, id="tampered-document"),
         # The snapshot records and verifies the facts of core owners.
         pytest.param(
             _alter_a_recorded_owner_fact,
-            "",
             {"sample_count": 0, "snapshot_count": 0, "window_count": 0},
             id="altered-owner-fact",
         ),
@@ -574,8 +619,7 @@ def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str,
 def test_a_restore_that_cannot_be_proven_safe_keeps_the_candidate_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    interfere: Callable[[Path, ExitStack], dict[str, int]],
-    reason: str,
+    interfere: Callable[[Path], dict[str, int]],
     recorded_facts: dict[str, int],
 ) -> None:
     install = _install(tmp_path)
@@ -587,24 +631,21 @@ def test_a_restore_that_cannot_be_proven_safe_keeps_the_candidate_data(
         id="upd_refused", previous_version="rel_old", package="release.zip", local_package=True
     )
     _patch_server_update(monkeypatch, install)
-    monkeypatch.setattr(worker, "_CLAIM_SETTLE_SECONDS", 0.0)
     recorded: dict[str, int] = {}
-    with ExitStack() as stack:
 
-        def start(_install, *, version_id=None, verification=False, breakaway=True):
-            if version_id == "rel_new":
-                _candidate_writes(data_dir)
-                recorded.update(interfere(data_dir, stack))
-                return SimpleNamespace(ok=False, message="candidate failed")
-            return _ok()
+    def start(_install, *, version_id=None, verification=False, breakaway=True):
+        if version_id == "rel_new":
+            _candidate_writes(data_dir)
+            recorded.update(interfere(data_dir))
+            return SimpleNamespace(ok=False, message="candidate failed")
+        return _ok()
 
-        monkeypatch.setattr(worker.processes, "start", start)
-        worker.execute(install, operation)
+    monkeypatch.setattr(worker.processes, "start", start)
+    worker.execute(install, operation)
 
     assert recorded == recorded_facts
     assert operation.phase == "rolled_back"
     assert "was not restored automatically" in operation.message
-    assert reason in operation.message
     assert "written by the candidate" in stored_bodies(notes_spec(data_dir))
     assert read_incident(data_dir, "notes") is None
     assert read_maintenance(data_dir) is None
