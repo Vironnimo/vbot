@@ -9,6 +9,8 @@ Before reading any code, show the user the catalog below as a numbered list (num
 - which numbers to review;
 - whether to use subagents.
 
+Give a recommendation on every item and on the subagent question, each with a short reason: review now, or later. Base it on the catalog order, the usage budget the user names, and open entries in `.vorch/FLAGGED.md` that point at an area.
+
 Wait for the answer. Review only the chosen numbers, in catalog order.
 
 ## 2. Catalog
@@ -72,6 +74,6 @@ Try to refute each candidate before it counts. With subagents, a separate subage
 
 ## 5. Report and fix
 
-Report the confirmed findings as one numbered list: area, severity (🔴 harms users now, 🟡 real, 🔵 minor), a one-line summary and the failure scenario. Name the number of dropped candidates in one line. Ask which numbers to fix.
+Report the confirmed findings as one numbered list: area, severity (🔴 harms users now, 🟡 real, 🔵 minor), a one-line summary, the failure scenario, and a recommendation with a short reason: fix now, record in `FLAGGED.md`, or leave as it is. Name the number of dropped candidates in one line. Ask which numbers to fix.
 
 Fix the chosen findings following `AGENTS.md` (Git, Testing). Record confirmed findings the user did not choose in `.vorch/FLAGGED.md` under its rules.
