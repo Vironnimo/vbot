@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncGenerator
+from json import JSONDecodeError, loads
 from typing import Any, cast, override
 
 from server._http_dependencies import (
@@ -114,8 +114,8 @@ async def _read_json_body_with_limit(request: Request) -> bytes:
 async def _read_json_payload_with_limit(request: Request) -> object:
     body = await _read_json_body_with_limit(request)
     try:
-        return json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return loads(body)
+    except (JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
         raise ValueError("Request body must be valid JSON") from exc
 
 
