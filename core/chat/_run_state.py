@@ -59,7 +59,7 @@ from core.prompts.pinned_context import (
     pinned_working_project_context,
 )
 from core.providers.accounts import ConnectionRef
-from core.providers.adapter import TerminalOutcome
+from core.providers.adapter import ChatTransportPreparer, TerminalOutcome
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
     ReasoningReplayPolicy,
@@ -1027,6 +1027,21 @@ async def create_run_execution_context(
     target = await requests.targets.for_agent(agent)
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
+        session_address = SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
+            dependencies.sessions.prompt_cache_affinity_id, session_address
+        )
+        metadata = await dependencies.sessions.get_metadata_async(session_address)
+        if isinstance(target.adapter, ChatTransportPreparer):
+            target.adapter.start_chat_transport(
+                target.model_id,
+                agent_id=run.agent_id,
+                session_id=run.session_id,
+                affinity_id=prompt_cache_affinity_id,
+                fast_mode=metadata.get("fast_mode") is True,
+            )
         commands = dependencies.get_command_manager()
         if commands is not None:
             # A cancelled Run stops the shell commands still inside their call;
@@ -1109,13 +1124,6 @@ async def create_run_execution_context(
             project_id,
             skill_project_id=skill_project_id,
         )
-        session_address = SessionAddress(
-            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
-        )
-        prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
-            dependencies.sessions.prompt_cache_affinity_id, session_address
-        )
-        metadata = await dependencies.sessions.get_metadata_async(session_address)
         subagent_session = isinstance(metadata.get(SUBAGENT_PARENT_META_KEY), dict)
         subagent_tool_withheld = subagent_session and await _CHAT_TRANSFORM_WORKERS.run(
             withholds_subagent_tool, dependencies, session_address

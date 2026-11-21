@@ -258,6 +258,7 @@ class ResponsesTransports:
         self._idle: dict[_SocketKey, list[_PooledSocket]] = {}
         self._in_use: set[_PooledSocket] = set()
         self._closing: set[asyncio.Task[None]] = set()
+        self._preconnecting: dict[asyncio.Task[_PooledSocket | None], _SocketKey] = {}
         self._failures: dict[ResponsesConnectionKey, int] = {}
         self._websocket_retry_at: dict[ResponsesConnectionKey, float] = {}
         self._message_limits: dict[ResponsesConnectionKey, int] = {}
@@ -331,6 +332,65 @@ class ResponsesTransports:
 
     # -- Sockets ----------------------------------------------------------------
 
+    def has_idle(self, key: _SocketKey) -> bool:
+        """Leave a warm conversation to normal continuation selection."""
+        now = self._clock()
+        for pooled in list(self._idle.get(key, ())):
+            if self._usable(pooled, now):
+                return True
+            self._retire(pooled)
+        return False
+
+    def _usable(self, pooled: _PooledSocket, now: float) -> bool:
+        return (
+            pooled.is_open()
+            and now - pooled.opened_at < RESPONSES_SOCKET_MAX_AGE_SECONDS
+            and now - pooled.idle_since < self._idle_seconds
+        )
+
+    def preconnect(
+        self, key: _SocketKey, connect: Callable[[], Awaitable[_PooledSocket | None]]
+    ) -> asyncio.Task[_PooledSocket | None]:
+        async def warm() -> _PooledSocket | None:
+            pooled = await connect()
+            if pooled is not None:
+                # Invalidation can win while credentials or the network are pending.
+                await self.release(pooled, reusable=task in self._preconnecting)
+            return pooled
+
+        def finished(done: asyncio.Task[_PooledSocket | None]) -> None:
+            self._preconnecting.pop(done, None)
+            if not done.cancelled():
+                done.exception()  # May have been abandoned. Its consumer can still read it.
+
+        task = asyncio.create_task(warm(), eager_start=False)
+        self._preconnecting[task] = key
+        task.add_done_callback(finished)
+        return task
+
+    def discard_preconnect(self, task: asyncio.Task[_PooledSocket | None]) -> asyncio.Task[None]:
+        self._preconnecting.pop(task, None)
+        if not task.cancelling():
+            task.cancel()
+
+        async def drain() -> None:
+            await asyncio.wait((task,))
+            if task.cancelled() or task.exception() is not None:
+                return
+            pooled = task.result()
+            if (
+                pooled is not None
+                and pooled in self._idle.get(pooled.key, ())
+                and pooled.continuation is None
+            ):
+                self._unidle(pooled)
+                await self.release(pooled, reusable=False)
+
+        closing = asyncio.create_task(drain())
+        self._closing.add(closing)
+        closing.add_done_callback(self._closing.discard)
+        return closing
+
     def take(
         self,
         key: _SocketKey,
@@ -356,12 +416,7 @@ class ResponsesTransports:
         usable: list[_PooledSocket] = []
         for pooled in list(idle):
             same_route = pooled.route == route
-            if (
-                not pooled.is_open()
-                or now - pooled.opened_at >= RESPONSES_SOCKET_MAX_AGE_SECONDS
-                or now - pooled.idle_since >= self._idle_seconds
-                or (same_route and pooled.handshake != handshake)
-            ):
+            if not self._usable(pooled, now) or (same_route and pooled.handshake != handshake):
                 self._retire(pooled)
             elif same_route:
                 usable.append(pooled)
@@ -446,6 +501,11 @@ class ResponsesTransports:
 
     def abort(self) -> None:
         """Drop every socket without a closing handshake (synchronous shutdown)."""
+        pending = tuple(self._preconnecting)
+        self._preconnecting.clear()
+        for task in pending:
+            if not task.cancelling():
+                task.cancel()
         sockets = [*self._in_use, *(pooled for idle in self._idle.values() for pooled in idle)]
         self._idle.clear()
         for pooled in sockets:
@@ -457,6 +517,9 @@ class ResponsesTransports:
             _abort_websocket(pooled.websocket)
 
     async def _close_matching(self, matches: Callable[[_SocketKey], bool]) -> None:
+        for task, key in list(self._preconnecting.items()):
+            if matches(key):
+                self.discard_preconnect(task)
         for pooled in self._in_use:
             if matches(pooled.key):
                 pooled.retired = True
@@ -797,6 +860,55 @@ class ResponsesWebSocket:
         self._debug_recorder = debug_recorder
         self._transports = transports
         self._connection = connection
+        self._preconnect: asyncio.Task[_PooledSocket | None] | None = None
+        self._preconnect_identity: tuple[ResponsesWebSocketRoute, str] | None = None
+
+    def start_preconnect(
+        self,
+        conversation_id: str,
+        model_id: str,
+        resolve_headers: Callable[[], Awaitable[tuple[dict[str, str], str]]],
+    ) -> None:
+        key = (self._connection, conversation_id)
+        if self._preconnect is not None or self._transports.has_idle(key):
+            return
+
+        async def connect() -> _PooledSocket | None:
+            try:
+                headers, account = await resolve_headers()
+            except ProviderError, NetworkError:
+                # The request authenticates again and owns any credential recovery.
+                return None
+            url = self._websocket_url()
+            route = (conversation_id, model_id, account)
+            handshake = _handshake_fingerprint(url, headers)
+            self._preconnect_identity = route, handshake
+            return await self._open(url, key, headers=headers, route=route, handshake=handshake)
+
+        self._preconnect_identity = None
+        self._preconnect = self._transports.preconnect(key, connect)
+
+    async def cancel_preconnect(self) -> None:
+        """Close an unused connection, including when its Run never sends a request."""
+        task, self._preconnect = self._preconnect, None
+        if task is not None:
+            await self._transports.discard_preconnect(task)
+
+    async def _finish_preconnect(self, route: ResponsesWebSocketRoute, handshake: str) -> None:
+        task = self._preconnect
+        if task is None:
+            return
+        if self._preconnect_identity != (route, handshake):
+            # A changed request can open its own socket while the old one closes.
+            self._preconnect = None
+            self._transports.discard_preconnect(task)
+            return
+        # A cancelled waiter leaves the Adapter responsible for its handshake.
+        # Pool invalidation cancels just the handshake; dispatch can open afresh.
+        await asyncio.wait((task,))
+        self._preconnect = None
+        if not task.cancelled():
+            task.result()  # A failed matching handshake consumes the normal retry budget.
 
     async def stream(
         self,
@@ -883,6 +995,8 @@ class ResponsesWebSocket:
         state: ResponsesStreamState,
         output_items: dict[int | None, dict[str, Any] | None],
     ) -> AsyncGenerator[dict[str, Any]]:
+        if not fresh and self._preconnect is not None:
+            await self._finish_preconnect(route, handshake)
         pooled = (
             None
             if fresh

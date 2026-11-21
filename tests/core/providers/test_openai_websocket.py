@@ -63,6 +63,16 @@ MODEL_ID = "gpt-5.6-terra"
 CONVERSATION_ID = "orchestrator:sess-42"
 
 
+def _start_chat(adapter: OpenAIAdapter, *, affinity_id: str = CONVERSATION_ID) -> None:
+    adapter.start_chat_transport(
+        MODEL_ID,
+        agent_id="orchestrator",
+        session_id="sess-42",
+        affinity_id=affinity_id,
+        fast_mode=False,
+    )
+
+
 def _completed(response_id: str, output: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "type": "response.completed",
@@ -927,6 +937,7 @@ async def test_failed_codex_websockets_fall_back_to_sse_for_a_bounded_time(
         responses_websocket_connect=connector, responses_transports=ResponsesTransports(clock=clock)
     )
 
+    _start_chat(adapter)
     with respx.mock:
         sse = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
             return_value=codex_sse_response(
@@ -1004,6 +1015,86 @@ def _screenshot_history(text: str = "Hello", screenshot: str = "aW1hZ2U=") -> li
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_changed_route", [False, True], ids=["abandoned", "routing-changed"])
+async def test_unused_subscription_preconnect_closes_without_sending(
+    use_changed_route: bool,
+) -> None:
+    shared = ResponsesTransports()
+    unused = FakeCodexWebSocket([])
+    wanted = FakeCodexWebSocket([_final_turn("resp_1")])
+    connector = FakeCodexWebSocketConnector([unused, wanted])
+    adapter = codex_adapter(responses_websocket_connect=connector, responses_transports=shared)
+    _start_chat(adapter, affinity_id="old-affinity")
+    await asyncio.sleep(0)
+    if use_changed_route:
+        await _stream(adapter, SAMPLE_MESSAGES, prompt_cache_affinity_id="new-affinity")
+    await adapter.aclose()
+    assert not unused.sent_payloads and unused.closed
+    assert len(connector.calls) == (2 if use_changed_route else 1)
+    await shared.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action", ["close-run", "close-connection", "close-session", "abort", "change-route"]
+)
+async def test_pending_subscription_handshake_can_be_invalidated(action: str) -> None:
+    connecting = asyncio.Event()
+    cancelled = asyncio.Event()
+    release_old = asyncio.Event()
+    unused = FakeCodexWebSocket([])
+    wanted = FakeCodexWebSocket([_final_turn("resp_1")])
+
+    async def connect(_url: str, **_kwargs: Any) -> Any:
+        if connecting.is_set():
+            return wanted
+        connecting.set()
+        try:
+            await asyncio.Future[None]()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release_old.wait()
+            return unused  # The network completed as the old handshake was cancelled.
+
+    shared = ResponsesTransports()
+    adapter = codex_adapter(responses_websocket_connect=connect, responses_transports=shared)
+    _start_chat(adapter)
+    await connecting.wait()
+    if action == "change-route":
+        # The replacement must finish without waiting for the old network operation.
+        await _stream(adapter, SAMPLE_MESSAGES, prompt_cache_affinity_id="changed")
+        assert len(wanted.sent_payloads) == 1
+    elif action == "abort":
+        shared.abort()
+    else:
+        closing = asyncio.create_task(
+            {
+                "close-run": adapter.aclose,
+                "close-connection": lambda: shared.close_connection("openai"),
+                "close-session": lambda: shared.close_conversations([CONVERSATION_ID]),
+            }[action]()
+        )
+    await cancelled.wait()
+    release_old.set()
+    if action in {"close-run", "close-connection", "close-session"}:
+        await closing
+    await adapter.aclose()
+    await shared.aclose()
+    assert unused.closed and not unused.sent_payloads
+
+
+@pytest.mark.asyncio
+async def test_abandoning_a_refused_preconnect_preserves_run_cleanup() -> None:
+    connector = FakeCodexWebSocketConnector([OSError("refused")])
+    adapter = codex_adapter(responses_websocket_connect=connector)
+    _start_chat(adapter)
+    await asyncio.sleep(0)
+    assert len(connector.calls) == 1
+    await adapter.aclose()
+    assert adapter._client.is_closed
+
+
 @pytest.mark.parametrize("connection", ["codex", "platform"])
 @pytest.mark.asyncio
 async def test_a_later_run_continues_the_session_socket_with_only_new_input(
@@ -1019,11 +1110,16 @@ async def test_a_later_run_continues_the_session_socket_with_only_new_input(
     connector = FakeCodexWebSocketConnector([websocket])
     make_adapter = codex_adapter if connection == "codex" else platform_adapter
     first_run = make_adapter(responses_websocket_connect=connector, responses_transports=transports)
+    _start_chat(first_run)
+    await asyncio.sleep(0)
+    assert len(connector.calls) == (1 if connection == "codex" else 0)
+    assert not websocket.sent_payloads
     turn = await _stream(first_run, _screenshot_history(), tools=CODEX_TOOLS)
     await first_run.aclose()
     assert websocket.closed is False
 
     next_run = make_adapter(responses_websocket_connect=connector, responses_transports=transports)
+    _start_chat(next_run)
     await _stream(
         next_run, _messages_with_tool_result(turn, _screenshot_history()), tools=CODEX_TOOLS
     )
@@ -1133,6 +1229,9 @@ async def test_a_stale_session_socket_is_replaced_by_a_fresh_one(staleness: str)
     else:
         first.state = State.CLOSED
 
+    _start_chat(adapter)
+    await asyncio.sleep(0)
+    assert len(connector.calls) == 2 and not second.sent_payloads
     await _send(adapter, _messages_with_tool_result(turn), tools=CODEX_TOOLS)
     await _settle(first)
 
