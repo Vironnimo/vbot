@@ -512,6 +512,8 @@
       {modelsRefreshToken}
       {recallIndexStatus}
     />
+  {:else if panelId === 'external_history'}
+    <Panel {agents} {projects} {onOpenSession} />
   {:else if panelId === 'voice_controls'}
     <Panel
       {active}

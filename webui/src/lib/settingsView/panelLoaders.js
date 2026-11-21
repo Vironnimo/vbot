@@ -72,6 +72,8 @@ export const settingsPanelLoaders = {
   decision_model: loadSettingsSpecializedModelsPanel,
   session_titles: loadSettingsSessionTitlesPanel,
   recall: loadSettingsRecallPanel,
+  external_history: () =>
+    import('../../components/settings/SettingsExternalHistoryPanel.svelte'),
   voice_controls: loadWakewordVoiceSettings,
   transcription_audio: loadTranscriptionAudioSettings,
   web_fetch: loadSettingsWebFetchPanel,

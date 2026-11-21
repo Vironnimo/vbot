@@ -54,6 +54,7 @@ const sections = [
     id: 'recall',
     label: () => t('settings.sections.recall'),
   },
+  { id: 'external_history', label: () => t('external.title') },
   {
     id: 'reflection',
     label: () => t('settings.reflection.title'),
@@ -164,7 +165,7 @@ export function settingsPages(desktopCapabilities) {
       id: 'memory',
       label: () => t('settings.pages.memory'),
       description: () => t('settings.pages.memoryDescription'),
-      sections: ['reflection', 'librarian', 'recall'],
+      sections: ['reflection', 'librarian', 'recall', 'external_history'],
     },
     {
       id: 'tools',

@@ -2,7 +2,6 @@
   import { modelProviderLimits } from '$lib/modelSelection.js';
   import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
-  import ExternalHistoryDialog from './chat/ExternalHistoryDialog.svelte';
   import {
     contextCompactionState,
     isRunActive,
@@ -174,15 +173,6 @@
   // controls and their action capabilities cannot outlive edit mode.
   if (untrack(() => readOnly)) provideContributions(null);
   const chatState = $state(createChatState());
-  let importTarget = $state('');
-  // The Identity Agent's default place for an import: a Project id, '' for its
-  // Workspace, or null while the Agent is unknown.
-  let importDefaultProjectId = $derived.by(() => {
-    const agent = importTarget
-      ? target.agentById(parseAgentAddress(importTarget).agentId)
-      : null;
-    return agent ? agent.root_project_id || '' : null;
-  });
   const target = createChatViewTarget({
     get selectedProjectId() {
       return selectedProjectId;
@@ -862,7 +852,6 @@
       }}
       {newSessionDisabled}
       onNewSession={navigation.handleNewSession}
-      onImport={() => (importTarget = target.activeAgentAddress)}
       {otherArea}
       actions={workspaceActions}
       infoPanelOpen={activityPanelOpen}
@@ -880,24 +869,6 @@
         {t('appChat.openFull')}
       </Button>
     </div>
-  {/if}
-
-  {#if importTarget}
-    <ExternalHistoryDialog
-      agentAddress={importTarget}
-      {projects}
-      defaultProjectId={importDefaultProjectId}
-      onClose={() => (importTarget = '')}
-      onImported={(result) => {
-        importTarget = '';
-        createdSessions += 1;
-        void navigation.handleSessionSelected(
-          result.session_id,
-          result.agent_id,
-          false,
-        );
-      }}
-    />
   {/if}
 
   {#if target.projectAgentActive}

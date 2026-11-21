@@ -61,7 +61,6 @@
     onToggleSessionList = () => {},
     newSessionDisabled = false,
     onNewSession = () => {},
-    onImport = null,
     // Actions for this Chat area at the bar's end, such as Split.
     actions = undefined,
     // The Session information panel at the right: whether it is open, its id,
@@ -531,14 +530,6 @@
   </span>
 {/snippet}
 
-{#snippet importContribution()}
-  {#if onImport}
-    <Button variant="tertiary" disabled={!selectedAddress} onClick={onImport}>
-      {t('external.open')}
-    </Button>
-  {/if}
-{/snippet}
-
 {#snippet areaContribution()}
   {@render actions?.()}
 {/snippet}
@@ -658,12 +649,6 @@
         'session.info': () => onToggleInfoPanel(),
       }}
       builtins={[
-        {
-          id: 'core:chat-header.import',
-          title: t('external.open'),
-          order: 0,
-          render: importContribution,
-        },
         {
           id: 'core:chat-header.area',
           title: t('chat.title'),

@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { t } from '$lib/i18n.js';
   import { defaultChoiceValue, markDefaultOption } from '$lib/defaultChoice.js';
   import {
@@ -11,6 +11,11 @@
     importExternalMemory,
   } from '$lib/api.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
+  import { isChatAgent } from '$lib/agentPlacement.js';
+  import {
+    buildAgentTargetOptions,
+    projectTeamEntry,
+  } from '$lib/agentTargetOptions.js';
   import Modal from '../ui/Modal.svelte';
   import FormField from '../ui/FormField.svelte';
   import Button from '../ui/Button.svelte';
@@ -20,16 +25,29 @@
   import TextArea from '../ui/TextArea.svelte';
   import Dropdown from '../Dropdown.svelte';
 
-  let {
-    agentAddress,
-    projects = [],
-    // The Identity Agent's default Project id, '' for its Workspace, or null
-    // while unknown; it is the place option marked "(default)".
-    defaultProjectId = null,
-    onClose,
-    onImported,
-  } = $props();
+  let { agents, projects, onClose, onImported } = $props();
   const id = $props.id();
+  let targets = $derived(
+    buildAgentTargetOptions(
+      agents.filter(isChatAgent),
+      projects.map(projectTeamEntry),
+    ).map(({ value, label }) => ({ value, label })),
+  );
+  let chosenTarget = $state(
+    untrack(() => (targets.length === 1 ? targets[0].value : '')),
+  );
+  let agentAddress = $derived(
+    targets.find((target) => target.value === chosenTarget)?.value ?? '',
+  );
+  let defaultProjectId = $derived(
+    agents.find((agent) => agent.id === agentAddress)?.root_project_id || '',
+  );
+  let projectOptions = $derived(
+    projects.map((item) => ({
+      value: item.project_id,
+      label: item.display_name || item.project_id,
+    })),
+  );
   let sources = $state([]);
   let source = $state('codex');
   let mode = $state('sessions');
@@ -182,15 +200,30 @@
   }
 </script>
 
-<Modal
-  title={t('external.title')}
-  description={t('external.target', { agent: agentAddress })}
-  size="lg"
-  closeDisabled={saving}
-  {onClose}
->
+<Modal title={t('external.title')} size="lg" closeDisabled={saving} {onClose}>
   {#snippet body()}
-    <div class="external-history">
+    <div class="modal-body external-history">
+      <FormField controlId={`${id}-target`} label={t('external.target')}>
+        {#snippet children(field)}
+          <Dropdown
+            id={field.controlId}
+            ariaLabelledby={field.labelId}
+            value={agentAddress}
+            options={targets}
+            placeholder={targets.length
+              ? t('dropdown.placeholder')
+              : t('external.noTargets')}
+            disabled={busy || !targets.length}
+            onValueChange={(value) => {
+              chosenTarget = value;
+              project = 'default';
+              scope = 'agent';
+              memoryProject = '';
+              result = null;
+            }}
+          />
+        {/snippet}
+      </FormField>
       <FormField controlId={`${id}-mode`} label={t('external.kind')}>
         {#snippet children(field)}
           <Dropdown
@@ -328,10 +361,7 @@
                   options={markDefaultOption(
                     [
                       { value: '', label: t('external.workspace') },
-                      ...projects.map((item) => ({
-                        value: item.id,
-                        label: item.name || item.id,
-                      })),
+                      ...projectOptions,
                     ],
                     {
                       defaultValue: defaultProjectId,
@@ -365,10 +395,7 @@
               ariaLabel={t('external.project')}
               value={memoryProject}
               disabled={busy}
-              options={projects.map((item) => ({
-                value: item.id,
-                label: item.name || item.id,
-              }))}
+              options={projectOptions}
               onValueChange={(value) => (memoryProject = value)}
             />
           {/if}
@@ -402,6 +429,7 @@
       variant="primary"
       loading={saving}
       disabled={busy ||
+        !agentAddress ||
         sourceChanged ||
         !selected ||
         Boolean(result) ||

@@ -17,7 +17,9 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('$lib/api.js', async (original) => ({ ...(await original()), ...api }));
 const { default: Dialog } = await import('../ExternalHistoryDialog.svelte');
-const { default: Entry } = await import('../ChatTimelineEntry.svelte');
+const { default: Panel } =
+  await import('../SettingsExternalHistoryPanel.svelte');
+const { default: Entry } = await import('../../chat/ChatTimelineEntry.svelte');
 let component;
 const onImported = vi.fn();
 const onClose = vi.fn();
@@ -60,35 +62,57 @@ afterEach(async () => {
   document.body.innerHTML = '';
 });
 
-it('reads without importing, then imports the selected full Session into the named Agent', async () => {
-  api.importExternalSession.mockResolvedValue({
-    session_id: 'imported',
-    agent_id: 'coder',
-  });
-  component = mount(Dialog, {
-    target: document.body,
-    props: { agentAddress: 'coder', onClose, onImported },
-  });
-  await settle();
-  await click(t('external.browse'));
-  await click('Previous work');
-  expect(api.importExternalSession).not.toHaveBeenCalled();
-  expect(document.querySelector('pre').textContent).toBe(
-    '<script>old</script>',
-  );
-  expect(document.querySelector('script')).toBeNull();
-  await click(t('external.continue'));
-  expect(api.importExternalSession).toHaveBeenCalledWith({
-    source: 'codex',
-    path: '/source.jsonl',
-    source_session_id: 'source',
-    agent_id: 'coder',
-  });
-  expect(onImported).toHaveBeenCalledWith({
-    session_id: 'imported',
-    agent_id: 'coder',
-  });
-});
+it.each(['coder', 'dev@repo'])(
+  'opens the Session imported from Settings into %s',
+  async (address) => {
+    api.importExternalSession.mockResolvedValue({
+      session_id: 'imported',
+      agent_id: address,
+    });
+    const onOpenSession = vi.fn();
+    component = mount(Panel, {
+      target: document.body,
+      props: {
+        agents: [{ id: 'coder', name: 'Coder', root_project_id: 'repo' }],
+        projects: [
+          {
+            project_id: 'repo',
+            display_name: 'Repo',
+            scan: { team: [{ agent_id: 'dev' }] },
+          },
+        ],
+        onOpenSession,
+      },
+    });
+    await settle();
+    expect(api.listExternalSources).not.toHaveBeenCalled();
+    await click(t('external.open'));
+    await click(t('external.browse'));
+    await click('Previous work');
+    expect(api.importExternalSession).not.toHaveBeenCalled();
+    expect(document.querySelector('pre').textContent).toBe(
+      '<script>old</script>',
+    );
+    expect(document.querySelector('script')).toBeNull();
+    expect(button(t('external.continue')).disabled).toBe(true);
+    await click(t('dropdown.placeholder'));
+    await click(address === 'coder' ? 'Coder' : address);
+    if (address === 'coder') {
+      await click(t('common.defaultOption', { label: 'Repo' }));
+      await click(t('external.workspace'));
+    }
+    await click(t('external.continue'));
+    expect(api.importExternalSession).toHaveBeenCalledWith({
+      source: 'codex',
+      path: '/source.jsonl',
+      source_session_id: 'source',
+      agent_id: address,
+      ...(address === 'coder' ? { working_project_id: null } : {}),
+    });
+    expect(onOpenSession).toHaveBeenCalledWith(address, 'imported');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  },
+);
 
 it('binds reviewed Unicode Memory facts to the selected preview and requires a refresh on change', async () => {
   api.readExternalMemories.mockResolvedValue({
@@ -111,7 +135,7 @@ it('binds reviewed Unicode Memory facts to the selected preview and requires a r
   );
   component = mount(Dialog, {
     target: document.body,
-    props: { agentAddress: 'coder', onClose, onImported },
+    props: { agents: [{ id: 'coder' }], projects: [], onClose, onImported },
   });
   await settle();
   await click(t('external.sessions'));

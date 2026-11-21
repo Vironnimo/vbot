@@ -117,7 +117,8 @@ export function buildAgentTargetDropdownOptions(
 // `{ projectId, displayName, team }` entry `buildAgentTargetOptions` consumes;
 // only the bare `agent_id`/`display_name` the dropdown needs are kept. An
 // empty/bare project yields an empty team, which is normal.
-function projectTeamEntry(projectId, project) {
+export function projectTeamEntry(project) {
+  const projectId = asText(project?.project_id);
   const rawTeam = Array.isArray(project?.scan?.team) ? project.scan.team : [];
   return {
     projectId,
@@ -166,7 +167,7 @@ export function createAgentTargetCatalogLoader({
         if (!projectId || seen.has(projectId)) continue;
         seen.add(projectId);
         if (project.scan === null) failedProjects.push({ projectId });
-        else projectTeams.push(projectTeamEntry(projectId, project));
+        else projectTeams.push(projectTeamEntry(project));
       }
       return {
         projects,

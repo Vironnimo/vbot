@@ -42,7 +42,6 @@ const BUILTIN_ENTRIES = {
     ['core:sidebar.navigation', () => t('navigation.sections'), 10],
   ],
   'chat.header': [
-    ['core:chat-header.import', () => t('external.open'), 0],
     ['core:chat-header.area', () => t('chat.title'), 10],
     ['core:chat-header.info', () => t('chat.activity.open'), 20],
   ],
