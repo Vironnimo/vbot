@@ -152,6 +152,11 @@ class SpeechService:
             lambda: {"transcription_audio": dict(DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS)}
         )
 
+    @property
+    def has_transcription_capacity(self) -> bool:
+        """Whether another recording fits in the bounded admission queue now."""
+        return self._pending_transcriptions < _MAX_PENDING_TRANSCRIPTIONS
+
     async def transcribe(
         self,
         audio: bytes,
@@ -170,7 +175,7 @@ class SpeechService:
             )
         if self._closed:
             raise SpeechConfigurationError("Speech service is closed")
-        if self._pending_transcriptions >= _MAX_PENDING_TRANSCRIPTIONS:
+        if not self.has_transcription_capacity:
             raise SpeechBusyError(
                 "Transcription is busy. Retry after an active recording finishes."
             )

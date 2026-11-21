@@ -255,6 +255,8 @@ async def test_stop_during_speech_to_text_keeps_the_voice_message(tmp_path: Path
     # Stop abandons the speech-to-text of the Run's input: the voice message
     # still persists, without a transcription, and the Run ends before a request.
     class StalledTranscriber:
+        has_transcription_capacity = True
+
         def __init__(self) -> None:
             self.entered = asyncio.Event()
             self.started: set[str] = set()

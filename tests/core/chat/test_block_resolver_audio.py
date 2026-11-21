@@ -14,6 +14,7 @@ from core.attachments import AttachmentStore
 from core.chat.block_resolver import AttachmentResolveError, ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.model_tasks import SpeechExecutionError
+from core.model_tasks.speech_types import SpeechBusyError
 from tests.core.chat.block_resolver_test_support import (
     IMAGE_AUDIO_WIRE,
     IMAGE_WIRE,
@@ -126,6 +127,8 @@ async def test_audio_batch_transcribes_at_most_two_attachments_and_keeps_order(
     active = peak = 0
 
     class Transcriber:
+        has_transcription_capacity = True
+
         async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
             nonlocal active, peak
             active += 1
@@ -164,6 +167,44 @@ async def test_audio_batch_transcribes_at_most_two_attachments_and_keeps_order(
         blocks[2],
         replace(blocks[3], transcription="d.ogg"),
         blocks[2],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("occupied", [3, 4], ids=["one-place-left", "full"])
+async def test_audio_batch_shares_remaining_speech_capacity(tmp_path: Path, occupied: int) -> None:
+    full = asyncio.Event()
+    attempts: list[str] = []
+
+    class Transcriber:
+        @property
+        def has_transcription_capacity(self) -> bool:
+            if occupied == 4:
+                full.set()
+                return False
+            return True
+
+        async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+            nonlocal occupied
+            attempts.append(filename)
+            if not self.has_transcription_capacity:
+                raise SpeechBusyError("full")
+            occupied += 1
+            try:
+                await full.wait()
+                return SimpleNamespace(text=filename)
+            finally:
+                occupied -= 1
+
+    store = AttachmentStore(tmp_path)
+    records = [store.store(f"{n}.ogg", OGG_BYTES) for n in range(3)]
+    blocks = [MediaBlock("media", r.id, r.filename, r.media_type) for r in records]
+    resolver = ContentBlockResolver(store, transcriber=Transcriber())
+    content = await resolver.transcribe_audio([*blocks])
+
+    assert sorted(attempts) == [r.filename for r in records]
+    assert content == [
+        replace(block, transcription=block.filename if occupied == 3 else None) for block in blocks
     ]
 
 
