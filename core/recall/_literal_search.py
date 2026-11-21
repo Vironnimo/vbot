@@ -1,5 +1,8 @@
 """Literal Passage ranking shared by Hybrid and unavailable semantic search."""
 
+from collections.abc import Sequence
+from dataclasses import replace
+
 from core.recall._passage_catalog import Candidates, StoredPassage
 from core.recall.canonical import RecallScope, first_match_span
 from core.recall.passage_index import TRIGRAM_RANKING, LiteralQuery, PassageIndex
@@ -48,7 +51,7 @@ class PreparedLiteralSearch:
             await self._index.discard_if_damaged(error)
             raise
         hits = tuple(
-            _literal_hit(passage, session_id, rank, request)
+            _literal_hit(passage, session_id, rank)
             for passage, session_id, rank in matches[offset : offset + limit]
         )
         return RecallSearchPage(
@@ -61,10 +64,20 @@ class PreparedLiteralSearch:
         )
 
 
-def _literal_hit(
-    passage: StoredPassage, session_id: str, rank: float, request: RecallSearchRequest
-) -> RecallSearchHit:
-    start, end = first_match_span(passage.text, request.query, request.match_mode)
+def highlight_literal_hits(
+    hits: Sequence[RecallSearchHit], request: RecallSearchRequest
+) -> tuple[RecallSearchHit, ...]:
+    """Map literal matches to source offsets only for the results sent to the caller."""
+    result = []
+    for hit in hits:
+        if "literal" in hit.sources:
+            start, end = first_match_span(hit.text, request.query, request.match_mode)
+            hit = replace(hit, match_start=start, match_end=end)
+        result.append(hit)
+    return tuple(result)
+
+
+def _literal_hit(passage: StoredPassage, session_id: str, rank: float) -> RecallSearchHit:
     return RecallSearchHit(
         result_type="passage",
         session_id=session_id,
@@ -77,8 +90,6 @@ def _literal_hit(
         start_message_id=passage.start_message_id,
         end_message_id=passage.end_message_id,
         end_timestamp=passage.end_timestamp,
-        match_start=start,
-        match_end=end,
         sources=("literal",),
         source_start=passage.start_offset,
         source_length=passage.source_length,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -280,31 +281,39 @@ def message_hit(hit: SessionSearchHit, request: RecallSearchRequest) -> RecallSe
     )
 
 
+_FOLDED_WHITESPACE = re.compile(r"\s+")
+
+
 def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None, int | None]:
     """Locate a useful raw-source span without normalizing the returned text."""
 
     # Search uses collapsed whitespace and Unicode case folding. Both can
     # change lengths (for example, sharp s becomes two characters), so keep
     # each normalized character's source position for the returned span.
-    normalized: list[str] = []
-    source_positions: list[int] = []
-    previous_space = False
-    for position, character in enumerate(text):
-        if character.isspace():
-            if previous_space:
-                continue
-            folded = " "
-            previous_space = True
-        else:
-            folded = character.casefold()
-            previous_space = False
-        normalized.append(folded)
-        source_positions.extend([position] * len(folded))
-    haystack = "".join(normalized)
+    source_positions: list[int] | None = None
+    haystack = _FOLDED_WHITESPACE.sub(" ", text.lower()) if text.isascii() else None
+    if haystack is None or len(haystack) != len(text):
+        normalized: list[str] = []
+        source_positions = []
+        previous_space = False
+        for position, character in enumerate(text):
+            if character.isspace():
+                if previous_space:
+                    continue
+                folded = " "
+                previous_space = True
+            else:
+                folded = character.casefold()
+                previous_space = False
+            normalized.append(folded)
+            source_positions.extend([position] * len(folded))
+        haystack = "".join(normalized)
     needles = LiteralSearchQuery(query, match_mode).folded_values
     matches = [(haystack.find(needle), len(needle)) for needle in needles if needle]
     matches = [(index, length) for index, length in matches if index >= 0]
     if not matches:
         return None, None
     index, length = min(matches, key=lambda item: item[0])
+    if source_positions is None:
+        return index, index + length
     return source_positions[index], source_positions[index + length - 1] + 1

@@ -96,6 +96,7 @@ CREATE TABLE passages (
 ) STRICT;
 
 CREATE INDEX passages_by_text_hash ON passages (text_hash);
+CREATE INDEX passages_by_ref_hash_length ON passages (passage_ref, text_hash, length(text));
 
 CREATE TABLE passage_views (
   session_ref INTEGER NOT NULL,
@@ -497,9 +498,10 @@ def _apply_change(
         {}
         if change.incremental
         else {
-            str(row[0]): (int(row[1]), bool(row[2]))
+            str(row[0]): (int(row[1]), bool(row[2]), tuple(row[3:]))
             for row in connection.execute(
-                "SELECT p.passage_key, v.passage_ref, v.owned FROM passage_views AS v "
+                "SELECT p.passage_key, v.passage_ref, v.owned, p.start_offset, p.source_length, "
+                "p.message_index FROM passage_views AS v "
                 "JOIN passages AS p ON p.passage_ref = v.passage_ref WHERE v.session_ref = ?",
                 (session_ref,),
             )
@@ -510,7 +512,7 @@ def _apply_change(
         key = passage_key(passage)
         previous = target.get(key)
         target[key] = (passage, owned or (previous is not None and previous[1]))
-    for key, (passage_ref, _owned) in existing.items():
+    for key, (passage_ref, _owned, _position) in existing.items():
         if key not in target:
             connection.execute(
                 "DELETE FROM passage_views WHERE session_ref = ? AND passage_ref = ?",
@@ -521,11 +523,13 @@ def _apply_change(
     for key, (passage, owned) in target.items():
         stored = existing.get(key)
         if stored is not None:
-            connection.execute(
-                "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
-                "WHERE passage_ref = ?",
-                (passage.start_offset, passage.source_length, passage.message_index, stored[0]),
-            )
+            position = (passage.start_offset, passage.source_length, passage.message_index)
+            if stored[2] != position:
+                connection.execute(
+                    "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
+                    "WHERE passage_ref = ?",
+                    (*position, stored[0]),
+                )
             if stored[1] != owned:
                 connection.execute(
                     "UPDATE passage_views SET owned = ? WHERE session_ref = ? AND passage_ref = ?",
@@ -582,15 +586,17 @@ def _insert_passage(
         added.append(int(inserted[0][0]))
         return int(inserted[0][0])
     row = connection.execute(
-        "SELECT passage_ref FROM passages "
+        "SELECT passage_ref, start_offset, source_length, message_index FROM passages "
         "WHERE project_id = ? AND agent_id = ? AND passage_key = ?",
         (plan.project, plan.agent_id, key),
     ).fetchone()
-    connection.execute(
-        "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
-        "WHERE passage_ref = ?",
-        (passage.start_offset, passage.source_length, passage.message_index, int(row[0])),
-    )
+    position = (passage.start_offset, passage.source_length, passage.message_index)
+    if tuple(row[1:]) != position:
+        connection.execute(
+            "UPDATE passages SET start_offset = ?, source_length = ?, message_index = ? "
+            "WHERE passage_ref = ?",
+            (*position, int(row[0])),
+        )
     return int(row[0])
 
 
