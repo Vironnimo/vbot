@@ -11,8 +11,12 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 from core.attachments import AttachmentStore, AttachmentTooLargeError
+from core.channels._websocket import ChannelConnection
 from core.channels.config import ChannelError
 from core.chat.content_blocks import TextBlock
 from core.runs import WaitingWorkLimitError
@@ -21,6 +25,30 @@ from .engine_test_support import channel_state
 from .network_test_support import event, make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("/another-path", "wss://socket.example.com/another-path"),
+        ("wss://socket.example.com:443/another-path", "wss://socket.example.com:443/another-path"),
+        ("wss://socket.example.net/another-path", None),
+        ("wss://socket.example.com:8443/another-path", None),
+        ("ws://socket.example.com/another-path", None),
+    ],
+)
+def test_channel_socket_redirects_keep_the_selected_origin(
+    location: str, expected: str | None
+) -> None:
+    connection = ChannelConnection("wss://socket.example.com/connect")
+    response = Response(307, "Temporary Redirect", Headers({"Location": location}))
+
+    result = connection.process_redirect(InvalidStatus(response))
+
+    if expected is None:
+        assert isinstance(result, Exception)
+    else:
+        assert result == expected
 
 
 class Socket:
@@ -65,7 +93,7 @@ async def test_slack_acknowledges_before_dispatch_and_clears_connection(
     socket = Socket(
         [{"type": "events_api", "envelope_id": "e1", "payload": {"event": {"text": "hi"}}}]
     )
-    monkeypatch.setattr("core.channels.slack.connect", lambda *a, **kw: socket)
+    monkeypatch.setattr("core.channels.slack.ChannelConnection", lambda *a, **kw: socket)
 
     async def handle(event: dict[str, Any]) -> None:
         assert adapter.connection_status() == {"connected": True}
@@ -98,7 +126,7 @@ async def test_mattermost_requires_websocket_authentication(
 
     adapter = make_adapter(tmp_path, "mattermost", http=mattermost, connected=False).adapter
     socket = Socket([{"seq_reply": 1, "status": status}, {"event": "posted", "data": {}}])
-    monkeypatch.setattr("core.channels.mattermost.connect", lambda *a, **kw: socket)
+    monkeypatch.setattr("core.channels.mattermost.ChannelConnection", lambda *a, **kw: socket)
     adapter.handle_event = AsyncMock()
     try:
         with pytest.raises(ChannelError):

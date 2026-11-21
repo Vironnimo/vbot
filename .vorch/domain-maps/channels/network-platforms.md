@@ -12,6 +12,8 @@ Outbound text for all three platforms is chunked at 3500 characters through `Net
 
 Slack and Mattermost threads use the parent chat's Session and return replies to the supplied thread/root. Mention-only groups require an explicit bot mention or configured wake regex; these adapters do not resolve whether a thread reply addresses a bot. Neither supplies typing indicators, interactive buttons, history backfill or fetched quoted-message content. Their current upstream contracts have mocked wire tests; live account delivery remains unverified.
 
+Slack and Mattermost WebSocket connections accept redirects only within the original scheme, host and effective port (`_websocket.py`). Mattermost sends the authentication challenge to that origin, and Slack processes Socket Mode events from the origin supplied by Slack's Web API.
+
 ## Slack
 
 Repeated sends to a Slack destination reuse its last outbound lookup while the adapter retains it. An inbound message carries different sender and thread facts and triggers a fresh destination lookup.

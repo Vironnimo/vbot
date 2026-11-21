@@ -7,9 +7,8 @@ import json
 from typing import Any, override
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from websockets.asyncio.client import connect
-
 from core.channels._network_adapter import NetworkChannelAdapter
+from core.channels._websocket import ChannelConnection
 from core.channels.adapter import ConversationFacts, DeliveryProgress, FileData
 from core.channels.config import ChannelError
 from core.utils.tls import shared_ssl_context
@@ -36,7 +35,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
         url = urlunsplit(
             ("wss" if parts.scheme == "https" else "ws", parts.netloc, parts.path, "", "")
         )
-        async with connect(
+        async with ChannelConnection(
             url,
             max_size=2_097_152,
             ping_interval=20,
