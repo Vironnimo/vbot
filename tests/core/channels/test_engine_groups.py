@@ -34,23 +34,34 @@ _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["text", "caption", "context"])
+@pytest.mark.parametrize("source", ["text", "caption", "companion", "context", "command"])
 async def test_group_key_is_refused_before_admission(tmp_path: Path, source: str) -> None:
     key = "ghp_" + ("AbCdEf0123456789" * 3)[:36]
     engine, _sessions, trigger, transport = make_engine(tmp_path, response_mode="all")
-    group = make_conversation(kind="group", mentioned_bot=True)
-    context = [(group, key)] if source == "context" else ()
-    if source == "caption":
+    group = make_conversation(kind="group", mentioned_bot=True, message_id="10")
+    context = (
+        [(make_conversation(kind="group", message_id="9"), key)] if source == "context" else ()
+    )
+    if source in {"caption", "companion"}:
         accepted = await engine.handle_inbound_media(
-            group, (SimpleNamespace(caption=key),), observed_context=context
+            group,
+            (
+                SimpleNamespace(caption=None),
+                SimpleNamespace(caption=key if source == "caption" else None),
+            ),
+            message_ids=("10", "11"),
+            companion_text=key if source == "companion" else None,
+            companion_message_id="8",
         )
     else:
-        accepted = await engine.handle_inbound_text(
-            group, key if source == "text" else "hello", observed_context=context
-        )
+        message = {"text": key, "command": f"/secret TOKEN {key}", "context": "hello"}[source]
+        accepted = await engine.handle_inbound_text(group, message, observed_context=context)
     assert not accepted
     trigger.assert_not_awaited()
     assert transport.sent and key not in str(transport.sent)
+    expected_id = {"context": "9", "caption": "11", "companion": "8"}.get(source, "10")
+    assert transport.deleted == [("12345", expected_id)]
+    assert transport.sent_reply_targets == [None if expected_id == "10" else "10"]
     assert not engine._chat_queues
     await engine.stop()
 

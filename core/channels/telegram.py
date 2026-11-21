@@ -55,6 +55,7 @@ from ._telegram_messages import (
     _parse_start_command,
     _render_structured_message,
     _telegram_bot_display_name,
+    _telegram_message_id,
     _user_display_name,
     split_telegram_message,
 )
@@ -522,7 +523,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if message is None:
             return
 
-        companion_text, conversation = await self._inbound._take_forward_comment_for_media(
+        comment, conversation = await self._inbound._take_forward_comment_for_media(
             conversation, message
         )
         media_group_id = getattr(message, "media_group_id", None)
@@ -531,15 +532,11 @@ class TelegramChannelAdapter(ChannelAdapter):
                 str(media_group_id),
                 conversation,
                 message,
-                companion_text=companion_text,
+                comment=comment,
             )
             return
 
-        await self._engine.handle_inbound_media(
-            conversation,
-            (message,),
-            companion_text=companion_text,
-        )
+        await self._inbound.dispatch_media(conversation, (message,), comment)
 
     async def _handle_inbound_structured_message(self, update: Any, _context: Any) -> None:
         """Route a location/contact/poll message as rendered text into the engine."""
@@ -834,9 +831,6 @@ class TelegramChannelAdapter(ChannelAdapter):
         is_topic_message = bool(getattr(message, "is_topic_message", False))
         thread_id = str(thread_id_raw) if is_topic_message and _is_integer(thread_id_raw) else None
 
-        message_id_raw = getattr(message, "message_id", None)
-        message_id = str(message_id_raw) if _is_integer(message_id_raw) else None
-
         return ConversationFacts(
             platform=self.platform,
             channel_id=self._config.id,
@@ -847,7 +841,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             # Telegram group chats are identified by negative chat ids.
             kind="group" if chat_id < 0 else "direct",
             user_display_name=_user_display_name(user),
-            message_id=message_id,
+            message_id=_telegram_message_id(message),
             mentioned_bot=self._mentions_bot(message),
             is_reply_to_bot=self._is_reply_to_bot(message),
         )

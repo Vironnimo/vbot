@@ -53,6 +53,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
+    from core.attachments import AttachmentStore
     from core.automation.automation import TriggerService
     from core.channels.config import ChannelConfig
     from core.extensions.interactions import InteractionEvent
@@ -80,6 +81,7 @@ from ._conversation_work import (
     _QueuedPreparedCommand,
     _QueuedWork,
 )
+from ._group_attachments import GroupAttachmentKeyError, group_content_has_key
 from ._observations import ChannelObservationInbox
 
 _LOGGER = get_logger("channels.engine")
@@ -88,7 +90,9 @@ _LOGGER = get_logger("channels.engine")
 
 
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
-_GROUP_KEY_REPLY = "This message contains an API key. Send it privately instead."
+_GROUP_KEY_REPLY = (
+    "A secret was shared in this group. Rotate it and send its replacement privately."
+)
 _QUOTED_MESSAGE_PREFIX = "[quoted-message]"
 _QUOTED_MESSAGE_UNAVAILABLE = "[quoted-message unavailable]"
 
@@ -118,6 +122,12 @@ InteractionTriggerStatus = Literal[
 ]
 
 
+def _carries_secret_argument(command: PreparedCommand | None) -> bool:
+    return (
+        command is not None and command.secret_argument and bool((command.argument or "").strip())
+    )
+
+
 class ChannelConversationEngine:
     """Platform-neutral conversation behavior shared by channel adapters."""
 
@@ -131,6 +141,7 @@ class ChannelConversationEngine:
         conversation_pointers: ConversationPointerStore,
         pending_replies: PendingReplyStore,
         observation_inbox: ChannelObservationInbox,
+        attachment_store: AttachmentStore | None = None,
         previous_observations: tuple[asyncio.Task[None], ...] = (),
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
         access_registry: ChannelAccessRegistry | None = None,
@@ -139,6 +150,7 @@ class ChannelConversationEngine:
         self._config = config
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
+        self._attachment_store = attachment_store
         # The running adapter's transport, and whether its platform connection is
         # up; replies wait for a connected transport.
         self._observation_inbox = observation_inbox
@@ -233,6 +245,13 @@ class ChannelConversationEngine:
         """Gate and admit text with optional bounded context; report admission."""
         conversation = await self._access._snapshot_group_sender(conversation)
         prepared_command = self._command_dispatcher.prepare(message_text)
+        if await self._reject_group_keys(
+            conversation,
+            ((conversation, message_text),),
+            observed_context,
+            command=prepared_command,
+        ):
+            return False
         if prepared_command is not None:
             # Commands are inherently addressed; group commands are gated by sender
             # authorization instead of response mode. Authorization precedes both
@@ -240,12 +259,13 @@ class ChannelConversationEngine:
             if conversation.kind == "group" and not self._access._command_sender_authorized(
                 conversation
             ):
+                await self._remove_secret_message(
+                    prepared_command, conversation, self._routing._reply_plan_for(conversation)
+                )
                 _LOGGER.debug(
                     "Channel command denied for member (channel=%s)",
                     self._config.id,
                 )
-                return False
-            if await self._reject_group_keys(conversation, (message_text,), observed_context):
                 return False
             reply_plan = self._routing._reply_plan_for(conversation)
             unavailable = self._command_dispatcher.unavailability(
@@ -279,8 +299,6 @@ class ChannelConversationEngine:
                 return False
             return True
 
-        if await self._reject_group_keys(conversation, (message_text,), observed_context):
-            return False
         if not self._access.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
                 return await self._enqueue_observed_message(
@@ -308,6 +326,8 @@ class ChannelConversationEngine:
         raw_messages: tuple[Any, ...],
         *,
         companion_text: str | None = None,
+        companion_message_id: str | None = None,
+        message_ids: tuple[str | None, ...] | None = None,
         observed_context: Sequence[tuple[ConversationFacts, str]] = (),
     ) -> bool:
         """Gate and admit media with optional bounded context; report admission."""
@@ -321,7 +341,25 @@ class ChannelConversationEngine:
             *((normalized_companion,) if normalized_companion is not None else ()),
             *caption_texts,
         )
-        if await self._reject_group_keys(conversation, gating_texts, observed_context):
+        sources = (
+            message_ids
+            if message_ids is not None
+            else (conversation.message_id,) * len(raw_messages)
+        )
+        companion = replace(
+            conversation, message_id=companion_message_id or conversation.message_id
+        )
+        if await self._reject_group_keys(
+            conversation,
+            (
+                (companion, normalized_companion),
+                *(
+                    (replace(conversation, message_id=source), caption)
+                    for source, caption in zip(sources, caption_texts, strict=True)
+                ),
+            ),
+            observed_context,
+        ):
             return False
         if not self._access.should_respond(conversation, gating_texts):
             if self._config.observe_unaddressed and conversation.kind == "group":
@@ -344,6 +382,7 @@ class ChannelConversationEngine:
             _QueuedInboundMedia(
                 conversation=conversation,
                 messages=tuple(raw_messages),
+                message_ids=sources,
                 companion_text=normalized_companion,
                 observed_context=await self._snapshot_observed_context(observed_context),
             ),
@@ -355,20 +394,44 @@ class ChannelConversationEngine:
     async def _reject_group_keys(
         self,
         conversation: ConversationFacts,
-        texts: Sequence[str | None],
+        sources: Sequence[tuple[ConversationFacts, str | None]],
         context: Sequence[tuple[ConversationFacts, str]],
+        *,
+        command: PreparedCommand | None = None,
     ) -> bool:
-        if not (
-            conversation.kind == "group"
-            and any(text and detect_api_keys(text) for text in texts)
-            or any(facts.kind == "group" and detect_api_keys(text) for facts, text in context)
-        ):
+        messages = {
+            (facts.chat_id, facts.message_id)
+            for facts, text in (*sources, *context)
+            if facts.kind == "group" and text and detect_api_keys(text)
+        }
+        messages.update(
+            (facts.chat_id, facts.message_id)
+            for facts, text in context
+            if facts.kind == "group" and self._text_carries_secret_argument(text)
+        )
+        if not messages:
             return False
+        if conversation.kind == "group" and _carries_secret_argument(command):
+            messages.add((conversation.chat_id, conversation.message_id))
         if not self._stopped:
-            await self._replies.send_ingress(
-                self._routing._reply_plan_for(conversation), _GROUP_KEY_REPLY
-            )
+            plan = self._routing._reply_plan_for(conversation)
+            for target, message_id in messages:
+                plan = await self._remove_group_key(plan, target, message_id)
+            await self._replies.send_ingress(plan, _GROUP_KEY_REPLY)
         return True
+
+    def _text_carries_secret_argument(self, text: str) -> bool:
+        return text.lstrip().startswith("/") and _carries_secret_argument(
+            self._command_dispatcher.prepare(text)
+        )
+
+    async def _remove_group_key(
+        self, plan: ReplyPlanFacts, target: str, message_id: str | None
+    ) -> ReplyPlanFacts:
+        removed = await self._replies.remove_inbound(target, message_id)
+        if removed and (target, message_id) == (plan.platform_target, plan.reply_to_message_id):
+            return replace(plan, reply_to_message_id=None)
+        return plan
 
     async def _snapshot_observed_context(
         self, context: Sequence[tuple[ConversationFacts, str]]
@@ -760,6 +823,20 @@ class ChannelConversationEngine:
             try:
                 transport = await self._replies.ready_transport()
                 quoted = await transport.build_quoted_message(queued.raw_message)
+                if (
+                    quoted is not None
+                    and quoted.content
+                    and await group_content_has_key(
+                        quoted.content, self._attachment_store, self._text_carries_secret_argument
+                    )
+                ):
+                    raise GroupAttachmentKeyError(quoted.message_id)
+            except GroupAttachmentKeyError as error:
+                reply_plan = await self._remove_group_key(
+                    reply_plan, queued.conversation.chat_id, error.message_id
+                )
+                await self._replies.answer_admitted(queued.pending, reply_plan, _GROUP_KEY_REPLY)
+                return
             except Exception as error:
                 _LOGGER.warning(
                     "Channel quoted attachment processing failed (channel=%s): %s",
@@ -774,16 +851,6 @@ class ChannelConversationEngine:
                 )
             if quoted is not None:
                 content = await self._content_with_quoted_message(queued, quoted)
-
-        if (
-            queued.conversation.kind == "group"
-            and isinstance(content, list)
-            and any(
-                isinstance(block, TextBlock) and detect_api_keys(block.text) for block in content
-            )
-        ):
-            await self._replies.answer_admitted(queued.pending, reply_plan, _GROUP_KEY_REPLY)
-            return
 
         await self._replies.trigger_and_relay(
             route,
@@ -836,10 +903,21 @@ class ChannelConversationEngine:
         if queued.companion_text is not None:
             content_blocks.append(TextBlock(type="text", text=queued.companion_text))
         failure_replies: list[str] = []
-        for message in queued.messages:
+        rejected = False
+        for message, source in zip(queued.messages, queued.message_ids, strict=True):
             try:
                 transport = await self._replies.ready_transport()
-                content_blocks.extend(await transport.build_media_blocks(message))
+                blocks = await transport.build_media_blocks(message)
+                if queued.conversation.kind == "group" and await group_content_has_key(
+                    blocks, self._attachment_store, self._text_carries_secret_argument
+                ):
+                    raise GroupAttachmentKeyError(source)
+                content_blocks.extend(blocks)
+            except GroupAttachmentKeyError:
+                rejected = True
+                reply_plan = await self._remove_group_key(
+                    reply_plan, queued.conversation.chat_id, source
+                )
             except Exception as error:
                 _LOGGER.warning(
                     "Channel inbound media processing failed (channel=%s): %s",
@@ -849,9 +927,7 @@ class ChannelConversationEngine:
                 )
                 failure_replies.append(_media_failure_reply(error))
 
-        if queued.conversation.kind == "group" and any(
-            isinstance(block, TextBlock) and detect_api_keys(block.text) for block in content_blocks
-        ):
+        if rejected:
             await self._replies.answer_admitted(queued.pending, reply_plan, _GROUP_KEY_REPLY)
             return
 
@@ -937,7 +1013,7 @@ class ChannelConversationEngine:
         Returns the reply plan to answer with (no longer referencing a removed
         message) and what to tell the user about the message, if anything.
         """
-        if not prepared.secret_argument or not (prepared.argument or "").strip():
+        if not _carries_secret_argument(prepared):
             return reply_plan, None
         removed = await self._replies.remove_inbound(
             reply_plan.platform_target, conversation.message_id

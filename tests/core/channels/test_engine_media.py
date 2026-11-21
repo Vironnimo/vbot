@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels._conversation_content as content_module
-from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
-from core.channels.adapter import QuotedMessageFacts
+from core.attachments import AttachmentStore, AttachmentTooLargeError, AttachmentTypeNotAllowedError
+from core.channels.adapter import QuotedMessageFacts, content_blocks_for_attachment
 from core.chat import MessageSender
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.runs import RunKind
@@ -138,6 +138,33 @@ async def test_a_wake_word_caption_triggers_group_media_with_its_sender(tmp_path
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
     )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["album", "quote"])
+async def test_group_refuses_keys_in_uploaded_or_quoted_text_files(
+    tmp_path: Path, source: str
+) -> None:
+    key = "ghp_" + ("AbCdEf0123456789" * 3)[:36]
+    record = AttachmentStore(tmp_path).store("config.env", ("comment\n" * 2100 + key).encode())
+    blocks = content_blocks_for_attachment(record)
+    transport = FakeTransport(
+        media_builder=AsyncMock(side_effect=[[_BLOCK], blocks]),
+        quoted_builder=AsyncMock(return_value=QuotedMessageFacts("51", "Alice", blocks, "9")),
+    )
+    engine, sessions, trigger, _transport = make_engine(tmp_path, transport=transport)
+    group = make_conversation(kind="group", mentioned_bot=True, message_id="10")
+    if source == "album":
+        assert await engine.handle_inbound_media(group, ("image", "file"), message_ids=("10", "11"))
+    else:
+        assert await engine.handle_inbound_text(group, "Read this", raw_message="quote")
+    await drain(engine, group.chat_id)
+    trigger.assert_not_awaited()
+    assert transport.deleted == [(group.chat_id, "11" if source == "album" else "9")]
+    assert transport.sent_reply_targets == ["10"]
+    assert "Rotate" in transport.sent_texts[0] and key not in transport.sent_texts[0]
+    assert not sessions.get(SessionAddress(None, "assistant", SESSION_ID)).load()
     await engine.stop()
 
 

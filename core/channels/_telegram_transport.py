@@ -9,6 +9,7 @@ from itertools import batched
 from typing import Any, cast
 
 from core.attachments import AttachmentStore
+from core.channels._group_attachments import store_inbound_attachment
 from core.channels.adapter import (
     DeliveryProgress,
     FileData,
@@ -40,6 +41,7 @@ from ._telegram_messages import (
     _parse_thread_id,
     _telegram_message_author,
     _telegram_message_has_media,
+    _telegram_message_id,
     _utf16_length,
     split_telegram_message,
 )
@@ -402,7 +404,9 @@ class TelegramTransport:
 
             file_unique_id = getattr(largest_photo, "file_unique_id", None)
             filename = _default_photo_filename(file_unique_id)
-            record = await self._store_inbound_attachment(file_id=file_id, filename=filename)
+            record = await self._store_inbound_attachment(
+                raw_message, file_id=file_id, filename=filename
+            )
             blocks.append(
                 MediaBlock(
                     type="media",
@@ -427,7 +431,9 @@ class TelegramTransport:
             return blocks
 
         filename = _default_document_filename(document)
-        record = await self._store_inbound_attachment(file_id=file_id, filename=filename)
+        record = await self._store_inbound_attachment(
+            raw_message, file_id=file_id, filename=filename
+        )
         # A document is classified by its sniffed type, not by Telegram's delivery channel:
         # an MP3/MP4 sent as a "file" becomes a media attachment like any voice/video message.
         blocks.extend(content_blocks_for_attachment(record))
@@ -463,6 +469,7 @@ class TelegramTransport:
             user_id=user_id,
             user_display_name=display_name,
             content=blocks,
+            message_id=_telegram_message_id(replied_message),
         )
 
     async def _build_audio_video_block(self, message: Any) -> MediaBlock | None:
@@ -489,7 +496,9 @@ class TelegramTransport:
                 return None
 
             filename = default_filename_builder(media_object)
-            record = await self._store_inbound_attachment(file_id=file_id, filename=filename)
+            record = await self._store_inbound_attachment(
+                message, file_id=file_id, filename=filename
+            )
             return MediaBlock(
                 type="media",
                 attachment_id=record.id,
@@ -498,7 +507,7 @@ class TelegramTransport:
             )
         return None
 
-    async def _store_inbound_attachment(self, *, file_id: str, filename: str) -> Any:
+    async def _store_inbound_attachment(self, message: Any, *, file_id: str, filename: str) -> Any:
         attachment_store = self._attachment_store
         if attachment_store is None:
             raise ChannelError("Attachment store is not configured for Telegram channels")
@@ -509,7 +518,14 @@ class TelegramTransport:
             attachment_store,
             initial_delay=_INBOUND_MEDIA_RETRY_INITIAL_SECONDS,
         )
-        return await attachment_store.store_async(filename, bytes(payload))
+        chat_id = getattr(message, "chat_id", None)
+        return await store_inbound_attachment(
+            attachment_store,
+            filename,
+            bytes(payload),
+            group=isinstance(chat_id, int) and chat_id < 0,
+            message_id=_telegram_message_id(message),
+        )
 
     async def _download_inbound_attachment(
         self,

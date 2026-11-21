@@ -410,10 +410,9 @@ async def test_a_command_whose_argument_can_hold_a_secret_removes_the_message(
     dispatcher = _workflow_dispatcher(handler, execution_mode="immediate")
     prepare = dispatcher.prepare
 
-    def prepare_secret(content: str) -> PreparedCommand:
+    def prepare_secret(content: str) -> PreparedCommand | None:
         prepared = prepare(content)
-        assert prepared is not None
-        return replace(prepared, secret_argument=True)
+        return replace(prepared, secret_argument=True) if prepared is not None else None
 
     monkeypatch.setattr(dispatcher, "prepare", prepare_secret)
     if kind == "group":
@@ -426,6 +425,32 @@ async def test_a_command_whose_argument_can_hold_a_secret_removes_the_message(
     )
     transport.can_delete = can_delete
 
+    if kind == "group":
+        assert not await engine.handle_inbound_text(
+            make_conversation(kind="group", user_id=51, message_id="76"), "/workflow private-value"
+        )
+        assert transport.deleted == [("12345", "76")]
+        assert not transport.sent_texts
+        transport.deleted.clear()
+        key = "ghp_" + ("AbCdEf0123456789" * 3)[:36]
+        assert not await engine.handle_inbound_text(
+            make_conversation(kind="group", message_id="76"),
+            "/workflow private-value",
+            observed_context=[(make_conversation(kind="group", message_id="75"), key)],
+        )
+        assert sorted(transport.deleted) == [("12345", "75"), ("12345", "76")]
+        transport.deleted.clear()
+        assert not await engine.handle_inbound_text(
+            make_conversation(kind="group", message_id="76"),
+            "Read the preceding message",
+            observed_context=[
+                (make_conversation(kind="group", message_id="75"), "/workflow private-value")
+            ],
+        )
+        assert transport.deleted == [("12345", "75")]
+        transport.deleted.clear()
+        transport.sent.clear()
+        transport.sent_reply_targets.clear()
     await engine.handle_inbound_text(
         make_conversation(kind=kind, message_id="77"), "/workflow API_KEY sk-value"
     )

@@ -17,6 +17,7 @@ from typing import Any, override
 import httpx
 
 from core.attachments import AttachmentStore
+from core.channels._group_attachments import store_inbound_attachment
 from core.channels._message_chunks import split_message
 from core.channels.adapter import (
     ChannelAdapter,
@@ -174,7 +175,10 @@ class NetworkChannelAdapter(ChannelAdapter):
             self.remember(facts)
             if raw.get("files"):
                 # One failing file must not discard the other attachments or caption.
-                messages = tuple({**raw, "files": [file], "text": ""} for file in raw["files"])
+                messages = tuple(
+                    {**raw, "files": [file], "text": "", "group": facts.kind == "group"}
+                    for file in raw["files"]
+                )
                 admitted = await self._engine.handle_inbound_media(
                     facts, messages, companion_text=raw.get("text") or None
                 )
@@ -214,8 +218,12 @@ class NetworkChannelAdapter(ChannelAdapter):
                 raise ChannelError("Attachment storage is unavailable")
             self._attachment_store.ensure_within_limit(file.get("size"))
             data = await self.download(file)
-            record = await self._attachment_store.store_async(
-                file.get("name") or "attachment", data
+            record = await store_inbound_attachment(
+                self._attachment_store,
+                file.get("name") or "attachment",
+                data,
+                group=bool(raw_message.get("group")),
+                message_id=None,
             )
             blocks.extend(content_blocks_for_attachment(record))
         return blocks
