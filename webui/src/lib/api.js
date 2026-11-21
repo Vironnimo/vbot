@@ -228,6 +228,7 @@ export {
   listChatCommands,
   loadChatRunResult,
   loadChatHistory,
+  searchChat,
   loadChatTimeline,
   loadChatTimelineChildren,
   loadChatToolCall,

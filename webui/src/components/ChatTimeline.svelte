@@ -7,6 +7,9 @@
     dateKeyForTimestamp,
     formatDate,
     groupTransientCards,
+    groupRunChildren,
+    visibleRunChildren,
+    userContentBlocks,
     labelForEvent,
     latestLiveClockStart,
     runFooterGroups,
@@ -15,6 +18,8 @@
   import { t } from '$lib/i18n.js';
   import { createChatScrollController } from '$lib/chatScroll.js';
   import { timelineRowsForViewport } from '$lib/chatTimeline.js';
+  import { locateSearchHit } from '$lib/chatState/sessionSearch.svelte.js';
+  import { searchRange } from './chat/searchHighlight.svelte.js';
   import { nestedScrollConsumes } from '$lib/boundedScroll.js';
   import { provideMountHold } from '$lib/mountHold.js';
 
@@ -41,6 +46,7 @@
     // Key of the displayed Session: per-Session scroll memory and follow
     // requests.
     sessionKey = '',
+    searchTarget = null,
     // The displayed Session's current Run; while it runs, its Tool rows offer
     // the server-advertised Move to background action.
     currentRun = null,
@@ -158,7 +164,10 @@
   // Disclosure and pending-action state of the rows, per displayed Session;
   // rows read it through context so it outlives their components.
   const viewState = provideTimelineViewState(
-    createTimelineViewState(() => readOnly),
+    createTimelineViewState(
+      () => readOnly,
+      () => searchTarget,
+    ),
   );
   // Text of the polite live region: only genuinely new content (see
   // `timelineAnnouncer.js`), never rows the window mounts while scrolling.
@@ -510,6 +519,56 @@
 
   function isReasoningOpen(id) {
     return viewState.isOpen(`reasoning:${id}`);
+  }
+
+  export async function revealSearchHit(destination, current) {
+    await tick();
+    if (!current() || !controller) return false;
+    const found = locateSearchHit(timelineItems, destination.hit);
+    if (!found) return false;
+    const { row, child, message } = found;
+    if (child && workingMode === 'compact') {
+      const group = groupRunChildren(
+        visibleRunChildren(row),
+        workingMode,
+        presentation === 'compact',
+      ).find((group) => group.children?.includes(child));
+      if (group) viewState.setOpen(group.id, true);
+    }
+    if (message.role === 'user') {
+      // Steer renders its own message entry inside the Run.
+      const key = child ? message.id : row.id;
+      viewState.setOpen(`user-text:${key}`, true);
+      userContentBlocks(message).forEach((block, index) =>
+        viewState.setOpen(
+          `${block.type === 'text' ? 'user-text' : 'user-transcription'}-${index}:${key}`,
+          true,
+        ),
+      );
+    }
+    controller.revealRow(row.id);
+    await tick();
+    if (!current()) return false;
+    const rowElement = Array.from(
+      timelineContent.querySelectorAll('[data-timeline-item-id]'),
+    ).find((el) => el.dataset.timelineItemId === row.id);
+    const element = Array.from(
+      rowElement?.querySelectorAll('[data-search-message]') ?? [],
+    ).find((el) => el.dataset.searchMessage === message.id);
+    if (!rowElement) return false;
+    // A contribution can hide the built-in Markdown body. Its timeline
+    // row is still a valid destination for this persisted message.
+    const anchor = element ?? rowElement;
+    controller.alignSearchMatch(anchor, searchRange(anchor));
+    if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+      anchor.animate?.(
+        [
+          { backgroundColor: 'var(--surface-2)' },
+          { backgroundColor: 'transparent' },
+        ],
+        { duration: 800 },
+      );
+    return true;
   }
 
   function setReasoningOpen(id, isOpen) {

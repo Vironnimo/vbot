@@ -43,6 +43,7 @@ const BUILTIN_ENTRIES = {
   ],
   'chat.header': [
     ['core:chat-header.area', () => t('chat.title'), 10],
+    ['core:chat-header.search', () => t('chat.search.title'), 15],
     ['core:chat-header.info', () => t('chat.activity.open'), 20],
   ],
   'chat.composer.actions': [

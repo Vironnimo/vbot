@@ -127,24 +127,36 @@ def search(
         return empty
     search_filter = _search_filter(request)
     literal = request.literal_query
-    check = _Check(connection, search_filter, matches=literal.matches, limit=request.limit)
+    check = _Check(
+        connection,
+        search_filter,
+        matches=literal.matches,
+        limit=request.limit,
+        timeline_only=request.timeline_only,
+    )
 
     if use_fts:
         if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
             tool_inclusive = request.tool_inclusive
             # SQLite builds without the trigram tokenizer have no trigram index.
+            index_query = request.timeline_index_query if request.timeline_only else literal
             trigram = (
                 request.roles is not None
                 and set(request.roles).issubset(FTS_TRIGRAM_ROLES)
-                and literal.trigram_supported
+                and index_query.trigram_supported
                 and _store_fts._fts_table_exists(connection, FTS_TRIGRAM_TABLE)
             )
+            if request.timeline_only and not trigram:
+                hits, complete = check.run(
+                    _scan_candidates(connection, search_filter, request.order), ranked=False
+                )
+                return SessionSearchResult(tuple(hits), complete, "scan", "timeline_substring")
             table = FTS_TRIGRAM_TABLE if trigram else FTS_TABLE
             hits, complete = check.run(
                 _fts_candidates(
                     connection,
                     table,
-                    "{content search_text} : (" + literal.fts_expression + ")",
+                    "{content search_text} : (" + index_query.fts_expression + ")",
                     search_filter,
                     request.order,
                 ),
@@ -167,9 +179,12 @@ def _search_filter(request: SessionSearchRequest) -> _Filter:
     """Return the eligible live Sessions and the entry filter of one search."""
     eligible = (
         "eligible (session_key) AS MATERIALIZED (SELECT s.session_key FROM sessions AS s "
-        "WHERE s.state = 'live' AND s.project_id = ? AND "
-        + _store_values._recall_visibility_sql(include_subagents=request.include_subagents)
+        "WHERE s.state = 'live' AND s.project_id = ?"
     )
+    if not request.timeline_only:
+        eligible += " AND " + _store_values._recall_visibility_sql(
+            include_subagents=request.include_subagents
+        )
     eligible_params: list[Any] = [request.project_id if request.project_id is not None else ""]
     if request.agent_id is not None:
         eligible += " AND s.agent_id = ?"
@@ -183,6 +198,8 @@ def _search_filter(request: SessionSearchRequest) -> _Filter:
     eligible += ")"
     clauses: list[str] = ["e.searchable = 1"]
     entry_params: list[Any] = []
+    if request.timeline_only:
+        clauses.append("e.role IN ('user', 'assistant')")
     if request.roles is not None:
         clauses.append("e.role IN (SELECT value FROM json_each(?))")
         entry_params.append(json.dumps(list(request.roles)))
@@ -261,6 +278,7 @@ class _Check:
         *,
         matches: Callable[[str], bool],
         limit: int,
+        timeline_only: bool,
     ) -> None:
         from core.sessions.search_content import (
             RECALL_TOOL_RESULT_NAMES,
@@ -271,6 +289,7 @@ class _Check:
         self._filter = search_filter
         self._matches = matches
         self._limit = limit
+        self._timeline_only = timeline_only
         self._roles = frozenset(SESSION_RECALL_CONVERSATION_ROLES)
         self._artifact_tools = RECALL_TOOL_RESULT_NAMES
 
@@ -304,6 +323,7 @@ class _Check:
                             text=text,
                             rank=ranks[key],
                             message_index=int(row["seq"]),
+                            run_id=row["run_id"],
                         )
                     )
                     if len(hits) == self._limit:
@@ -312,17 +332,24 @@ class _Check:
 
     def _rows(self, keys: Iterable[int]) -> dict[int, sqlite3.Row]:
         """Read each candidate's text and the Session its hit is reported for."""
+        external_fields = (
+            "json_extract(t.external_history_json, '$.kind') AS external_kind, "
+            "json_extract(t.external_history_json, '$.role') AS external_role, "
+            if self._timeline_only
+            else ""
+        )
         return {
             int(row["entry_key"]): row
             for row in self._connection.execute(
                 f"WITH {self._filter.eligible_sql}, "
                 f"candidates (entry_key, reported_key) AS (SELECT e.entry_key, {_REPORTED_SESSION} "
                 "FROM entries AS e WHERE e.entry_key IN (SELECT value FROM json_each(?))) "
-                "SELECT e.entry_key, e.entry_id, e.seq, e.role, e.created_at, "
+                "SELECT e.entry_key, e.entry_id, e.seq, e.role, e.created_at, r.run_id, "
                 "COALESCE(t.content, t.search_text) AS text, c.name AS tool_name, "
-                "s.project_id, s.agent_id, s.session_id "
+                f"{external_fields}s.project_id, s.agent_id, s.session_id "
                 "FROM candidates AS k JOIN entries AS e ON e.entry_key = k.entry_key "
                 "JOIN sessions AS s ON s.session_key = k.reported_key "
+                "LEFT JOIN runs AS r ON r.run_key = e.run_key "
                 "LEFT JOIN entry_text AS t ON t.entry_key = e.entry_key "
                 "LEFT JOIN tool_calls AS c ON c.result_entry_key = e.entry_key",
                 (*self._filter.eligible_params, _store_values._key_list(list(keys))),
@@ -336,6 +363,17 @@ class _Check:
         and never the persisted results of earlier Recall searches.
         """
         role = row["role"]
+        if self._timeline_only:
+            from core.runs import is_silent_answer
+
+            if row["external_kind"] is not None:
+                if row["external_kind"] != "message" or row["external_role"] not in (
+                    "user",
+                    "assistant",
+                ):
+                    return ""
+            elif role == "assistant" and is_silent_answer(row["text"]):
+                return ""
         if role not in self._roles or (role == "tool" and row["tool_name"] in self._artifact_tools):
             return ""
         return str(row["text"] or "")

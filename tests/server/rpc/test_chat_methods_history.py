@@ -170,6 +170,89 @@ def history(tmp_path: Path) -> Iterator[_History]:
         sessions.close()
 
 
+@pytest.mark.asyncio
+async def test_chat_search_returns_bounded_snippets_from_the_displayed_fork(
+    history: _History,
+) -> None:
+    parent = history.session()
+    question = ChatMessage.user("context " * 50 + "🌱 Needle and a PIN")
+    parent.append_many(
+        [
+            question,
+            ChatMessage.compaction_checkpoint(
+                summary="needle pin", projection=[], compacted_token_count=20
+            ),
+        ]
+    )
+    fork = await history.sessions.fork(parent.address)
+    parent.append(ChatMessage.user("needle pin outside fork"))
+    answer = ChatMessage.assistant(model="test", content="pin then needle")
+    fork.append_many(
+        [
+            answer,
+            ChatMessage.error("tool", "pin needle"),
+            ChatMessage.assistant(model="test", content="  [SILENT]  ", reasoning="needle pin"),
+        ]
+    )
+
+    async def search(query: str) -> dict[str, Any]:
+        return await history.read(
+            method="chat.search", session_id=fork.address.session_id, query=query
+        )
+
+    found = await search("pIn NEEDLE")
+    assert found["complete"]
+    assert [(hit["message_id"], hit["role"]) for hit in found["hits"]] == [
+        (answer.id, "assistant"),
+        (question.id, "user"),
+    ]
+    snippet = found["hits"][1]
+    assert len(snippet["snippet"]) < 180
+    assert [snippet["snippet"][a:b] for a, b in snippet["ranges"]] == ["Needle", "PIN"]
+    assert not (await search("silent"))["hits"]
+    long_term = "a" * 180
+    imported = ChatMessage.assistant(model="test", content="historical tool needle pin")
+    fork.append_many(
+        [
+            ChatMessage.user(long_term),
+            ChatMessage.user("Fuß an der Straße"),
+            ChatMessage.user("ᲗᲑᲘᲚᲘᲡᲘ"),
+            replace(
+                imported,
+                external_history={
+                    "source": "codex",
+                    "session_id": "old",
+                    "ordinal": 1,
+                    "role": "tool",
+                    "kind": "tool_result",
+                    "raw": {},
+                },
+            ),
+        ]
+    )
+    assert len((await search("needle pin"))["hits"]) == 2
+    assert len((await search("თბილისი"))["hits"]) == 1
+    (unicode_hit,) = (await search("strasse ss"))["hits"]
+    assert [unicode_hit["snippet"][a:b] for a, b in unicode_hit["ranges"]] == ["ß", "Straße"]
+    (long_hit,) = (await search(long_term))["hits"]
+    assert [long_hit["snippet"][a:b] for a, b in long_hit["ranges"]] == [long_term[:168]]
+    invalid = await call(
+        history.state,
+        "chat.search",
+        agent_id="coder",
+        session_id=fork.address.session_id,
+        query="x" * 257,
+    )
+    assert not invalid["ok"]
+    fork.append_many([ChatMessage.user(f"boundary {i}") for i in range(200)])
+    assert (await search("boundary"))["complete"]
+    last = ChatMessage.user("boundary newest")
+    fork.append(last)
+    capped = await search("boundary")
+    assert not capped["complete"] and len(capped["hits"]) == 200
+    assert capped["hits"][0]["message_id"] == last.id
+
+
 def _user(index: int) -> ChatMessage:
     return replace(ChatMessage.user(f"Message {index}"), id=f"message-{index:03d}")
 

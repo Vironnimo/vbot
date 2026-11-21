@@ -87,6 +87,7 @@ export function createChatHistory({
   const historyLoadVersions = new Map();
   const historyCache = new Map();
   const runHistoryLoads = new Map();
+  const olderHistoryLoads = new Map();
   let displayedHistoryRequest = null;
 
   // Unchanged immutable records survive page loads, so charge them at their
@@ -385,7 +386,21 @@ export function createChatHistory({
     }
   }
 
-  async function loadOlderHistory(sessionState) {
+  function loadOlderHistory(sessionState, limit = HISTORY_OLDER_LIMIT) {
+    if (!sessionState) return Promise.resolve(false);
+    if (!olderHistoryLoads.has(sessionState.key)) {
+      const key = sessionState.key;
+      olderHistoryLoads.set(
+        key,
+        readOlderHistory(sessionState, limit).finally(() =>
+          olderHistoryLoads.delete(key),
+        ),
+      );
+    }
+    return olderHistoryLoads.get(sessionState.key);
+  }
+
+  async function readOlderHistory(sessionState, limit) {
     if (
       !sessionState?.agentId ||
       !sessionState.hasOlderHistory ||
@@ -419,7 +434,7 @@ export function createChatHistory({
           history = await operations.loadChatHistory({
             agent_id: sessionState.agentId,
             session_id: sessionState.sessionId,
-            limit: HISTORY_OLDER_LIMIT,
+            limit,
             child_limit: 100,
             before,
           });

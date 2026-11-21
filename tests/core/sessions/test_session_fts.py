@@ -815,6 +815,14 @@ def test_search_admits_only_recall_visible_sessions(
             "delegated",
         }
         assert searched(session_id="reflection") == set()
+        sessions.create("agent", session_id="ephemeral", metadata={"ephemeral": True}).append(
+            ChatMessage.user("visible needle")
+        )
+        for session_id in ("ephemeral", "delegated", "reflection"):
+            assert searched(session_id=session_id) == set()
+            assert searched(session_id=session_id, timeline_only=True) == {session_id}
+        with pytest.raises(ValueError):
+            searched(timeline_only=True)
     finally:
         sessions.close()
 

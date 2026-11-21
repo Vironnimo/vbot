@@ -74,6 +74,7 @@
   import ChatWidgetState from './ChatWidgetState.svelte';
   import ChatPortal from './ChatPortal.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
+  import { searchHighlight } from './searchHighlight.svelte.js';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
@@ -807,13 +808,19 @@
           timestamp: child.timestamp,
         }}
         {#snippet messageContent()}
-          <MarkdownContent
-            contentId={child.id}
-            source={child.content ?? ''}
-            streaming={working}
-            caret={working}
-            class={`msg-markdown${working ? ' streaming-text' : ''}`}
-          />
+          <div
+            data-search-message={message.id}
+            use:searchHighlight={() =>
+              viewState.searchFor(child.messages?.[0] ?? message)}
+          >
+            <MarkdownContent
+              contentId={child.id}
+              source={child.content ?? ''}
+              streaming={working}
+              caret={working}
+              class={`msg-markdown${working ? ' streaming-text' : ''}`}
+            />
+          </div>
         {/snippet}
         <MessageContributionSurface
           {message}

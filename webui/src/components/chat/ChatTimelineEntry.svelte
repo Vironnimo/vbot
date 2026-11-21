@@ -75,6 +75,7 @@
   import ToolCategoryIcon from './ToolCategoryIcon.svelte';
   import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import UserMessageText from './UserMessageText.svelte';
+  import { searchHighlight } from './searchHighlight.svelte.js';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
@@ -355,7 +356,12 @@
       <span class="msg-timestamp">{formatTime(item.message.timestamp)}</span>
     </div>
     {#if item.message.external_history.kind === 'message'}
-      <MarkdownContent source={item.message.content} class="msg-markdown" />
+      <div
+        data-search-message={item.message.id}
+        use:searchHighlight={() => viewState.searchFor(item.message)}
+      >
+        <MarkdownContent source={item.message.content} class="msg-markdown" />
+      </div>
     {:else}
       <details>
         <summary>{t('external.historicalActivity')}</summary>
@@ -433,7 +439,11 @@
         ]}
       />
     </div>
-    <div class="msg-content">
+    <div
+      class="msg-content"
+      data-search-message={item.message.id}
+      use:searchHighlight={() => viewState.searchFor(item.message)}
+    >
       {#if editing && !viewState.readOnly}
         <div class="message-edit-form">
           <TextArea

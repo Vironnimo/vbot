@@ -22,7 +22,10 @@ function createScope() {
   return scope;
 }
 
-export function createTimelineViewState(readOnly = () => false) {
+export function createTimelineViewState(
+  readOnly = () => false,
+  searchTarget = () => null,
+) {
   // sessionKey -> scope, least recently displayed first. Only `scope` is
   // read reactively; this index is bookkeeping.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, not rendered state
@@ -37,6 +40,15 @@ export function createTimelineViewState(readOnly = () => false) {
   const autoplaySources = new Set();
 
   return {
+    searchFor(message) {
+      const target = searchTarget();
+      return target &&
+        target.hit.message_id === message?.id &&
+        (message.history_sequence == null ||
+          target.hit.sequence === message.history_sequence)
+        ? target
+        : null;
+    },
     get readOnly() {
       return readOnly();
     },

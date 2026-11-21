@@ -30,6 +30,10 @@ export function loadChatHistory(params = {}, options = {}) {
   return rpc('chat.history', params, options);
 }
 
+export function searchChat(params, options = {}) {
+  return rpc('chat.search', params, options);
+}
+
 export function loadChatTimeline(params = {}, options = {}) {
   requirePlainObject(
     params,
