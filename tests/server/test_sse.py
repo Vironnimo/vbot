@@ -401,6 +401,10 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
     run = Run(run_id="run-file", agent_id="coder", session_id="session-one")
     run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Here is an image"})
     run.emit(
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        {"content_delta": "continued", "private_data": {"reasoning_meta": {"opaque": "secret"}}},
+    )
+    run.emit(
         ASSISTANT_OUTPUT_EVENT,
         {
             "message": message.to_dict(),
@@ -436,6 +440,12 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
     )
 
     delta = await anext(stream)
+    assert not projection_threads
+    extended_delta = await anext(stream)
+    assert _parse_sse(extended_delta)[0]["data"]["payload"] == {
+        "content_delta": "continued",
+        "private_data": {},
+    }
     # The Run URL's 120 seconds limit admission, not an already-open stream:
     # a long Run must still produce usable media for its live Device.
     monkeypatch.setattr("server.file_delivery.time.time", lambda: 1121)

@@ -7,12 +7,18 @@ import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import psutil  # type: ignore[import-untyped]
 
 from core.performance import count
-from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
+from core.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    RUN_AGENT_ACTIVITY_FIELD,
+    RunEvent,
+    RunStatus,
+)
 from core.utils.surrogates import replace_lone_surrogates
 from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import finish_despite_cancel
@@ -61,6 +67,10 @@ SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 # Run events sent over SSE, all streams together; heartbeats are not counted.
 SSE_EVENTS_METRIC = "events.sse"
+_TEXT_DELTA_FIELDS = {
+    ASSISTANT_OUTPUT_DELTA_EVENT: "content_delta",
+    REASONING_DELTA_EVENT: "reasoning_delta",
+}
 
 WS_HEARTBEAT_INTERVAL_SECONDS = 25.0
 
@@ -97,6 +107,20 @@ async def _send_websocket_json(websocket: WebSocket, payload: Any) -> None:
     """
     text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     await websocket.send_text(replace_lone_surrogates(text))
+
+
+async def _wait_for_stream_read(
+    event_task: asyncio.Task[Any],
+    heartbeat_interval: float,
+    shutdown: asyncio.Task[Any] | None = None,
+) -> None:
+    """Keep a pending read alive across heartbeats and yield fairly on a buffered read."""
+    if event_task.done():
+        # Retained replay or a ready burst still yields to disconnects and other Runs.
+        await asyncio.sleep(0)
+    else:
+        waiting = (event_task,) if shutdown is None else (event_task, shutdown)
+        await asyncio.wait(waiting, timeout=heartbeat_interval, return_when=asyncio.FIRST_COMPLETED)
 
 
 async def _stream_websocket_events(
@@ -136,14 +160,12 @@ async def _stream_websocket_events(
             while True:
                 if event_task is None:
                     event_task = asyncio.create_task(
-                        stream_iter.__anext__(), name="websocket-stream-next"
+                        stream_iter.__anext__(), name="websocket-stream-next", eager_start=True
                     )
                 # Keep the pending read through heartbeats; cancelling it would
                 # close an async generator and end server-push delivery.
-                done, _pending = await asyncio.wait(
-                    {event_task}, timeout=WS_HEARTBEAT_INTERVAL_SECONDS
-                )
-                if not done:
+                await _wait_for_stream_read(event_task, WS_HEARTBEAT_INTERVAL_SECONDS)
+                if not event_task.done():
                     await _send_websocket_json(
                         websocket,
                         {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()},
@@ -360,6 +382,18 @@ def _replay_after_sequence(request: Request) -> int:
     return _parse_after_sequence(request.headers.get("last-event-id"))
 
 
+async def _public_run_event(event: RunEvent, file_delivery: FileDelivery | None) -> JsonObject:
+    data = event.to_dict()
+    # Only the exact one-string delta shape skips metadata projection. An
+    # extended event takes the full path even when its type names a text delta.
+    field = _TEXT_DELTA_FIELDS.get(event.type)
+    if field is not None and len(event.payload) == 1 and isinstance(event.payload.get(field), str):
+        return data
+    return cast(
+        JsonObject, await remove_opaque_provider_metadata_async(data, file_delivery=file_delivery)
+    )
+
+
 async def _sse_run_events(
     run: Any,
     *,
@@ -383,22 +417,13 @@ async def _sse_run_events(
             while shutdown_event is None or not shutdown_event.is_set():
                 if event_task is None:
                     event_task = asyncio.create_task(
-                        anext(event_iterator), name=f"sse-next:{run.id}"
+                        anext(event_iterator), name=f"sse-next:{run.id}", eager_start=True
                     )
-                waiting = {event_task}
-                if shutdown_task is not None:
-                    waiting.add(shutdown_task)
-                done, _pending = await asyncio.wait(
-                    waiting,
-                    timeout=heartbeat_interval_seconds,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if shutdown_task in done:
+                await _wait_for_stream_read(event_task, heartbeat_interval_seconds, shutdown_task)
+                if shutdown_event is not None and shutdown_event.is_set():
                     break
-                if not done:
-                    # A named transport-only event keeps quiet Tool calls from
-                    # looking like a dead connection. It has no Run sequence and
-                    # never enters timeline or replay state.
+                if not event_task.done():
+                    # A heartbeat has no sequence and never enters Run history.
                     yield "event: heartbeat\ndata: {}\n\n"
                     continue
                 try:
@@ -406,10 +431,7 @@ async def _sse_run_events(
                 except StopAsyncIteration:
                     break
                 event_task = None
-                data = await remove_opaque_provider_metadata_async(
-                    event.to_dict(),
-                    file_delivery=file_delivery,
-                )
+                data = await _public_run_event(event, file_delivery)
                 if shutdown_event is not None and shutdown_event.is_set():
                     break
                 if include_file_urls:

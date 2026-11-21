@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from io import StringIO
 from typing import Any
 
 from core.providers._messages_constants import (
@@ -214,7 +215,12 @@ class AnthropicMessagesStreamDecoder:
         if index is None:
             return []
         block_state = self.content_blocks_by_index.get(index, {})
-        reasoning_block = self._reasoning_block_normalizer(block_state.get("block"))
+        block = block_state.get("block")
+        if isinstance(block, dict):
+            for key in ("thinking", "text"):
+                if (parts := block_state.pop(key, None)) is not None:
+                    block[key] = parts.getvalue()
+        reasoning_block = self._reasoning_block_normalizer(block)
         if not reasoning_block:
             return []
 
@@ -263,24 +269,30 @@ class AnthropicMessagesStreamDecoder:
         if not isinstance(text, str) or not text:
             return []
         if self._text_delta_in_thinking and block_state.get("type") == THINKING_BLOCK_TYPE:
-            block = block_state.get("block")
-            if isinstance(block, dict):
-                block["text"] = f"{block.get('text', '')}{text}"
+            self._append_reasoning_fragment(block_state, "text", text)
             return [{"type": "reasoning_delta", "text": text}]
         return [{"type": "content_delta", "text": text}]
 
-    @staticmethod
     def _normalize_thinking_delta(
+        self,
         delta: dict[str, Any],
         block_state: dict[str, Any],
     ) -> list[dict[str, Any]]:
         thinking = delta.get("thinking")
         if not isinstance(thinking, str) or not thinking:
             return []
+        self._append_reasoning_fragment(block_state, "thinking", thinking)
+        return [{"type": "reasoning_delta", "text": thinking}]
+
+    @staticmethod
+    def _append_reasoning_fragment(block_state: dict[str, Any], key: str, fragment: str) -> None:
         block = block_state.get("block")
         if isinstance(block, dict):
-            block["thinking"] = f"{block.get('thinking', '')}{thinking}"
-        return [{"type": "reasoning_delta", "text": thinking}]
+            parts = block_state.get(key)
+            if parts is None:
+                parts = block_state[key] = StringIO()
+                parts.write(str(block.get(key, "")))
+            parts.write(fragment)
 
     @staticmethod
     def _apply_signature_delta(

@@ -108,6 +108,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
+    ReasoningReplayFidelity,
     remove_reasoning_kwargs,
     warn_effort_swallowed,
     warn_rejected_effort,
@@ -118,7 +119,7 @@ from core.providers.reasoning_dialects import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
-from core.providers.wire_profile import ReasoningWire
+from core.providers.wire_profile import ReasoningWire, WireProfile
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import (
@@ -359,7 +360,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self,
         message: dict[str, Any],
         *,
-        model_id: str | None = None,
+        profile: WireProfile,
+        fidelity: ReasoningReplayFidelity,
     ) -> dict[str, Any]:
         """Convert an internal assistant message to its wire representation.
 
@@ -374,11 +376,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         wire = _to_openai_assistant_message(
             message,
             escape_rfl_parameter_end=(
-                self.wire_profile(model_id or "").request.options.get("escape_rfl_parameter_end")
-                is True
+                profile.request.options.get("escape_rfl_parameter_end") is True
             ),
         )
-        fidelity = self.reasoning_replay_fidelity(model_id or "")
         reasoning_meta = message.get("reasoning_meta")
         if fidelity != REASONING_REPLAY_FIDELITY_READABLE_ONLY and isinstance(
             reasoning_meta, Mapping
@@ -395,7 +395,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     for item in chunks
                 ]
                 return wire
-        replay = self.wire_profile(model_id or "").replay
+        replay = profile.replay
         carrier = replay.history_field
         if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY or carrier is None:
             # Strict/block-shaped wires never take a top-level readable field.
@@ -420,21 +420,29 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             wire.setdefault(carrier, "")
         return wire
 
-    def _format_message(
-        self,
-        message: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Convert one internal message to its wire representation."""
-        if message.get("role") == "assistant":
-            return self._format_assistant_message(message, model_id=model_id)
-        if message.get("role") == "user" and isinstance(message.get("content"), list):
-            return {
-                "role": "user",
-                "content": [self._format_user_content_part(part) for part in message["content"]],
-            }
-        return _to_openai_message(message)
+    def _format_messages(
+        self, messages: Sequence[Mapping[str, Any]], model_id: str, profile: WireProfile
+    ) -> list[dict[str, Any]]:
+        """Render request history with the same replay policy for each Assistant turn."""
+        fidelity = self.reasoning_replay_fidelity(model_id)
+        wire = []
+        for message in project_tool_result_content_fallbacks(messages):
+            if message.get("role") == "assistant":
+                wire.append(
+                    self._format_assistant_message(message, profile=profile, fidelity=fidelity)
+                )
+            elif message.get("role") == "user" and isinstance(message.get("content"), list):
+                wire.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            self._format_user_content_part(part) for part in message["content"]
+                        ],
+                    }
+                )
+            else:
+                wire.append(_to_openai_message(message))
+        return wire
 
     def _format_user_content_part(self, part: Any) -> dict[str, Any]:
         """Encode one canonical user content part for this provider's wire."""
@@ -449,14 +457,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> int:
         """Count the rendered Chat request, including only its selected reasoning class."""
-        projected = project_tool_result_content_fallbacks([dict(message) for message in messages])
-        wire = [self._format_message(message, model_id=model_id) for message in projected]
+        profile = self.wire_profile(model_id)
+        wire = self._format_messages(messages, model_id, profile)
         tokens, _ = estimate_structured_tokens(wire, model_id=model_id)
         if tools:
             tool_tokens, _ = estimate_structured_tokens(
-                render_tool_definitions(
-                    list(tools), profile=self.wire_profile(model_id).request.tool_schema
-                ),
+                render_tool_definitions(list(tools), profile=profile.request.tool_schema),
                 model_id=model_id,
             )
             tokens += tool_tokens
@@ -481,12 +487,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             messages = normalize_tool_call_ids(messages, id_profile)
         selected_effort = _selected_thinking_effort(request_kwargs)
         self._apply_model_output_limit(request_kwargs, model_id, messages)
-        projected_messages = project_tool_result_content_fallbacks(messages)
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": [
-                self._format_message(message, model_id=model_id) for message in projected_messages
-            ],
+            "messages": self._format_messages(messages, model_id, profile),
         }
         _apply_openai_tools(payload, request_kwargs, profile=rules.tool_schema)
         unrendered = set(payload)

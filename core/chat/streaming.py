@@ -7,8 +7,10 @@ import json
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
+from io import StringIO
 from typing import Any, Literal
 
 from core.chat._output_speed import (
@@ -45,7 +47,7 @@ from core.runs import (
 from core.tools import registry_tool_name
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import format_canonical_timestamp
 
 JsonObject = dict[str, Any]
 
@@ -474,7 +476,7 @@ class _ToolCallFragments:
     synthetic_id_suffix: str
     provider_id: str | None = None
     name_text: str = ""
-    arguments_text: str = ""
+    arguments: StringIO = field(default_factory=StringIO)
     rejection: object = None
 
     @property
@@ -496,11 +498,11 @@ class _ToolCallFragments:
         into a sibling Call.
         """
         self.name_text += name_delta
-        self.arguments_text += arguments_delta
+        self.arguments.write(arguments_delta)
 
     def arguments_closed(self) -> bool:
         """Whether the call has a name and its arguments form one complete JSON value."""
-        text = self.arguments_text.strip()
+        text = self.arguments.getvalue().strip()
         if not self.name_text or not text:
             return False
         try:
@@ -513,7 +515,7 @@ class _ToolCallFragments:
         return normalize_tool_call_candidates(
             tool_call_id=self.provider_id,
             name=self.name_text,
-            arguments=self.arguments_text,
+            arguments=self.arguments.getvalue(),
             fallback_id=f"tool_call_{self.synthetic_id_suffix}",
             rejection=self.rejection,
         )
@@ -538,13 +540,13 @@ class StreamingAccumulator:
         self._reasoning_parts: list[str] = []
         self._content_guard = StreamRepetitionGuard()
         self._reasoning_guard = StreamRepetitionGuard()
-        self._reasoning_summary: list[str] = []
+        self._reasoning_summary: list[list[str]] = []
         self._last_text_delta_type: str | None = None
         self._reasoning_meta: JsonObject | None = None
         self._reasoning_started_perf: float | None = None
         self._reasoning_ended_perf: float | None = None
-        self._reasoning_started_at: str | None = None
-        self._reasoning_completed_at: str | None = None
+        self._reasoning_started_at: datetime | None = None
+        self._reasoning_completed_at: datetime | None = None
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
         # The slot whose fragments are still arriving; every earlier slot is complete.
         self._open_tool_slot: str | None = None
@@ -590,9 +592,10 @@ class StreamingAccumulator:
         """
         if self._reasoning_started_perf is None or self._reasoning_ended_perf is None:
             return None
+        assert self._reasoning_started_at is not None and self._reasoning_completed_at is not None
         return {
-            "started_at": self._reasoning_started_at,
-            "completed_at": self._reasoning_completed_at,
+            "started_at": format_canonical_timestamp(self._reasoning_started_at),
+            "completed_at": format_canonical_timestamp(self._reasoning_completed_at),
             "duration_ms": max(
                 0,
                 round((self._reasoning_ended_perf - self._reasoning_started_perf) * 1000),
@@ -679,7 +682,7 @@ class StreamingAccumulator:
             finish_reason=self._finish_reason,
             usage=dict(self._usage) if self._usage is not None else None,
             reasoning_timing=self.reasoning_timing,
-            reasoning_summary=list(self._reasoning_summary) or None,
+            reasoning_summary=["".join(section) for section in self._reasoning_summary] or None,
         )
 
     def finalize_partial_fields(self) -> StreamingAssistantFields:
@@ -700,7 +703,7 @@ class StreamingAccumulator:
             finish_reason=None,
             usage=dict(self._usage) if self._usage is not None else None,
             reasoning_timing=self.reasoning_timing,
-            reasoning_summary=list(self._reasoning_summary) or None,
+            reasoning_summary=["".join(section) for section in self._reasoning_summary] or None,
         )
 
     def _finalize_text(self) -> tuple[str | None, str | None]:
@@ -748,8 +751,8 @@ class StreamingAccumulator:
             if index < 0 or index > len(self._reasoning_summary):
                 raise StreamingDeltaError("reasoning summary sections must arrive in order")
             if index == len(self._reasoning_summary):
-                self._reasoning_summary.append("")
-            self._reasoning_summary[index] += summary_text
+                self._reasoning_summary.append([])
+            self._reasoning_summary[index].append(summary_text)
             payload.update(summary_index=index, summary_text=summary_text)
         return StreamingVisibleDelta(event_type=REASONING_DELTA_EVENT, payload=payload)
 
@@ -787,11 +790,12 @@ class StreamingAccumulator:
 
     def _record_reasoning_activity(self) -> None:
         now_perf = time.monotonic()
+        wall_time = datetime.now(UTC)
         if self._reasoning_started_perf is None:
             self._reasoning_started_perf = now_perf
-            self._reasoning_started_at = utc_now_timestamp()
+            self._reasoning_started_at = wall_time
         self._reasoning_ended_perf = now_perf
-        self._reasoning_completed_at = utc_now_timestamp()
+        self._reasoning_completed_at = wall_time
 
     def _add_tool_call_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
         stream_slot, synthetic_id_suffix = _tool_call_stream_slot(delta)

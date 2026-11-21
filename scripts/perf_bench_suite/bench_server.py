@@ -3,8 +3,8 @@
 A Run holding the benchmark's events, followed by its terminal event, is
 replayed through the real ``server._streams._sse_run_events`` generator, which
 the Run event SSE route streams: per event it awaits the Run subscription in a
-task, projects the payload with ``remove_opaque_provider_metadata`` (through
-``FileDelivery``) and serializes the frame. Replaying keeps every operation
+task, projects file and metadata payloads through ``FileDelivery``, and
+serializes the frame. Plain text deltas need no projection. Replay keeps every operation
 identical; a live subscriber runs the same per-event code.
 
 The Run publishes its terminal event without settling: a settled Run keeps only
