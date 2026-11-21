@@ -457,11 +457,20 @@ class SystemPromptManager:
             subagent_session=subagent_session,
             project_context=project_context,
         )
+        layout = self._catalog.resolve_layout(scope_key)
+        # Only Channels contributes a live core text. Other core definitions
+        # supply layout metadata here, so their fragment files can stay closed.
+        core_text_ids = (
+            (CORE_CHANNELS_BLOCK_ID,)
+            if block_ids is None or CORE_CHANNELS_BLOCK_ID in block_ids
+            else ()
+        )
         definitions = self._collect_block_definitions(
             agent,
             prompt_scope,
             agent_body="",
-            layout=self._catalog.resolve_layout(scope_key),
+            layout=layout,
+            core_text_ids=core_text_ids,
             request_block_definitions=request_block_definitions,
         )
         dynamic_ids = {
@@ -469,7 +478,7 @@ class SystemPromptManager:
             *(definition.id for definition in self._catalog.definitions),
             *(definition.id for definition in request_block_definitions),
         }
-        layout = _selected_layout(agent, definitions, self._catalog.resolve_layout(scope_key))
+        layout = _selected_layout(agent, definitions, layout)
         resolved = resolve_layout(definitions, layout)
         if block_order is not None:
             block_order.extend(block.definition.id for block in resolved)
@@ -608,6 +617,7 @@ class SystemPromptManager:
         *,
         agent_body: str,
         layout: Sequence[LayoutEntry] = (),
+        core_text_ids: Collection[str] | None = None,
         pinned_blocks: Mapping[str, str] | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
     ) -> list[BlockDefinition]:
@@ -626,7 +636,7 @@ class SystemPromptManager:
         blocks, so current registry membership and gates cannot edit the prefix.
         """
         contributed = self._catalog.definitions
-        core = self._catalog.core_text_definitions(prompt_scope, agent.id)
+        core = self._catalog.core_text_definitions(prompt_scope, agent.id, text_ids=core_text_ids)
         definitions = [
             *core,
             memory_block_definition(),

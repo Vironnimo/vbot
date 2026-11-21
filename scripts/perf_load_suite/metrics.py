@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from itertools import pairwise
 from typing import Any
 
@@ -117,6 +117,7 @@ class RunRecord:
             "delta_events": self.delta_events,
             "markers": len(self.delta_latencies_ms),
             "tool_calls": len(self.tool_timings),
+            "tool_timings": [asdict(timing) for timing in self.tool_timings],
             "tool_errors": self.tool_errors,
         }
 

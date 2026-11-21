@@ -763,8 +763,12 @@ def test_dynamic_block_membership_and_position_stay_pinned_after_reload(
         )
 
     original = definition("z", "ORIGINAL SENTINEL", 3)
+    storage = StubStorage({})
     manager = _manager(
-        tmp_path, block_definitions=() if temporary else [original], loaded_extensions=["probe"]
+        tmp_path,
+        storage=storage,
+        block_definitions=() if temporary else [original],
+        loaded_extensions=["probe"],
     )
     agent = _agent("")
     order: list[str] = []
@@ -772,6 +776,12 @@ def test_dynamic_block_membership_and_position_stay_pinned_after_reload(
     blocks = manager.render_dynamic_blocks(
         agent, request_block_definitions=request_blocks, block_order=order
     )
+    assert {name for _, name in storage.reads} <= {"channels.md"}
+    storage.reads.clear()
+    assert manager.render_dynamic_blocks(
+        agent, request_block_definitions=request_blocks, block_ids={original.id}
+    ) == {original.id: blocks[original.id]}
+    assert not storage.reads
     previously_live = manager.render_dynamic_blocks(
         agent, request_block_definitions=request_blocks, static_contributions_only=True
     )

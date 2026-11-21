@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 from collections.abc import AsyncGenerator
+from time import monotonic
 from typing import Any, cast, override
 
 from core.chat.timeline import history_timeline, history_tool_call
@@ -546,7 +547,10 @@ async def sse_timeline(
     )
     if shutdown_event is not None and shutdown_event.is_set():
         return
-    yield _frame("timeline_snapshot", initial)
+    frame = _frame("timeline_snapshot", initial)
+    next_frame_at = monotonic() + batch_interval_seconds
+    yield frame
+    del frame
     if initial["terminal"] or projection is None or previous is None:
         return
     known_children = {
@@ -581,8 +585,9 @@ async def sse_timeline(
                     changed_task = None
                     break
                 yield "event: heartbeat\ndata: {}\n\n"
-            if batch_interval_seconds > 0:
-                await _sleep(batch_interval_seconds)
+            remaining = next_frame_at - monotonic()
+            if remaining > 0:
+                await _sleep(remaining)
             current = capture_run_timeline(run, projection)
             assert current is not None
             patch = (
@@ -600,7 +605,10 @@ async def sse_timeline(
             )
             if shutdown_event is not None and shutdown_event.is_set():
                 return
-            yield _frame("timeline_update", public)
+            frame = _frame("timeline_update", public)
+            next_frame_at = monotonic() + batch_interval_seconds
+            yield frame
+            del frame
             if current["terminal"]:
                 return
     finally:
