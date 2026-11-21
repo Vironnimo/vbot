@@ -363,10 +363,10 @@ class LogViewer:
             debounce=100,
             step=50,
             stop_event=stop_event,
-            rust_timeout=100,
+            rust_timeout=500,
             yield_on_timeout=True,
             force_polling=True,
-            poll_delay_ms=50,
+            poll_delay_ms=500,
         )
 
     async def _watch_file(self, watcher: _WatcherState) -> None:
