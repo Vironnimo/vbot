@@ -6,6 +6,7 @@ import hashlib
 import os
 import stat
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -54,3 +55,13 @@ def fsync_dir(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def directory_sync_order(root: Path, directories: Iterable[Path]) -> list[Path]:
+    """Include every parent through ``root``, once each and deepest first."""
+    parents: set[Path] = set()
+    for directory in directories:
+        while directory.is_relative_to(root) and directory not in parents:
+            parents.add(directory)
+            directory = directory.parent
+    return sorted(parents, key=lambda directory: (-len(directory.parts), directory))

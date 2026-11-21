@@ -33,7 +33,7 @@ from typing import Any
 
 # A module import: ``core.json_documents`` imports the kernel's snapshot freeze in turn.
 import core.json_documents as json_documents
-from core.database._files import fsync_dir, fsync_file, sha256_file
+from core.database._files import directory_sync_order, fsync_dir, fsync_file, sha256_file
 from core.database._staging import restore_staging_path
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
 from core.utils.file_status import exists_strict, is_link_status
@@ -222,12 +222,13 @@ def capture_documents(
 
 def sync_documents(snapshot_dir: Path, members: Mapping[str, DocumentMember]) -> None:
     """Make the document copies :func:`capture_documents` wrote durable."""
+    root = Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME
     directories: set[Path] = set()
     for member in members.values():
-        copy = Path(snapshot_dir).joinpath(DOCUMENTS_DIRECTORY_NAME, *_parts(member.path))
+        copy = root.joinpath(*_parts(member.path))
         fsync_file(copy)
         directories.add(copy.parent)
-    for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+    for directory in directory_sync_order(root, directories):
         fsync_dir(directory)
 
 
@@ -350,6 +351,10 @@ def restore_documents(
             ):
                 raise DatabaseCorruptError(f"snapshot document {path} changed while staged")
             fsync_file(temporary)
+        # A restored document can recreate a missing tree. Persist its path
+        # before displacing any live document or publishing a staged copy.
+        for directory in directory_sync_order(data_dir, (path.parent for path in staged.values())):
+            fsync_dir(directory)
         displaced = [
             path
             for path in (*plan.restored, *plan.removed)
@@ -379,10 +384,16 @@ def _quarantine_documents(data_dir: Path, paths: Iterable[str], batch: Path) -> 
     moved: list[tuple[Path, Path]] = []
     try:
         batch.mkdir(parents=True, exist_ok=False)
-        for path in paths:
-            source = _data_path(data_dir, path)
-            destination = batch.joinpath(*_parts(path))
+        targets = [(_data_path(data_dir, path), batch.joinpath(*_parts(path))) for path in paths]
+        for _source, destination in targets:
             destination.parent.mkdir(parents=True, exist_ok=True)
+        # Make the new path to each quarantine leaf durable before moving the
+        # only current copy. The snapshot can only reproduce the older version.
+        for directory in directory_sync_order(
+            data_dir, (destination.parent.parent for _source, destination in targets)
+        ):
+            fsync_dir(directory)
+        for source, destination in targets:
             os.replace(source, destination)
             moved.append((source, destination))
             fsync_dir(destination.parent)

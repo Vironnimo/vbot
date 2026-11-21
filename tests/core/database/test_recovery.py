@@ -1005,15 +1005,21 @@ def test_a_failed_quarantine_rollback_keeps_the_only_copy_in_the_batch(
     assert _registered(data_dir) == {_EXTENSION}
 
 
-def test_a_quarantine_durability_failure_moves_the_whole_bundle_back(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.durable
+@pytest.mark.parametrize("phase", ["prepare", "after-move"])
+def test_a_quarantine_durability_failure_keeps_the_whole_original_bundle(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     path, sidecar, original = _extension_with_sidecar(data_dir)
     batches = quarantine_root(data_dir) / _EXTENSION
     real_fsync = recovery_module.fsync_dir
 
     def fail_quarantine_sync(directory: Path) -> None:
-        if directory.parent == batches:
+        if phase == "prepare" and directory == batches.parent:
+            assert path.exists() and sidecar.exists()
+            raise OSError("injected quarantine durability failure")
+        if phase == "after-move" and directory.parent == batches:
+            assert not path.exists() and not sidecar.exists()
             raise OSError("injected quarantine durability failure")
         real_fsync(directory)
 
