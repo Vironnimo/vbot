@@ -62,6 +62,7 @@ from core.prompts.prompts import project_memory_visible
 from core.providers.accounts import ConnectionRef
 from core.sessions import ChatSession, PromptEpoch
 from core.tools.file_state import FileRead
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
 
 
 _PROMPT_REFRESH_ATTEMPTS = 3
+_LOGGER = get_logger("chat.compaction")
 
 
 @dataclass(frozen=True)
@@ -639,7 +641,7 @@ class ChatCompactionHost:
             )
         if committed is None:
             return False
-        await self._stamp_prompt_files_read(session.generation_id, refresh)
+        await self._stamp_prompt_files_read(session, refresh)
         return True
 
     async def commit_automatic_checkpoint(
@@ -689,21 +691,27 @@ class ChatCompactionHost:
             return False
         context.image_budget = request_state.image_budget or RequestImageBudget()
         if refresh is not None:
-            await self._stamp_prompt_files_read(session.generation_id, refresh)
             self.apply_prompt_refresh(context, refresh)
+        await self._stamp_prompt_files_read(session, refresh)
         return True
 
     async def _stamp_prompt_files_read(
-        self, generation_id: str | None, refresh: _CompactionPromptRefresh | None
+        self, session: ChatSession, refresh: _CompactionPromptRefresh | None
     ) -> None:
         if refresh is None or not refresh.prompt_read_paths:
             return
-        await self.run_transform(
-            stamp_prompt_files_read,
-            self._dependencies.file_read_state,
-            generation_id,
-            list(refresh.prompt_read_paths),
-        )
+        try:
+            await self.run_transform(
+                stamp_prompt_files_read,
+                self._dependencies.file_read_state,
+                session.generation_id,
+                list(refresh.prompt_read_paths),
+            )
+        except Exception:
+            # The committed epoch is usable; an unstamped file requires an explicit read.
+            _LOGGER.exception(
+                "Compaction prompt files could not be stamped (session=%s)", session.id
+            )
 
     async def project_post_compaction_request(
         self,

@@ -402,7 +402,7 @@ def cursor_is_current(
 
 @dataclass
 class HistoryDelta:
-    """Entries selected after a cursor, decoded only after the transaction ends."""
+    """Selected entries after a cursor, awaiting Message reconstruction."""
 
     batch: _store_codec.EntryBatch
     audit_rows: list[sqlite3.Row]

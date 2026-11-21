@@ -259,6 +259,7 @@ class RunExecution:
                         {"reason": "run_finished"},
                         allow_after_cancel=True,
                     )
+                run.set_compaction_state("unavailable")
         except BaseException as exc:
             if (
                 isinstance(exc, Exception)

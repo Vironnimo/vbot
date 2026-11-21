@@ -676,15 +676,12 @@ class SessionStore:
         Returns the entries after *since*, or ``None`` (nothing written) when
         another writer advanced first.
         """
-        committed = self._execute_write(
+        return self._execute_write(
             lambda connection: _store_operations.commit_compaction(
                 connection, address, checkpoint, since=since, epoch=epoch, run_id=run_id
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
-        if committed is None:
-            return None
-        return _store_history.read_batch(committed)
 
     def apply_edit(
         self,

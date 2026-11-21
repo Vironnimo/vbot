@@ -632,7 +632,6 @@ async def test_user_compaction_waits_for_tool_result_and_continues_run(
     [call] = service.compact_calls
     assert call["message_roles"][-2:] == ["assistant", "tool"]
     assert call["minimum_reclaim_tokens"] == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
-    assert run.compaction_state == "idle"
     # The one outcome line labels the user request as manual, never as automatic.
     [outcome] = [
         record.getMessage()
@@ -641,7 +640,12 @@ async def test_user_compaction_waits_for_tool_result_and_continues_run(
     ]
     assert "trigger=manual" in outcome
     roles = persisted_roles(session.load())
-    event_types = {event.type for event in await runtime.timelines.events(run)}
+    events = await runtime.timelines.events(run)
+    controls = [
+        event.payload["compaction"] for event in events if event.type == "run_controls_changed"
+    ]
+    assert controls[-2:] == ["idle", "unavailable"]
+    event_types = {event.type for event in events}
     if failure:
         assert "compaction_checkpoint" not in roles
         assert COMPACTION_ABORTED_EVENT in event_types

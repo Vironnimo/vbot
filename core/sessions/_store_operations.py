@@ -26,7 +26,7 @@ from core.sessions._types import PromptEpoch, SeenSkillsUpdate
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-    from core.sessions._types import SessionAddress, SessionReadCursor
+    from core.sessions._types import SessionAddress, SessionReadBatch, SessionReadCursor
 
 _NOT_EDITABLE = (
     "Only a current User message with plain text, sent after the latest Agent takeover, "
@@ -42,7 +42,7 @@ def commit_compaction(
     since: SessionReadCursor,
     epoch: PromptEpoch,
     run_id: str | None,
-) -> _store_history.HistoryDelta | None:
+) -> SessionReadBatch | None:
     """Append a Compaction *checkpoint* only while *since* still names the newest entry.
 
     The checkpoint starts a new prompt epoch: its pins and seen Skills replace
@@ -62,7 +62,7 @@ def commit_compaction(
         _store_prompts.replace_seen_skills(connection, session_key, epoch.seen_skills)
     delta = _store_history.message_rows_since(connection, address, since)
     assert delta is not None
-    return delta
+    return _store_history.read_batch(delta)
 
 
 def _edit_target(
