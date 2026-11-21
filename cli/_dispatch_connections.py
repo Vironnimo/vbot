@@ -501,27 +501,22 @@ def dispatch_extensions_command(
     show_extension_fn: Callable[[ServerInstance, str], CommandResult],
     set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult],
 ) -> CommandResult:
-    """Route one name-first extensions command against the server RPC client.
-
-    Grammar: ``list`` | ``reload`` | ``enable|disable <name>`` | ``<name>`` (show
-    settings) | ``<name> set <field> <value>`` (write one setting). The selector is
-    either a reserved verb or an extension name; a name is inspected or configured.
-    """
+    """Dispatch the parsed action, including when an Extension's name is also a verb."""
 
     selector = args.selector
     rest = list(args.rest)
 
-    if selector == "list":
+    if args.command == "list":
         if rest:
             return _extensions_usage(instance, "extensions list takes no arguments")
         return list_extensions_fn(instance)
 
-    if selector == "reload":
+    if args.command == "reload":
         if rest:
             return _extensions_usage(instance, "extensions reload takes no arguments")
         return reload_extensions_fn(instance)
 
-    if selector in ("enable", "disable"):
+    if args.command in ("enable", "disable"):
         if len(rest) != 1:
             return _extensions_usage(instance, f"usage: extensions {selector} <name>")
         toggle = enable_extension_fn if selector == "enable" else disable_extension_fn
@@ -529,9 +524,9 @@ def dispatch_extensions_command(
 
     # Otherwise the selector is an extension name: inspect or configure it.
     name = selector
-    if not rest:
+    if args.command == "show":
         return show_extension_fn(instance, name)
-    if rest[0] == "set":
+    if args.command == "set":
         return _dispatch_extensions_set(args, instance, name, rest, set_extension_fn)
     return extensions_operation(instance, name, rest)
 

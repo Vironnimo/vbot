@@ -559,6 +559,14 @@ class CommandChecker:
         folders = [cwd, *(access.path for access in plan.paths if access.kind == "start_dir")]
         for command in plan.commands:
             if allow_instance_cli and command.instance_cli:
+                if not plan.instance_cli_only:
+                    return boundary.refusal(
+                        "command",
+                        _shown(command.source),
+                        "protected_location",
+                        location="vbot_cli",
+                        hint="Run vbot in a separate shell call from other commands.",
+                    )
                 continue
             name = command.name.casefold().removesuffix(".ps1")
             if name == "vbot" or (

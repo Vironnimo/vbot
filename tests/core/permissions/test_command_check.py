@@ -286,7 +286,9 @@ async def test_reviewed_instance_cli_only_grants_the_bare_command(
     for line, expected, grant in [
         ("vbot server status", set(), True),
         ("vbot agent delete other", {"deny_rule"}, True),
-        ("vbot server status | other", {"not_permitted"}, True),
+        ("vbot server status | vbot --version", set(), True),
+        ("vbot server status | env", {"protected_location"}, True),
+        ("vbot server status | other", {"protected_location", "not_permitted"}, True),
         ("python -m cli agent list", {"protected_location", "not_permitted"}, False),
         ("./vbot agent list", {"protected_location", "not_permitted"}, False),
         ("vbot.exe agent list", {"protected_location", "not_permitted"}, False),

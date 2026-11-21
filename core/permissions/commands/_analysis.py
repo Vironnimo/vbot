@@ -125,6 +125,7 @@ class Analysis:
         self.environment_dynamic: set[str] = set()
         self._powershell = powershell
         self._commands: list[SimpleCommand] = []
+        self._has_unlisted_shell_work = False
         self._paths: dict[tuple[object, ...], PlannedPathAccess] = {}
         self._mentions: dict[tuple[object, ...], PlannedPathAccess] = {}
         self._unresolved: dict[tuple[str, str, str], UnresolvedElement] = {}
@@ -144,6 +145,7 @@ class Analysis:
             tuple(self._urls),
             tuple(self._hosts),
             tuple(self._mentions.values()),
+            self._has_unlisted_shell_work,
         )
 
     # Scripts ----------------------------------------------------------------
@@ -182,7 +184,12 @@ class Analysis:
         )
         self._prepare(context, script)
         for command in script.commands:
+            before = len(self._commands)
             self._command(context, command)
+            if len(self._commands) == before and (command.words or command.call or command.item):
+                # A transparent wrapper with no inner command, or native work
+                # in a PowerShell expression, can still observe the environment.
+                self._has_unlisted_shell_work = True
 
     def run_argv(self, argv: Sequence[str], cwd: Path) -> None:
         """Analyze starting the program *argv* directly, its words literal."""
