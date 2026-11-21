@@ -990,12 +990,21 @@
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
     </Banner>
+  {:else if !boundSession && chatState.agentsError && (sharedRoster ? !sharedRoster.agentsLoaded : !chatState.agents.length)}
+    <Banner variant="error" class="chat-view__state-banner">
+      {chatState.agentsError}
+      <Button
+        variant="tertiary"
+        onClick={() =>
+          sharedRoster
+            ? sharedRoster.seedAgentsFromServer()
+            : chatController.loadAgents({
+                preferredAgentId: sharedSelectedAgentId,
+              })}>{t('common.retry')}</Button
+      >
+    </Banner>
   {:else if !boundSession && !target.activeAgent && chatState.agents.length === 0 && target.projectGroups.length === 0}
-    <EmptyState
-      fill
-      title={t('chat.noAgents')}
-      description={chatState.agentsError}
-    />
+    <EmptyState fill title={t('chat.noAgents')} />
   {:else if !target.activeAgent}
     <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}

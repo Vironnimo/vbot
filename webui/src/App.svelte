@@ -648,6 +648,7 @@
       chatNavigation.remapIdentityAgentId(oldAgentId, newAgentId);
     },
     onReloadAgents: selection.reloadAgentsFromServer,
+    onRecoverInitialAgents: selection.recoverInitialAgents,
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onPublicResourceChange: extensions.publicChange,

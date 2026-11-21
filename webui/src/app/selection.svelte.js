@@ -68,6 +68,7 @@ export function createAppSelection() {
   let agentsError = $state(null);
   let agentsLoadRequestId = 0;
   let agentsSnapshotVersion = 0;
+  let agentsRead = null;
 
   let selectedAgentId = $state(readStoredSelectedAgentId());
 
@@ -302,7 +303,7 @@ export function createAppSelection() {
 
   // Read the canonical roster once for the shell and its Chat areas. Other
   // Agent settings surfaces use the refresh token to invalidate their details.
-  const reloadAgentsFromServer = async () => {
+  const readAgentRefresh = async () => {
     const requestId = ++agentsLoadRequestId;
     while (requestId === agentsLoadRequestId) {
       const snapshotVersion = agentsSnapshotVersion;
@@ -326,7 +327,7 @@ export function createAppSelection() {
 
   // The shell publishes the first roster to its Chat areas without invalidating
   // their settings. A roster published while seeding supersedes this read.
-  const seedAgentsFromServer = async () => {
+  const readAgentSeed = async () => {
     const requestId = ++agentsLoadRequestId;
     const snapshotVersion = agentsSnapshotVersion;
     try {
@@ -347,6 +348,30 @@ export function createAppSelection() {
       }
     }
   };
+  function trackAgentsRead(read) {
+    agentsError = null;
+    const pending = read().finally(() => {
+      if (agentsRead === pending) agentsRead = null;
+    });
+    agentsRead = pending;
+    return pending;
+  }
+
+  const reloadAgentsFromServer = () => trackAgentsRead(readAgentRefresh);
+  const seedAgentsFromServer = () =>
+    agentsRead ?? trackAgentsRead(readAgentSeed);
+
+  // A fresh/resumed hello is also a chance to recover a failed first roster.
+  // If it arrives before that read settles, retry only if the same read fails.
+  async function recoverInitialAgents() {
+    if (agentsLoaded) return;
+    const requestId = agentsLoadRequestId;
+    if (agentsRead) await agentsRead;
+    if (requestId === agentsLoadRequestId && !agentsLoaded && agentsError) {
+      return seedAgentsFromServer();
+    }
+  }
+
   function destroy() {
     agentsLoadRequestId += 1;
     projectsLoadRequestId += 1;
@@ -423,5 +448,6 @@ export function createAppSelection() {
     get seedAgentsFromServer() {
       return seedAgentsFromServer;
     },
+    recoverInitialAgents,
   };
 }

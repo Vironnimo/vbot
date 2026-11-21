@@ -160,6 +160,7 @@ export function createAppController({
   onLoadProjects,
   onAgentIdChanged = () => {},
   onReloadAgents,
+  onRecoverInitialAgents = () => {},
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
   onPublicResourceChange = () => {},
@@ -397,7 +398,9 @@ export function createAppController({
         refreshOwners.push(onLoadProjects);
         refreshRosterOnHello = true;
       }
-      if (refreshRosterOnHello) refreshOwners.push(onReloadAgents);
+      refreshOwners.push(
+        refreshRosterOnHello ? onReloadAgents : onRecoverInitialAgents,
+      );
       refreshRosterOnHello = false;
       // Recovery owners are independent. Optional projections cannot hold up
       // resource invalidation or another owner's refresh, even on failure.
