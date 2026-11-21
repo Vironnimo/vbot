@@ -23,6 +23,8 @@ Elicitation, sampling approvals and OAuth sign-ins are resumable pending inputs 
 
 Programmatic Tool calls (`ToolContext.programmatic`, `tools/registry-dispatch.md`) receive the complete preserved MCP payload as their success data: content blocks and `structuredContent` remain in protocol form, including fields the Model view omits. This projection has no Model-size clipping or `complete`/`value` management wrapper; binary content still uses the Attachment store and the same omission markers. Programmatic failures keep their full diagnostic text instead of a bounded read receipt. Discovery, authorization, output-schema validation and failure codes use the ordinary connection path. Coverage: `test_mcp_results.py`.
 
+Explicit resource subscriptions belong to the MCP connection. Sessions that use the same connection share its subscriptions and catalog changes. Configure separate connections when the Sessions belong to different trust domains (user decision, 2026-11-21).
+
 ## Connection lifecycle and call outcomes
 
 Management `save` accepts an optional `base`: `null` requires a missing id; an
