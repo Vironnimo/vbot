@@ -408,7 +408,7 @@ def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
     input_tokens = _nonnegative_int(raw.get("promptTokenCount"))
     visible_output = _nonnegative_int(raw.get("candidatesTokenCount"))
     reasoning_tokens = _nonnegative_int(raw.get("thoughtsTokenCount"))
-    cache_read = _nonnegative_int(raw.get("cachedContentTokenCount"))
+    cache_read = _nonnegative_int(raw.get("cachedContentTokenCount", 0))
     usage = {}
     if input_tokens is not None:
         usage["input_tokens"] = input_tokens
@@ -422,8 +422,8 @@ def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
         usage["reasoning_tokens"] = reasoning_tokens
     # Gemini's JSON omits zero counters, so with a reported prompt a missing
     # cached count is a cache miss; without the prompt count there is no share.
-    if input_tokens is not None:
-        usage["cache_read_tokens"] = cache_read or 0
+    if input_tokens is not None and cache_read is not None:
+        usage["cache_read_tokens"] = cache_read
     return usage
 
 
