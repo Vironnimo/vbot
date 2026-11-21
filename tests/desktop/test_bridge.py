@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import inspect
 import logging
+import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +15,7 @@ from typing import Any, cast
 import pytest
 
 from desktop import connection as desktop_connection
+from desktop._webview_bridge import DocumentBridge
 from desktop.bridge import BridgeError, DesktopBridge, configure_bridge_logging
 from desktop.connection import ConnectionController
 from desktop.page_events import PageEventDispatcher
@@ -142,6 +145,36 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
     }
 
 
+def test_native_bridge_binds_calls_and_replies_to_the_selected_document() -> None:
+    page = [OWN_SERVER]
+    permissions = _page_permissions(lambda: page[0])
+    bridge, voice = _bridge(permissions=permissions)
+    transport = DocumentBridge(bridge, permissions, lambda: page[0])
+    replies: list[str] = []
+    returned = threading.Event()
+
+    class Window:
+        def run_js(self, script: str) -> None:
+            replies.append(script)
+            returned.set()
+
+    window = Window()
+    script = transport.prepare(OWN_SERVER + "/chat")
+    key = re.search(r'const key = "([0-9a-f]{64})"', script)
+    assert key is not None
+    args: list[Any] = [key[1], {"active_model_ids": []}]
+    transport.dispatch(window, "updateVoiceConfig", args, "1", source=OWN_SERVER)
+    assert returned.wait(1)
+    assert voice.calls == [("update_config", ({"active_model_ids": []},))]
+    assert OWN_SERVER in replies[0] and key[1] in replies[0]
+    returned.clear()
+    transport.dispatch(window, "updateVoiceConfig", args, "2", source="https://elsewhere.test")
+    transport.invalidate()
+    transport.dispatch(window, "updateVoiceConfig", args, "3", source=OWN_SERVER)
+    assert transport.prepare("https://elsewhere.test/chat") == ""
+    assert len(voice.calls) == len(replies) == 1
+
+
 def test_pywebview_reads_the_real_parameter_names() -> None:
     bridge, _ = _bridge()
 
@@ -259,6 +292,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         zoom=hotkey,
         taskbar_badge=hotkey,
         secure_origins=("http://a.lan:8420", "http://pi.lan:9000"),
+        permissions=_page_permissions(lambda: "http://pi.lan:9000"),
     )
 
     assert bridge.getDesktopCapabilities() == {
@@ -271,7 +305,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "dictation": available,
         "zoom": available,
         "taskbarBadge": available,
-        "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
+        "secureOrigins": ["http://pi.lan:9000"],
         "restart": False,
         "signIn": False,
         "computerSharing": False,
@@ -377,6 +411,28 @@ def test_remote_page_needs_current_native_consent_for_clipboard_write_or_listeni
         bridge.setVoiceEnabled(False)
         assert voice.calls[-1] == ("set_enabled", (False,))
         assert len(questions) == 1
+
+
+@pytest.mark.parametrize(
+    ("method", "value"),
+    [
+        ("setDictation", {"enabled": True}),
+        ("setLiveHotkey", {"enabled": True}),
+        ("setMicrophone", {"device": "default"}),
+        ("deleteWakewordModel", "custom/old"),
+        ("updateVoiceConfig", {"active_model_ids": []}),
+        ("listServers", None),
+    ],
+)
+def test_a_remote_page_cannot_silently_change_native_settings(method: str, value: Any) -> None:
+    remote = _page_permissions(lambda: "https://remote.example")
+    owner = FakeVoice()
+    bridge, voice = _bridge(
+        permissions=remote, microphone=owner, live_hotkey=owner, dictation=owner, connection=owner
+    )
+    with pytest.raises(BridgeError, match="^declined$"):
+        getattr(bridge, method)(*(() if value is None else (value,)))
+    assert not owner.calls and not voice.calls
 
 
 # -- Microphone --------------------------------------------------------------------
@@ -641,13 +697,14 @@ def test_only_the_connection_screen_connects_pairs_and_forgets_a_sign_in() -> No
     assert bridge.connect(server, None, screen)["offer"] == {"name": "PC"}
     assert bridge.startPairing(server, "443", "Work laptop", screen)["pairing"] == {"code": "K7M2"}
     assert bridge.selectServer(server, None)["status"] == "pairing_required"
-    assert bridge.cancelPairing() == {"cancelled": True}
+    assert bridge.cancelPairing(screen) == {"cancelled": True}
     assert bridge.forgetSignIn(server, None, screen) == {"forgotten": False}
     # A page without the screen's key is refused before anything happens.
     for refused in (
         lambda: bridge.connect(server, None),
         lambda: bridge.startPairing(server, 443, "Work laptop", "guessed"),
         lambda: bridge.forgetSignIn(server, None, None),
+        lambda: bridge.cancelPairing(),
     ):
         with pytest.raises(BridgeError, match="^connection_screen_only$"):
             refused()
@@ -676,7 +733,7 @@ def test_another_servers_page_asks_the_user_before_it_acts_on_the_desktop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     page = ["https://other.example.com/chat"]
-    confirm = ScriptedConfirm(False, True, True, False, True, False)
+    confirm = ScriptedConfirm(False, True, True, True, False, True)
     permissions = _page_permissions(lambda: page[0], confirm)
     bridge, probed, controller = _server_bridge(
         tmp_path,
@@ -692,7 +749,7 @@ def test_another_servers_page_asks_the_user_before_it_acts_on_the_desktop(
     with pytest.raises(BridgeError, match="^declined$"):
         bridge.selectServer("pi.lan", 9000)
     assert (probed, controller.list_servers()) == ([], [])
-    # Allowed, it connects; a remembered server is selected without asking.
+    # Both first use and selection of a remembered server ask for confirmation.
     assert bridge.selectServer("pi.lan", 9000)["status"] == "webui_available"
     bridge.selectServer("pi.lan", 9000)
     # The clipboard is asked for once per origin while the Desktop runs.
@@ -709,23 +766,24 @@ def test_another_servers_page_asks_the_user_before_it_acts_on_the_desktop(
 
     titles = [title for title, _ in confirm.questions]
     assert titles == [
-        "Add a server",
-        "Add a server",
+        "Connect to a server",
+        "Connect to a server",
+        "Connect to a server",
         "Paste from the clipboard",
         "Remove a server",
         "Install a wake word model",
     ]
     # Each question names the asking page and what it asks for, in plain text.
     assert confirm.questions[0][1].startswith(
-        "The page of https://other.example.com asks to add pi.lan:9000"
+        "The page of https://other.example.com asks to switch vBot Desktop to pi.lan:9000"
     )
-    assert "model “evil name.tflite”" in confirm.questions[4][1]
+    assert "model “evil name.tflite”" in confirm.questions[5][1]
 
-    # A page that sends the window to the own server right after its call is still asked.
+    # A page between navigations cannot use a native action at all.
     page[0] = f"{OWN_SERVER}/"
     with pytest.raises(BridgeError, match="^declined$"):
         bridge.removeServer("pi.lan", 9000)
-    assert confirm.questions[5][1].startswith("A page asks to remove pi.lan:9000")
+    assert len(confirm.questions) == 6
     # The installation's own server's page, once loaded, is trusted like the Desktop.
     permissions.page_loaded()
     assert bridge.removeServer("pi.lan", 9000) == {"removed": True}
@@ -752,6 +810,26 @@ def test_without_a_way_to_ask_another_servers_page_is_refused() -> None:
             bridge.getClipboardText()
 
 
+def test_sharing_status_and_pushes_need_one_read_grant_for_their_origin() -> None:
+    one = "https://one.example/"
+    two = "https://two.example/"
+    page = [one]
+    confirm = ScriptedConfirm(False, True)
+    permissions = _page_permissions(lambda: page[0], confirm)
+    status = {"server_url": one, "extensions": ["printer"]}
+    bridge, _ = _bridge(
+        permissions=permissions, computer_sharing=SimpleNamespace(status=lambda: status)
+    )
+    assert not permissions.may_publish_sharing(one)
+    with pytest.raises(BridgeError, match="^declined$"):
+        bridge.getComputerSharing()
+    assert not permissions.may_publish_sharing(one)
+    assert bridge.getComputerSharing() == bridge.getComputerSharing() == status
+    assert permissions.may_publish_sharing(one)
+    assert not permissions.may_publish_sharing(two)
+    assert len(confirm.questions) == 2
+
+
 @pytest.mark.parametrize("outcome", ["allow", "decline", "navigate"])
 @pytest.mark.parametrize("action", ["grant", "reload"])
 def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
@@ -763,6 +841,8 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
     questions: list[str] = []
 
     def confirm(_title: str, message: str) -> bool:
+        if _title == "Show computer sharing settings":
+            return True
         questions.append(message)
         if outcome == "navigate":
             page[0] = OWN_SERVER
@@ -781,8 +861,11 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
         *,
         expected_server: str,
         confirm: Any = None,
+        authorize: Any = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        if authorize is not None:
+            authorize(expected_server, ["Printer: Print documents"], None)
         applied.append((changes, expected_server))
         return status
 

@@ -36,8 +36,9 @@ class FakeWindow:
         self.started = threading.Event()
         self.delivered = threading.Event()
 
-    def run_js(self, script: str) -> None:
+    def run_js(self, script: str) -> Any:
         self.direct_scripts.append(script)
+        return self.evaluate_js(script)
 
     def evaluate_js(self, script: str) -> Any:
         self.threads.append(threading.current_thread())
@@ -138,7 +139,7 @@ def test_live_request_is_delivered_on_a_background_thread(dispatchers: Any) -> N
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
 
-    dispatcher.request_live("start", "wakeword")
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")
 
     assert window.delivered.wait(timeout=2)
     assert window.threads[0] is not threading.current_thread()
@@ -152,14 +153,14 @@ def test_live_requests_never_block_the_producer_and_drop_excess(dispatchers: Any
     window = FakeWindow(block=release)
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.request_live("toggle", "hotkey")
+    dispatcher.request_live("toggle", "hotkey", origin="https://test.example")
     assert window.started.wait(timeout=2)
 
     # The page is still busy with the first request: the producer returns at
     # once, four requests wait, and the rest are dropped.
     for _ in range(10):
-        dispatcher.request_live("toggle", "hotkey")
-    dispatcher.publish_event(SENTINEL)
+        dispatcher.request_live("toggle", "hotkey", origin="https://test.example")
+    dispatcher.publish_event(SENTINEL, origin="https://test.example")
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 6)
@@ -173,11 +174,13 @@ def test_stale_live_requests_are_dropped(dispatchers: Any) -> None:
     window = FakeWindow(block=release)
     dispatcher = dispatchers(clock=lambda: now[0])
     dispatcher.attach_window(window)
-    dispatcher.request_live("start", "wakeword")
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")
     assert window.started.wait(timeout=2)
-    dispatcher.request_live("toggle", "hotkey")  # waits, then goes stale
+    dispatcher.request_live(
+        "toggle", "hotkey", origin="https://test.example"
+    )  # waits, then goes stale
     now[0] += 30.0
-    dispatcher.request_live("start", "wakeword")  # fresh
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")  # fresh
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 2)
@@ -193,8 +196,8 @@ def test_invalid_live_requests_are_ignored(dispatchers: Any, action: str, source
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
 
-    dispatcher.request_live(action, source)
-    dispatcher.publish_event(SENTINEL)
+    dispatcher.request_live(action, source, origin="https://test.example")
+    dispatcher.publish_event(SENTINEL, origin="https://test.example")
 
     _wait_until(lambda: len(window.scripts) == 1)
     assert _voice_detail(window.scripts[0])["event"] == SENTINEL
@@ -205,11 +208,11 @@ def test_missing_window_and_unhandled_page_are_only_logged(
 ) -> None:
     caplog.set_level(logging.DEBUG, logger="vbot.desktop.page_events")
     without_window = dispatchers()
-    without_window.request_live("start", "wakeword")
+    without_window.request_live("start", "wakeword", origin="https://test.example")
     window = FakeWindow(result=False)
     unhandled = dispatchers()
     unhandled.attach_window(window)
-    unhandled.request_live("toggle", "hotkey")
+    unhandled.request_live("toggle", "hotkey", origin="https://test.example")
 
     def logged(fragment: str) -> bool:
         return any(fragment in record.getMessage() for record in caplog.records)
@@ -222,11 +225,11 @@ def test_page_errors_do_not_stop_delivery(dispatchers: Any) -> None:
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
 
-    dispatcher.request_live("start", "wakeword")
-    dispatcher.publish_event({"sequence": 1, "kind": "detected"})
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")
+    dispatcher.publish_event({"sequence": 1, "kind": "detected"}, origin="https://test.example")
     _wait_until(lambda: len(window.scripts) == 2)
     window.result = True
-    dispatcher.request_live("toggle", "hotkey")
+    dispatcher.request_live("toggle", "hotkey", origin="https://test.example")
 
     _wait_until(lambda: len(window.scripts) == 3)
 
@@ -237,10 +240,10 @@ def test_pushes_after_close_are_ignored(dispatchers: Any) -> None:
     dispatcher.attach_window(window)
     dispatcher.close()
 
-    dispatcher.request_live("start", "wakeword")
-    dispatcher.request_open_session("builder", "session-1")
-    dispatcher.publish_status({"sequence": 1})
-    dispatcher.publish_event({"sequence": 2, "kind": "detected"})
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")
+    dispatcher.request_open_session("builder", "session-1", origin="https://test.example")
+    dispatcher.publish_status({"sequence": 1}, origin="https://test.example")
+    dispatcher.publish_event({"sequence": 2, "kind": "detected"}, origin="https://test.example")
 
     # Nothing can arrive to wait for, so a short bounded wait proves no delivery thread started.
     assert not window.started.wait(timeout=0.05)
@@ -255,16 +258,21 @@ def test_a_waiting_session_request_is_replaced_by_the_newest(dispatchers: Any) -
     window = FakeWindow(block=release)
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.request_open_session("builder", "session-1")
+    dispatcher.request_open_session("builder", "session-1", origin="https://test.example")
     assert window.started.wait(timeout=2)
 
-    dispatcher.request_open_session("builder", "session-2")
-    dispatcher.publish_event({"sequence": 1, "kind": "detected"})
-    dispatcher.request_open_session("reviewer@project", "session-3")
-    dispatcher.request_open_session("", "session-4")  # invalid: ignored
+    dispatcher.request_open_session("builder", "session-2", origin="https://test.example")
+    dispatcher.publish_event({"sequence": 1, "kind": "detected"}, origin="https://test.example")
+    dispatcher.request_open_session("reviewer@project", "session-3", origin="https://next.test")
+    dispatcher.request_open_session(
+        "", "session-4", origin="https://test.example"
+    )  # invalid: ignored
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 3)
+    assert window.direct_scripts == window.scripts
+    assert window.scripts[0].startswith('window.location.origin === "https://test.example"')
+    assert window.scripts[1].startswith('window.location.origin === "https://next.test"')
     # The waiting request keeps its place in the queue but opens the newest Session.
     assert [
         _request_detail(script) for script in window.scripts if "vbot-desktop-open" in script
@@ -283,17 +291,22 @@ def test_voice_pushes_keep_their_order(dispatchers: Any) -> None:
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
 
-    dispatcher.publish_event({"sequence": 1, "kind": "detected"})
-    dispatcher.publish_status({"sequence": 2, "state": "listening"})
-    dispatcher.publish_event({"sequence": 3, "kind": "recording_started"})
+    dispatcher.publish_event({"sequence": 1, "kind": "detected"}, origin="https://test.example")
+    dispatcher.publish_status({"sequence": 2, "state": "listening"}, origin="https://test.example")
+    dispatcher.publish_event(
+        {"sequence": 3, "kind": "recording_started"}, origin="https://test.example"
+    )
     dispatcher.publish_event(
         {"sequence": 4, "kind": "wakeword_completed", "message": "state:on"},
         origin="https://home.test",
     )
 
-    _wait_until(lambda: len(window.direct_scripts) == 1)
-    assert window.direct_scripts[0].startswith('window.location.origin === "https://home.test" && ')
-    assert [_voice_detail(script) for script in window.scripts] == [
+    _wait_until(lambda: len(window.scripts) == 4)
+    assert window.direct_scripts == window.scripts
+    assert window.direct_scripts[-1].startswith(
+        'window.location.origin === "https://home.test" && '
+    )
+    assert [_voice_detail(script) for script in window.scripts[:-1]] == [
         {"type": "event", "event": {"sequence": 1, "kind": "detected"}},
         {"type": "status", "status": {"sequence": 2, "state": "listening"}},
         {"type": "event", "event": {"sequence": 3, "kind": "recording_started"}},
@@ -305,13 +318,13 @@ def test_a_waiting_status_is_replaced_by_the_newest_snapshot(dispatchers: Any) -
     window = FakeWindow(block=release)
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.publish_status({"sequence": 1})
+    dispatcher.publish_status({"sequence": 1}, origin="https://test.example")
     assert window.started.wait(timeout=2)
 
-    dispatcher.publish_status({"sequence": 2})
-    dispatcher.publish_event({"sequence": 3, "kind": "detected"})
-    dispatcher.publish_status({"sequence": 4})
-    dispatcher.publish_event(SENTINEL)
+    dispatcher.publish_status({"sequence": 2}, origin="https://test.example")
+    dispatcher.publish_event({"sequence": 3, "kind": "detected"}, origin="https://test.example")
+    dispatcher.publish_status({"sequence": 4}, origin="https://test.example")
+    dispatcher.publish_event(SENTINEL, origin="https://test.example")
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 4)
@@ -329,12 +342,14 @@ def test_waiting_events_are_bounded_by_dropping_the_oldest(dispatchers: Any) -> 
     window = FakeWindow(block=release)
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.publish_event({"sequence": 0, "kind": "detected"})
+    dispatcher.publish_event({"sequence": 0, "kind": "detected"}, origin="https://test.example")
     assert window.started.wait(timeout=2)
 
     for sequence in range(1, MAX_PENDING_VOICE_EVENTS + 11):
-        dispatcher.publish_event({"sequence": sequence, "kind": "detected"})
-    dispatcher.request_live("start", "wakeword")
+        dispatcher.publish_event(
+            {"sequence": sequence, "kind": "detected"}, origin="https://test.example"
+        )
+    dispatcher.request_live("start", "wakeword", origin="https://test.example")
     release.set()
 
     _wait_until(lambda: len(window.scripts) == MAX_PENDING_VOICE_EVENTS + 2)
@@ -356,8 +371,10 @@ def test_an_unserializable_push_is_dropped_and_delivery_continues(
     dispatcher.attach_window(window)
 
     with caplog.at_level(logging.ERROR, logger="vbot.desktop.page_events"):
-        dispatcher.publish_event({"sequence": 1, "kind": "detected", "bad": object()})
-        dispatcher.publish_event({"sequence": 2, "kind": "sent"})
+        dispatcher.publish_event(
+            {"sequence": 1, "kind": "detected", "bad": object()}, origin="https://test.example"
+        )
+        dispatcher.publish_event({"sequence": 2, "kind": "sent"}, origin="https://test.example")
         _wait_until(lambda: len(window.scripts) == 1)
 
     assert _voice_detail(window.scripts[0])["event"]["sequence"] == 2
@@ -368,7 +385,7 @@ def test_close_stops_the_delivery_thread(dispatchers: Any) -> None:
     window = FakeWindow()
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.publish_status({"sequence": 1})
+    dispatcher.publish_status({"sequence": 1}, origin="https://test.example")
     assert window.delivered.wait(timeout=2)
     thread = window.threads[0]
 
@@ -391,7 +408,14 @@ UPDATE_STATES = [
     [
         ("publish_update", UPDATE_STATES, update_push_script),
         ("publish_dictation", [True, True, False], dictation_push_script),
-        ("publish_computer_sharing", UPDATE_STATES, computer_sharing_push_script),
+        (
+            "publish_computer_sharing",
+            [
+                {"server_url": "https://one.test/", "connected": ready}
+                for ready in (True, False, True)
+            ],
+            computer_sharing_push_script,
+        ),
     ],
     ids=["update", "dictation", "computer-sharing"],
 )
@@ -409,8 +433,13 @@ def test_a_state_push_keeps_only_the_newest_waiting_value(
     getattr(dispatcher, publish)(values[2])
     release.set()
 
-    _wait_until(lambda: len(window.scripts) == 2)
-    assert window.scripts == [script(values[0]), script(values[2])]
+    scripts = window.direct_scripts if publish == "publish_computer_sharing" else window.scripts
+    _wait_until(lambda: len(scripts) == 2)
+    assert scripts == [script(values[0]), script(values[2])]
+    if publish == "publish_computer_sharing":
+        assert all(
+            text.startswith('window.location.origin === "https://one.test"') for text in scripts
+        )
 
 
 def test_the_dictation_script_dispatches_the_recording_state() -> None:

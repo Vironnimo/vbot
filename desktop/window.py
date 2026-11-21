@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from desktop import _windows, restart
+from desktop.server_address import parse_server_address
 
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
@@ -306,9 +307,10 @@ def activation_handler(
             else:
                 logger.warning("Ignoring a Desktop handoff; this Desktop is not restarting")
             return
-        link = _requested_session(request, controller)
+        origin = _windows.url_origin(controller.active_server_url())
+        link = _requested_session(request, origin)
         if link is not None:
-            page_events.request_open_session(link.agent, link.session)
+            page_events.request_open_session(link.agent, link.session, origin)
         focus.bring_to_front()
 
     return on_activate
@@ -333,7 +335,7 @@ def activation_request(
 
 def _requested_session(
     request: Mapping[str, Any] | None,
-    controller: ConnectionController,
+    origin: str | None,
 ) -> SessionLink | None:
     """Return the handed-over Session when the window shows its server."""
 
@@ -352,9 +354,12 @@ def _requested_session(
         logger.warning("Ignoring a malformed Session request from another Desktop launch")
         return None
     if host is None and port is None:
-        shown = controller.active_server_url() is not None
+        shown = origin is not None
     elif isinstance(host, str) and isinstance(port, int) and not isinstance(port, bool):
-        shown = controller.is_active_server(host, port)
+        try:
+            shown = origin == parse_server_address(host, port).origin
+        except ValueError:
+            shown = False
     else:
         logger.warning("Ignoring a malformed Session request from another Desktop launch")
         return None

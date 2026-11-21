@@ -704,11 +704,11 @@ def apply_browser_arguments(origins: Iterable[str]) -> None:
 
 
 def allow_server_microphone(window: Any, allowed_origin: Callable[[], str | None]) -> None:
-    """Grant microphone requests from the connected server without a prompt.
+    """Grant microphone requests only on the selected installation server's own page.
 
     pywebview leaves WebView2 ``PermissionRequested`` unhandled, so WebView2
     would prompt and remember the answer in the profile. A microphone request
-    whose origin equals ``allowed_origin()`` (read at request time) is allowed
+    whose origin and top-level document both match ``allowed_origin()`` is allowed
     for this request only; every other request keeps WebView2's default
     handling. The handler runs on the GUI thread and must not block. A failure
     is logged once per stage and leaves the default prompt in place.
@@ -724,13 +724,17 @@ def allow_server_microphone(window: Any, allowed_origin: Callable[[], str | None
             failures.add(stage)
             logger.warning("Desktop microphone permission hook failed (%s)", stage, exc_info=True)
 
-    def permission_requested(_sender: Any, args: Any) -> None:
+    def permission_requested(sender: Any, args: Any) -> None:
         try:
             core = webview2_core[0]
             if args.PermissionKind != core.CoreWebView2PermissionKind.Microphone:
                 return
             origin = url_origin(str(args.Uri))
-            if origin is None or origin != allowed_origin():
+            if (
+                origin is None
+                or origin != allowed_origin()
+                or origin != url_origin(str(sender.Source))
+            ):
                 return
             args.State = core.CoreWebView2PermissionState.Allow
             # Older WebView2 SDKs have no per-request persistence switch.

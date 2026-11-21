@@ -93,7 +93,7 @@ def test_pairing_is_offered_with_the_origin_and_an_editable_name_before_any_code
     # The code panel waits hidden for the script; the form keeps the offered server.
     assert '<div id="connection-pairing" class="pairing" role="status" hidden>' in page
     assert '<p id="pairing-code" class="code"></p>' in page
-    assert "window.pywebview.api.cancelPairing()" in page
+    assert "window.pywebview.api.cancelPairing(SCREEN_KEY)" in page
     assert 'value="https://vbot.example.com"' in page
     assert offer.to_payload() == {
         "host": "https://vbot.example.com",

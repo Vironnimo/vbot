@@ -55,6 +55,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from desktop._windows import url_origin
+
 logger = logging.getLogger("vbot.desktop.page_events")
 
 LIVE_REQUEST_EVENT = "vbot-desktop-live"
@@ -85,6 +87,10 @@ def live_request_script(action: str, source: str) -> str:
     )
 
 
+def _for_origin(script: str, origin: str) -> str:
+    return f"window.location.origin === {json.dumps(origin)} && {script}"
+
+
 def voice_push_script(detail: Mapping[str, Any], *, origin: str | None = None) -> str:
     """Return JavaScript that dispatches one Voice push with ``detail``."""
     script = (
@@ -92,7 +98,7 @@ def voice_push_script(detail: Mapping[str, Any], *, origin: str | None = None) -
         f"{{detail: {json.dumps(detail)}}}))"
     )
     # A result can still be queued when the user switches to another server.
-    return f"window.location.origin === {json.dumps(origin)} && {script}" if origin else script
+    return _for_origin(script, origin) if origin else script
 
 
 def open_session_script(agent: str, session: str) -> str:
@@ -136,7 +142,11 @@ def dictation_push_script(recording: bool) -> str:
 
 def computer_sharing_push_script(status: Mapping[str, Any]) -> str:
     """Dispatch this Desktop's public sharing state to its settings surface."""
+    origin = url_origin(status.get("server_url"))
+    if not origin:
+        return "false"
     return (
+        f"window.location.origin === {json.dumps(origin)} && "
         f"window.dispatchEvent(new CustomEvent({json.dumps(COMPUTER_SHARING_EVENT)}, "
         f"{{detail: {json.dumps(dict(status))}}}))"
     )
@@ -147,12 +157,14 @@ class _LiveRequest:
     action: str
     source: str
     requested_at: float
+    origin: str
 
 
 @dataclass
 class _OpenSession:
     agent: str
     session: str
+    origin: str
 
 
 @dataclass
@@ -178,7 +190,7 @@ class _RestartRequest:
 @dataclass
 class _VoicePush:
     detail: dict[str, Any]
-    origin: str | None = None
+    origin: str
 
     @property
     def is_status(self) -> bool:
@@ -226,7 +238,7 @@ class PageEventDispatcher:
         with self._condition:
             self._window = window
 
-    def request_live(self, action: str, source: str) -> None:
+    def request_live(self, action: str, source: str, origin: str | None) -> None:
         """Queue one Live voice request; invalid or excess requests are dropped."""
         if action not in LIVE_REQUEST_ACTIONS or source not in LIVE_REQUEST_SOURCES:
             logger.warning(
@@ -234,28 +246,29 @@ class PageEventDispatcher:
             )
             return
         with self._condition:
-            if self._closed:
+            if self._closed or not origin:
                 return
             if self._live_count >= MAX_PENDING_LIVE_REQUESTS:
                 logger.info("Dropping Live voice request; earlier requests are still pending")
                 return
             self._live_count += 1
-            self._enqueue_locked(_LiveRequest(action, source, self._clock()))
+            self._enqueue_locked(_LiveRequest(action, source, self._clock(), origin))
         logger.info("Live voice requested (action=%s, source=%s)", action, source)
 
-    def request_open_session(self, agent: str, session: str) -> None:
+    def request_open_session(self, agent: str, session: str, origin: str | None) -> None:
         """Queue a request to open one Session, replacing a request that still waits."""
         if not agent or not session:
             logger.warning("Ignoring a Session request without an Agent address or Session id")
             return
         with self._condition:
-            if self._closed:
+            if self._closed or not origin:
                 return
             if self._pending_open is not None:
                 self._pending_open.agent = agent
                 self._pending_open.session = session
+                self._pending_open.origin = origin
                 return
-            request = _OpenSession(agent, session)
+            request = _OpenSession(agent, session, origin)
             self._pending_open = request
             self._enqueue_locked(request)
         logger.info("Asking the page to open Session %s of %s", session, agent)
@@ -309,23 +322,24 @@ class PageEventDispatcher:
             self._pending_restart = request
             self._enqueue_locked(request)
 
-    def publish_status(self, status: Mapping[str, Any]) -> None:
+    def publish_status(self, status: Mapping[str, Any], *, origin: str | None) -> None:
         """Queue a Voice status snapshot, replacing one that still waits."""
         detail = {"type": "status", "status": dict(status)}
         with self._condition:
-            if self._closed:
+            if self._closed or not origin:
                 return
             if self._pending_status is not None:
                 self._pending_status.detail = detail
+                self._pending_status.origin = origin
                 return
-            push = _VoicePush(detail)
+            push = _VoicePush(detail, origin)
             self._pending_status = push
             self._enqueue_locked(push)
 
-    def publish_event(self, event: Mapping[str, Any], *, origin: str | None = None) -> None:
+    def publish_event(self, event: Mapping[str, Any], *, origin: str | None) -> None:
         """Queue a Voice event; the oldest waiting event is dropped beyond the bound."""
         with self._condition:
-            if self._closed:
+            if self._closed or not origin:
                 return
             self._event_count += 1
             self._enqueue_locked(_VoicePush({"type": "event", "event": dict(event)}, origin))
@@ -408,7 +422,7 @@ class PageEventDispatcher:
                     self._evaluate(window, dictation_push_script(recording))
             elif isinstance(item, _ComputerSharingPush):
                 if window is not None:
-                    self._evaluate(window, computer_sharing_push_script(status))
+                    self._evaluate(window, computer_sharing_push_script(status), scoped=True)
             elif isinstance(item, _RestartRequest):
                 self._deliver_restart(window, item)
             elif isinstance(item, _VoicePush):
@@ -425,7 +439,11 @@ class PageEventDispatcher:
         if window is None:
             logger.debug("Dropping Live voice request; no window is attached")
             return
-        handled = self._evaluate(window, live_request_script(request.action, request.source))
+        handled = self._evaluate(
+            window,
+            _for_origin(live_request_script(request.action, request.source), request.origin),
+            scoped=True,
+        )
         if handled is not True:
             logger.debug(
                 "Live voice request was not handled by the page (action=%s, source=%s)",
@@ -437,7 +455,11 @@ class PageEventDispatcher:
         if window is None:
             logger.debug("Dropping the Session request; no window is attached")
             return
-        handled = self._evaluate(window, open_session_script(request.agent, request.session))
+        handled = self._evaluate(
+            window,
+            _for_origin(open_session_script(request.agent, request.session), request.origin),
+            scoped=True,
+        )
         if handled is not True:
             logger.info(
                 "The page did not open Session %s of %s; it shows no WebUI",
@@ -464,7 +486,7 @@ class PageEventDispatcher:
         except TypeError, ValueError:
             logger.exception("Voice push is not serializable; dropping it")
             return
-        self._evaluate(window, script, scoped=push.origin is not None)
+        self._evaluate(window, script, scoped=True)
 
     def _evaluate(self, window: Any, script: str, *, scoped: bool = False) -> Any:
         try:

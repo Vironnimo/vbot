@@ -9,25 +9,11 @@ rejects with a :class:`BridgeError` whose message is exactly that code, so the
 page can explain it; any other failure keeps its own message, which never
 looks like a code, and is logged with its traceback.
 
-The same instance stays the window's ``js_api`` across navigation, so it
-serves both the shell connection screen (server selection) and the remote
-WebUI (capabilities, clipboard and browser, the microphone, the Live voice
-hotkey, Voice, Desktop dictation, the window zoom, the taskbar badge, the
-update restart). Any
-server's page can call it, so the methods a page could abuse are gated
-(:mod:`desktop.page_permissions`): ``connect``, ``startPairing`` and
-``forgetSignIn`` need the connection screen's key; another server's page needs
-the user's confirmation to add, select an unknown, or remove a server, to read
-the clipboard and to install a wake word model, and is rejected with
-``declined`` otherwise. ``restartDesktop`` stays open: it only starts the
-restart into a version already installed, which the Desktop also does by
-itself. The facade holds no state of its own: microphone methods delegate to
-:class:`desktop.speech.microphone.MicrophoneService`, Voice methods to
-:class:`desktop.wakeword.controller.VoiceController`, dictation methods to
-:class:`desktop.dictation.controller.DictationController`, zoom methods to
-:class:`desktop.zoom.DesktopZoom`, the badge to
-:class:`desktop.taskbar_badge.TaskbarBadge`, server selection to the connection
-controller, the update restart to :class:`desktop.restart.DesktopRestart`.
+The same facade serves the native Connection screen and the selected server.
+The transport authenticates the invoking document. PagePermissions owns
+native confirmations, and the Connection screen has its own additional key.
+Microphone, Voice, dictation, sharing and window operations delegate to their
+respective controllers.
 """
 
 from __future__ import annotations
@@ -217,11 +203,13 @@ class DesktopBridge:
         # Server-selection calls mutate stored servers and navigate the single
         # window; serialize them across pywebview's call threads.
         self._connection_lock = threading.Lock()
+        self._speech_lock = threading.Lock()
 
     # -- Capabilities and system actions ---------------------------------------
 
     def getDesktopCapabilities(self) -> dict[str, Any]:  # noqa: N802
         """Return the Desktop feature flags for the WebUI feature gates."""
+        origin = self._permissions.origin
         return {
             "wakeword": True,
             "voiceApi": VOICE_API_VERSION,
@@ -232,7 +220,7 @@ class DesktopBridge:
             "dictation": self._dictation is not None and self._dictation.supported,
             "zoom": self._zoom is not None and self._zoom.supported,
             "taskbarBadge": self._taskbar_badge is not None and self._taskbar_badge.supported,
-            "secureOrigins": list(self._secure_origins),
+            "secureOrigins": [origin] if origin in self._secure_origins else [],
             "restart": self._restart is not None,
             # The Desktop signs its window in to servers in the access mode
             # ``authenticated``: ``selectServer`` opens a login ticket or sends
@@ -245,7 +233,9 @@ class DesktopBridge:
         """Describe this Desktop's grants to its selected server, without its keys."""
         if self._computer_sharing is None:
             raise BridgeError("computer_sharing_unavailable")
-        return self._computer_sharing.status()
+        status = self._computer_sharing.status()
+        self._permissions.read_sharing_status(status["server_url"])
+        return status
 
     def setComputerSharing(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Apply native-approved capability grants for the unchanged selected server."""
@@ -253,26 +243,11 @@ class DesktopBridge:
             raise BridgeError("computer_sharing_unavailable")
         status = self._computer_sharing.status()
         server_url = status["server_url"]
-        if not server_url:
-            raise BridgeError("computer_server_changed")
-        enabled = [
-            name
-            for name in status["capabilities"]
-            if isinstance(changes, dict)
-            and changes.get(name) is True
-            and not status["capabilities"][name]
-        ]
-        catalog = {item["id"]: item for item in status.get("capability_catalog", [])}
-        summaries = []
-        for name in enabled:
-            descriptor = catalog.get(name, {})
-            label = descriptor.get("label", name)
-            description = descriptor.get("description", "")
-            summaries.append(f"{label}: {description}" if description else label)
-        self._permissions.computer_sharing(server_url, summaries)
+        self._permissions.read_sharing_status(server_url)
         return self._computer_sharing.update(
             changes,
             expected_server=server_url,
+            authorize=self._permissions.computer_sharing,
             confirm=self._confirm,
             expected_revision=status.get("catalog_revision"),
         )
@@ -282,6 +257,7 @@ class DesktopBridge:
         if self._computer_sharing is None:
             raise BridgeError("computer_sharing_unavailable")
         server_url = self._computer_sharing.status()["server_url"]
+        self._permissions.read_sharing_status(server_url)
         self._permissions.reload_desktop_extensions(server_url)
         return self._computer_sharing.reload_extensions(
             expected_server=server_url, confirm=self._confirm
@@ -314,6 +290,7 @@ class DesktopBridge:
 
     def setMicrophone(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Apply one partial microphone change; returns the settings."""
+        self._permissions.configure_microphone()
         return self._microphone.update(changes)
 
     def listMicrophones(self) -> list[dict[str, Any]]:  # noqa: N802
@@ -328,13 +305,16 @@ class DesktopBridge:
 
     def setVoiceEnabled(self, enabled: Any) -> dict[str, Any]:  # noqa: N802
         """Enable or disable Voice listening; returns ``{enabled, error_code}``."""
-        if enabled is True:
-            self._permissions.enable_voice()
-        return self._voice.set_enabled(enabled)
+        with self._speech_lock:
+            if enabled is True:
+                self._permissions.enable_voice()
+            return self._voice.set_enabled(enabled)
 
     def updateVoiceConfig(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Apply one partial Voice config change; returns the status snapshot."""
-        return self._voice.update_config(changes)
+        with self._speech_lock:
+            self._permissions.configure_voice()
+            return self._voice.update_config(changes)
 
     def listWakewordModels(self) -> list[dict[str, Any]]:  # noqa: N802
         """Return the curated built-ins and the imported wakeword models."""
@@ -370,6 +350,7 @@ class DesktopBridge:
 
     def deleteWakewordModel(self, model_id: Any) -> dict[str, bool]:  # noqa: N802
         """Permanently remove one inactive imported model."""
+        self._permissions.delete_model(model_id)
         return self._voice.delete_model(model_id)
 
     def retryVoice(self) -> dict[str, Any]:  # noqa: N802
@@ -400,6 +381,7 @@ class DesktopBridge:
 
     def setLiveHotkey(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Merge, persist, and re-register the Live voice hotkey; returns its status."""
+        self._permissions.configure_hotkey()
         return self._require_live_hotkey().update(changes)
 
     # -- Window zoom -----------------------------------------------------------
@@ -428,7 +410,15 @@ class DesktopBridge:
 
     def setDictation(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Apply a partial shortcut or mode change; returns the dictation status."""
-        return self._require_dictation().update(changes)
+        with self._speech_lock:
+            self._permissions.configure_dictation()
+            return self._require_dictation().update(changes)
+
+    def _follow_speech_server(self, url: str) -> None:
+        """Switch recording destinations atomically with their consent checks."""
+        with self._speech_lock:
+            self._voice.set_server_url(url)
+            self._require_dictation().set_server_url(url)
 
     # -- Update restart --------------------------------------------------------
 
@@ -479,6 +469,7 @@ class DesktopBridge:
         """Return the remembered servers, marking the window's server and the signed-in ones."""
         controller = self._require_connection()
         with self._connection_lock:
+            self._permissions.list_servers()
             return controller.describe_servers()
 
     def addServer(  # noqa: N802
@@ -491,9 +482,9 @@ class DesktopBridge:
         controller = self._require_connection()
         port = _coerce_port(port)
         display = _display(host, port)
-        if display is not None and not controller.is_remembered(host, port):
-            self._permissions.add_server(display)
         with self._connection_lock:
+            if display is not None:
+                self._permissions.add_server(display)
             entry = controller.add_server(host, port, label or None)
         return entry.to_bridge()
 
@@ -505,9 +496,9 @@ class DesktopBridge:
         controller = self._require_connection()
         port = _coerce_port(port)
         display = _display(host, port)
-        if display is not None and controller.is_remembered(host, port):
-            self._permissions.remove_server(display)
         with self._connection_lock:
+            if display is not None and controller.is_remembered(host, port):
+                self._permissions.remove_server(display)
             removed = controller.remove_server(host, port)
         return {"removed": removed}
 
@@ -516,21 +507,21 @@ class DesktopBridge:
 
         A server that needs pairing returns :data:`SIGN_IN_PAGE` as ``url``: the
         window then shows the connection screen, where the user decides about
-        pairing. A server that is not remembered is added first, which another
-        server's page asks the user for (``declined`` otherwise).
+        pairing. A successful selection remembers the server. Remote pages ask
+        the user before switching.
         """
         controller = self._require_connection()
         port = _coerce_port(port)
         display = _display(host, port)
-        if display is not None and not controller.is_remembered(host, port):
-            self._permissions.add_server(display)
         with self._connection_lock:
+            if display is not None:
+                self._permissions.select_server(display)
             prepared = controller.prepare_connect(host, port)
         return prepared.to_bridge_payload()
 
-    def cancelPairing(self) -> dict[str, bool]:  # noqa: N802
+    def cancelPairing(self, screen: Any = None) -> dict[str, bool]:  # noqa: N802
         """End a pairing waiting for approval; reports whether one was waiting."""
-        controller = self._require_connection()
+        controller = self._require_screen(screen)
         with self._connection_lock:
             return {"cancelled": controller.cancel_pairing()}
 

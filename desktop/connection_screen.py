@@ -531,7 +531,7 @@ def build_connection_html(
         document.getElementById("connection-pairing").hidden = true;
         if (bridgeReady("cancelPairing")) {{
           try {{
-            await window.pywebview.api.cancelPairing();
+            await window.pywebview.api.cancelPairing(SCREEN_KEY);
           }} catch (error) {{
             // The pairing ends with its code anyway.
           }}

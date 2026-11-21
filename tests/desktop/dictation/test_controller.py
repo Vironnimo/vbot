@@ -267,6 +267,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
                 echo_stage_factory=lambda: echo_stages.append("created"),
             ),
             server_url=server_url,
+            own_server=lambda origin: origin == SERVER_URL,
             page=page,
             wake_phrases=page,
             cues=cues,  # type: ignore[arg-type]
@@ -466,7 +467,6 @@ def test_a_take_that_types_nothing_signals_and_reports_why(
 @pytest.mark.parametrize(
     ("server_url", "readiness", "devices", "budget_error", "code"),
     [
-        ("", None, True, None, "server_unreachable"),
         (
             "http://server.lan:8420",
             "speech_to_text_unconfigured",
@@ -483,7 +483,7 @@ def test_a_take_that_types_nothing_signals_and_reports_why(
             "speech_to_text_unavailable",
         ),
     ],
-    ids=["no-server", "no-speech-to-text", "no-microphone", "upload-limit-below-wav-minimum"],
+    ids=["no-speech-to-text", "no-microphone", "upload-limit-below-wav-minimum"],
 )
 def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
     make_rig: Any,
@@ -565,7 +565,9 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
 
         monkeypatch.setattr(PieceCutter, "add", observe_add)
     rig.sd.feed(LEAD_IN, *script)
+    assert rig.controller.status()["enabled"] is False
     rig.controller.set_server_url(SERVER_URL)
+    assert rig.controller.status()["enabled"] is True
 
     rig.press()
     if budget_ready != "immediate":

@@ -26,6 +26,7 @@ Desktop settings section `dictation` (`desktop/settings.py`):
 
 ## Bridge and status
 
+- The shortcut is enabled per receiving server origin (`hotkey.enabled_servers`); an older global enable setting applies only to the installation server. Switching origins cancels a pending take and applies the destination's saved enablement before admitting another take. A remote page needs native consent to configure dictation.
 - Capability `dictation`: the global shortcut can be registered (Windows only); gates the Settings section.
 - `getDictation()` / `setDictation(changes)` return `{supported, enabled, hotkey: {ctrl, alt, shift, win, key}, mode, error_code, state, last_failure}`. Without a dictation controller both reject.
 - `setDictation` takes a partial change of `enabled`, `ctrl`, `alt`, `shift`, `win`, `key`, and `mode`. A non-object or an invalid `mode` returns `dictation_config_invalid`, an invalid combination `hotkey_invalid`; neither persists anything. A valid shortcut change persists and re-registers (`error_code` `hotkey_in_use` / `hotkey_failed` as for the Live voice shortcut); a mode change alone keeps the registration.

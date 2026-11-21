@@ -35,6 +35,7 @@ from typing import Any, Protocol
 
 from desktop import settings as desktop_settings
 from desktop._windows import win32_last_error, win32_library
+from desktop.speech.destination import SpeechDestination
 
 logger = logging.getLogger("vbot.desktop.hotkey")
 
@@ -150,7 +151,9 @@ LIVE_VOICE_HOTKEY = HotkeyPreference(
 )
 
 
-def read_hotkey_setting(preference: HotkeyPreference, path: Path | None) -> dict[str, Any]:
+def read_hotkey_setting(
+    preference: HotkeyPreference, path: Path | None, destination: SpeechDestination | None = None
+) -> dict[str, Any]:
     """Return the stored hotkey merged with its defaults.
 
     Each malformed field falls back to its default independently, so one bad
@@ -167,16 +170,34 @@ def read_hotkey_setting(preference: HotkeyPreference, path: Path | None) -> dict
     key = stored.get("key")
     if isinstance(key, str) and key.strip():
         normalized["key"] = key.strip()
+    if destination is not None:
+        normalized["enabled"] = destination.enabled(stored)
     return normalized
 
 
 def _write_hotkey_setting(
-    preference: HotkeyPreference, setting: Mapping[str, Any], path: Path | None
+    preference: HotkeyPreference,
+    setting: Mapping[str, Any],
+    path: Path | None,
+    destination: SpeechDestination | None = None,
+    *,
+    set_enabled: bool = False,
 ) -> None:
     """Persist the hotkey, preserving the rest of its section and the file."""
 
     def mutate(section: dict[str, Any]) -> dict[str, Any]:
-        section[_SETTING_KEY] = dict(setting)
+        stored = section.get(_SETTING_KEY)
+        merged = dict(stored) if isinstance(stored, dict) else {}
+        merged.update(
+            {
+                key: value
+                for key, value in setting.items()
+                if destination is None or key != "enabled"
+            }
+        )
+        if destination is not None and set_enabled:
+            destination.set_enabled(merged, setting["enabled"])
+        section[_SETTING_KEY] = merged
         return section
 
     desktop_settings.update_section(preference.section, mutate, path)
@@ -624,7 +645,9 @@ class HotkeyController:
         handlers: HotkeyHandlers,
         supported: bool | None = None,
         api_factory: Callable[[], HotkeyApi] | None = None,
+        destination: SpeechDestination | None = None,
     ) -> None:
+        self._destination = destination
         self._preference = preference
         self._settings_path = settings_path
         self._handlers = handlers
@@ -667,7 +690,15 @@ class HotkeyController:
             combination_changed = any(name in changes for name in (*_MODIFIER_FLAGS, "key"))
             if (merged["enabled"] or combination_changed) and parse_hotkey(merged) is None:
                 return self._status(current, HOTKEY_ERROR_INVALID)
-            _write_hotkey_setting(self._preference, merged, self._settings_path)
+            _write_hotkey_setting(
+                self._preference,
+                merged,
+                self._settings_path,
+                self._destination,
+                set_enabled="enabled" in changes,
+            )
+            if self._destination is not None:
+                merged = self._read()
             if self._active:
                 self._apply(merged)
             return self._status(merged, self._error_code)
@@ -703,8 +734,15 @@ class HotkeyController:
             if self._thread is not None:
                 self._thread.arm_escape(armed)
 
+    def set_destination(self, origin: str | None) -> None:
+        with self._lock:
+            if self._destination is not None and self._destination.origin != origin:
+                self._destination.origin = origin
+                if self._active:
+                    self._apply(self._read())
+
     def _read(self) -> dict[str, Any]:
-        return read_hotkey_setting(self._preference, self._settings_path)
+        return read_hotkey_setting(self._preference, self._settings_path, self._destination)
 
     def _apply(self, setting: Mapping[str, Any]) -> None:
         self._release()
