@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 import pytest
+import tiktoken
 from PIL import Image
 
 from core.utils import tokens as token_utils
@@ -44,7 +45,7 @@ def _forget_estimation_encoding() -> None:
 def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     real_encoding = token_utils._estimation_encoding()
     encoding = _DeterministicEncoding()
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: encoding)
+    monkeypatch.setattr(tiktoken, "get_encoding", lambda _name: encoding)
     _forget_estimation_encoding()
     token_utils._estimation_encoding()
     token_utils._COUNT_CACHE.clear()
@@ -53,7 +54,7 @@ def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     # Later tests on this worker count with the encoding the session loaded
     # (tests/conftest.py); a cold one would load mid-test and change counts.
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: real_encoding)
+        patch.setattr(tiktoken, "get_encoding", lambda _name: real_encoding)
         _forget_estimation_encoding()
         token_utils._estimation_encoding()
     token_utils._COUNT_CACHE.clear()
@@ -83,7 +84,7 @@ def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch
         calls.append(name)
         return encoding
 
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", load_encoding)
+    monkeypatch.setattr(tiktoken, "get_encoding", load_encoding)
     _forget_estimation_encoding()
     token_utils._estimation_encoding()
 
@@ -113,7 +114,7 @@ def test_startup_prewarm_loads_once_without_blocking_counts(
         release.wait(timeout=5)
         return Encoding()
 
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", slow_load)
+    monkeypatch.setattr(tiktoken, "get_encoding", slow_load)
     _forget_estimation_encoding()
     prewarm_estimation_encoding()
     assert loading.wait(timeout=5)
@@ -139,7 +140,7 @@ def test_estimate_tokens_uses_character_fallback_when_encoding_is_unavailable(
     def fail_to_load(_name: str) -> Any:
         raise OSError("offline")
 
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", fail_to_load)
+    monkeypatch.setattr(tiktoken, "get_encoding", fail_to_load)
     _forget_estimation_encoding()
     token_utils._estimation_encoding()
 
@@ -499,7 +500,7 @@ def test_growing_wire_reuses_unchanged_message_counts(monkeypatch):
             encoded.append(text)
             return [0] * len(text)
 
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _: Encoding())
+    monkeypatch.setattr(tiktoken, "get_encoding", lambda _: Encoding())
     _forget_estimation_encoding()
     token_utils._estimation_encoding()
     first = {"role": "user", "content": "unchanged"}

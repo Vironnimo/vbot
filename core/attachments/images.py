@@ -14,17 +14,14 @@ import threading
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
+from functools import cache
 from typing import Any, override
 
-from PIL import Image, ImageCms, ImageMath, ImageOps
-from pillow_heif import register_heif_opener
+from PIL import Image, ImageCms, ImageFile, ImageMath, ImageOps
 
 from core.attachments._png import recompress_png
 from core.attachments.attachments import AttachmentError
 from core.utils.workers import BoundedWorkerPool
-
-# Never silently substitute an embedded thumbnail for the main image.
-register_heif_opener(thumbnails=False)
 
 _WORKERS = BoundedWorkerPool(name="image-conversion", max_workers=1)
 _CACHE_BYTES = 32 * 1024 * 1024
@@ -43,6 +40,21 @@ _SOURCE_FORMATS = {
 # PNG accepts Pillow's I;16 mode. Other unsigned 16-bit modes differ in byte order.
 _UINT16_RAW_MODES = {"I;16B": "I;16B", "I;16L": "I;16", "I;16N": "I;16N"}
 _DECODE_ERRORS = (OSError, ValueError, SyntaxError, EOFError, struct.error)
+
+
+@cache
+def _register_heif() -> None:
+    from pillow_heif import register_heif_opener
+
+    # Never silently substitute an embedded thumbnail for the main image.
+    register_heif_opener(thumbnails=False)
+
+
+def open_raster(data: bytes) -> ImageFile.ImageFile:
+    """Open image bytes or a header, loading HEIF support for its container only."""
+    if data[4:8] == b"ftyp":
+        _register_heif()
+    return Image.open(io.BytesIO(data))
 
 
 class ImageConversionError(AttachmentError):
@@ -245,7 +257,7 @@ class ImageConverter:
             self._cache.move_to_end(key)
             return self._cache[key]
         try:
-            with Image.open(io.BytesIO(data)) as original:
+            with open_raster(data) as original:
                 converted = ImageOps.exif_transpose(original)
                 profile = original.info.get("icc_profile")
                 if raw_mode := _UINT16_RAW_MODES.get(converted.mode):
@@ -310,7 +322,7 @@ class ImageConverter:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
-                with Image.open(io.BytesIO(data)) as image:
+                with open_raster(data) as image:
                     if image.format != _SOURCE_FORMATS.get(media_type):
                         raise ImageConversionError("invalid_image")
                     if image.width * image.height > _PIXEL_LIMIT:
@@ -318,7 +330,7 @@ class ImageConverter:
                             "image_too_large", pixels=image.width * image.height
                         )
                     image.verify()
-                with Image.open(io.BytesIO(data)) as image:
+                with open_raster(data) as image:
                     size = image.size
                     maximum_width, maximum_height = size
                     frames = getattr(image, "n_frames", 1)

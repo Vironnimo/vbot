@@ -12,7 +12,6 @@ Usage::
 import base64
 import binascii
 import hashlib
-import io
 import json
 import logging
 import math
@@ -22,10 +21,12 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from threading import Lock, RLock, Thread
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import tiktoken
 from PIL import Image
+
+if TYPE_CHECKING:
+    import tiktoken
 
 _LOGGER = logging.getLogger("vbot.utils.tokens")
 
@@ -208,6 +209,8 @@ def _load_estimation_encoding() -> tiktoken.Encoding | None:
 
 @lru_cache(maxsize=1)
 def _estimation_encoding() -> tiktoken.Encoding | None:
+    import tiktoken
+
     try:
         return tiktoken.get_encoding(TOKEN_ESTIMATE_ENCODING)
     except (OSError, ValueError) as exc:
@@ -455,6 +458,8 @@ def _image_dimensions(payload: str) -> tuple[int, int] | None:
         if key in _IMAGE_CACHE:
             _IMAGE_CACHE.move_to_end(key)
             return _IMAGE_CACHE[key]
+    from core.attachments.images import open_raster
+
     dimensions = None
     start = 0
     if payload.startswith("data:"):
@@ -466,7 +471,7 @@ def _image_dimensions(payload: str) -> tuple[int, int] | None:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(header)) as source:
+            with open_raster(header) as source:
                 if source.width > 0 and source.height > 0:
                     dimensions = source.size
     except (

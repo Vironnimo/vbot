@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import base64
-import io
 import warnings
 from collections.abc import Iterator
 from typing import Any
 
 from PIL import Image
 
-from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget, open_raster
 from core.providers.errors import ProviderError
 from core.providers.wire_profile import MediaRules
 
@@ -123,7 +122,7 @@ def _dimensions(encoded: Any) -> tuple[int, int] | None:
             header = base64.b64decode(candidate, validate=True)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-                with Image.open(io.BytesIO(header)) as image:
+                with open_raster(header) as image:
                     return image.size
         except OSError, ValueError, SyntaxError, Image.DecompressionBombError:
             pass

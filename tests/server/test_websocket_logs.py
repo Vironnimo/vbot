@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import watchfiles
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
@@ -130,7 +131,7 @@ def test_log_websocket_closes_for_a_reconnect_when_the_stream_cannot_continue(
             raise OSError("log directory unavailable")
             yield set()
 
-        monkeypatch.setattr(log_viewer_module, "awatch", crashing_awatch)
+        monkeypatch.setattr(watchfiles, "awatch", crashing_awatch)
     else:
 
         def locked_read(*_args: object) -> None:
