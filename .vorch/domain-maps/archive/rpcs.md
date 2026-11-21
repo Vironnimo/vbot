@@ -1,5 +1,7 @@
 # Archive: RPCs
 
+The entry read projects Session and owner-group titles together with member counts. A page can therefore label entries and report which accept a new id from the same snapshot.
+
 The archive RPCs of `server/rpc/archive_methods.py` and the archive fields of the deleting RPCs, as accessors see them: parameters, results, error codes and their `data`. Archive semantics: `archive.md`.
 
 Agent group entries expose `private_agents: [{agent_id, name}]` in list/show, empty for other entries. `agent.delete` adds `private_agent_ids`, and `archive.restore` includes them in its `restored` Agent result. A group refusal identifies its blocking member in `agent_in_use`/`agent_busy` `data.agent_id`. Only the last Chat Agent is protected by the minimum-one delete rule; Helpers and Private Agents remain deletable.
