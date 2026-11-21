@@ -425,6 +425,9 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         {"content": "Title:\nSession naming audit"},
         {"content": 'Titel:\n"Session naming audit"'},
         {"content": "```text\nTitle:\nSession naming audit\n```"},
+        {"content": "**Title:** Session naming audit"},
+        {"content": "**Titel**:\nSession naming audit"},
+        {"content": "Title:\nTitle: Session naming audit"},
         # One explicit block, with straight or typographic quotes.
         {"content": "[title=Session naming audit]"},
         {"content": '[title="Session naming audit"]'},
@@ -442,19 +445,53 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         {"content": "[title=Session naming\naudit]"},
         # The Model stopped right before the closing bracket.
         {"content": "[title=Session naming audit"},
+        # Misspelled keys still mark a block. Canonical blocks take priority.
+        {"content": "[Ntitle=Session naming audit]"},
+        {"content": "[TİTLE=Session naming audit]"},
+        {"content": "[éTitle=Session naming audit]"},
+        {"content": "Draft. [titzle=Session naming audit] Done."},
+        {"content": "[tilte=Session naming audit][Ntitle=Second]"},
+        {"content": "[ TITLE : Session naming audit ]"},
+        {"content": "```text\n[Titel=Session naming\naudit]\n```"},
+        {"content": "«[tilte=Session naming audit]»"},
+        {"content": "[tittle=Session naming audit"},
+        {"content": "[Ntitle=Other candidate]\n[title=Session naming audit]"},
+        {"content": "**Title:** **[Ntitle=Session naming audit]**"},
+        {"content": "# [Titel: Session naming audit]"},
     ],
 )
 def test_generated_title_extracts_one_unambiguous_title(response: dict[str, Any]) -> None:
     assert _generated_title(response) == "Session naming audit"
 
 
-def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -> None:
-    assert _generated_title({"content": """[title="Fix O'Brien's parser"]"""}) == (
-        "Fix O'Brien's parser"
-    )
+def test_generated_title_counts_only_the_title() -> None:
     longest = "x" * GENERATED_TITLE_MAX_CHARACTERS
     assert _generated_title({"content": longest}) == longest
     assert _generated_title({"content": f"[title={longest}]"}) == longest
+    assert _generated_title({"content": f"[Ntitle={longest}]"}) == longest
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ("[Ntitle=Nebenläufigkeit & Lebenszyklus prüfen]", "Nebenläufigkeit & Lebenszyklus prüfen"),
+        ("# Migration zu C# #", "Migration zu C#"),
+        ("""[title="Fix O'Brien's parser"]""", "Fix O'Brien's parser"),
+        ("[title='Fix O'Brien's parser']", "Fix O'Brien's parser"),
+        ('[Ntitle=Fehler in "Login"]', 'Fehler in "Login"'),
+        ("[Ntitle=„Start“ oder „Stopp“]", "„Start“ oder „Stopp“"),
+        ("[Ntitle=__init__ und __eq__]", "__init__ und __eq__"),
+        ("`__init__`", "__init__"),
+        ("[RFC] Update", "[RFC] Update"),
+        ("[subtitle=Entwurf]", "[subtitle=Entwurf]"),
+        ("[tile=32]", "[tile=32]"),
+        ("Explain [Titel: Entwurf]", "Explain [Titel: Entwurf]"),
+        ("[Titel: A] vs. [Titel: B]", "[Titel: A] vs. [Titel: B]"),
+        ("[Titel: [WIP]] Changelog prüfen", "[Titel: [WIP]] Changelog prüfen"),
+    ],
+)
+def test_generated_title_preserves_title_content(response: str, expected: str) -> None:
+    assert _generated_title({"content": response}) == expected
 
 
 @pytest.mark.parametrize(
@@ -466,6 +503,12 @@ def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -
         "[title=]",
         '[title=""]',
         "[title=" + "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1) + "]",
+        '[Ntitle=""]',
+        "[tilte=Nested [brackets]]",
+        "[Titel: Unfinished\nmore text",
+        "Title: [Ntitle=]",
+        "[Ntitle=" + "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1) + "]",
+        "[Titel: The user is asking for a session naming audit]",
         # Ambiguous, unfinished or empty plain text.
         "First candidate\nSecond candidate",
         "Here is your title:\nSession naming audit",
@@ -479,6 +522,7 @@ def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -
         "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1),
         # Descriptions of the request instead of a title.
         "The user is asking me to perform a session naming audit",
+        '[Ntitle="The user is asking about scheduling]',
         "Was macht der User in dieser Session",
     ],
 )
@@ -492,6 +536,7 @@ def test_generated_title_rejects_invalid_ambiguous_or_meta_output(response: str)
     ("response", "accepted"),
     [
         ('Explanation\n[title="Session naming audit"]\nDone.', True),
+        ("[Ntitle=Session naming audit]", True),
         ("private-candidate-one\nprivate-candidate-two", False),
         ("<think>The user is asking me to perform a naming audit", False),
         # Reasoning whose opening tag the chat template supplied, with candidates.

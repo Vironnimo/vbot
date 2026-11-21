@@ -59,11 +59,27 @@ TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 _MARKDOWN_HEADING_MARKER = re.compile(r"^#{1,6}\s+")
-_TITLE_BLOCK_START = re.compile(r"\[\s*title\s*=", re.IGNORECASE)
-_TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]]*)\]", re.IGNORECASE)
-_UNCLOSED_FINAL_TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]\n]*)\s*\Z", re.IGNORECASE)
-# Quotation and Markdown characters Models wrap around a title.
-_TITLE_WRAPPERS = " \t\"'‘’“”„«»`*_#"
+_TITLE_BLOCK_START = re.compile(r"\[\s*([^\W\d_]{5,6})\s*([=:])")
+_TITLE_BLOCK_BODY = re.compile(r"([^\[\]]*)\]")
+_UNCLOSED_TITLE_BLOCK_BODY = re.compile(r"([^\[\]\n]*)\Z")
+_PLAIN_TITLE_LABEL = re.compile(
+    r"(?:title|titel)\s*:|\*\*(?:title|titel)(?:\s*:\*\*|\*\*\s*:)", re.IGNORECASE
+)
+_TITLE_CLOSERS = {
+    '"': '"',
+    "'": "'",
+    "‘": "‘’",
+    "’": "’",
+    "“": "“”",
+    "”": "”",
+    "„": "„“”",
+    "«": "«»",
+    "»": "»«",
+    "`": "`",
+    "*": "*",
+    "_": "_",
+}
+_TITLE_DECORATION = " #*`_\"'‘’“”„«»"
 _META_TITLE_PATTERNS = (
     re.compile(
         r"^(?:the\s+)?user\s+(?:is\s+)?(?:asking|asks|wants|requested|requests|needs)\b",
@@ -659,42 +675,25 @@ def _generated_title(response: dict[str, Any]) -> str:
     else:
         raise _InvalidGeneratedTitleError("Session title response did not include text content")
 
-    # The response's Reasoning is already split from its content
-    # (``split_inline_reasoning``). The first complete title block wins,
-    # whatever surrounds it.
-    blocks = (
-        " ".join(block.group(1).split()).strip(_TITLE_WRAPPERS)
-        for block in _TITLE_BLOCK.finditer(text)
-    )
-    if (first_block := next((block for block in blocks if block), None)) is not None:
-        text = first_block
-    elif (unclosed := _UNCLOSED_FINAL_TITLE_BLOCK.search(text)) is not None and (
-        unclosed_title := unclosed.group(1).strip(_TITLE_WRAPPERS)
-    ):
-        # The Model stopped right before the closing bracket.
-        text = unclosed_title
-    elif _TITLE_BLOCK_START.search(text):
-        raise _InvalidGeneratedTitleError("Session title response held no complete title block")
+    # The response's Reasoning was already split from its answer content.
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    # Unwrap presentation only when the entire response contains one bounded
-    # block. Never select one candidate from a multi-line answer.
     if len(lines) >= 3:
         fence = re.fullmatch(r"(`{3,}|~{3,})(?:text|plaintext)?", lines[0], re.IGNORECASE)
         if fence is not None and lines[-1] == fence.group(1):
             lines = lines[1:-1]
-    if lines and re.fullmatch(r"(?:title|titel)\s*:", lines[0], re.IGNORECASE):
+    if lines and _PLAIN_TITLE_LABEL.fullmatch(lines[0]):
         lines = lines[1:]
-    if not lines:
-        raise _InvalidGeneratedTitleError("Session title response was empty")
-    if len(lines) != 1:
+    text = _unwrap_title("\n".join(lines))
+    if (title := _marked_title(text)) is not None:
+        text = title
+    elif "\n" in text:
         raise _InvalidGeneratedTitleError("Session title response was not exactly one text line")
-    line = lines[0]
-    line = re.sub(r"^(?:title|titel)\s*:\s*", "", line, flags=re.IGNORECASE)
-    line = line.strip(_TITLE_WRAPPERS)
-    line = " ".join(line.split()).rstrip(".!?:;").strip(_TITLE_WRAPPERS)
+    line = _strip_title_wrappers(" ".join(text.split()).rstrip(".!?:;"))
     if not line:
         raise _InvalidGeneratedTitleError("Session title response was empty")
-    if any(pattern.search(line) for pattern in _META_TITLE_PATTERNS):
+    # An unmatched opening quote can still introduce a description of the task.
+    unwrapped_start = line.lstrip(_TITLE_DECORATION)
+    if any(pattern.search(unwrapped_start) for pattern in _META_TITLE_PATTERNS):
         raise _InvalidGeneratedTitleError(
             "Session title response described the naming task instead of the topic"
         )
@@ -703,6 +702,68 @@ def _generated_title(response: dict[str, Any]) -> str:
             f"Session title response exceeded {GENERATED_TITLE_MAX_CHARACTERS} characters"
         )
     return line
+
+
+def _is_title_typo(key: str) -> bool:
+    # One adjacent transposition or one extra letter (Ntitle).
+    if key in {"ittle", "ttile", "tilte", "titel"}:
+        return True
+    return len(key) == 6 and any(key[:i] + key[i + 1 :] == "title" for i in range(6))
+
+
+def _marked_title(text: str) -> str | None:
+    attempted = False
+    first_variant = None
+    for marker in _TITLE_BLOCK_START.finditer(text):
+        exact_key = re.fullmatch("title", marker[1], re.IGNORECASE) is not None
+        if not exact_key and not _is_title_typo(marker[1].lower()):
+            continue
+        body = _TITLE_BLOCK_BODY.match(text, marker.end()) or _UNCLOSED_TITLE_BLOCK_BODY.match(
+            text, marker.end()
+        )
+        # A colon also introduces ordinary prose, e.g. "[Titel: A] vs. [Titel: B]".
+        # Treat it as an assignment only when the block is the whole answer.
+        if marker[2] == ":" and (marker.start() or body is None or body.end() != len(text)):
+            continue
+        attempted = True
+        if body and (value := _unwrap_title(" ".join(body[1].split()))):
+            if exact_key and marker[2] == "=":
+                return value
+            if first_variant is None:
+                first_variant = value
+    if attempted and first_variant is None:
+        raise _InvalidGeneratedTitleError("Session title response held no complete title block")
+    return first_variant
+
+
+def _unwrap_title(text: str) -> str:
+    label = _PLAIN_TITLE_LABEL.match(text)
+    if label is None:
+        text = _strip_title_wrappers(text)
+        label = _PLAIN_TITLE_LABEL.match(text)
+    return _strip_title_wrappers(text[label.end() :]) if label else text
+
+
+def _strip_title_wrappers(text: str) -> str:
+    text = text.strip()
+    if heading := _MARKDOWN_HEADING_MARKER.match(text):
+        text = re.sub(r"\s+#+$", "", text[heading.end() :]).strip()
+    while len(text) >= 2 and text[-1] in _TITLE_CLOSERS.get(text[0], ""):
+        closer = text[-1]
+        if text[0] in "`*_":
+            width = len(text) - len(text.lstrip(text[0]))
+            closer = text[0] * width
+            if not text.endswith(closer) or (closer == "__" and text.isidentifier()):
+                break
+        inner = text[len(closer) : -len(closer)]
+        # Two separately quoted terms keep their quotes. Apostrophes inside a
+        # word (O'Brien) do not close a quoted title.
+        if closer in inner and (
+            closer not in {"'", "’"} or re.search(r"(?<!\w)['’]|['’](?!\w)", inner)
+        ):
+            break
+        text = inner.strip()
+    return text if text.strip(_TITLE_DECORATION) else ""
 
 
 def _mentioned_filename(path: str) -> str:
