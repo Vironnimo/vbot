@@ -548,23 +548,14 @@ class ChatMessage:
             target_message_id=target_message_id,
         )
 
-    def to_dict(self) -> JsonObject:
-        """Return a canonical JSON-serializable message dictionary."""
-        self.validate()
+    def request_fields(self) -> JsonObject:
+        """Serialize the conversation fields shared by request history and storage."""
         message: JsonObject = {
             "id": self.id,
             "timestamp": self.timestamp,
             "role": self.role,
         }
-        _add_if_not_none(message, "subagent_reply_target", self.subagent_reply_target)
-        if self.programmatic:
-            message["programmatic"] = True
-        _add_if_not_none(message, "parent_tool_call_id", self.parent_tool_call_id)
-        _add_if_not_none(message, "external_history", self.external_history)
-        if self.skill_package is not None:
-            message["skill_package"] = self.skill_package.to_dict()
         _add_if_not_none(message, "model", self.model)
-        _add_if_not_none(message, "thinking_effort", self.thinking_effort)
         if self.content is not None:
             if isinstance(self.content, list):
                 message["content"] = [content_block_to_dict(block) for block in self.content]
@@ -572,19 +563,34 @@ class ChatMessage:
                 message["content"] = self.content
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
+        _add_if_not_none(message, "phase", self.phase)
+        if self.tool_calls is not None:
+            message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
+        _add_if_not_none(message, "tool_call_id", self.tool_call_id)
+        _add_if_not_none(message, "name", self.name)
+        _add_if_not_none(message, "input_origin", self.input_origin)
+        return message
+
+    def to_dict(self) -> JsonObject:
+        """Return a validated, canonical JSON-serializable message dictionary."""
+        self.validate()
+        message = self.request_fields()
+        _add_if_not_none(message, "subagent_reply_target", self.subagent_reply_target)
+        if self.programmatic:
+            message["programmatic"] = True
+        _add_if_not_none(message, "parent_tool_call_id", self.parent_tool_call_id)
+        _add_if_not_none(message, "external_history", self.external_history)
+        if self.skill_package is not None:
+            message["skill_package"] = self.skill_package.to_dict()
+        _add_if_not_none(message, "thinking_effort", self.thinking_effort)
         _add_if_not_none(message, "reasoning_scope", self.reasoning_scope)
         _add_if_not_none(message, "reasoning_timing", self.reasoning_timing)
         _add_if_not_none(message, "reasoning_summary", self.reasoning_summary)
-        _add_if_not_none(message, "phase", self.phase)
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
         _add_if_not_none(message, "tool_display", self.tool_display)
         if self.tool_media is not None:
             message["tool_media"] = [dict(item) for item in self.tool_media]
-        if self.tool_calls is not None:
-            message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
-        _add_if_not_none(message, "tool_call_id", self.tool_call_id)
-        _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
         if self.projection is not None:
             message["projection"] = [dict(entry) for entry in self.projection]
@@ -599,7 +605,6 @@ class ChatMessage:
         _add_if_not_none(message, "target_message_id", self.target_message_id)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
-        _add_if_not_none(message, "input_origin", self.input_origin)
         if self.interrupted:
             message["interrupted"] = True
         _add_if_not_none(message, "interruption_cause", self.interruption_cause)

@@ -16,6 +16,7 @@ from core.chat._message_history import (
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.messages import (
+    TOOL_RESULT_COMPACTED_FIELD,
     ChatMessage,
     JsonObject,
 )
@@ -28,6 +29,7 @@ from core.chat.wire_shaping import (
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.reasoning import ReasoningReplayPolicy
+from core.tools import READ_MEDIA_ARTIFACT_KIND
 
 
 @dataclass(frozen=True)
@@ -154,22 +156,28 @@ def _tool_media_outputs(
     *messages* is the effective history since the latest Compaction checkpoint, so
     Tool images stay in context across Runs until Compaction replaces them.
     """
-    from core.compaction import is_compacted_tool_result_content
-
     outputs: list[JsonObject] = []
     for message in messages:
+        if message.role != "tool" or not isinstance(message.tool_call_id, str):
+            continue
+        content = message.content
+        if not isinstance(content, str):
+            continue
+        # Even text-only envelopes have an empty artifacts array. A matching
+        # kind could use Unicode escapes, so parse those uncommon inputs too.
         if (
-            message.role != "tool"
-            or not isinstance(message.tool_call_id, str)
-            or not isinstance(message.content, str)
-            or is_compacted_tool_result_content(message.content)
+            not message.tool_media
+            and READ_MEDIA_ARTIFACT_KIND not in content
+            and "\\u" not in content
         ):
             continue
         try:
-            result = json.loads(message.content)
-        except TypeError, ValueError:
+            result = json.loads(content)
+        except ValueError:
             result = None
         if isinstance(result, dict):
+            if result.get(TOOL_RESULT_COMPACTED_FIELD) is True:
+                continue
             outputs.extend(
                 _read_media_outputs(
                     result,

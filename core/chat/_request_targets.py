@@ -182,7 +182,7 @@ class RequestTargets:
                 lambda: resolve_agent_context_window(
                     self._dependencies,
                     agent,
-                    local_context_windows=self._dependencies.get_local_context_windows(),
+                    local_context_windows=self._dependencies.get_local_context_windows,
                 )
             )
         try:
@@ -226,7 +226,7 @@ class RequestTargets:
             # Live read through the runtime's single source of truth (no reload
             # hook, StorageError-tolerant), so a settings change applies to the
             # next request without re-implementing the storage read here.
-            local_context_windows=self._dependencies.get_local_context_windows(),
+            local_context_windows=self._dependencies.get_local_context_windows,
         )
 
     @staticmethod

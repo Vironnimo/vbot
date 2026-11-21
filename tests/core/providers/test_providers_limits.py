@@ -110,12 +110,18 @@ def test_resolve_effective_context_window(
     local_context_windows: dict[str, Any] | None,
     expected: int,
 ) -> None:
+    def read_local_windows() -> dict[str, Any]:
+        assert model_is_local(metadata)
+        return local_context_windows or {}
+
     resolved = resolve_effective_context_window(
         model_window,
         None,
         model_metadata=metadata,
         model_key="ollama/m",
-        local_context_windows=local_context_windows,
+        local_context_windows=local_context_windows
+        if local_context_windows is not None
+        else read_local_windows,
     )
 
     assert resolved == expected

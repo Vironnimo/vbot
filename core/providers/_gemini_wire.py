@@ -38,7 +38,7 @@ def gemini_input_payload(
     tools: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Render the native input shared by request construction and Context estimation."""
-    projected = project_tool_result_content_fallbacks([dict(message) for message in messages])
+    projected = project_tool_result_content_fallbacks(messages)
     system_parts: list[dict[str, str]] = []
     contents: list[dict[str, Any]] = []
     tool_names: dict[str, str] = {}
