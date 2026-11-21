@@ -30,6 +30,7 @@ from core.database._connections import (
     required_journal_mode,
 )
 from core.database._documents import DOCUMENT_QUARANTINE_NAME
+from core.database._schema import quote_identifier
 from core.database.config_backups import (
     CONFIGURATION_FILE_PATTERNS,
     ConfigBackup,
@@ -195,6 +196,7 @@ __all__ = [
     "open_offline_database",
     "projection_failure",
     "purge_config_backup_files",
+    "quote_identifier",
     "read_config_backup",
     "read_incident",
     "read_maintenance",
