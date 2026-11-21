@@ -663,6 +663,10 @@ class ChatSessionManager:
         """Find the live address of the same generation after a move or Agent rename."""
         return self._store.generation_address(generation_id)
 
+    def generation_scope(self, generation_id: str) -> tuple[SessionAddress, bool] | None:
+        """Return the address and Sub-Agent status for this live generation."""
+        return self._store.generation_scope(generation_id)
+
     def append_notes_once(
         self,
         address: SessionAddress,
@@ -874,6 +878,10 @@ class ChatSessionManager:
 
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
         return self._store.execution.temporary_binding(address)
+
+    def temporary_profile_references(self, name: str) -> builtins.list[str]:
+        """The live owner-managed Sessions that still resolve this named profile."""
+        return self._store.execution.temporary_profile_references(name)
 
     def temporary_agent_binding(
         self, project_id: str | None, agent_id: str

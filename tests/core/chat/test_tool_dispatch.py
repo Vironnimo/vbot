@@ -371,11 +371,25 @@ async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retirement", ["none", "once", "delete", "replace"])
+@pytest.mark.parametrize(
+    ("retirement", "sink", "field"),
+    [
+        ("none", "files", "value"),
+        ("once", "files", "value"),
+        ("delete", "files", "value"),
+        ("replace", "files", "value"),
+        ("none", "files", "short"),
+        ("once", "external_tools", "totp"),
+    ],
+)
 async def test_secret_values_leave_a_tool_call_only_as_references(
-    tmp_path: Path, retirement: str
+    tmp_path: Path, retirement: str, sink: str, field: str
 ) -> None:
-    value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    from tests.core.secrets.test_agent_secrets import TOTP_SEED
+
+    value = "Z7Q" if field == "short" else "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    ref = "{{secret:API.totp}}" if field == "totp" else "{{secret:API}}"
+    used: list[str] = []
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if retirement == "delete":
@@ -383,7 +397,8 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
         elif retirement == "replace":
             secrets.update(secret.id, actor="user", values={"value": "replacement-credential"})
         context.add_display_notice("info", f"printed {arguments['content']}")
-        return tool_success({"content": f"output {arguments['content']}"})
+        used.append(arguments["content"])
+        return tool_success({"content": f"output {arguments['content']}", arguments["content"]: 1})
 
     store = SecretStore(
         tmp_path / "data",
@@ -399,28 +414,70 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
         {"type": "object", "additionalProperties": True},
         handler,
         open_input_schema=True,
-        secret_sinks={"content": "files"},
+        secret_sinks={"content": sink},
     )
     harness = ToolDispatchHarness(tmp_path, tools)
     secret = secrets.create(
         name="api",
-        kind="token",
-        values={"value": value},
+        kind="login" if field == "totp" else "token",
+        values={"password": "unused", "totp": TOTP_SEED} if field == "totp" else {"value": value},
         actor="user",
         agents=[harness.agent.id],
         lifetime="once" if retirement == "once" else "permanent",
         session_id=harness.session.id,
+        sinks=[sink],
     )
 
-    dispatched = await harness.dispatch([call("echo", content="{{secret:API}}")])
+    dispatched = await harness.dispatch([call("echo", content=ref)])
 
     [completed] = dispatched.events(TOOL_CALL_RESULT_EVENT)
     persisted = json.dumps([message.to_dict() for message in dispatched.messages])
-    assert completed.payload["result"]["data"]["content"] == "output {{secret:API}}"
-    assert value not in json.dumps(completed.payload["display"])
-    assert value not in persisted
-    assert completed.payload["display"]["secrets_used"] == ["API.value (files)"]
+    assert completed.payload["result"]["data"] == {"content": f"output {ref}", ref: 1}
+    [literal] = used
+    assert literal.isdecimal() and len(literal) == 6 if field == "totp" else literal == value
+    assert literal not in json.dumps(completed.payload["display"])
+    assert literal not in persisted
+    name = "totp" if field == "totp" else "value"
+    assert completed.payload["display"]["secrets_used"] == [f"API.{name} ({sink})"]
     assert len(secrets.all()) == (0 if retirement in {"once", "delete"} else 1)
+
+
+@pytest.mark.asyncio
+async def test_file_displays_mask_short_values_before_clipping_long_lines(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    state = FileReadState()
+    register_edit_tools(tools, file_state=state)
+    register_apply_patch_tool(tools, file_state=state)
+    harness = ToolDispatchHarness(tmp_path, tools)
+    secrets = AgentSecrets(SecretStore(tmp_path), clock=lambda: datetime.now(UTC))
+    secrets.create(
+        name="PIN", kind="token", values={"value": "Z7QX"}, actor="user", agents=[harness.agent.id]
+    )
+    secrets.create(
+        name="MULTI",
+        kind="text",
+        values={"value": "Q7z\r\nH8j"},
+        actor="user",
+        agents=[harness.agent.id],
+    )
+    tools.set_secrets(secrets)
+    line = "x" * 996 + "{{secret:PIN}}"
+    dispatched = await harness.dispatch(
+        [
+            call("write", path="a.txt", content="{{secret:MULTI}}\n" + line + "\n"),
+            call("edit", path="b.txt", edits=[{"old_string": "", "new_string": line + "\n"}]),
+            call(
+                "apply_patch",
+                patch=f"*** Begin Patch\n*** Add File: c.txt\n+{line}\n*** End Patch",
+            ),
+        ]
+    )
+    assert [item["ok"] for item in dispatched.results] == [True, True, True], dispatched.results
+    for name in ("a.txt", "b.txt", "c.txt"):
+        assert (harness.agent.workspace / name).read_text().endswith("Z7QX\n")
+    assert (harness.agent.workspace / "a.txt").read_text().startswith("Q7z\nH8j\n")
+    for event in dispatched.events(TOOL_CALL_RESULT_EVENT):
+        assert all(value not in json.dumps(event.payload) for value in ("Z7Q", "Q7z", "H8j"))
 
 
 @pytest.mark.asyncio

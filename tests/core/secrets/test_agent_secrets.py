@@ -456,6 +456,27 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     assert masker.mask("abc") == "abc"
     assert masker.mask_value(untouched) is untouched
 
+    [login] = [item for item in secrets.all() if item.name == "GITHUB"]
+    # Unchanged records from a reload or metadata write are still active values.
+    secrets.reload()
+    secrets.update(login.id, description="new description", actor="user")
+    secrets.update(login.id, concealed={"password": False}, actor="user")
+    assert secrets.masker.mask(PASSWORD) == PASSWORD
+    secrets.update(login.id, concealed={"password": True}, actor="user")
+    secrets.update(login.id, values={"password": "rotated-credential"}, actor="user")
+    assert secrets.masker.mask(PASSWORD) == "{{secret:GITHUB.password}}"
+    secrets.update(
+        login.id, values={"password": PASSWORD}, concealed={"password": False}, actor="user"
+    )
+    assert secrets.masker.mask(PASSWORD) == PASSWORD
+    duplicate = secrets.create(
+        name="SHARED", kind="token", values={"value": PASSWORD}, actor="user"
+    )
+    assert secrets.masker.mask(PASSWORD) == duplicate.reference()
+    secrets.update(duplicate.id, concealed={"value": False}, actor="user")
+    secrets.set_system_values({"SYSTEM_TOKEN": PASSWORD})
+    assert secrets.masker.mask(PASSWORD) == "{{secret:SYSTEM_TOKEN}}"
+
 
 def test_reads_and_masking_never_wait_for_a_store_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

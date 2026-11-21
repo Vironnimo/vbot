@@ -416,6 +416,92 @@ async def test_replacing_a_secret_applies_the_chosen_lifetime_or_keeps_its_own(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["give", "answer"])
+@pytest.mark.parametrize("lifetime", [None, "session", "once", "permanent", "until"])
+async def test_giving_a_subagent_a_passed_name_changes_only_its_own_branch(
+    tmp_path: Path, path: str, lifetime: Lifetime | None
+) -> None:
+    state = _state(tmp_path)
+    secrets: AgentSecrets = state.runtime.agent_secrets
+    requests: SecretRequests = state.runtime.secret_requests
+    parent = SessionAddress(None, "main", "parent")
+    child = state.runtime.chat_sessions.create(
+        "main",
+        "child",
+        metadata={
+            "subagent_parent": {"agent_id": parent.agent_id, "session_id": parent.session_id}
+        },
+    ).address
+    sibling = SessionAddress(None, "helper", "sibling")
+    grandchild = SessionAddress(None, "helper", "grandchild")
+    original = secrets.create(
+        name="API", kind="token", actor="user", agents=["main"], values={"value": "parent-only"}
+    )
+    for target in (child, sibling):
+        secrets.pass_to_session(parent, ["API"], target)
+    secrets.pass_to_session(child, ["API"], grandchild, passed_only=True)
+    params: dict[str, Any] = {"values": {"value": PASSWORD}}
+    if lifetime:
+        params["lifetime"] = lifetime
+    if lifetime == "until":
+        params["expires_at"] = "2031-01-01T00:00:00Z"
+    task = None
+    if path == "answer":
+        task = asyncio.create_task(
+            requests.request(
+                agent_id=child.agent_id,
+                session_id=child.session_id,
+                project_id=None,
+                name="API",
+                kind="token",
+                description="",
+                lifetime="session",
+                passed_only=True,
+            )
+        )
+        await asyncio.sleep(0)
+        pending = requests.pending_for(child, "API")
+        assert pending is not None and pending.replaces is None
+        params["id"] = pending.id
+    else:
+        params.update(
+            agent_id=child.agent_id, session_id=child.session_id, name="API", kind="token"
+        )
+    if lifetime in ("permanent", "until"):
+        error = await rpc_error(state, f"agent_secrets.{path}", **params)
+        assert error["code"] == "invalid_request"
+        if task:
+            requests.decline(params["id"])
+            assert (await task).status == "declined"
+        for target in (child, grandchild):
+            inherited = secrets.lookup(target, "API", passed_only=True)
+            assert inherited is not None and inherited.id == original.id
+    else:
+        await rpc_result(state, f"agent_secrets.{path}", **params)
+        if task:
+            assert (await task).status == "stored"
+        secrets.reload()
+        assert secrets.lookup(grandchild, "API", passed_only=True) is None
+        secrets.pass_to_session(child, ["API"], grandchild, passed_only=True)
+        assert (
+            secrets.substitute(grandchild, "{{secret:API}}", "files", passed_only=True)[0]
+            == PASSWORD
+        )
+        if lifetime != "once":
+            secrets.remove_session(child)
+        assert secrets.lookup(child, "API", passed_only=True) is None
+        assert secrets.lookup(grandchild, "API", passed_only=True) is None
+    for target, passed_only in ((parent, False), (sibling, True)):
+        kept = secrets.lookup(target, "API", passed_only=passed_only)
+        assert kept is not None and kept.id == original.id
+        assert (kept.agents, kept.fields, kept.lifetime) == (
+            original.agents,
+            original.fields,
+            original.lifetime,
+        )
+
+
+@pytest.mark.asyncio
 async def test_sources_are_unlocked_locked_and_reported_by_state(tmp_path: Path) -> None:
     state = _state(tmp_path)
     source = FakeSource({"password": PASSWORD})

@@ -1046,11 +1046,11 @@ class _CompletionDeliveryCoordinator:
                 notice.body = self._secret_masker().mask(body)
             else:
                 resolve = (
-                    partial(sessions.generation_address, notice.expected_session_generation_id)
+                    partial(sessions.generation_scope, notice.expected_session_generation_id)
                     if sessions is not None and notice.expected_session_generation_id is not None
                     else None
                 )
-                protect = partial(self._secrets.protect_output, address, resolve_address=resolve)
+                protect = partial(self._secrets.protect_output, address, resolve_scope=resolve)
                 notice.body = await finish_despite_cancel(asyncio.to_thread(protect, body))
                 if display := notice.original_subagent_message:
                     title = await finish_despite_cancel(asyncio.to_thread(protect, display.title))

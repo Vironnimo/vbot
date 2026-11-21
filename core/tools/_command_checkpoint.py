@@ -76,6 +76,8 @@ class CommandCheckpointStore(Protocol):
 
     def generation_address(self, generation_id: str) -> SessionAddress | None: ...
 
+    def generation_scope(self, generation_id: str) -> tuple[SessionAddress, bool] | None: ...
+
     def append_notes_once(
         self,
         address: SessionAddress,
@@ -455,8 +457,8 @@ class CommandCheckpoints:
                         self._secrets.protect_output,
                         entry.report.owner,
                         entry.body,
-                        resolve_address=partial(
-                            self.store.generation_address,
+                        resolve_scope=partial(
+                            self.store.generation_scope,
                             self._generations[entry.report.command_id],
                         ),
                     )

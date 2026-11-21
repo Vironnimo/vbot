@@ -8,7 +8,9 @@ cannot bloat the persisted Tool display.
 
 from __future__ import annotations
 
-from core.tools._line_diff import grouped_line_opcodes
+from collections.abc import Callable
+
+from core.tools._line_diff import grouped_line_opcodes, line_change_counts
 from core.tools.arguments import split_text_lines
 from core.tools.contracts import JsonObject
 
@@ -26,6 +28,7 @@ def display_file_diff(
     *,
     destination: str | None = None,
     line_budget: int = MAX_DISPLAY_DIFF_LINES,
+    mask: Callable[[str], str] | None = None,
 ) -> JsonObject:
     """Return one file's diff as display metadata.
 
@@ -49,8 +52,17 @@ def display_file_diff(
         payload.update(added=0, removed=0, hunks=[], binary=True)
         return payload
 
-    old = split_text_lines(before or "", keepends=True)
-    new = split_text_lines(after or "", keepends=True)
+    before, after = before or "", after or ""
+    old = split_text_lines(before, keepends=True)
+    new = split_text_lines(after, keepends=True)
+    raw_counts = None
+    if mask is not None:
+        masked_before, masked_after = mask(before), mask(after)
+        if (masked_before, masked_after) != (before, after):
+            # Preserve actual edit counts even when one reference covers several lines.
+            raw_counts = line_change_counts(old, new)
+            old = split_text_lines(masked_before, keepends=True)
+            new = split_text_lines(masked_after, keepends=True)
     groups = grouped_line_opcodes(old, new, DISPLAY_DIFF_CONTEXT_LINES)
     added = removed = shown = omitted = 0
     hunks: list[JsonObject] = []
@@ -73,6 +85,8 @@ def display_file_diff(
         if lines:
             first = group[0]
             hunks.append({"old_start": first[1] + 1, "new_start": first[3] + 1, "lines": lines})
+    if raw_counts is not None:
+        added, removed = raw_counts
     payload.update(added=added, removed=removed, hunks=hunks)
     if omitted:
         payload["omitted_lines"] = omitted

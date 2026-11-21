@@ -1013,7 +1013,15 @@ def file_reports(
     added = removed = 0
     for path, label, kind, before, after, destination in entries:
         before_text, after_text = _text(before), _text(after)
-        report = file_report(path, label, kind, before_text, after_text, destination=destination)
+        report = file_report(
+            path,
+            label,
+            kind,
+            before_text,
+            after_text,
+            destination=destination,
+            mask=context.mask_prepared_secrets,
+        )
         change = context.add_display_file_change(
             label, kind, before_text, after_text, destination=destination
         )

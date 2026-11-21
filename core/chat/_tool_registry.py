@@ -137,8 +137,12 @@ class _EmittingToolRegistry(ToolRegistry):
                 _empty_tool_display_payload(),
             )
         masker = self._secret_masker()
+        result = {
+            key: context.mask_prepared_secrets(item, include_keys=key == "data")
+            for key, item in result.items()
+        }
         return (
-            _leaving_call(masker, context.mask_prepared_secrets(result)),
+            _leaving_call(masker, result),
             _leaving_call(masker, context.mask_prepared_secrets(display)),
         )
 

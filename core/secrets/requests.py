@@ -67,6 +67,7 @@ class PendingSecretRequest:
     expires_at: datetime
     # The Secret an answer replaces the values of, when the name exists already.
     replaces: str | None
+    passed_only: bool
     outcome: asyncio.Future[SecretRequestOutcome] = field(repr=False)
 
     @property
@@ -143,7 +144,7 @@ class SecretRequests:
         # replacement snapshot only after that write has settled.
         while (answer := self._answers.get((address, secret_name))) is not None:
             await asyncio.shield(answer)
-        existing = self._secrets.lookup(address, secret_name, passed_only=passed_only)
+        existing = self._secrets.replacement_target(address, secret_name, passed_only=passed_only)
         now = self._clock()
         pending = PendingSecretRequest(
             id=new_id("sreq", claim=lambda item: item not in self._pending),
@@ -157,6 +158,7 @@ class SecretRequests:
             created_at=now,
             expires_at=now + timedelta(seconds=self._timeout),
             replaces=existing.id if existing is not None else None,
+            passed_only=passed_only,
             outcome=asyncio.get_running_loop().create_future(),
         )
         for other in list(self._pending.values()):
@@ -259,14 +261,14 @@ class SecretRequests:
         expires_at: datetime | None,
         actor: str,
     ) -> tuple[AgentSecret, bool]:
-        current = self._secrets.get(pending.replaces) if pending.replaces else None
-        if current is not None and current.source is None:
+        if pending.replaces is not None:
             return self._secrets.update(
-                current.id,
+                pending.replaces,
                 actor=actor,
                 values=values,
                 lifetime=lifetime,
-                given_to=pending.address if lifetime is not None else None,
+                given_to=pending.address,
+                passed_only=pending.passed_only,
                 expires_at=expires_at,
             ), True
         return (
@@ -280,6 +282,7 @@ class SecretRequests:
                 expires_at=expires_at,
                 agents=[format_agent_address(pending.agent_id, pending.project_id)],
                 description=pending.description,
+                passed_only=pending.passed_only,
             ),
             False,
         )

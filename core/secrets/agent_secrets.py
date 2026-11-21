@@ -199,6 +199,7 @@ class AgentSecrets:
         # Values known only in memory: system credentials and values a source
         # delivered in this process, each with the reference that masks it.
         self._runtime_values: dict[str, str] = {}
+        self._retired_values: dict[str, str] = {}
         self._system_values: dict[str, str] = {}
         # Rebuilt after every change of the known values; read without a lock.
         self._masker: SecretMasker = EMPTY_MASKER
@@ -220,7 +221,7 @@ class AgentSecrets:
                 _LOGGER.warning("Agent Secret %s is unreadable and ignored: %s", secret_id, error)
         with self._lock, self._memory_lock:
             for previous in self._records.values():
-                self._remember(previous)
+                self._remember_retired(previous, records.get(previous.id))
             self._records = records
             self._publish_masker()
             self._loaded = True
@@ -309,6 +310,16 @@ class AgentSecrets:
         usable = self.usable(address, passed_only=passed_only)
         return next((item for item in usable if item.name == name), None)
 
+    def replacement_target(
+        self, address: SessionAddress, name: str, *, passed_only: bool
+    ) -> AgentSecret | None:
+        """A user giving a value here can replace only a directly held record."""
+        secret = self.lookup(address, name, passed_only=passed_only)
+        if secret is None:
+            return None
+        grant = secret.grant_for(address, passed_only=passed_only)
+        return secret if grant is not None and grant.path == (address,) else None
+
     def describe(self, secret: AgentSecret) -> dict[str, Any]:
         """What an Agent or the WebUI may know about a Secret: never a concealed value."""
         described: dict[str, Any] = {
@@ -364,6 +375,7 @@ class AgentSecrets:
         sinks: Iterable[str] | None = None,
         source: SourceBinding | None = None,
         source_fields: Mapping[str, str] | None = None,
+        passed_only: bool = False,
     ) -> AgentSecret:
         """Store a new Secret (blocking); :class:`SecretRecordError` when invalid."""
         secret_name = normalize_secret_name(name)
@@ -401,11 +413,25 @@ class AgentSecrets:
             created_by=actor,
         )
         with self._lock:
-            self._check_name_free(secret)
+            self._check_name_free(secret, passed_only=passed_only)
+            superseded = []
+            if passed_only and secret.session_id is not None:
+                for other in self.all():
+                    if other.name != secret.name:
+                        continue
+                    updated = other
+                    for agent in agents:
+                        updated = updated.without_grants_through(
+                            session_address(agent, secret.session_id)
+                        )
+                    if updated != other:
+                        superseded.append(updated)
             secret = replace(
                 secret, id=new_id(SECRET_ID_PREFIX, claim=lambda item: item not in self._records)
             )
-            self._write(secret)
+            self._write_many([*superseded, secret])
+        for updated in superseded:
+            self._notify(SecretChange("changed", updated, actor))
         _LOGGER.info(
             "Agent Secret %s created (kind=%s lifetime=%s actor=%s)",
             secret.name,
@@ -423,7 +449,7 @@ class AgentSecrets:
         *,
         source: Literal["user", "tool"] = "user",
         passed_only: bool = False,
-        resolve_address: Callable[[], SessionAddress | None] | None = None,
+        resolve_scope: Callable[[], tuple[SessionAddress, bool] | None] | None = None,
     ) -> dict[str, str]:
         """Capture received values atomically and return their local masking references.
 
@@ -439,11 +465,11 @@ class AgentSecrets:
             # Lifecycle operations move/archive Sessions before retargeting or
             # removing their Secrets under this same lock. Resolve a captured
             # generation here so a reused old address receives no grants.
-            if resolve_address is not None:
-                current = resolve_address()
+            if resolve_scope is not None:
+                current = resolve_scope()
                 if current is None:
                     raise SessionNotFoundError("The output's Session no longer exists")
-                address = current
+                address, passed_only = current
             if not candidates:
                 return {}
             actor = f"agent:{address.agent_id}" if source == "tool" else "user"
@@ -470,6 +496,8 @@ class AgentSecrets:
                         for secret in self.all()
                     )
                     if not rediscovered:
+                        if passed_only and source == "tool":
+                            references[value] = "[redacted API key]"
                         continue
                 base = normalize_secret_name(base)
                 name = base
@@ -527,7 +555,7 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
         growing: bool = False,
-        resolve_address: Callable[[], SessionAddress | None] | None = None,
+        resolve_scope: Callable[[], tuple[SessionAddress, bool] | None] | None = None,
     ) -> str:
         """Capture output keys before publication, preserving this Session's references."""
         from core.secrets.detection import complete_output_prefix, detect_api_keys
@@ -540,7 +568,7 @@ class AgentSecrets:
             candidates,
             source="tool",
             passed_only=passed_only,
-            resolve_address=resolve_address,
+            resolve_scope=resolve_scope,
         )
         text = SecretMasker(references).mask(text)
         return self.masker.mask_growing(text) if growing else self.masker.mask(text)
@@ -560,10 +588,17 @@ class AgentSecrets:
         permanent: bool = False,
         lifetime: Lifetime | None = None,
         given_to: SessionAddress | None = None,
+        passed_only: bool = False,
     ) -> AgentSecret:
         """Change a Secret (blocking); only the given parts change."""
         with self._lock:
             current = self._require(secret_id)
+            if (
+                given_to is not None
+                and self.replacement_target(given_to, current.name, passed_only=passed_only)
+                != current
+            ):
+                raise SecretRecordError("This Session no longer holds the Secret it would replace.")
             secret = current
             if values:
                 if secret.source is not None:
@@ -629,7 +664,7 @@ class AgentSecrets:
                 current.session_id,
                 current.agents,
             ):
-                self._check_name_free(secret)
+                self._check_name_free(secret, passed_only=passed_only)
             self._write(secret)
         _LOGGER.info("Agent Secret %s changed (actor=%s)", secret.name, actor)
         self._notify(SecretChange("changed", secret, actor))
@@ -695,7 +730,7 @@ class AgentSecrets:
                     session_grants=(*secret.session_grants, grant),
                 )
                 changed.append(updated)
-            self._write_grants(changed)
+            self._write_many(changed)
         for secret in changed:
             self._notify(SecretChange("changed", secret, f"session:{address.session_id}"))
         return granted
@@ -713,17 +748,8 @@ class AgentSecrets:
                     self._remove(secret)
                     changes.append(SecretChange("deleted", secret, "session removed"))
                     continue
-                grants = tuple(
-                    grant for grant in secret.session_grants if address not in grant.path
-                )
-                if grants != secret.session_grants:
-                    kept = replace(
-                        secret,
-                        session_grants=grants,
-                        sessions=tuple(
-                            dict.fromkeys(grant.path[-1].session_id for grant in grants)
-                        ),
-                    )
+                kept = secret.without_grants_through(address)
+                if kept != secret:
                     self._write(kept)
                     changes.append(SecretChange("changed", kept, "session removed"))
         for change in changes:
@@ -828,7 +854,7 @@ class AgentSecrets:
                 )
                 if agents != secret.agents or grants != secret.session_grants:
                     changed.append(replace(secret, agents=agents, session_grants=grants))
-            self._write_grants(changed)
+            self._write_many(changed)
         for secret in changed:
             self._notify(SecretChange("changed", secret, "agent renamed"))
         return len(changed)
@@ -1115,9 +1141,15 @@ class AgentSecrets:
 
     def _publish_masker(self) -> None:
         """Build the masker over the current values; the caller holds ``_memory_lock``."""
-        known: dict[str, str] = {}
+        visible = {
+            item.value
+            for secret in self._records.values()
+            for item in secret.fields
+            if not item.concealed
+        }
+        known = {value: ref for value, ref in self._retired_values.items() if value not in visible}
         for name, value in self._system_values.items():
-            known.setdefault(value, f"{{{{secret:{name}}}}}")
+            known[value] = f"{{{{secret:{name}}}}}"
         known.update(self._runtime_values)
         for secret in self._records.values():
             for item in secret.fields:
@@ -1218,7 +1250,7 @@ class AgentSecrets:
             raise SecretRecordError(f"No Secret with id {secret_id}.")
         return secret
 
-    def _check_name_free(self, secret: AgentSecret) -> None:
+    def _check_name_free(self, secret: AgentSecret, *, passed_only: bool) -> None:
         system = {credential_name_key(item).upper() for item in self._credential_names()}
         if secret.name in system:
             raise SecretRecordError(
@@ -1233,12 +1265,14 @@ class AgentSecrets:
                 and other.session_id == secret.session_id
                 and bool(set(secret.agents) & set(other.agents))
             )
-            both_agent_wide = secret.session_id is None and other.session_id is None
-            if same_session or both_agent_wide:
+            occupied_agent_name = secret.session_id is None and (
+                other.session_id is None or passed_only
+            )
+            if same_session or occupied_agent_name:
                 raise SecretRecordError(f"A Secret named {secret.name} already exists.")
 
-    def _write_grants(self, changed: Sequence[AgentSecret]) -> None:
-        """Commit a pass or rename as a unit before publishing the new grants."""
+    def _write_many(self, changed: Sequence[AgentSecret]) -> None:
+        """Commit records as a unit before publishing the new grants."""
         if not changed:
             return
         texts = {secret.id: encode_record(secret) for secret in changed}
@@ -1268,20 +1302,23 @@ class AgentSecrets:
         with self._memory_lock:
             for secret_id, secret in changes.items():
                 if previous := records.pop(secret_id, None):
-                    self._remember(previous)
+                    self._remember_retired(previous, secret)
                 if secret is not None:
                     records[secret_id] = secret
             self._records = records
             self._publish_masker()
 
-    def _remember(self, secret: AgentSecret) -> None:
+    def _remember_retired(self, secret: AgentSecret, current: AgentSecret | None) -> None:
         """Keep redacting retired values for this process, like resolved source values.
 
         The caller holds ``_memory_lock`` and publishes the masker afterwards.
         """
         for item in secret.fields:
+            active = current.field_named(item.name) if current is not None else None
+            if active is not None and active.value == item.value:
+                continue
             if item.concealed and item.value is not None and len(item.value) >= MIN_MASKED_LENGTH:
-                self._runtime_values[item.value] = secret.reference(item.name)
+                self._retired_values[item.value] = secret.reference(item.name)
 
 
 _SINK_WORDS: Final[Mapping[SinkClass, str]] = {
@@ -1294,10 +1331,9 @@ _SINK_WORDS: Final[Mapping[SinkClass, str]] = {
 
 
 def _session_bound(secret: AgentSecret, address: SessionAddress) -> int:
-    return int(
-        secret.session_id == address.session_id
-        or any(grant.path[-1] == address for grant in secret.session_grants)
-    )
+    if secret.session_id == address.session_id and agent_address(address) in secret.agents:
+        return 2
+    return int(any(grant.path[-1] == address for grant in secret.session_grants))
 
 
 def _grant_names_identity_agent(grant: SessionGrant, agent_id: str) -> bool:

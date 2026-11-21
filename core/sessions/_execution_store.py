@@ -234,6 +234,21 @@ class SessionExecutionStore:
             lambda connection: _store_owned.temporary_binding(connection, address)
         )
 
+    def temporary_profile_references(self, name: str) -> list[str]:
+        return self._store._read(
+            lambda connection: [
+                f"{owner} Session {session_id}"
+                for owner, session_id in connection.execute(
+                    "SELECT b.owner_name, s.session_id FROM temporary_session_bindings b "
+                    "JOIN sessions s ON s.session_key = b.session_key WHERE s.state = 'live' "
+                    "AND ? IN (json_extract(b.config_json, '$.permission_profile'), "
+                    "json_extract(b.config_json, '$.permission_ceiling_profile')) "
+                    "ORDER BY b.owner_name, s.session_id",
+                    (name,),
+                )
+            ]
+        )
+
     def temporary_agent_binding(
         self, project_id: str | None, agent_id: str
     ) -> TemporarySessionBinding | None:

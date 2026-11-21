@@ -424,7 +424,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
         runtime._update_handoffs.remove_expired_files()
         runtime._tools = ToolRegistry()
-        runtime._tools.set_secrets(runtime._agent_secrets)
+        runtime._tools.set_secrets(
+            runtime._agent_secrets, generation_scope=runtime._chat_sessions.generation_scope
+        )
         # Tool-owned System Prompt block declarations (D6): the tool side of the
         # unified contributor path. Project and Sub-Agent contribute their dynamic
         # catalogs/guidance here; the runtime hands declarations to the prompt

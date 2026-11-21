@@ -411,7 +411,7 @@ async def _request(
     if isinstance(lifetime, dict):
         return lifetime
     description = str(arguments.get("description") or "").strip()
-    existing = secrets.lookup(
+    existing = secrets.replacement_target(
         SessionAddress(context.project_id, context.agent_id, context.session_id),
         name,
         passed_only=context.subagent_session,
@@ -526,6 +526,7 @@ async def _generate(
             values=values,
             actor=f"agent:{context.agent_id}",
             session_id=context.session_id,
+            passed_only=context.subagent_session,
             agents=[format_agent_address(context.agent_id, context.project_id)],
             description=str(arguments.get("description") or "").strip(),
         )

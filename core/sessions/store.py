@@ -39,6 +39,7 @@ from core.sessions._search_request import SessionSearchRequest
 from core.sessions._store_health import SessionHealth
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
+    SUBAGENT_PARENT_META_KEY,
     JsonObject,
     SessionChatHistorySnapshot,
     SessionConversationPage,
@@ -295,6 +296,18 @@ class SessionStore:
         return self._read(
             lambda connection: _store_external_notes.generation_address(connection, generation_id)
         )
+
+    def generation_scope(self, generation_id: str) -> tuple[SessionAddress, bool] | None:
+        """Read the address and its parent link in one generation-bound snapshot."""
+
+        def read(connection: sqlite3.Connection) -> tuple[SessionAddress, bool] | None:
+            address = _store_external_notes.generation_address(connection, generation_id)
+            if address is None:
+                return None
+            parent = _store_queries.metadata_value(connection, address, SUBAGENT_PARENT_META_KEY)
+            return address, isinstance(parent, dict)
+
+        return self._read(read)
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
         return self._read(
