@@ -435,17 +435,16 @@ class ContentBlockResolver:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> list[JsonObject]:
-        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
-
-        if record is None:
-            # Missing or invalid metadata degrades like other removed attachments.
-            return [await self._path_note("Audio", attachment_id, filename, media_type)]
-
         if transcription is not None:
+            # The Session stores the transcript independently of the recording.
             return [
                 self._transcription_block(filename, media_type, transcription),
-                self._record_path_note("Audio", record, filename, media_type),
+                await self._path_note("Audio", attachment_id, filename, media_type),
             ]
+
+        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
+        if record is None:
+            return [await self._path_note("Audio", attachment_id, filename, media_type)]
 
         if "audio" in input_modalities and media_type in wire_media_types:
             native_block = {
