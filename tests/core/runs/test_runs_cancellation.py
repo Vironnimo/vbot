@@ -99,14 +99,19 @@ async def test_executor_base_exception_settles_run_before_queue_advances(grouped
         return "successor"
 
     run = await manager.start(address, execute)
+    task = run._task
+    assert task is not None
+    task_done = asyncio.Event()
+    task.add_done_callback(lambda _task: task_done.set())
     queued = await manager.enqueue(address, successor)
     release.set()
     with pytest.raises(RunCancelledError):
         await asyncio.wait_for(run.wait(), timeout=1)
-    assert run._task is not None
     with pytest.raises(type(failure)) as caught:
-        await run._task
+        await task
     assert caught.value is failure
+    await task_done.wait()
+    assert run._task is None
     assert await asyncio.wait_for(manager.cancel(run.id), timeout=1) is run
     next_run = await asyncio.wait_for(queued.future, timeout=1)
     assert await next_run.wait() == "successor"

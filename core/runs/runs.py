@@ -1348,7 +1348,7 @@ class ChatRunManager:
         # Create the task before registering the Run: a failure here leaves no
         # active Session entry behind. The task cannot run before this returns.
         task = asyncio.create_task(self._execute(run, address, executor), name=f"run:{run.id}")
-        task.add_done_callback(self._report_execution_abort)
+        task.add_done_callback(lambda finished: self._execution_done(run, finished))
         self._active_by_session[address] = run
         self._runs[run.id] = run
         run.set_task(task)
@@ -1356,7 +1356,9 @@ class ChatRunManager:
         return run
 
     @staticmethod
-    def _report_execution_abort(task: asyncio.Task[None]) -> None:
+    def _execution_done(run: Run, task: asyncio.Task[None]) -> None:
+        # A failed Task retains the execution traceback after its error is retrieved.
+        run._task = None  # noqa: SLF001 - manager owns Run execution tasks.
         if not task.cancelled() and (error := task.exception()) is not None:
             _LOGGER.error("Run task aborted (task=%s)", task.get_name(), exc_info=error)
 
