@@ -237,9 +237,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         Shared Responses transports keep the Session's socket for its next Run.
         """
-        if self._owns_responses_transports:
-            await self._responses_transports.aclose()
-        await super().aclose()
+        try:
+            await self._responses_socket.cancel_preconnect()
+        finally:
+            try:
+                if self._owns_responses_transports:
+                    await self._responses_transports.aclose()
+            finally:
+                await super().aclose()
 
     @classmethod
     def discovery_headers(
@@ -343,6 +348,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             task for task in model.capabilities.task_types if task != "speech_to_text"
         )
         return replace(model, capabilities=replace(model.capabilities, task_types=task_types))
+
+    def start_chat_transport(
+        self, model_id: str, *, agent_id: str, session_id: str, affinity_id: str, fast_mode: bool
+    ) -> None:
+        """Overlap a cold subscription handshake with the Run's local preparation."""
+        conversation_id = responses_conversation_id(agent_id, session_id)
+        if self._connection_mode != CODEX_RESPONSES_MODE or not self._tries_websocket(
+            affinity_id, conversation_id
+        ):
+            return
+
+        async def handshake_headers() -> tuple[dict[str, str], str]:
+            headers, account_id = await self._websocket_headers(affinity_id)
+            headers.update(
+                self._stable_request_headers(
+                    model_id, self.fast_mode_kwargs(model_id, enabled=fast_mode)
+                )
+            )
+            return headers, account_id
+
+        self._responses_socket.start_preconnect(conversation_id, model_id, handshake_headers)
 
     @override
     def request_context_kwargs(

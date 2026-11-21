@@ -12,7 +12,8 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, tzinfo
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, runtime_checkable
+from typing import Protocol as TypingProtocol
 from urllib.parse import urlparse
 
 import httpx
@@ -232,6 +233,15 @@ def is_local_provider_base_url(base_url: str | None) -> bool:
     except ValueError:
         return False
     return address.is_loopback or address.is_private or address.is_link_local
+
+
+@runtime_checkable
+class ChatTransportPreparer(TypingProtocol):
+    """An Adapter that can start the admitted Run's transport before its request is built."""
+
+    def start_chat_transport(
+        self, model_id: str, *, agent_id: str, session_id: str, affinity_id: str, fast_mode: bool
+    ) -> None: ...
 
 
 class ProviderAdapter(ABC):

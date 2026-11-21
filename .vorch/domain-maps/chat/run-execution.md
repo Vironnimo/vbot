@@ -10,6 +10,8 @@ Task-gated reference for Chat admission, provider/Tool progression, streaming re
 
 ## Entry points and admission
 
+Once an admitted Run resolves its primary Adapter and Session routing context, it can start the Adapter's handshake while it prepares the local prompt. The Adapter owns the connection and releases an unused attempt when the Run closes (`providers/openai.md`).
+
 Chat admission reserves its target through `ChatRunManager.prepare_admission` before asynchronous resolution and binds the resolved Working Project before Session mutation. This covers immediate, queued, ordinary Accessor, Compaction, external and owned/temporary starts; Session creation and installed Run/Queue ownership leave no lifecycle gap (`runs/queue-and-admission.md` -> Admission preparation).
 
 `start_run(..., expected_session_generation_id=...)` optionally pins the target independently of continuation settings. It checks the loaded Session before preflight and carries the same expectation into Run admission, so replacing an address during an awaited producer or preflight step cannot redirect its input.
