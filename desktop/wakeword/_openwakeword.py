@@ -267,10 +267,8 @@ class FeatureStream:
 
     def reset(self) -> None:
         """Restore a new stream's zero prefill without rebuilding the interpreters."""
-        self._audio = np.zeros(_MAX_SAMPLES, dtype=np.float32)
-        self._new_samples = _PREFILL_SAMPLES
-        self._mels = np.zeros((_MAX_MELS, _MEL_BANDS), dtype=np.float32)
-        self._new_mels = 0
+        self._audio = np.zeros(_PREFILL_SAMPLES, dtype=np.float32)
+        self._mels = np.empty((0, _MEL_BANDS), dtype=np.float32)
 
     def process(self, chunk: bytes) -> list[np.ndarray]:
         """Consume PCM16 audio; return the embeddings (96 floats each) it completed."""
@@ -278,17 +276,16 @@ class FeatureStream:
         count = len(samples)
         if count == 0:
             return []
-        audio = self._audio
-        audio[:-count] = audio[count:]
-        audio[-count:] = samples
-        self._new_samples = min(len(audio), self._new_samples + count)
+        # Keep only the overlap and any partial stride for the next input.
+        audio = np.concatenate((self._audio, samples[-_MAX_SAMPLES:]), dtype=np.float32)
+        start = max(0, len(audio) - _MAX_SAMPLES)
         embeddings: list[np.ndarray] = []
-        while self._new_samples >= _MEL_WINDOW_SAMPLES:
-            start = len(audio) - self._new_samples
+        while start + _MEL_WINDOW_SAMPLES <= len(audio):
             window = audio[start : start + _MEL_WINDOW_SAMPLES]
-            self._new_samples = max(0, self._new_samples - _CHUNK_SAMPLES)
+            start += _CHUNK_SAMPLES
             mels = (self._mel.run(window) / 10 + 2).reshape(-1, _MEL_BANDS)
             self._append_mels(mels, embeddings)
+        self._audio = audio[start:].copy()
         return embeddings
 
     def close(self) -> None:
@@ -296,15 +293,13 @@ class FeatureStream:
         self._embedding.close()
 
     def _append_mels(self, mels: np.ndarray, embeddings: list[np.ndarray]) -> None:
-        count = len(mels)
-        self._mels[:-count] = self._mels[count:]
-        self._mels[-count:] = mels
-        self._new_mels = min(len(self._mels), self._new_mels + count)
-        while self._new_mels >= _EMBEDDING_WINDOW_MELS:
-            start = len(self._mels) - self._new_mels
-            window = self._mels[start : start + _EMBEDDING_WINDOW_MELS]
-            self._new_mels = max(0, self._new_mels - _EMBEDDING_STEP_MELS)
+        frames = np.concatenate((self._mels, mels))
+        start = max(0, len(frames) - _MAX_MELS)
+        while start + _EMBEDDING_WINDOW_MELS <= len(frames):
+            window = frames[start : start + _EMBEDDING_WINDOW_MELS]
+            start += _EMBEDDING_STEP_MELS
             embeddings.extend(self._embedding.run(window).reshape(-1, _EMBEDDING_FEATURES))
+        self._mels = frames[start:]
 
 
 class PhraseHead:
@@ -333,7 +328,7 @@ class PhraseHead:
 
     def reset(self) -> None:
         """Discard embeddings from before a discontinuity in the microphone stream."""
-        self._embeddings = np.zeros((_MAX_EMBEDDINGS, _EMBEDDING_FEATURES), dtype=np.float32)
+        self._embeddings = np.zeros((self._windows, _EMBEDDING_FEATURES), dtype=np.float32)
         self._new_embeddings = 0
 
     def scores(self, embeddings: list[np.ndarray]) -> list[float]:

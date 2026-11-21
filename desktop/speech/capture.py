@@ -571,6 +571,7 @@ class AudioCapture:
         failures = 0
         silent_seconds = 0.0
         user_away = False
+        next_activity_check = float("-inf")
         user_returned = False  # back at the computer; the microphone showed no sound since
         while not self._stop.is_set():
             if self._awaiting_stage:
@@ -590,13 +591,16 @@ class AudioCapture:
                 continue
             failures = 0
             self._process(samples, arrival)
-            idle_seconds = self._user_idle_seconds()
-            if idle_seconds is not None:
-                if idle_seconds >= self._user_away_seconds:
-                    user_away = True
-                elif user_away:
-                    user_away = False
-                    user_returned = True
+            now = self._clock()
+            if now >= next_activity_check:
+                next_activity_check = now + 1.0
+                idle_seconds = self._user_idle_seconds()
+                if idle_seconds is not None:
+                    if idle_seconds >= self._user_away_seconds:
+                        user_away = True
+                    elif user_away:
+                        user_away = False
+                        user_returned = True
             if not _is_digital_silence(samples):
                 silent_seconds = 0.0
                 user_returned = False
