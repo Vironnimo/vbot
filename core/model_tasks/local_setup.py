@@ -116,8 +116,8 @@ class LocalSetup:
 
     def status(self, *, log_unavailable: bool = False) -> dict[str, Any]:
         """Return ``{state, phase, error}`` plus ``progress`` while bytes are counted."""
-        state = self._state
-        error = self._error
+        # A Settings worker may read status while the Event Loop advances the install.
+        state, phase, error, progress = self._state, self._phase, self._error, self._progress
         if state in {"idle", "ready"}:
             error = self._availability_error()
             state = "missing" if error else "ready"
@@ -133,9 +133,9 @@ class LocalSetup:
             elif not reason and self._reported_unavailability:
                 self._logger.info(f"{self._subject} available again (engine=%s)", self._name)
             self._reported_unavailability = reason
-        status: dict[str, Any] = {"state": state, "phase": self._phase, "error": error}
-        if state == "installing" and self._progress is not None:
-            completed, total = self._progress
+        status: dict[str, Any] = {"state": state, "phase": phase, "error": error}
+        if state == "installing" and progress is not None:
+            completed, total = progress
             status["progress"] = {"completed": completed, "total": total}
         return status
 
