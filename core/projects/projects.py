@@ -213,6 +213,11 @@ def load_validated_project_json(project_path: str | Path) -> JsonObject:
         data = load_validated_json_file(project_path, validate_project_data, missing_ok=False)
     except JsonConfigValidationError as error:
         raise ProjectError(str(error)) from error
+    return project_config_fields(data)
+
+
+def project_config_fields(data: JsonObject) -> JsonObject:
+    """Normalize Sources and select the modeled fields of a validated config."""
     from core.projects.source_migration import project_sources_v1
 
     try:

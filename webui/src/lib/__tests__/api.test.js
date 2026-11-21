@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as api from '../api.js';
+import { defaultChatOperations } from '../api/chatOperations.js';
 import { jsonResponse } from './api.support.js';
 
 const {
@@ -26,6 +27,29 @@ const invalidRequest = (method) =>
   });
 
 describe('rpc()', () => {
+  it('searches the same history scope as the timeline', async () => {
+    const fetch = rpcFetch();
+    const params = { agent_id: 'coder', session_id: 'side-chat' };
+    const ownHistory = defaultChatOperations({ includeInherited: false });
+    await ownHistory.loadChatHistory(params, { fetch });
+    await ownHistory.searchChat({ ...params, query: 'needle' }, { fetch });
+    await defaultChatOperations().searchChat(
+      { ...params, query: 'needle' },
+      { fetch },
+    );
+    expect(sentEnvelopes(fetch)).toEqual([
+      {
+        method: 'chat.timeline',
+        params: { ...params, include_inherited: false },
+      },
+      {
+        method: 'chat.search',
+        params: { ...params, query: 'needle', include_inherited: false },
+      },
+      { method: 'chat.search', params: { ...params, query: 'needle' } },
+    ]);
+  });
+
   it('sends an explicitly chosen Cron retry destination only when supplied', async () => {
     const fetch = rpcFetch();
     const delivery = {

@@ -1,0 +1,15 @@
+{
+  "provider_id": "google",
+  "discovered_only": true,
+  "models": {
+    "lyria-3-clip-preview": {
+      "pricing": {"source": "google:lyria-3-clip-preview", "rates": {}}
+    },
+    "lyria-3-pro-preview": {
+      "pricing": {"source": "google:lyria-3-pro-preview", "rates": {}}
+    },
+    "lyria-3.5": {
+      "pricing": {"source": "google:lyria-3.5", "rates": {}}
+    }
+  }
+}

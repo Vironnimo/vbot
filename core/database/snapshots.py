@@ -623,6 +623,8 @@ def create_data_snapshot(
         replace_path(partial, final)
         partial = None
         fsync_dir(root)
+        # The snapshot root itself may have been created by this capture.
+        fsync_dir(data_dir)
         if retain_as is not None:
             retain_snapshot_locked(data_dir, retain_as, snapshot_id)
         _prune_snapshots(data_dir, protected_snapshot=final)

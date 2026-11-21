@@ -60,11 +60,20 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
       const [agentId = '', sessionId = ''] = location.place;
       const subAgent = location.extra?.subAgent === true;
       const shown = chatShownSession;
+      const requestedSelection = location.extra?.selection;
+      const currentSelection = selection.currentNavigationSelection();
+      // A pending Project restore can already have changed the selection
+      // while the previous Session is still on screen.
       if (
         shown?.agentId === agentId &&
         shown.sessionId === sessionId &&
-        shown.subAgent === subAgent
+        shown.subAgent === subAgent &&
+        requestedSelection &&
+        requestedSelection.agentId === currentSelection.agentId &&
+        requestedSelection.projectId === currentSelection.projectId &&
+        requestedSelection.projectAgentId === currentSelection.projectAgentId
       ) {
+        pendingSessionNavigation = null;
         acceptedLink = linkedSession;
         return;
       }

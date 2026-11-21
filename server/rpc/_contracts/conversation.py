@@ -739,7 +739,12 @@ SERVICE_DEFINITIONS: tuple[ServiceDefinition, ...] = (
         "chat.search",
         "query",
         params(
-            {**_ADDRESS, "query": {**_nonempty(), "maxLength": 256}}, (*_ADDRESS_REQUIRED, "query")
+            {
+                **_ADDRESS,
+                "query": {**_nonempty(), "maxLength": 256},
+                "include_inherited": _HISTORY_FIELDS["include_inherited"],
+            },
+            (*_ADDRESS_REQUIRED, "query"),
         ),
         ("sessions",),
         "Search the displayed Session for User and Assistant messages, newest first.",

@@ -19,6 +19,8 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
@@ -56,7 +58,12 @@ from core.database import (
     read_maintenance,
     restore_update_snapshot,
 )
-from core.utils.server_control import live_server_ports, process_started, read_server_control
+from core.utils.server_control import (
+    live_server_ports,
+    offline_data_change,
+    process_started,
+    read_server_control,
+)
 
 _LOGGER = logging.getLogger("vbot.application.update")
 #: How long a just-stopped server's lifetime claim may take to disappear.
@@ -226,18 +233,23 @@ def roll_back_data(
     """
     if snapshot is None:
         return "No database was registered, so no data snapshot was restored."
+    data_dir = _data_dir(install)
+    kind = "safety" if operation.data_restore_started else "pre-update"
+    running = _live_servers(data_dir)
+    if running is not None:
+        raise _restore_conflict(snapshot.snapshot_id, running, kind=kind)
+    with _offline_restore(data_dir, snapshot.snapshot_id, kind=kind):
+        return _restore_failed_candidate_data(data_dir, operation, snapshot)
+
+
+def _restore_failed_candidate_data(
+    data_dir: Path, operation: Operation, snapshot: UpdateSnapshot
+) -> str:
     snapshot_id = snapshot.snapshot_id
     not_restored = (
         f"The data snapshot {snapshot_id} was not restored automatically: {{reason}}; "
         "the data may still hold changes made by the new version."
     )
-    data_dir = _data_dir(install)
-    running = _live_servers(data_dir)
-    if running is not None:
-        if operation.data_restore_started:
-            raise _safety_restore_conflict(snapshot_id, running)
-        _log_data_kept(operation, snapshot_id, running)
-        return not_restored.format(reason=running)
     try:
         change = data_changed_since(data_dir, snapshot)
     except DatabaseError:
@@ -266,7 +278,7 @@ def roll_back_data(
                     before_recovery, data_stamp(data_dir)
                 )
                 if refusal is not None:
-                    raise _safety_restore_conflict(snapshot_id, refusal)
+                    raise _restore_conflict(snapshot_id, refusal, kind="safety")
 
             restore_data_snapshot(
                 data_dir,
@@ -282,6 +294,8 @@ def roll_back_data(
     except UpdateRollbackRefusedError as exc:
         _log_data_kept(operation, snapshot_id, str(exc))
         return not_restored.format(reason=str(exc))
+    except _RestoreConflictError:
+        raise
     except (DatabaseError, OSError, ValueError) as exc:
         raise ApplicationError(
             f"The new version failed its startup check ({operation.error}), and restoring "
@@ -296,10 +310,25 @@ def roll_back_data(
     return f"The data was restored from snapshot {snapshot_id}, taken before the update."
 
 
-def _safety_restore_conflict(snapshot_id: str, reason: str) -> ApplicationError:
-    return ApplicationError(
-        f"The safety snapshot {snapshot_id} was not restored: {reason}. "
-        "The preserved data needs inspection before starting vBot"
+@contextmanager
+def _offline_restore(data_dir: Path, snapshot_id: str, *, kind: str) -> Iterator[None]:
+    """Keep new servers off the data through restore planning and replacement."""
+    with ExitStack() as admission:
+        try:
+            admission.enter_context(offline_data_change(data_dir))
+        except OSError as exc:
+            raise _restore_conflict(snapshot_id, str(exc), kind=kind) from exc
+        yield
+
+
+class _RestoreConflictError(ApplicationError):
+    """Restore admission failed before data replacement."""
+
+
+def _restore_conflict(snapshot_id: str, reason: str, *, kind: str) -> _RestoreConflictError:
+    return _RestoreConflictError(
+        f"The {kind} snapshot {snapshot_id} was not restored: {reason}. "
+        "Inspect the preserved data with `vbot data-store status` before starting vBot"
     )
 
 
@@ -625,14 +654,17 @@ def execute(install: Installation, operation: Operation) -> None:
                 )
 
             try:
-                restore_data_snapshot(
-                    data_dir,
-                    selected,
-                    documents=True,
-                    retire_unlisted=True,
-                    cause="user-approved application rollback",
-                    before_restore=admit_restore,
-                )
+                with _offline_restore(data_dir, operation.restore_snapshot, kind="selected"):
+                    restore_data_snapshot(
+                        data_dir,
+                        selected,
+                        documents=True,
+                        retire_unlisted=True,
+                        cause="user-approved application rollback",
+                        before_restore=admit_restore,
+                    )
+            except _RestoreConflictError:
+                raise
             except ApplicationError as exc:
                 if operation.data_restore_started:
                     raise

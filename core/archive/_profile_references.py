@@ -8,7 +8,12 @@ from pathlib import Path
 from core.agents import AgentError, load_validated_agent_json
 from core.config_validation import discover_json_documents
 from core.json_documents import DURABLE_DOCUMENTS
-from core.projects import ProjectError, format_agent_address, load_validated_project_json
+from core.projects import (
+    ProjectError,
+    ProjectStore,
+    format_agent_address,
+    load_validated_project_json,
+)
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_PROJECT,
@@ -40,11 +45,17 @@ def _entries(ledger: SessionArchiveLedger, kind: str) -> Iterator[ArchiveEntry]:
         cursor = page.next_cursor
 
 
-def _assigned(path: Path, name: str) -> list[str]:
+def _assigned(path: Path, name: str, *, archived: bool = False) -> list[str]:
     if path.name == "agent.json":
         data = load_validated_agent_json(path)
         return [data["id"]] if data.get("permission_profile") == name else []
-    data = load_validated_project_json(path)
+    if archived:
+        payload = ProjectStore.inspect_archived(path.parent)
+        if payload.project is None:
+            raise ProjectError(f"Project archive cannot be read: {path}")
+        data = payload.project.to_dict()
+    else:
+        data = load_validated_project_json(path)
     return [
         format_agent_address(agent_id, data["project_id"])
         for agent_id, fields in (data.get("overrides") or {}).items()
@@ -84,7 +95,7 @@ def permission_profile_references(
                     continue
                 path = data_dir / tree.path / filename
                 try:
-                    targets = _assigned(path, name)
+                    targets = _assigned(path, name, archived=True)
                 except AgentError, ProjectError, OSError:
                     current = ledger.entry_by_key(entry.entry_key)
                     if current and current.state != ARCHIVE_STATE_PURGING:

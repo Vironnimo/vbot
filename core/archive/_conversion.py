@@ -5,8 +5,8 @@ An archived Project keeps its Anchor, ``project.json`` included, under
 (``payload_format``), which decide whether it can be restored. The Projects
 converter rewrites the document; this module finds the archived Projects that
 still hold an older version and records the new version once the payload is converted.
-Run only where the Projects converter runs: an update's verification start and
-``vbot data-store convert``.
+Run only through ``vbot data-store convert``. A restore converts the document
+when it moves the Anchor live.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from pathlib import Path
 
 from core.projects import PROJECT_FORMAT_VERSION
 from core.projects.conversion import (
-    CONVERTED_PROJECT_FORMAT_VERSIONS,
     convert_archived_project,
+    is_convertible_project_version,
     project_file_needs_conversion,
 )
 from core.sessions import (
@@ -43,10 +43,8 @@ def convert_archived_projects(data_dir: Path, ledger: SessionArchiveLedger) -> t
         page = ledger.page(ArchiveEntryFilter(kind=ARCHIVE_KIND_PROJECT), cursor=cursor, limit=100)
         for entry in page.entries:
             recorded = entry.facts.get("payload_format")
-            if (
-                entry.state != ARCHIVE_STATE_ARCHIVED
-                or isinstance(recorded, bool)
-                or recorded not in CONVERTED_PROJECT_FORMAT_VERSIONS
+            if entry.state != ARCHIVE_STATE_ARCHIVED or not is_convertible_project_version(
+                recorded
             ):
                 continue
             for tree in entry.trees:

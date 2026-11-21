@@ -114,6 +114,12 @@ def test_a_provider_model_without_a_canonical_join_loads(registry: ModelRegistry
     assert registry.get("opencode-go", "deepseek-v4-pro").capabilities.reasoning.supported is True
 
 
+def test_google_models_billed_per_song_have_no_token_price(registry: ModelRegistry) -> None:
+    for model_id in ("lyria-3-clip-preview", "lyria-3-pro-preview", "lyria-3.5"):
+        assert "music_generation" in registry.get("google", model_id).capabilities.task_types
+        assert registry.pricing_for(f"google/{model_id}::api-key") is None
+
+
 def test_the_bundled_root_loads_without_dropping_records(registry: ModelRegistry) -> None:
     """A refreshed catalog must not leave omitted records or partial overrides."""
 

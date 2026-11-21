@@ -53,10 +53,13 @@ class SessionSearchRequest:
     include_subagents: bool = False
     use_fts: bool = True
     timeline_only: bool = False
+    include_inherited: bool = True
 
     def __post_init__(self) -> None:
         if self.timeline_only and not (self.agent_id and self.session_id):
             raise ValueError("Timeline search requires an exact Session address")
+        if not self.include_inherited and not self.timeline_only:
+            raise ValueError("Excluding inherited history requires a timeline search")
 
     @cached_property
     def literal_query(self) -> LiteralSearchQuery:

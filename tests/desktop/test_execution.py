@@ -7,10 +7,14 @@ import json
 import threading
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, cast, override
 
 import pytest
+from websockets.asyncio.server import ServerConnection, serve
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Request, Response
 
 from desktop import execution, servers
 from desktop.connection import ConnectionController
@@ -23,6 +27,34 @@ from desktop.probe import (
     DesktopProbeResult,
     DesktopTarget,
 )
+
+
+@pytest.mark.asyncio
+async def test_native_connector_uses_the_configured_endpoint() -> None:
+    paths: list[str] = []
+
+    async def connected(socket: ServerConnection) -> None:
+        await socket.send("connected")
+
+    def normalize_path(socket: ServerConnection, request: Request) -> Response | None:
+        paths.append(request.path)
+        if len(paths) == 1:
+            return None
+        response = socket.respond(HTTPStatus.PERMANENT_REDIRECT, "Use a trailing slash")
+        response.headers["Location"] = "/ws/computers/"
+        return response
+
+    async with serve(connected, "127.0.0.1", 0, process_request=normalize_path) as server:
+        port = server.sockets[0].getsockname()[1]
+        url = f"http://127.0.0.1:{port}/"
+        async with execution.connect_socket(url, None) as socket:
+            assert await socket.recv() == "connected"
+        with pytest.raises(InvalidStatus) as refusal:
+            async with execution.connect_socket(url, None):
+                pytest.fail("A redirect cannot open the configured Computer endpoint")
+
+    assert refusal.value.response.status_code == HTTPStatus.PERMANENT_REDIRECT
+    assert paths == ["/ws/computers", "/ws/computers"]
 
 
 class Authorization:

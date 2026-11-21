@@ -329,3 +329,14 @@ def test_audio_transcription_is_best_effort_but_request_rejects_io_failure(
     assert resolved[0]["content"] == [
         {"type": "text", "text": "[Audio: gone.wav (audio/wav) — file no longer available]"}
     ]
+    replay = resolve(
+        resolver,
+        [attachment_message(record, transcription="The deadline is Friday.")],
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+    assert replay[0]["content"] == [
+        path_note(
+            record, _transcript(record.filename, record.media_type, "The deadline is Friday.")
+        ),
+        *resolved[0]["content"],
+    ]

@@ -66,7 +66,7 @@ _COMPACT_SCHEMA_SQL = NOTES_SCHEMA_SQL + (
 )
 
 
-@pytest.mark.parametrize("formatting", ["identical", "column", "comment"])
+@pytest.mark.parametrize("formatting", ["identical", "column", "block-comment", "line-comment"])
 def test_the_current_schema_reopens_without_a_change_while_another_writer_holds_admission(
     data_dir: Path,
     formatting: str,
@@ -75,9 +75,19 @@ def test_the_current_schema_reopens_without_a_change_while_another_writer_holds_
     open_database(spec).close()
     if formatting == "column":
         spec = replace(spec, schema_sql=spec.schema_sql.replace("TEXT NOT NULL", "text  not\nnull"))
-    elif formatting == "comment":
+    elif formatting == "block-comment":
         spec = replace(
-            spec, schema_sql=spec.schema_sql.replace("TEXT NOT NULL", "TEXT /* type */ NOT NULL")
+            spec,
+            schema_sql=spec.schema_sql.replace(
+                "right_id TEXT NOT NULL", "/* name, etc. */ right_id TEXT /* type: ) */ NOT NULL"
+            ),
+        )
+    elif formatting == "line-comment":
+        spec = replace(
+            spec,
+            schema_sql=spec.schema_sql.replace(
+                "flag INTEGER NOT NULL", "-- a flag, with a default marker )\nflag INTEGER NOT NULL"
+            ),
         )
 
     # A planned change would need the write lock the other writer holds.
@@ -92,21 +102,21 @@ def test_the_current_schema_reopens_without_a_change_while_another_writer_holds_
 def test_open_adds_missing_columns_tables_and_indexes_and_keeps_rows(data_dir: Path) -> None:
     _created(data_dir, "kept")
     grown = NOTES_SCHEMA_SQL + (
-        "\nALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 "
-        "CHECK (pinned IN (0, 1));"
+        '\nALTER TABLE notes ADD COLUMN "check" INTEGER NOT NULL DEFAULT 0 '
+        'CHECK ("check" IN (0, 1));'
         "\nCREATE TABLE labels (label TEXT PRIMARY KEY) STRICT;"
-        "\nCREATE INDEX notes_by_pinned ON notes (pinned, note_id);"
+        '\nCREATE INDEX notes_by_check ON notes ("check", note_id);'
     )
 
     database = open_database(notes_spec(data_dir, schema_sql=grown))
     try:
         assert note_bodies(database) == ["kept"]
         with database.read() as connection:
-            assert connection.execute("SELECT pinned FROM notes").fetchone()[0] == 0
+            assert connection.execute('SELECT "check" FROM notes').fetchone()[0] == 0
             assert connection.execute("SELECT COUNT(*) FROM labels").fetchone()[0] == 0
             assert (
                 connection.execute(
-                    "SELECT name FROM sqlite_master WHERE name = 'notes_by_pinned'"
+                    "SELECT name FROM sqlite_master WHERE name = 'notes_by_check'"
                 ).fetchone()
                 is not None
             )

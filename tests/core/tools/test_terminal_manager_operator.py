@@ -7,6 +7,7 @@ import logging
 import re
 from datetime import timedelta
 from pathlib import Path
+from threading import Event
 from typing import Any, override
 
 import pytest
@@ -235,6 +236,48 @@ async def test_operator_controls_same_live_session_and_changed_callbacks(
     assert manager.list_for_operator() == []
     assert changed.count(terminal_id) >= 5
     unsubscribe()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_admitted_resize_keeps_the_pty_and_renderer_in_sync(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, factory = terminal_manager
+    started = await spawn(manager, tmp_path)
+    terminal_id = started.terminal_id
+    adapter = factory.adapters[0]
+    resize = adapter.resize
+    entered, applied = asyncio.Event(), asyncio.Event()
+    release = Event()
+    loop = asyncio.get_running_loop()
+
+    def resize_pty(rows: int, columns: int) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(3)
+        resize(rows, columns)
+        loop.call_soon_threadsafe(applied.set)
+
+    monkeypatch.setattr(adapter, "resize", resize_pty)
+    resizing = asyncio.create_task(
+        manager.resize(terminal_id, owner(), columns=90, rows=28, seconds=1)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        resizing.cancel()
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await resizing
+    await asyncio.wait_for(applied.wait(), 2)
+
+    current = manager.list_for_operator()[0]
+    assert adapter.resizes == [(28, 90)]
+    assert (current["rows"], current["columns"]) == (28, 90)
+    adapter.emit("a" * 89 + "XY")
+    await eventually(lambda: screen_shows(manager, terminal_id, "X\nY"))
 
 
 @pytest.mark.asyncio

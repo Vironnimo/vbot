@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, override
 
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
@@ -73,6 +73,12 @@ async def connect_socket(url: str, header: str | None) -> AsyncIterator[Socket]:
     """Open one native socket with the same origin/TLS policy as Desktop HTTP."""
     from websockets.asyncio.client import connect
 
+    class DirectConnection(connect):
+        @override
+        def process_redirect(self, exc: Exception) -> Exception:
+            # The greeting carries a separate Computer credential for this origin.
+            return exc
+
     target = url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
     options: dict[str, Any] = {
         "additional_headers": {"Authorization": header} if header else {},
@@ -85,7 +91,7 @@ async def connect_socket(url: str, header: str | None) -> AsyncIterator[Socket]:
     }
     if target.startswith("wss://"):
         options["ssl"] = shared_ssl_context()
-    async with connect(f"{target.rstrip('/')}/ws/computers", **options) as socket:
+    async with DirectConnection(f"{target.rstrip('/')}/ws/computers", **options) as socket:
         yield socket
 
 

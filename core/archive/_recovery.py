@@ -320,7 +320,9 @@ def _payload_contents(
         )
     if is_dir_strict(project_dir) and not is_link_status(project_dir.lstat()):
         inspected_project = services.projects.inspect_archived(project_dir)
-        facts = _format_facts(inspected_project.problem, PROJECT_FORMAT_VERSION)
+        facts = _format_facts(
+            inspected_project.problem, inspected_project.format_version or PROJECT_FORMAT_VERSION
+        )
         subject = child.name
         if inspected_project.project is not None:
             subject = inspected_project.project.project_id

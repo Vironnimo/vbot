@@ -21,6 +21,7 @@ from core.tools.terminal_emulator import (
     ScreenObservation,
 )
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 from ._terminal_activity import (
     PROCESS_SAMPLE_SECONDS,
@@ -503,7 +504,7 @@ class TerminalSession:
             if (columns, rows) != (self._output.screen.columns, self._output.screen.rows):
                 # A resize to the current dimensions would only make the
                 # program repaint, so it is skipped.
-                await self._resize_screen(columns, rows)
+                await settle_before_cancelling(self._resize_screen(columns, rows))
             return {
                 "terminal_id": self.terminal_id,
                 "state": self.state,
@@ -526,10 +527,7 @@ class TerminalSession:
             if (columns, rows) == (self._output.screen.columns, self._output.screen.rows):
                 return False
             settles, shown = self._settles, self._shown_outputs
-            await self._resize_screen(columns, rows)
-            if self._activity.state == "working":
-                # Work in progress settles after its redraw, not on its earlier timer.
-                self._restart_quiet(QuietRestart(self._activity.generation, False))
+            await settle_before_cancelling(self._resize_screen(columns, rows, restart_quiet=True))
         services = self._services
         silent_until = services.monotonic() + TERMINAL_REPAINT_WINDOW_SECONDS
         while not self.finished and self._settles == settles:
@@ -541,7 +539,7 @@ class TerminalSession:
             await self._waits.wait_or_sleep(change, (silent_until if silent else deadline) - now)
         return True
 
-    async def _resize_screen(self, columns: int, rows: int) -> None:
+    async def _resize_screen(self, columns: int, rows: int, *, restart_quiet: bool = False) -> None:
         """Resize the PTY and the screen to new dimensions; the lock is held."""
         await asyncio.to_thread(self._adapter.resize, rows, columns)
         self._output.resizes.append((self._output.log.size, columns, rows))
@@ -552,6 +550,9 @@ class TerminalSession:
         self._output.resize_count += 1
         self._activity.expect_redraw(self._services.monotonic())
         self._publish_state()
+        if restart_quiet and self._activity.state == "working":
+            # Work in progress settles after its redraw.
+            self._restart_quiet(QuietRestart(self._activity.generation, False))
 
     # Observation
 

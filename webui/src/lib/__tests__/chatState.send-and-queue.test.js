@@ -1217,35 +1217,30 @@ describe('Queue', () => {
     'keeps an accepted Queue %s when an earlier list response arrives later',
     async (mutation) => {
       const stale = deferred();
-      let edited = false;
+      const original = { id: 'old', content: 'Original', editable: true };
+      const added = { id: 'new', content: 'New queued text', editable: true };
+      let serverItems = [original, added];
       const { chatState, controller } = setupController({
         operationOverrides: {
           listQueue: vi
             .fn()
             .mockReturnValueOnce(stale.promise)
-            .mockImplementation(async () => ({
-              items: [
-                {
-                  id: 'old',
-                  content: edited ? 'Edited' : 'Original',
-                  editable: true,
-                },
-                { id: 'new', content: 'New queued text', editable: true },
-              ],
-            })),
+            .mockImplementation(async () => ({ items: serverItems })),
           updateQueueItem: vi.fn(async () => {
-            edited = true;
+            serverItems = [{ ...original, content: 'Edited' }, added];
             return { ok: true };
           }),
-          removeFromQueue: vi.fn().mockResolvedValue({ ok: true }),
+          removeFromQueue: vi.fn(async () => {
+            serverItems = [added];
+            return { ok: true };
+          }),
           startChatRun: vi.fn().mockResolvedValue({
             queued: true,
-            item: { id: 'new', content: 'New queued text', editable: true },
+            item: added,
           }),
         },
       });
       const session = ensureSessionState(chatState, 'alpha', 'one');
-      const original = { id: 'old', content: 'Original', editable: true };
       session.queue = [structuredClone(original)];
       const pendingSync = controller.syncSessionQueue(session);
       if (mutation === 'edit')
@@ -1254,6 +1249,7 @@ describe('Queue', () => {
       if (mutation === 'enqueue')
         await controller.sendMessage(session, 'New queued text');
       const accepted = structuredClone(session.queue);
+      expect(accepted).toMatchObject(serverItems);
 
       stale.resolve({ items: [original] });
       await pendingSync;

@@ -10,6 +10,7 @@ from core.archive._operations import stored_path
 from core.archive._types import ArchiveEntryDetail, ArchiveListing, ArchivePage
 from core.archive.errors import ArchiveRetentionUnknownError
 from core.projects import PROJECT_FORMAT_VERSION, AgentOverrides
+from core.projects.conversion import is_convertible_project_version
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_PROJECT,
@@ -152,6 +153,8 @@ def _not_restorable_reason(services: ArchiveServices, entry: ArchiveEntry) -> st
     records = [entry.facts, *(entry.facts.get("private_agents") or ())]
     for record in records:
         recorded = record.get("payload_format")
+        if entry.kind == ARCHIVE_KIND_PROJECT and is_convertible_project_version(recorded):
+            continue
         if recorded == "older" or (
             isinstance(recorded, int) and not isinstance(recorded, bool) and recorded < version
         ):

@@ -308,13 +308,16 @@ def test_normalize_response_extracts_tool_calls(
         ("incomplete", "max_output_tokens", TERMINAL_OUTCOME_OUTPUT_TRUNCATED),
         ("incomplete", "content_filter", TERMINAL_OUTCOME_CONTENT_FILTERED),
         ("incomplete", "other", TERMINAL_OUTCOME_UNKNOWN),
+        pytest.param(
+            "incomplete", ["content_filter"], TERMINAL_OUTCOME_UNKNOWN, id="malformed-reason"
+        ),
         ("failed", "", TERMINAL_OUTCOME_ERROR),
         ("completed", "", TERMINAL_OUTCOME_TOOL_CALLS),
         (None, "", TERMINAL_OUTCOME_UNKNOWN),
     ],
 )
 def test_normalize_response_terminal_outcome_guards_incomplete_calls(
-    status: str | None, reason: str, outcome: str
+    status: str | None, reason: str | list[str], outcome: str
 ) -> None:
     response = normalize_responses_response(
         {
@@ -1038,11 +1041,11 @@ def test_stream_error_events_are_classified_and_keep_the_provider_message(
         pytest.param('["test_frame"]', id="non-object"),
     ],
 )
-def test_stream_bad_frames_keep_evidence_without_naming_a_provider(frame: str) -> None:
+def test_stream_bad_frames_keep_payload_out_of_provider_errors(frame: str) -> None:
     with pytest.raises(ProviderError) as caught:
         decode_responses_sse([f"data: {frame}"])
 
     assert caught.value.retryable is False
-    assert frame in str(caught.value)
+    assert "test_frame" not in str(caught.value)
     # The shared decoder serves several Providers, so it names none of them.
     assert "GitHub Copilot" not in str(caught.value)

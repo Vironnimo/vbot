@@ -10,6 +10,7 @@ from core.sessions.search_content import compact_text
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
+    _optional_bool,
     _reject_unsupported,
     _required_session_address,
     _required_string,
@@ -68,6 +69,7 @@ async def chat_search(state: Any, params: dict[str, Any]) -> dict[str, Any]:
     _reject_unsupported(params, rpc_request_fields("chat.search"), "chat.search")
     address = _required_session_address(params)
     query = _required_string(params, "query")
+    include_inherited = _optional_bool(params, "include_inherited", default=True)
     if len(query) > 256:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "query must contain at most 256 characters")
     sessions = state.runtime.chat_sessions
@@ -80,6 +82,7 @@ async def chat_search(state: Any, params: dict[str, Any]) -> dict[str, Any]:
             agent_id=address.agent_id,
             session_id=address.session_id,
             timeline_only=True,
+            include_inherited=include_inherited,
             roles=("user", "assistant"),
             order="newest",
             limit=_RESULT_LIMIT + 1,

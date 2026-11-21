@@ -465,7 +465,9 @@ def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
     assert cookie not in json.dumps(stored)
 
 
-def test_a_denied_or_unknown_pairing_ends_without_a_device(served: Any) -> None:
+def test_a_denied_or_unknown_pairing_ends_without_a_device(
+    served: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _app, client = served(_authenticated())
     started = _pair(client, kind="desktop")
 
@@ -483,12 +485,20 @@ def test_a_denied_or_unknown_pairing_ends_without_a_device(served: Any) -> None:
         headers={**_INTERNET, "Content-Type": "application/json"},
     )
 
+    def decoder_limit_reached(_body: bytes) -> object:
+        raise RecursionError
+
+    with monkeypatch.context() as decoder:
+        decoder.setattr("server._request_bodies.loads", decoder_limit_reached)
+        unreadable = _poll(client, started)
+
     assert unknown["error"]["code"] == "pairing_not_found"
     assert denied["result"]["status"] == "denied"
     assert polled == {"status": "denied"}
     assert forged == {"status": "expired"}
-    assert malformed.status_code == 400
-    assert malformed.json()["error"]["code"] == "invalid_request"
+    for response in (malformed, unreadable):
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_request"
     assert _rpc(client, "devices.list")["result"]["devices"] == []
 
 

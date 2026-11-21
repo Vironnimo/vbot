@@ -167,8 +167,22 @@ async def test_startup_policy_keeps_catalog_loading_separate_from_producers(
 async def test_start_modes_split_staging_cleanup_conversion_and_database_release(
     config: Config,
 ) -> None:
-    from core.database import open_database, read_marker, snapshot_root, write_bootstrap_marker
+    from core.database import (
+        create_update_snapshot,
+        open_database,
+        read_marker,
+        restore_update_snapshot,
+        snapshot_root,
+        write_bootstrap_marker,
+    )
     from core.runtime.databases import RETIRED_CANONICAL_DATABASES
+    from core.sessions import (
+        ARCHIVE_KIND_PROJECT,
+        ARCHIVE_TREE_PROJECT,
+        ArchiveScope,
+        ArchiveTree,
+        ChatSessionManager,
+    )
     from tests.core.database.database_test_support import notes_spec
 
     data_dir = config.data_dir
@@ -177,7 +191,6 @@ async def test_start_modes_split_staging_cleanup_conversion_and_database_release
     for name in RETIRED_CANONICAL_DATABASES:
         open_database(notes_spec(data_dir, name=name)).close()
     killed = snapshot_root(data_dir) / ".20260101T000000Z-deadbeef.4242.partial"
-    killed.mkdir(parents=True)
 
     def registered() -> set[str]:
         marker = read_marker(data_dir)
@@ -195,14 +208,42 @@ async def test_start_modes_split_staging_cleanup_conversion_and_database_release
         return json.loads(path.read_text(encoding="utf-8"))["format_version"]
 
     converted = older_project("converted")
+    sessions = ChatSessionManager(data_dir)
+    try:
+
+        def trees(entry_id: str) -> tuple[ArchiveTree, ...]:
+            return (ArchiveTree(f"archive/entries/{entry_id}/project", ARCHIVE_TREE_PROJECT),)
+
+        ledger = sessions.archive_ledger
+        entry = ledger.begin(
+            ARCHIVE_KIND_PROJECT,
+            subject_id="archived",
+            project_id="archived",
+            facts={"payload_format": 1},
+            trees=trees,
+        )
+        ledger.commit_scope(entry.entry_key, ArchiveScope(project_id="archived"))
+        archived = data_dir / trees(entry.entry_id)[0].path / "project.json"
+        archived.parent.parent.mkdir(parents=True)
+        older_project("archived").parent.rename(archived.parent)
+    finally:
+        sessions.close()
+    archived_bytes = archived.read_bytes()
+    snapshot = create_update_snapshot(data_dir, operation_id="verification-test")
+    assert snapshot is not None
+    killed.mkdir(parents=True)
     # An update's verification start keeps them: its rollback needs every registration.
-    # It converts older documents; what a killed snapshot left goes at every start.
+    # It converts older live documents; what a killed snapshot left goes at every start.
     verification = Runtime(config, safe_startup_mode="verification")
     verification.start()
     await verification.aclose()
     assert not killed.exists()
     assert set(RETIRED_CANONICAL_DATABASES) <= registered()
     assert version(converted) == PROJECT_FORMAT_VERSION
+    assert archived.read_bytes() == archived_bytes
+    restore_update_snapshot(data_dir, snapshot)
+    assert version(converted) == 1
+    assert archived.read_bytes() == archived_bytes
 
     # Normal startup never converts.
     unconverted = older_project("unconverted")

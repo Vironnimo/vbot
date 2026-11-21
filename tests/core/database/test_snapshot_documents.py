@@ -13,6 +13,7 @@ import pytest
 from core.database import (
     DatabaseCorruptError,
     DatabaseUnavailableError,
+    _documents,
     create_data_snapshot,
     data_store_status,
     list_data_snapshots,
@@ -79,6 +80,34 @@ def test_a_snapshot_holds_every_durable_document_and_nothing_else(data_dir: Path
         "file_size": sum(len(text.encode()) for text in _DOCUMENTS.values()),
     }
     assert "secret" not in json.dumps(summary)
+
+
+@pytest.mark.durable
+def test_a_published_snapshot_syncs_new_document_directories_and_its_root(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    published: list[Path] = []
+
+    def publish(source: Path, target: Path) -> None:
+        publish_snapshot(source, target)
+        published.append(source)
+        assert synced == [
+            source / "documents" / "agents" / "main",
+            source / "documents" / "agents",
+            source / "documents",
+            source,
+        ]
+
+    publish_snapshot = snapshots_module.replace_path
+    monkeypatch.setattr(_documents, "fsync_dir", synced.append)
+    monkeypatch.setattr(snapshots_module, "fsync_dir", synced.append)
+    monkeypatch.setattr(snapshots_module, "replace_path", publish)
+
+    snapshot = _with_documents(data_dir)
+
+    assert len(published) == 1
+    assert synced[-2:] == [snapshot.parent, data_dir]
 
 
 @pytest.mark.parametrize(
@@ -215,13 +244,17 @@ def test_an_older_vbot_ignores_documents_and_fields_a_newer_one_added(data_dir: 
     assert future.read_text(encoding="utf-8") == '{"format_version": 1}\n'
 
 
-def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
+@pytest.mark.durable
+def test_the_document_set_is_restored_as_one_unit(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     snapshot = _with_documents(data_dir)
     database = open_database(notes_spec(data_dir))
     add_note(database, "later")
     database.close()
     write_document(data_dir, "settings.json", '{"format_version": 1, "theme": "light"}\n')
     (data_dir / "agents" / "main" / "agent.json").unlink()
+    (data_dir / "agents" / "main").rmdir()
     extra = write_document(data_dir, "channels/new/channel.json", '{"format_version": 1}\n')
     # A credential set after the snapshot: the Secret Store is never rolled back.
     secrets = '{"format_version": 1, "credentials": {"KEY": "newer"}}\n'
@@ -233,7 +266,27 @@ def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
     assert plan.documents.restored == ("agents/main/agent.json", "settings.json")
     assert plan.documents.removed == ("channels/new/channel.json",)
 
-    result = restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
+    synced: set[Path] = set()
+    real_sync = _documents.fsync_dir
+    real_replace = os.replace
+
+    def record_sync(directory: Path) -> None:
+        real_sync(directory)
+        synced.add(directory)
+
+    def check_replace(source: str | Path, destination: str | Path) -> None:
+        target = Path(destination)
+        if target.is_relative_to(quarantine_root(data_dir)):
+            required = {path for path in target.parent.parents if path.is_relative_to(data_dir)}
+            assert required <= synced
+        if target == data_dir / "agents" / "main" / "agent.json":
+            assert {data_dir, data_dir / "agents", target.parent} <= synced
+        real_replace(source, destination)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(_documents, "fsync_dir", record_sync)
+        patched.setattr(os, "replace", check_replace)
+        result = restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
 
     for relative, text in _DOCUMENTS.items():
         if relative != "secrets.json":

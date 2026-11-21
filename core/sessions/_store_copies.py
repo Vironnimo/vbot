@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from core.database import quote_identifier
 from core.sessions import _store_lineage, _store_values
 from core.utils.timestamps import utc_now_timestamp
 
@@ -22,14 +23,20 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
     return [str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")]
 
 
+def _column_list(columns: Sequence[str]) -> str:
+    return ", ".join(map(quote_identifier, columns))
+
+
 def _copy_side_rows(
     connection: sqlite3.Connection, table: str, pairs: Sequence[tuple[int, int]]
 ) -> None:
     """Copy the ``entry_key``-keyed rows of *table* for ``(new, old)`` key pairs."""
-    columns = [column for column in _table_columns(connection, table) if column != "entry_key"]
+    columns = _column_list(
+        [column for column in _table_columns(connection, table) if column != "entry_key"]
+    )
     connection.executemany(
-        f"INSERT INTO {table} (entry_key, {', '.join(columns)}) "
-        f"SELECT ?, {', '.join(columns)} FROM {table} WHERE entry_key = ?",
+        f"INSERT INTO {table} (entry_key, {columns}) "
+        f"SELECT ?, {columns} FROM {table} WHERE entry_key = ?",
         pairs,
     )
 
@@ -65,9 +72,8 @@ def copy_entries(
     """
     now = utc_now_timestamp()
     columns = _table_columns(connection, "entries")
-    column_sql = {column: '"' + column.replace('"', '""') + '"' for column in columns}
     rows = connection.execute(
-        f"SELECT {', '.join(f'e.{column_sql[column]}' for column in columns)} FROM entries AS e "
+        f"SELECT {', '.join(f'e.{quote_identifier(column)}' for column in columns)} FROM entries AS e "
         f"WHERE {_store_lineage.range_predicate()} ORDER BY e.seq",
         _store_lineage.range_params(view_range),
     ).fetchall()
@@ -77,6 +83,10 @@ def copy_entries(
     }
     entry_map: dict[int, int] = {}
     copied_columns = [column for column in columns if column != "entry_key"]
+    insert_entry = (
+        f"INSERT INTO entries ({_column_list(copied_columns)}) "
+        f"VALUES ({', '.join('?' for _ in copied_columns)})"
+    )
     for row in rows:
         replaced = {
             "session_key": target_key,
@@ -84,8 +94,7 @@ def copy_entries(
             "superseded_at_seq": None,
         }
         cursor = connection.execute(
-            f"INSERT INTO entries ({', '.join(column_sql[column] for column in copied_columns)}) "
-            f"VALUES ({', '.join('?' for _ in copied_columns)})",
+            insert_entry,
             tuple(replaced.get(column, row[column]) for column in copied_columns),
         )
         assert cursor.lastrowid is not None
@@ -120,7 +129,7 @@ def _copy_run(connection: sqlite3.Connection, run_key: int, target_key: int, now
         "completed_at": "CASE WHEN status = 'running' THEN ? ELSE completed_at END",
     }
     columns = [column for column in _table_columns(connection, "runs") if column != "run_key"]
-    expressions = [replaced.get(column, column) for column in columns]
+    expressions = [replaced.get(column, quote_identifier(column)) for column in columns]
     params: list[Any] = []
     for column in columns:
         if column == "session_key":
@@ -129,16 +138,14 @@ def _copy_run(connection: sqlite3.Connection, run_key: int, target_key: int, now
             params.append(now)
     params.append(run_key)
     cursor = connection.execute(
-        f"INSERT INTO runs ({', '.join(columns)}) SELECT {', '.join(expressions)} "
+        f"INSERT INTO runs ({_column_list(columns)}) SELECT {', '.join(expressions)} "
         "FROM runs WHERE run_key = ?",
         params,
     )
     assert cursor.lastrowid is not None
     copied = int(cursor.lastrowid)
-    path_columns = ", ".join(
-        '"' + column.replace('"', '""') + '"'
-        for column in _table_columns(connection, "run_change_paths")
-        if column != "run_key"
+    path_columns = _column_list(
+        [column for column in _table_columns(connection, "run_change_paths") if column != "run_key"]
     )
     connection.execute(
         f"INSERT INTO run_change_paths (run_key, {path_columns}) "
@@ -158,27 +165,32 @@ def _copy_tool_calls(
         for column in _table_columns(connection, "tool_calls")
         if column not in {"call_key", "entry_key", "result_entry_key", "status", "completed_at"}
     ]
+    column_list = _column_list(columns)
     calls = connection.execute(
-        f"SELECT call_key, entry_key, result_entry_key, status, completed_at, {', '.join(columns)} "
+        f"SELECT call_key, entry_key, result_entry_key, status, completed_at, {column_list} "
         f"FROM tool_calls WHERE entry_key {_KEYS} ORDER BY call_key",
         (_store_values._key_list(list(entry_map)),),
     ).fetchall()
-    payload_columns = [
-        column
-        for column in _table_columns(connection, "tool_call_payloads")
-        if column != "call_key"
-    ]
-    result_payload_columns = [
-        column
-        for column in _table_columns(connection, "tool_result_payloads")
-        if column not in {"payload_key", "call_key"}
-    ]
+    payload_columns = _column_list(
+        [
+            column
+            for column in _table_columns(connection, "tool_call_payloads")
+            if column != "call_key"
+        ]
+    )
+    result_payload_columns = _column_list(
+        [
+            column
+            for column in _table_columns(connection, "tool_result_payloads")
+            if column not in {"payload_key", "call_key"}
+        ]
+    )
     for call in calls:
         unfinished = call["status"] in {"pending", "running"}
         result_key = call["result_entry_key"]
         cursor = connection.execute(
             f"INSERT INTO tool_calls (entry_key, result_entry_key, status, completed_at, "
-            f"{', '.join(columns)}) VALUES ({', '.join('?' for _ in range(4 + len(columns)))})",
+            f"{column_list}) VALUES ({', '.join('?' for _ in range(4 + len(columns)))})",
             (
                 entry_map[int(call["entry_key"])],
                 None if result_key is None else entry_map.get(int(result_key)),
@@ -188,13 +200,13 @@ def _copy_tool_calls(
             ),
         )
         connection.execute(
-            f"INSERT INTO tool_call_payloads (call_key, {', '.join(payload_columns)}) "
-            f"SELECT ?, {', '.join(payload_columns)} FROM tool_call_payloads WHERE call_key = ?",
+            f"INSERT INTO tool_call_payloads (call_key, {payload_columns}) "
+            f"SELECT ?, {payload_columns} FROM tool_call_payloads WHERE call_key = ?",
             (cursor.lastrowid, call["call_key"]),
         )
         connection.execute(
-            f"INSERT INTO tool_result_payloads (call_key, {', '.join(result_payload_columns)}) "
-            f"SELECT ?, {', '.join(result_payload_columns)} FROM tool_result_payloads "
+            f"INSERT INTO tool_result_payloads (call_key, {result_payload_columns}) "
+            f"SELECT ?, {result_payload_columns} FROM tool_result_payloads "
             "WHERE call_key = ? ORDER BY payload_key",
             (cursor.lastrowid, call["call_key"]),
         )

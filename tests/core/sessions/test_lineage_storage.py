@@ -308,13 +308,20 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
 async def test_ancestor_delete_preserves_additive_columns(manager: ChatSessionManager) -> None:
     """Columns a newer vBot added survive every materialized copy."""
     source = manager.create("agent", session_id="source")
-    run = source.start_run("run-one")
-    run.append(ChatMessage.user("retained text"))
-    complete_run(run, _summary("run-one"))
+    _tool_run(source, "run-one", "retained text")
     inherited = source.load_active()
+    tables = (
+        "entries",
+        "runs",
+        "run_change_paths",
+        "entry_text",
+        "tool_calls",
+        "tool_call_payloads",
+        "tool_result_payloads",
+    )
 
     def add_newer_fields(connection: sqlite3.Connection) -> None:
-        for table in ("entries", "run_change_paths"):
+        for table in tables:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN future_text TEXT")
             connection.execute(f'ALTER TABLE {table} ADD COLUMN "references" TEXT')
             connection.execute(
@@ -329,13 +336,18 @@ async def test_ancestor_delete_preserves_additive_columns(manager: ChatSessionMa
     child = await manager.fork(source.address)
     manager.delete(source.address)
     grandchild = await manager.fork(child.address)
-    manager.delete(child.address)
+    entry = await manager.archive(child.address)
+    ledger = manager.archive_ledger
+    ledger.begin_purge(entry.entry_id)
+    assert ledger.purge_next_session(entry.entry_key)
+    ledger.finish_purge(entry.entry_key)
 
     assert grandchild.load_active() == inherited
     with manager.database.read() as connection:
-        assert _rows(
-            connection, 'SELECT DISTINCT future_text, future_count, "references" FROM entries'
-        ) == [("durable entries", 42, "retained entries")]
+        for table in tables:
+            assert _rows(
+                connection, f'SELECT DISTINCT future_text, future_count, "references" FROM {table}'
+            ) == [(f"durable {table}", 42, f"retained {table}")]
         assert _rows(
             connection,
             'SELECT p.ordinal, p.path, p.future_text, p.future_count, p."references", '

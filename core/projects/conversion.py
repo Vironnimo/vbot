@@ -83,9 +83,18 @@ class ProjectConversion:
     invalid: tuple[str, ...] = ()
 
 
-def _converted(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the current form of a decoded ``project.json`` of a converted version."""
-    if data.get(FORMAT_VERSION_FIELD) == 1:
+def is_convertible_project_version(version: object) -> bool:
+    return type(version) is int and version in CONVERTED_PROJECT_FORMAT_VERSIONS
+
+
+def converted_project_document(data: Any) -> dict[str, Any] | None:
+    """Return the current form of a supported older document without writing it."""
+    if not isinstance(data, dict):
+        return None
+    version = data.get(FORMAT_VERSION_FIELD)
+    if not is_convertible_project_version(version):
+        return None
+    if version == 1:
         data = _version_2(data)
     return _version_3(data)
 
@@ -212,9 +221,10 @@ def _convert_file(path: Path, *, snapshot_document: bool = True) -> ConversionRe
     version = data.get(FORMAT_VERSION_FIELD)
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         return "invalid"
-    if version not in CONVERTED_PROJECT_FORMAT_VERSIONS:
+    converted = converted_project_document(data)
+    if converted is None:
         return "current"
-    rendered = render_json_document(_converted(data), version=PROJECT_FORMAT_VERSION)
+    rendered = render_json_document(converted, version=PROJECT_FORMAT_VERSION)
     if snapshot_document:
         with document_change(path):
             atomic_write_text(path, rendered)
@@ -262,8 +272,7 @@ def project_file_needs_conversion(path: Path) -> bool:
         return False
     if not isinstance(data, dict):
         return False
-    version = data.get(FORMAT_VERSION_FIELD)
-    return not isinstance(version, bool) and version in CONVERTED_PROJECT_FORMAT_VERSIONS
+    return is_convertible_project_version(data.get(FORMAT_VERSION_FIELD))
 
 
 def _created_before_change(value: Any) -> bool:

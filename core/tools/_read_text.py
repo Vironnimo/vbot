@@ -945,11 +945,19 @@ def _matching_lines(
         shown_bytes += size
         last_shown = number
 
+    context_start = position.line - context
     for number, line in enumerate(lines, start=1):
-        if number < position.line:
+        if number < context_start:
             continue
         text = plain_line_end(line).removesuffix("\n")
-        if regex.search(text.replace(_INVALID_UTF8, "\ufffd")):
+        matched = regex.search(text.replace(_INVALID_UTF8, "\ufffd"))
+        if number < position.line:
+            # A previous page can end in a match's trailing context. Recover the
+            # remaining window without counting the match or showing earlier lines.
+            if matched:
+                after = number + context - position.line + 1
+            continue
+        if matched:
             matches += 1
             for previous_number, previous in before:
                 show(previous_number, previous)
@@ -964,10 +972,13 @@ def _matching_lines(
 
     scope = f" from line {position.line} on" if position.line > 1 else ""
     quoted = json.dumps(pattern, ensure_ascii=False)
-    if not matches:
+    if matches:
+        noun = "line" if matches == 1 else "lines"
+        header = f"{matches} {noun} of {label}{scope} match {quoted}{note}:\n"
+    elif shown:
+        header = f"Showing context in {label}{scope} for earlier matches of {quoted}{note}.\n"
+    else:
         return ReadPage(f"No line of {label}{scope} matches {quoted}{note}."), []
-    noun = "line" if matches == 1 else "lines"
-    header = f"{matches} {noun} of {label}{scope} match {quoted}{note}:\n"
     while True:
         decoding_note = notes.note(shown_numbers)
         output = (decoding_note + "\n" if decoding_note else "") + header + "".join(shown)

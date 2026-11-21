@@ -53,7 +53,7 @@ from core.database._documents import (
     restore_documents,
     verify_documents,
 )
-from core.database._files import fsync_dir, fsync_file
+from core.database._files import directory_sync_order, fsync_dir, fsync_file
 from core.database._incidents import (
     INCIDENT_ROOT_NAME as INCIDENT_ROOT_NAME,
 )
@@ -249,12 +249,13 @@ def _quarantine_bundle(
         return QuarantineResult("failed", reason=str(exc))
     moved: list[tuple[Path, Path]] = []
     try:
+        for directory in directory_sync_order(data_dir, (batch.parent,)):
+            fsync_dir(directory)
         for member in members:
             target = batch / member.name
             os.replace(member, target)
             moved.append((member, target))
         fsync_dir(batch)
-        fsync_dir(batch.parent)
         fsync_dir(path.parent)
     except OSError as exc:
         rollback_errors: list[str] = []
@@ -415,6 +416,8 @@ def _install_member(
         shutil.copy2(source, temporary)
         verify_member(snapshot_dir, member, spec=spec, path=temporary)
         fsync_file(temporary)
+        for directory in directory_sync_order(data_dir, (target.parent.parent,)):
+            fsync_dir(directory)
         quarantine_path = _new_quarantine_path(data_dir, name) if _bundle(target) else None
         before_replace(quarantine_path)
         quarantine = _quarantine_bundle(data_dir, name, target, destination=quarantine_path)

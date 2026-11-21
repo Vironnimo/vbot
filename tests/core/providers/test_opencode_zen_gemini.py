@@ -602,6 +602,11 @@ async def test_broken_gemini_tool_stream_replays_only_dispatched_calls(with_ids:
             {"input_tokens": 12, "cache_read_tokens": 0},
             id="input-only",
         ),
+        pytest.param(
+            {"promptTokenCount": 12, "cachedContentTokenCount": "4"},
+            {"input_tokens": 12},
+            id="malformed-cache-count",
+        ),
         pytest.param({"candidatesTokenCount": 7}, {"output_tokens": 7}, id="output-only"),
         pytest.param(
             {

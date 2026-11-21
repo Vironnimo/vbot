@@ -247,13 +247,11 @@ class ConnectionController:
     def remove_server(self, host: str, port: Any) -> bool:
         """Forget a remembered server and its stored sign-in."""
 
-        removed = servers.remove_server(host, port, settings_file=self._settings_file)
-        try:
-            address = parse_server_address(host, port)
-        except ValueError:
-            return removed
+        if not servers.remove_server(host, port, settings_file=self._settings_file):
+            return False
+        address = parse_server_address(host, port)
         self.forget_sign_in(address.bridge_host, address.port)
-        return removed
+        return True
 
     def forget_sign_in(self, host: str, port: Any) -> bool:
         """Forget the stored sign-in of a server; reports whether one was stored.

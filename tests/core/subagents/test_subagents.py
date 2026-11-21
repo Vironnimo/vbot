@@ -21,6 +21,7 @@ import pytest_asyncio
 import core.subagents.forwarding as forwarding_module
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
+from core.chat.commands import CommandDispatcher
 from core.chat.messages import ToolCall
 from core.database import DatabaseUnavailableError
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
@@ -29,6 +30,7 @@ from core.runs import (
     Run,
     RunAdmission,
     RunAdmissionBlockedError,
+    RunCancelledError,
     RunInterruptedError,
     RunKind,
     RunStatus,
@@ -1268,6 +1270,69 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
         f"command:{ended}"
     ]
     assert commands.sink.cancellations == [f"command:{ended}"]
+
+
+@pytest.mark.parametrize("with_goal", [False, True])
+async def test_stop_all_defers_the_retained_queue_through_cleanup(
+    harness: SubAgentHarness, commands: CommandHarness, with_goal: bool
+) -> None:
+    terminal_cleanup = asyncio.Event()
+    release_terminals = asyncio.Event()
+    goal_cleanup = asyncio.Event()
+    release_goal = asyncio.Event()
+
+    async def close_scopes(_owners: object) -> int:
+        terminal_cleanup.set()
+        await release_terminals.wait()
+        return 0
+
+    harness.runtime.terminal_manager = SimpleNamespace(close_scopes=close_scopes)
+
+    async def active(_run: Run) -> None:
+        await asyncio.Event().wait()
+
+    async def next_run(_run: Run) -> str:
+        return await _background_command(commands, harness.parent, "Queued work")
+
+    async def pause_goal(address: SessionAddress) -> bool:
+        assert address == harness.parent
+        goal_cleanup.set()
+        await release_goal.wait()
+        return True
+
+    async def stop_all() -> int:
+        if not with_goal:
+            return await harness.coordinator.stop_tree(harness.parent)
+        dispatcher = CommandDispatcher(
+            harness.manager,
+            stop_all=harness.coordinator.stop_tree,
+            goals=cast(Any, SimpleNamespace(pause_for_stop=pause_goal)),
+        )
+        stopped, goal_paused = await dispatcher.stop_all(harness.parent)
+        assert goal_paused
+        return stopped
+
+    running = await harness.manager.start(harness.parent, active)
+    queued = await harness.manager.enqueue(harness.parent, next_run)
+    stopping = asyncio.create_task(stop_all())
+    try:
+        await terminal_cleanup.wait()
+        with pytest.raises(RunCancelledError):
+            await running.wait()
+        assert not queued.future.done()
+        release_terminals.set()
+        if with_goal:
+            await goal_cleanup.wait()
+            assert not queued.future.done()
+    finally:
+        release_terminals.set()
+        release_goal.set()
+        await stopping
+        harness.runtime.terminal_manager = None
+
+    assert await stopping == 1
+    successor = await queued.future
+    assert commands.manager.status(await successor.wait()) == "running"
 
 
 @pytest.mark.parametrize(

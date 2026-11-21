@@ -38,6 +38,7 @@ CREATE TABLE kernel_migrations (
 """
 
 _TABLE_CONSTRAINT_PREFIXES = ("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN")
+_IDENTIFIER_QUOTES = {'"', "'", "`", "["}
 _BARE_TOKEN = re.compile(r"([^\s(]+)\s*(.*)", re.DOTALL)
 
 
@@ -216,30 +217,32 @@ def _declared_columns(
 
 
 def _table_declaration(sql: str) -> tuple[dict[str, str], tuple[str, ...], str]:
-    """Return exact column expressions, table constraints, and table suffix.
+    """Return column expressions, table constraints, and the table suffix.
 
     Raises ``ValueError`` for a definition this parser cannot split.
     """
-    open_index = sql.find("(")
-    if open_index < 0:
-        raise ValueError("the table definition has no body")
-    close_index = _matching_parenthesis(sql, open_index)
+    # Remove comments before looking for delimiters or the start of an item.
+    # A comment can contain any delimiter, and a line comment ends at its newline.
+    items, suffix = _table_items(_normalized_ddl(sql))
     expressions: dict[str, str] = {}
     constraints: list[str] = []
-    for item in _split_sql_items(sql[open_index + 1 : close_index]):
+    for item in items:
         stripped = item.strip()
         first, remainder = _first_sql_token(stripped)
-        if first.upper() in _TABLE_CONSTRAINT_PREFIXES:
-            constraints.append(_normalized_ddl(stripped))
+        if stripped[0] not in _IDENTIFIER_QUOTES and first.upper() in _TABLE_CONSTRAINT_PREFIXES:
+            constraints.append(stripped)
             continue
         expressions[first] = remainder.strip()
-    return expressions, tuple(constraints), _normalized_ddl(sql[close_index + 1 :].rstrip(";"))
+    return expressions, tuple(constraints), suffix.strip().removesuffix(";").rstrip()
 
 
-def _matching_parenthesis(sql: str, open_index: int) -> int:
+def _table_items(sql: str) -> tuple[list[str], str]:
+    """Split the table body on top-level commas outside quoted tokens."""
+    items: list[str] = []
+    start = 0
     depth = 0
     quote: str | None = None
-    index = open_index
+    index = 0
     while index < len(sql):
         character = sql[index]
         if quote is not None:
@@ -255,52 +258,28 @@ def _matching_parenthesis(sql: str, open_index: int) -> int:
         elif character == "[":
             quote = "]"
         elif character == "(":
+            if depth == 0:
+                start = index + 1
             depth += 1
-        elif character == ")":
+        elif character == ")" and depth:
             depth -= 1
             if depth == 0:
-                return index
-        index += 1
-    raise ValueError("the table definition has an unterminated body")
-
-
-def _split_sql_items(body: str) -> list[str]:
-    items: list[str] = []
-    start = 0
-    depth = 0
-    quote: str | None = None
-    index = 0
-    while index < len(body):
-        character = body[index]
-        if quote is not None:
-            if quote == "]" and character == "]":
-                quote = None
-            elif character == quote:
-                if index + 1 < len(body) and body[index + 1] == quote:
-                    index += 1
-                else:
-                    quote = None
-        elif character in {"'", '"', "`"}:
-            quote = character
-        elif character == "[":
-            quote = "]"
-        elif character == "(":
-            depth += 1
-        elif character == ")":
-            depth -= 1
-        elif character == "," and depth == 0:
-            items.append(body[start:index])
+                items.append(sql[start:index])
+                return items, sql[index + 1 :]
+        elif character == "," and depth == 1:
+            items.append(sql[start:index])
             start = index + 1
         index += 1
-    items.append(body[start:])
-    return [item for item in items if item.strip()]
+    if depth:
+        raise ValueError("the table definition has an unterminated body")
+    raise ValueError("the table definition has no body")
 
 
 def _first_sql_token(item: str) -> tuple[str, str]:
     if not item:
         raise ValueError("the table definition has an empty item")
     opening = item[0]
-    if opening in {'"', "`", "["}:
+    if opening in _IDENTIFIER_QUOTES:
         closing = "]" if opening == "[" else opening
         index = 1
         token: list[str] = []

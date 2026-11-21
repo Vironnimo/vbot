@@ -36,6 +36,8 @@ import {
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 export function defaultChatOperations({ includeInherited = true } = {}) {
+  const historyScope = (params) =>
+    includeInherited ? params : { ...params, include_inherited: false };
   return {
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
@@ -53,12 +55,10 @@ export function defaultChatOperations({ includeInherited = true } = {}) {
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     getSessionUsage: (...args) => requestGetSessionUsage(...args),
     getSubAgentTree: (...args) => requestGetSubAgentTree(...args),
-    searchChat: (...args) => requestSearchChat(...args),
+    searchChat: (params, ...options) =>
+      requestSearchChat(historyScope(params), ...options),
     loadChatHistory: (params, ...options) =>
-      requestLoadChatHistory(
-        includeInherited ? params : { ...params, include_inherited: false },
-        ...options,
-      ),
+      requestLoadChatHistory(historyScope(params), ...options),
     loadTimelineChildren: (...args) => requestLoadTimelineChildren(...args),
     loadToolCall: (...args) => requestLoadToolCall(...args),
     loadCommandOutput: (...args) => requestLoadCommandOutput(...args),

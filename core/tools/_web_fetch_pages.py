@@ -441,14 +441,18 @@ def _find_text(
     # A small max_chars from older history still shows the match and its read-on call.
     size = (min(before, max_chars // 5), min(after, max_chars // 2))
     spans: list[list[int]] = []
+    shortened: str | None = None
     next_offset = None
+
+    def read_on(last: int) -> str:
+        return f"Read on with {_call({'ref': _continuation(ref, scope, last)})}"
 
     def render(passages: list[list[int]]) -> str:
         parts = []
         for first, last in passages:
             passage = text[first:last].rstrip("\n")
             if last < len(text):
-                passage += f"\nRead on with {_call({'ref': _continuation(ref, scope, last)})}"
+                passage += f"\n{read_on(last)}"
             parts.append(passage)
         return "\n\n".join(parts)
 
@@ -467,11 +471,20 @@ def _find_text(
         else:
             trial = [*spans, [first, last]]
         rendered = render(trial)
-        if spans and _bounded(rendered, max_chars, max_tokens) != rendered:
-            # A match next to the last passage continues the search where it ends.
-            next_offset = spans[-1][1] if len(trial) == len(spans) else position
-            break
-        spans = trial
+        if _bounded(rendered, max_chars, max_tokens) == rendered:
+            spans = trial
+            shortened = None
+        elif spans:
+            if match_end > spans[-1][1]:
+                next_offset = position
+                break
+        else:
+            # Spend the excerpt budget on the match before surrounding text or the read-on call.
+            shortened = _bounded(text[first:last], max_chars, max_tokens)
+            if first + len(shortened) < match_end and first < position:
+                first = position
+                shortened = _bounded(text[first:last], max_chars, max_tokens)
+            spans = [[first, first + len(shortened)]]
     # A view cut at a size limit was searched only as far as it was saved; a 2,000,000-
     # character JSON file read "No ... match ... in the whole page" (2026-10-20).
     searched = _search_scope(snapshot, text, scope, offset)
@@ -508,12 +521,17 @@ def _find_text(
     words = ", ".join(_call(word) for word in found.inside_words)
     words = f", only inside longer words such as {words}" if words else ""
     data: dict[str, Any] = {"shown": f"{count} matching {searched_for} {searched}{words}"}
+    more = []
     if next_offset is not None:
-        data["more"] = (
+        more.append(
             "More matches. Continue with "
             f"{_call({'ref': _continuation(ref, scope, next_offset), 'find': find})}."
         )
-    data["content"] = _bounded(render(spans), max_chars, max_tokens)
+    if shortened is not None and spans[-1][1] < len(text):
+        more.append(read_on(spans[-1][1]))
+    if more:
+        data["more"] = "\n".join(more)
+    data["content"] = render(spans) if shortened is None else shortened
     return data
 
 

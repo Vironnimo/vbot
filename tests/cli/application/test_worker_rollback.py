@@ -10,8 +10,9 @@ import pytest
 
 from cli.application import operations, rollback, worker
 from cli.application.state import Operation, load_operation
-from core.database import DatabaseFormatError, Migration, open_database, read_marker
+from core.database import DatabaseFormatError, Migration, open_database, read_marker, recovery
 from core.database.snapshots import create_data_snapshot, read_manifest, snapshot_root
+from core.utils.server_control import server_control_claim
 from tests.cli.application.test_worker import (
     _install,
     _ok,
@@ -177,6 +178,15 @@ def test_approved_restore_saves_current_data_and_recovers_it_if_the_target_fails
 ):
     install, data_dir, point = switched
     spec, extra = _newer_data(data_dir, monkeypatch)
+    restore_snapshot = recovery.restore_data_snapshot
+
+    def restore(directory, *args, **kwargs):
+        if not kwargs.get("check_only"):
+            with pytest.raises(RuntimeError), server_control_claim(directory, 9999):
+                pytest.fail("data restore must exclude new server claims")
+        return restore_snapshot(directory, *args, **kwargs)
+
+    monkeypatch.setattr(recovery, "restore_data_snapshot", restore)
 
     def start(_install, *, version_id=None, verification=False, **_kw):
         if version_id == "rel_old":

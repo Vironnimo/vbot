@@ -32,7 +32,7 @@ A new Session target may also carry Boolean `fast_mode` (default false), capture
 
 ## History, edit and timeline
 
-- `chat.search` takes an exact Session address and a query and returns up to 200 User and Assistant matches in newest-first order. Each hit includes the Message id, History sequence, Run id, timestamp, role and a short snippet with half-open Unicode code point ranges. `complete` reports whether the count covers every match.
+- `chat.search` takes an exact Session address and a query and returns up to 200 User and Assistant matches in newest-first order. It accepts the same `include_inherited` scope as `chat.timeline`. Each hit includes the Message id, History sequence, Run id, timestamp, role and a short snippet with half-open Unicode code point ranges. `complete` reports whether the count covers every match.
 
 Changed History and timeline pages without `before` carry `agent_name`, the display name of the Agent owning the addressed Session. A temporary participant and its delegated Sessions take their name from its live binding. A missing owner gives null. Unchanged and older pages omit the field.
 

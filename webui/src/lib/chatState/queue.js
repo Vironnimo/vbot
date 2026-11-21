@@ -91,8 +91,9 @@ export function createChatQueue({
         sessionState.sessionId,
         queuedMessageId,
       );
-      invalidateQueueSync(sessionState);
       removeQueuedMessage(sessionState, queuedMessageId);
+      // Replace earlier reads while keeping changes made by other windows.
+      await syncSessionQueue(sessionState);
     } catch (error) {
       if (await reportQueueItemSteering(sessionState, error)) return;
       sessionState.actionError = `${t('queue.removeError')} ${errorMessage(error)}`;

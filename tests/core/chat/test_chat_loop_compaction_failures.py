@@ -18,6 +18,7 @@ from core.chat._run_state import _RequestState
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import CompactionError, CompactionService
 from core.compaction.run_coordination import AUTO_COMPACTION_COMMIT_ATTEMPTS
+from core.database import DatabaseUnavailableError
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
 from core.providers.errors import NetworkError
 from core.runs import (
@@ -132,6 +133,38 @@ async def test_failed_compaction_logs_and_keeps_the_request(
         assert record.exc_info is not None
     assert _lifecycle(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
     assert probe.run.events[-1].payload == {"reason": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_preparation_failure_keeps_the_agentic_run_working(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = compaction_runtime(
+        tmp_path, adapter=StubAdapter([{"content": "Done"}]), context_window=1_000_000
+    )
+    sessions = runtime.chat_sessions
+    session = sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    metadata_value = sessions.metadata_value_async
+
+    async def unavailable_scratch_metadata(address, key):
+        if key == "scratch_announced" and service.compact_calls:
+            raise DatabaseUnavailableError("injected checkpoint metadata read failure")
+        return await metadata_value(address, key)
+
+    monkeypatch.setattr(sessions, "metadata_value_async", unavailable_scratch_metadata)
+    try:
+        run = await loop.start_run("coder", "Continue", session_id=session.id)
+        assert (await run.wait()).content == "Done"
+        assert len(service.compact_calls) == 1
+        assert "compaction_checkpoint" not in persisted_roles(session.load())
+        assert _lifecycle(await runtime.timelines.events(run)) == [
+            COMPACTION_STARTED_EVENT,
+            COMPACTION_ABORTED_EVENT,
+        ]
+    finally:
+        await runtime.chat_runs.aclose()
 
 
 @pytest.mark.asyncio
