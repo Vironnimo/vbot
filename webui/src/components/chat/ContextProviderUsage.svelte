@@ -1,7 +1,7 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { usageCreditsText } from '$lib/statisticsLimits.js';
-  import { formatPercent } from '$lib/statisticsView.js';
+  import { formatPercent } from '$lib/statisticsView/formatting.js';
   import { formatRelativeTime } from '$lib/timeText.js';
 
   let { provider, open } = $props();

@@ -68,7 +68,12 @@ describe('History reads', () => {
       },
     });
     for (let i = 0; i < 10; i++) {
-      await controller.loadHistoryForSession('alpha', `session-${i}`);
+      if (i === 0) {
+        const session = ensureSessionState(chatState, 'alpha', 'session-0');
+        await controller.reconcileRunSession(session, 'completed');
+      } else {
+        await controller.loadHistoryForSession('alpha', `session-${i}`);
+      }
       ensureSessionState(chatState, 'alpha', `session-${i}`).queue = [
         { id: `queued-${i}` },
       ];

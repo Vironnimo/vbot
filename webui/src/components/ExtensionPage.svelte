@@ -213,14 +213,15 @@
     return prototype === Object.prototype || prototype === null;
   }
 
-  function valid(value, maxBytes = MAX_MESSAGE_BYTES) {
+  function serialize(value, maxBytes) {
     try {
-      return (
-        isPlainObject(value) &&
-        new TextEncoder().encode(JSON.stringify(value)).byteLength <= maxBytes
-      );
+      if (!isPlainObject(value)) return null;
+      const json = JSON.stringify(value);
+      return new TextEncoder().encode(json).byteLength <= maxBytes
+        ? json
+        : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -245,13 +246,15 @@
     );
   }
 
-  function post(context, data) {
+  function post(context, data, fallback = null) {
     if (disposed || frameContext !== context || !context.window) return;
     // Replies include catalogs and canonical history, not just small commands.
     // Never drop a reply silently: onMessage returns this failure to its caller.
-    if (!valid(data, MAX_HOST_MESSAGE_BYTES))
-      throw new Error(t('extensions.page.responseTooLarge'));
-    context.window.postMessage(JSON.parse(JSON.stringify(data)), '*');
+    const json =
+      serialize(data, MAX_HOST_MESSAGE_BYTES) ??
+      (fallback && serialize(fallback, MAX_HOST_MESSAGE_BYTES));
+    if (!json) throw new Error(t('extensions.page.responseTooLarge'));
+    context.window.postMessage(JSON.parse(json), '*');
   }
 
   function projectedFileUrls(result) {
@@ -530,7 +533,7 @@
       event.origin !== 'null' ||
       !context ||
       event.source !== context.window ||
-      !valid(data) ||
+      !serialize(data, MAX_MESSAGE_BYTES) ||
       !matchesContext(data, context)
     )
       return;
@@ -810,7 +813,7 @@
               const event = { ...payload, type };
               if (
                 frameContext === context &&
-                valid(event, MAX_HOST_MESSAGE_BYTES)
+                serialize(event, MAX_HOST_MESSAGE_BYTES)
               ) {
                 if (
                   runScope !== null &&
@@ -1080,6 +1083,7 @@
     } else if (next.owner != null && next.owner !== context.descriptor.owner)
       return;
     const invalidation = {
+      publicResource: next.owner == null,
       revision: next.revision ?? null,
       change: validChange(next.change)
         ? {
@@ -1099,7 +1103,7 @@
     postInvalidation(context, invalidation);
   }
 
-  function postInvalidation(context, { revision, change }) {
+  function postInvalidation(context, { revision, change, publicResource }) {
     noteExtensionPageInvalidation('change');
     const message = {
       type: 'vbot.extension.invalidate',
@@ -1111,9 +1115,14 @@
     };
     post(
       context,
-      change && valid({ ...message, change }, MAX_HOST_MESSAGE_BYTES)
-        ? { ...message, change }
+      change
+        ? {
+            ...message,
+            change,
+            ...(publicResource ? { reason: 'public_resource_changed' } : {}),
+          }
         : message,
+      change ? message : null,
     );
   }
 
@@ -1125,12 +1134,14 @@
     const sameResource =
       held.change &&
       next.change &&
-      held.change.resource === next.change.resource;
+      held.change.resource === next.change.resource &&
+      held.publicResource === next.publicResource;
     const ids = sameResource
       ? [...new Set([...held.change.ids, ...next.change.ids])]
       : [];
     return {
       revision: next.revision,
+      publicResource: sameResource && next.publicResource,
       change:
         sameResource && ids.length <= MAX_HELD_CHANGE_IDS
           ? {

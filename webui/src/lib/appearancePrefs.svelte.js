@@ -11,7 +11,7 @@ import {
   CHAT_WORKING_MODE_OPTIONS,
   DEFAULT_CHAT_WIDTH,
   DEFAULT_CHAT_WORKING_MODE,
-} from './settingsView.js';
+} from './settingsView/appearance.js';
 
 export const appearancePrefs = $state({
   chatWidth: DEFAULT_CHAT_WIDTH,

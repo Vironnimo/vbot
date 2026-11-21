@@ -12,7 +12,7 @@ import {
   isReflectionRunKind,
   isRowCancellable,
   isRunChildWorking,
-  liveClockCadenceMs,
+  latestLiveClockStart,
   reasoningDurationLabel,
   reflectionElapsedLabel,
   reflectionTaskRows,
@@ -986,23 +986,26 @@ describe('background command rows', () => {
     const handedOff = items(backgroundCommandTool({ timing }));
 
     expect(
-      liveClockCadenceMs(handedOff, {}, nowMs, { cmd_one: state('running') }),
-    ).toBe(1000);
+      latestLiveClockStart(handedOff, {}, { cmd_one: state('running') }),
+    ).toBe(new Date(timing.started_at).getTime());
     expect(
-      liveClockCadenceMs(
+      latestLiveClockStart(
         handedOff,
         {},
-        nowMs,
         { cmd_one: state('running') },
         { cmd_one: state('completed') },
       ),
-    ).toBe(0);
+    ).toBeNull();
     // Processes left running show no ticking time.
     expect(
-      liveClockCadenceMs(items(lingeringBash()), {}, nowMs, {
-        cmd_one: state('completed', true),
-      }),
-    ).toBe(0);
+      latestLiveClockStart(
+        items(lingeringBash()),
+        {},
+        {
+          cmd_one: state('completed', true),
+        },
+      ),
+    ).toBeNull();
   });
 
   it('splits Activity panel work into running and finished, newest start first', () => {

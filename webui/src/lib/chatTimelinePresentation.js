@@ -39,7 +39,7 @@ export {
   runFooterParts,
   runFooterDetails,
   runFooterNotice,
-  liveClockCadenceMs,
+  latestLiveClockStart,
   isRowCancellable,
   backgroundTasks,
   activitySections,

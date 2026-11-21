@@ -89,11 +89,27 @@ export function createChatHistory({
   const runHistoryLoads = new Map();
   let displayedHistoryRequest = null;
 
+  // Unchanged immutable records survive page loads, so charge them at their
+  // last measured size without serializing the entire transcript again.
+  const recordSizes = new WeakMap();
+  function arrayBytes(records) {
+    let characters = 2 + Math.max(0, records.length - 1);
+    for (const record of records) {
+      let size = recordSizes.get(record);
+      if (size === undefined) {
+        size = JSON.stringify(record).length;
+        recordSizes.set(record, size);
+      }
+      characters += size;
+    }
+    return 2 * characters;
+  }
+
   function retainHistory(session) {
     historyCache.delete(session);
     historyCache.set(
       session,
-      JSON.stringify([session.messages, session.timelineItems]).length * 2,
+      6 + arrayBytes(session.messages) + arrayBytes(session.timelineItems),
     );
     let bytes = [...historyCache.values()].reduce((sum, size) => sum + size, 0);
     for (const [cached, size] of historyCache) {
@@ -340,6 +356,7 @@ export function createChatHistory({
         ...request.loadOptions(history),
         ...(successor ? { activeRunId: currentRunId, reset: false } : {}),
       });
+      retainHistory(sessionState);
       reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       if (successor) {

@@ -70,11 +70,13 @@
   });
 
   // An Extension publishes a pending-inputs change whenever its list gains or
-  // loses an entry, so the list is read only then. An invalidation without an
-  // owner (reconnect, Extension reload, enable or disable) reads it too;
+  // loses an entry, so the list is read only then. A global invalidation (reconnect, Extension reload, enable or disable) reads it too;
   // other Extension changes cannot alter it.
   function onInvalidation({ owner, change }) {
-    if (owner == null || change?.resource === PENDING_INPUTS_RESOURCE)
+    if (
+      (owner == null && !change) ||
+      change?.resource === PENDING_INPUTS_RESOURCE
+    )
       void refresh();
   }
 

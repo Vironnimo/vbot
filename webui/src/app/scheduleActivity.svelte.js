@@ -8,14 +8,17 @@ export function createScheduleActivity(context) {
   let jobs = $state({});
   let count = $state(0);
   let error = $state('');
+  let hasSchedules = true;
   let disposed = false;
   let retryTimer;
   const refresher = createCoalescedRefresh(async () => {
     if (context.unavailable) return false;
     try {
+      hasSchedules = true;
       const response = await loadCronActivity();
       if (disposed) return false;
       jobs = response.jobs;
+      hasSchedules = Object.keys(jobs ?? {}).length > 0;
       count = response.notification_count;
       error = '';
       clearTimeout(retryTimer);
@@ -31,10 +34,14 @@ export function createScheduleActivity(context) {
   });
   $effect(() => {
     void context.refreshToken;
-    void context.sessionInvalidations;
-    void context.sessionActivity;
     void context.connection;
     if (context.unavailable) return;
+    untrack(() => refresher.schedule(['schedules']));
+  });
+  $effect(() => {
+    void context.sessionInvalidations;
+    void context.sessionActivity;
+    if (context.unavailable || !hasSchedules) return;
     untrack(() => refresher.schedule(['schedules']));
   });
   onDestroy(() => {

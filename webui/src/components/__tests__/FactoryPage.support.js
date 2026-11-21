@@ -383,8 +383,8 @@ export function createBridge(initialCards = [card('fct-a')]) {
       invalidations.add(callback);
       return () => invalidations.delete(callback);
     },
-    invalidate(change = null) {
-      for (const callback of invalidations) callback({ reason: null, change });
+    invalidate(change = null, reason = null) {
+      for (const callback of invalidations) callback({ reason, change });
     },
     registerLayer(layer) {
       layers.push(layer);

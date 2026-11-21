@@ -4,7 +4,7 @@ import {
   getProviderItems,
   getUsableProviderItems,
   isOAuthDeviceFlowConnection,
-} from './settingsView.js';
+} from './settingsView/providers.js';
 import {
   parseModelSelectionValue,
   selectModelValue,

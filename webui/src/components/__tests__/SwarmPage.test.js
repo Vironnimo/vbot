@@ -292,6 +292,10 @@ describe('SwarmPage overview', () => {
           ]),
         );
       const before = counts();
+      bridge.invalidate(
+        changed('sessions', 'session'),
+        'public_resource_changed',
+      );
       for (const change of changes) bridge.invalidate(change);
       await settle(150);
       await vi.waitFor(() =>

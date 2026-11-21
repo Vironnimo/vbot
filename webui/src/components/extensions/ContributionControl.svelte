@@ -1,4 +1,9 @@
+<script module>
+  const loadExtensionPage = () => import('../ExtensionPage.svelte');
+</script>
+
 <script>
+  import LazyContent from '../ui/LazyContent.svelte';
   import { onDestroy, untrack } from 'svelte';
   import { invokeExtensionContribution } from '$lib/api.js';
   import {
@@ -9,7 +14,6 @@
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
-  import ExtensionPage from '../ExtensionPage.svelte';
   import ContributionIcon from './ContributionIcon.svelte';
 
   let {
@@ -128,19 +132,24 @@
     aria-label={descriptor.title}
     style={`--contribution-height: ${Math.max(160, Math.min(1600, descriptor.height ?? 480))}px`}
   >
-    <ExtensionPage
-      descriptor={descriptor.page}
-      apiCapabilities={registry?.apiCapabilities}
-      theme={registry?.theme}
-      locale={registry?.locale}
-      timezone={registry?.timezone}
-      subscribeInvalidations={registry?.subscribe}
-      onOpenSession={registry?.openSession}
-      onToast={registry?.toast}
-      uiContext={ui}
-      embedded
-      onUiCommand={(name, params) => registry.command(name, params, commands)}
-    />
+    <LazyContent load={loadExtensionPage}>
+      {#snippet children(Component)}
+        <Component
+          descriptor={descriptor.page}
+          apiCapabilities={registry?.apiCapabilities}
+          theme={registry?.theme}
+          locale={registry?.locale}
+          timezone={registry?.timezone}
+          subscribeInvalidations={registry?.subscribe}
+          onOpenSession={registry?.openSession}
+          onToast={registry?.toast}
+          uiContext={ui}
+          embedded
+          onUiCommand={(name, params) =>
+            registry.command(name, params, commands)}
+        />
+      {/snippet}
+    </LazyContent>
   </section>
 {:else}
   {#each items as item (item.id)}

@@ -314,9 +314,26 @@ export function renderReasoningMarkdownStreamingDocument(src, options) {
   return renderMarkdownStreamingDocument(reasoningMarkdownSource(src), options);
 }
 
+// While a fence grows, only its body changes. Keep one rendered prefix with
+// its mounted stream; finished documents have an independent cache.
+export function createMarkdownStreamRenderer() {
+  let prefix, label, document;
+  function renderPrefix(source, plainLanguageLabel) {
+    if (source !== prefix || label !== plainLanguageLabel) {
+      prefix = source;
+      label = plainLanguageLabel;
+      document = renderDocument(source, label);
+    }
+    return document;
+  }
+  return (source, options) =>
+    renderMarkdownStreamingDocument(source, options, renderPrefix);
+}
+
 export function renderMarkdownStreamingDocument(
   src,
   { plainLanguageLabel = 'text' } = {},
+  renderPrefix = renderDocument,
 ) {
   if (!src) return { html: '', codeBlocks: [] };
 
@@ -337,7 +354,7 @@ export function renderMarkdownStreamingDocument(
   const codeContent =
     firstNewlineIndex === -1 ? '' : fenceBlock.slice(firstNewlineIndex + 1);
   const prefixDocument = prefix
-    ? renderDocument(prefix, plainLanguageLabel)
+    ? renderPrefix(prefix, plainLanguageLabel)
     : { html: '', codeBlocks: [] };
   const codeBlocks = [
     ...prefixDocument.codeBlocks,

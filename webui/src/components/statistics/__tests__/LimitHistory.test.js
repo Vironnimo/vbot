@@ -112,6 +112,7 @@ describe('LimitHistory', () => {
       await unmount(mountedComponent);
     }
     document.body.innerHTML = '';
+    vi.useRealTimers();
   });
 
   it('renders the hourly trace and the vBot Runs overlapping its interval', async () => {
@@ -168,6 +169,7 @@ describe('LimitHistory', () => {
   });
 
   it('lists ten overlapping Runs until all are asked for', async () => {
+    vi.useFakeTimers();
     rpcMock.mockImplementation(
       routeHistory(
         Array.from({ length: 12 }, (_, index) => ({
@@ -197,6 +199,19 @@ describe('LimitHistory', () => {
     flushSync();
     expect(runs()).toHaveLength(12);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    await vi.advanceTimersByTimeAsync(60_000);
+    flushSync();
+    expect(
+      rpcMock.mock.calls.filter(
+        ([method]) => method === 'provider.usage_history',
+      ),
+    ).toHaveLength(2);
+    expect(
+      rpcMock.mock.calls.filter(
+        ([method]) => method === 'statistics.run_activity',
+      ),
+    ).toHaveLength(1);
+    expect(runs()).toHaveLength(12);
   });
 
   it('deletes the history only after confirmation', async () => {

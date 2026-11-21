@@ -884,9 +884,10 @@ export function createSwarmPageModel(host) {
         void backgroundRefresh.run();
       } else if (nextRoute !== route) void applyRoute(nextRoute);
     });
-    const offInvalidation = client.onInvalidation((invalidation) =>
-      backgroundRefresh.schedule(invalidation?.change ?? null),
-    );
+    const offInvalidation = client.onInvalidation(({ reason, change }) => {
+      if (reason !== 'public_resource_changed')
+        backgroundRefresh.schedule(change);
+    });
     return () => {
       disposed = true;
       backgroundRefresh.destroy();

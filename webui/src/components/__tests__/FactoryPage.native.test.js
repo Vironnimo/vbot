@@ -267,6 +267,12 @@ describe('Factory native work', () => {
     expect(count('board.get')).toBe(boards);
     expect(count('workflow.list')).toBe(workflows);
     const factories = count('factory.list');
+    bridge.invalidate(
+      { resource: 'sessions', ids: [], revision: 1 },
+      'public_resource_changed',
+    );
+    await settle();
+    expect(count('board.get')).toBe(boards);
     bridge.invalidate({ resource: 'cards', ids: ['card-new'], revision: 2 });
     await settle();
     expect(count('factory.list')).toBe(factories);

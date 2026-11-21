@@ -9,7 +9,7 @@
   // Renders nothing until the tokens and the window are known.
   import { floatingHoverCard } from '$lib/tooltip.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
-  import { formatTokens } from '$lib/statisticsView.js';
+  import { formatTokens } from '$lib/statisticsView/formatting.js';
   import {
     contextLimitWarning,
     contextUsageCardModel,

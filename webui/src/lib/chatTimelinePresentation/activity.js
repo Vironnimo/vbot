@@ -286,28 +286,31 @@ export const runFooterNotice = (assistantRun, nowMs = Date.now()) => {
   return '';
 };
 
-export const liveClockCadenceMs = (
+export const latestLiveClockStart = (
   timelineItems,
   subAgentStatuses = {},
-  nowMs = Date.now(),
   backgroundCommandStatuses = {},
   commandStatuses = {},
 ) => {
-  const starts = [];
+  let latest = null;
+  function include(timestamp) {
+    const ms = timestampToMs(timestamp);
+    if (ms !== null && (latest === null || ms > latest)) latest = ms;
+  }
   for (const assistantRun of timelineItems ?? []) {
     if (assistantRun?.type !== 'assistant_run') {
       continue;
     }
     if (assistantRun.status === 'running') {
-      starts.push(assistantRun.startTimestamp ?? assistantRun.timestamp);
+      include(assistantRun.startTimestamp ?? assistantRun.timestamp);
     }
-    for (const tool of assistantRun.items ?? []) {
+    for (const tool of assistantRun.tools ?? assistantRun.items ?? []) {
       if (tool?.type !== 'tool_call') {
         continue;
       }
       if (isSubAgentSpawnTool(tool)) {
         if (subAgentDotStatus(tool, subAgentStatuses) === 'running') {
-          starts.push(subAgentRunStartedAt(tool, subAgentStatuses));
+          include(subAgentRunStartedAt(tool, subAgentStatuses));
         }
       } else {
         const commandRowState = backgroundCommandRowState(
@@ -319,28 +322,17 @@ export const liveClockCadenceMs = (
           // Processes left running show no ticking time.
           if (
             commandRowState.dotStatus === 'running' &&
-            !commandRowState.stillRunning &&
-            timestampToMs(toolStartedTimestamp(tool)) !== null
+            !commandRowState.stillRunning
           ) {
-            starts.push(toolStartedTimestamp(tool));
+            include(toolStartedTimestamp(tool));
           }
         } else if (toolStatus(tool) === 'running' && !isToolPreparing(tool)) {
-          starts.push(toolStartedTimestamp(tool));
+          include(toolStartedTimestamp(tool));
         }
       }
     }
   }
-  const validStarts = starts
-    .map(timestampToMs)
-    .filter((value) => value !== null);
-  if (validStarts.length === 0) {
-    return 0;
-  }
-  return validStarts.some(
-    (startedAt) => Math.max(0, nowMs - startedAt) < 10_000,
-  )
-    ? 100
-    : 1000;
+  return latest;
 };
 
 // Single source of truth for whether a tool/sub-agent row should render a

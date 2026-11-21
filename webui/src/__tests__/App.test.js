@@ -423,6 +423,40 @@ describe('App', () => {
     expect(agentReads()).toBeGreaterThan(readsBefore);
   });
 
+  it('refreshes schedule activity for Session changes only while jobs exist', async () => {
+    vi.useFakeTimers();
+    let jobs = {};
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'cron.activity': () => ({ jobs, notification_count: 0 }),
+        },
+      }),
+    );
+    const handlers = mountApp();
+    const count = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'cron.activity')
+        .length;
+    const advance = async () => {
+      flushSync();
+      await vi.advanceTimersByTimeAsync(101);
+      flushSync();
+    };
+    const change = (kind) =>
+      handlers.onEvent({ type: 'resource_changed', payload: { kind } });
+    await advance();
+    expect(count()).toBe(1);
+    await change('sessions');
+    await advance();
+    expect(count()).toBe(1);
+    jobs = { scheduled: { notification_count: 0 } };
+    await change('cron');
+    await advance();
+    await change('sessions');
+    await advance();
+    expect(count()).toBe(3);
+  });
+
   it('re-reads Extension input requests and Computer Use status only on their changes', async () => {
     let pagesUnavailable = false;
     let declarations;

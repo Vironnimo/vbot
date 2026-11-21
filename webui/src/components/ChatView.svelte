@@ -1,4 +1,11 @@
+<script module>
+  const loadSessionListDrawer = () => import('./SessionListDrawer.svelte');
+  const loadSessionAdvancedSettings = () =>
+    import('./sessions/SessionAdvancedSettings.svelte');
+</script>
+
 <script>
+  import LazyContent from './ui/LazyContent.svelte';
   import { modelProviderLimits } from '$lib/modelSelection.js';
   import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import ChatHeader from './chat/ChatHeader.svelte';
@@ -13,7 +20,6 @@
   import Banner from './ui/Banner.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import Button from './ui/Button.svelte';
-  import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
   import ChatComposer from './ChatComposer.svelte';
@@ -21,7 +27,6 @@
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import SecretGiveForm from './chat/SecretGiveForm.svelte';
   import SecretRequests from './chat/SecretRequests.svelte';
-  import SessionAdvancedSettings from './sessions/SessionAdvancedSettings.svelte';
   import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import ChatPendingApprovals from './chat/ChatPendingApprovals.svelte';
@@ -741,7 +746,7 @@
   const chatController = lifecycle.controller;
 
   $effect(() => {
-    chatController.reconcileSubAgentRows(activity.timelineItems, {
+    chatController.reconcileSubAgentRows(activity.toolRuns, {
       projectId: target.displayedSessionProjectId(),
     });
   });
@@ -902,32 +907,36 @@
   {:else}
     <div class="chat-view__content-shell">
       {#if showSessionDrawer}
-        <SessionListDrawer
-          agentId={target.activeAgentAddress}
-          currentSessionId={navigation.viewingSessionId ||
-            target.activeAgent.current_session_id}
-          reloadToken={`${sessionsRefreshToken}:${createdSessions}:${sessionEdits}`}
-          invalidations={sessionInvalidations}
-          agents={target.sessionDrawerAgents}
-          liveActivity={activity.sessionDrawerActivity}
-          {sessionActivity}
-          initialFilters={sessionFilters}
-          onFiltersChange={(next) => {
-            sessionFilters = next;
-            onSessionFiltersChange(next);
-          }}
-          onSessionSelected={navigation.handleSessionSelected}
-          {otherArea}
-          onSessionDeleted={navigation.handleSessionDeleted}
-          onSessionDeleteStarted={navigation.beginSessionDeletion}
-          onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
-          {projects}
-          {onReorderProjects}
-          projectTeams={target.projectGroups}
-          onNewSessionInProject={startSessionInProject}
-          {newSessionDisabled}
-          onNewSession={navigation.handleNewSession}
-        />
+        <LazyContent load={loadSessionListDrawer}>
+          {#snippet children(Component)}
+            <Component
+              agentId={target.activeAgentAddress}
+              currentSessionId={navigation.viewingSessionId ||
+                target.activeAgent.current_session_id}
+              reloadToken={`${sessionsRefreshToken}:${createdSessions}:${sessionEdits}`}
+              invalidations={sessionInvalidations}
+              agents={target.sessionDrawerAgents}
+              liveActivity={activity.sessionDrawerActivity}
+              {sessionActivity}
+              initialFilters={sessionFilters}
+              onFiltersChange={(next) => {
+                sessionFilters = next;
+                onSessionFiltersChange(next);
+              }}
+              onSessionSelected={navigation.handleSessionSelected}
+              {otherArea}
+              onSessionDeleted={navigation.handleSessionDeleted}
+              onSessionDeleteStarted={navigation.beginSessionDeletion}
+              onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
+              {projects}
+              {onReorderProjects}
+              projectTeams={target.projectGroups}
+              onNewSessionInProject={startSessionInProject}
+              {newSessionDisabled}
+              onNewSession={navigation.handleNewSession}
+            />
+          {/snippet}
+        </LazyContent>
       {/if}
       <div
         class="chat-view__surface"
@@ -1245,7 +1254,7 @@
             onRunningCountChange={(count) => (activityRunningCount = count)}
             id={`${componentId}-info`}
             toggleId={`${componentId}-info-toggle`}
-            timelineItems={activity.timelineItems}
+            timelineItems={activity.toolRuns}
             subAgentStatuses={chatState.subAgentStatuses}
             subAgentWork={chatState.subAgentWork}
             onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
@@ -1285,16 +1294,23 @@
               {#if target.activeSessionState?.sessionId}
                 {#key target.activeSessionState.key}
                   {@const settingsSession = target.activeSessionState}
-                  <SessionAdvancedSettings
-                    agentId={settingsSession.agentId}
-                    sessionId={settingsSession.sessionId}
-                    session={sessionInfo.row}
-                    policy={settingsSession.notificationPolicy ?? 'all'}
-                    onChanged={() => (sessionEdits += 1)}
-                    onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
-                    onCommit={(summary) =>
-                      applySessionCompletionActivity(settingsSession, summary)}
-                  />
+                  <LazyContent load={loadSessionAdvancedSettings}>
+                    {#snippet children(Component)}
+                      <Component
+                        agentId={settingsSession.agentId}
+                        sessionId={settingsSession.sessionId}
+                        session={sessionInfo.row}
+                        policy={settingsSession.notificationPolicy ?? 'all'}
+                        onChanged={() => (sessionEdits += 1)}
+                        onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
+                        onCommit={(summary) =>
+                          applySessionCompletionActivity(
+                            settingsSession,
+                            summary,
+                          )}
+                      />
+                    {/snippet}
+                  </LazyContent>
                 {/key}
               {/if}
             {/snippet}
