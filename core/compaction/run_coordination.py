@@ -640,30 +640,44 @@ class CompactionRunCoordinator:
                     )
                 return current_state
 
-            checkpoint = await self._host.finalize_checkpoint(
-                checkpoint,
-                session_messages,
-                session,
-            )
-            checkpoint = checkpoint.with_compaction_duration_ms(
-                duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
-            )
+            try:
+                checkpoint = await self._host.finalize_checkpoint(
+                    checkpoint,
+                    session_messages,
+                    session,
+                )
+                checkpoint = checkpoint.with_compaction_duration_ms(
+                    duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
+                )
+            except VBotError as error:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+                _LOGGER.warning(
+                    "Compaction checkpoint preparation failed (run=%s session=%s cause=%s)",
+                    run.id,
+                    run.session_id,
+                    type(error).__name__,
+                )
+                return current_state
+            except Exception:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+                _LOGGER.exception(
+                    "Compaction checkpoint preparation failed unexpectedly (run=%s session=%s)",
+                    run.id,
+                    run.session_id,
+                )
+                return current_state
             prompt_refresh: object | None = None
             try:
-                try:
-                    prompt_refresh = await self._host.prepare_automatic_prompt_refresh(context)
-                except Exception:
-                    _LOGGER.warning(
-                        "Prompt context refresh failed after automatic Compaction "
-                        "(run=%s agent=%s session=%s)",
-                        run.id,
-                        run.agent_id,
-                        run.session_id,
-                        exc_info=True,
-                    )
+                prompt_refresh = await self._host.prepare_automatic_prompt_refresh(context)
             except Exception:
-                self._abort_failed_projection(run)
-                return current_state
+                _LOGGER.warning(
+                    "Prompt context refresh failed after automatic Compaction "
+                    "(run=%s agent=%s session=%s)",
+                    run.id,
+                    run.agent_id,
+                    run.session_id,
+                    exc_info=True,
+                )
 
             # The summary omits what other writers appended during its Model call.
             # Notes among them follow the Tail in the checkpoint and stay in the live
