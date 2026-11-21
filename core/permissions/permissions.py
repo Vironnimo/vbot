@@ -50,7 +50,7 @@ from core.permissions._paths import (
     patterns_below,
     pruned_away,
     reaches,
-    resolve_text,
+    resolve_path,
     spelled_like,
     split_lexical,
 )
@@ -430,22 +430,40 @@ class PermissionBoundary:
         )
         target = normalized.lexical
         lexical_key = self._key(normalized.lexical)
-        if normalized.unsafe is not None:
-            if not deny_only and not self._names_exactly(lexical_key, access):
-                return self.refusal(access, target, "unsafe_form", location=normalized.unsafe)
-            keys: tuple[str, ...] = (lexical_key,)
-        else:
-            keys = tuple(dict.fromkeys((lexical_key, self._key(normalized.resolved))))
-        # Name where a link leads, so a refusal of a path inside reads right.
+        resolved_key = self._key(normalized.resolved)
+        keys = tuple(dict.fromkeys((lexical_key, resolved_key)))
         shown = normalized.resolved if len(keys) == 2 else None
-        scoped = self._scoped_grants(keys, access)
-        location = self._protected(keys, access, scoped)
+        hard_keys = keys
+        if normalized.unsafe is not None:
+            if (not deny_only or shown is not None) and not self._names_exactly(
+                resolved_key, access
+            ):
+                return self.refusal(
+                    access, target, "unsafe_form", location=normalized.unsafe, resolved=shown
+                )
+            if normalized.stream_file is not None:
+                # A stream aliases its file even when a command merely mentions it.
+                # Check the file and its resolved destination, including missing outputs.
+                file = normalize_access_path(
+                    normalized.stream_file,
+                    base=self._base(base),
+                    home=self._home,
+                    windows=self._windows,
+                )
+                file_key = self._key(file.resolved)
+                if file.unsafe and not self._names_exactly(file_key, access):
+                    return self.refusal(
+                        access, target, "unsafe_form", location=file.unsafe, resolved=file.resolved
+                    )
+                hard_keys = tuple(dict.fromkeys((*keys, self._key(file.lexical), file_key)))
+        scoped = self._scoped_grants(hard_keys, access)
+        location = self._protected(hard_keys, access, scoped)
         if location is not None:
             return self.refusal(
                 access, target, "protected_location", location=location, resolved=shown
             )
         for layer in self._compiled:
-            denied = layer.denying_rule(keys, access)
+            denied = layer.denying_rule(hard_keys, access)
             if denied is not None:
                 return self.refusal(
                     access,
@@ -462,7 +480,9 @@ class PermissionBoundary:
             if subtree or not reach:
                 reach += ("**",)
             names = frozenset(path_key(name, windows=self._windows) for name in pruned)
-            refused = self._subtree_refusal(keys, access, target, shown, reach, names, git, scoped)
+            refused = self._subtree_refusal(
+                hard_keys, access, target, shown, reach, names, git, scoped
+            )
             if refused is not None:
                 return refused
         for layer in () if deny_only else self._compiled:
@@ -864,7 +884,7 @@ def normalize_path(
     """The lexical and resolved form of ``path`` exactly as every check compares it.
 
     Relative paths join ``base``; ``~`` expands to ``home``. An unsafe form
-    (``unsafe`` set) is returned without touching the filesystem.
+    supplied directly is returned without touching the filesystem.
     """
     windows = platform == "win32"
     return normalize_access_path(
@@ -886,7 +906,7 @@ class _Area:
         lexical = split_lexical(text, windows=windows)
         keys = [path_key(lexical.text, windows=windows)]
         if lexical.unsafe is None:
-            keys.append(path_key(resolve_text(lexical.text, windows=windows), windows=windows))
+            keys.append(path_key(resolve_path(lexical.text, windows=windows).text, windows=windows))
         return cls(tuple(dict.fromkeys(keys)))
 
     @classmethod
@@ -921,7 +941,7 @@ class _PathRule:
         variants = [lexical.text]
         prefix = literal_prefix(lexical)
         if lexical.unsafe is None and prefix.segments:
-            resolved = split_lexical(resolve_text(prefix.text, windows=windows), windows=windows)
+            resolved = resolve_path(prefix.text, windows=windows)
             rest = lexical.segments[len(prefix.segments) :]
             variants.append(LexicalPath(resolved.root, resolved.segments + rest).text)
         keys = tuple(dict.fromkeys(path_key(variant, windows=windows) for variant in variants))

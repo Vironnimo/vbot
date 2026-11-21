@@ -129,6 +129,39 @@ def test_an_allow_rule_that_names_a_network_path_permits_it(tmp_path: Path) -> N
         assert (refusal is None) == permitted
 
 
+@windows_only
+def test_stream_mentions_keep_the_files_hard_denies(tmp_path: Path) -> None:
+    boundary = _boundary(tmp_path, {"deny": ["Read({workdir}/protected.txt)"]})
+    linked = tmp_path / "outside" / "alias"
+    link_directory(linked, tmp_path / "work")
+    assert boundary.check_path(linked / "public.txt:notes", "read", deny_only=True) is None
+    for stream in ("protected.txt:notes", "protected.txt::$DATA"):
+        refusal = boundary.check_path(linked / stream, "read", deny_only=True)
+        assert refusal is not None and refusal.reason == "deny_rule"
+    share = "//fileserver/share/docs"
+    network = _boundary(tmp_path, {"allow": [f"Read({share})"], "deny": [f"Read({share}/private)"]})
+    refusal = network.check_path(f"{share}/private:notes", "read")
+    assert refusal is not None and refusal.reason == "deny_rule"
+
+
+@windows_only
+@pytest.mark.parametrize(
+    ("destination", "form"),
+    [
+        ("//server/share/note", "network path"),
+        ("//./example", "device path"),
+    ],
+)
+def test_resolved_unsafe_destinations_require_an_explicit_allow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, destination: str, form: str
+) -> None:
+    boundary = _boundary(tmp_path, {"web": "listed"})
+    monkeypatch.setattr(os.path, "realpath", lambda path: destination)
+    refusal = boundary.check_path("note", "read")
+    assert refusal is not None and refusal.reason == "unsafe_form"
+    assert refusal.location == form and refusal.resolved == destination
+
+
 @pytest.mark.parametrize(
     ("link", "target", "path", "access", "rules"),
     [

@@ -54,17 +54,26 @@ class LexicalPath:
             return "/".join(self.segments) or "."
         return self.root + "/".join(self.segments)
 
+    def stream_file(self, *, windows: bool) -> str | None:
+        if windows and self.unsafe:
+            file, separator, _stream = "/".join(self.segments).partition(":")
+            if separator:
+                return self.root + file
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class NormalizedPath:
     """Both forms of one access path, with ``/`` separators.
 
-    ``resolved`` equals ``lexical`` for an unsafe form, which is never resolved.
+    A lexically unsafe path is never resolved. A local path can resolve to an
+    unsafe destination. A stream also identifies its local file for hard denies.
     """
 
     lexical: str
     resolved: str
     unsafe: str | None = None
+    stream_file: str | None = None
 
 
 def path_key(text: str, *, windows: bool) -> str:
@@ -173,7 +182,9 @@ def normalize_access_path(
     base_path = split_lexical(base, windows=windows)
     lexical = join_lexical(base_path, split_lexical(text, windows=windows))
     if lexical.unsafe is not None:
-        return NormalizedPath(lexical.text, lexical.text, lexical.unsafe)
+        return NormalizedPath(
+            lexical.text, lexical.text, lexical.unsafe, lexical.stream_file(windows=windows)
+        )
     if windows:
         lexical = _expand_short_names(lexical)
         # Win32 applies ``..`` lexically before the filesystem sees the path.
@@ -185,10 +196,13 @@ def normalize_access_path(
         resolved_input = text if text.startswith("/") else base.rstrip("/") + "/" + text
     if not follow_missing and not os.path.lexists(resolved_input):
         return NormalizedPath(lexical.text, lexical.text)
-    return NormalizedPath(lexical.text, resolve_text(resolved_input, windows=windows))
+    resolved = resolve_path(resolved_input, windows=windows)
+    return NormalizedPath(
+        lexical.text, resolved.text, resolved.unsafe, resolved.stream_file(windows=windows)
+    )
 
 
-def resolve_text(text: str, *, windows: bool) -> str:
+def resolve_path(text: str, *, windows: bool) -> LexicalPath:
     """The resolved form of an absolute path: links and junctions followed.
 
     The longest existing prefix is resolved; the rest is kept as written. A prefix
@@ -196,7 +210,7 @@ def resolve_text(text: str, *, windows: bool) -> str:
     itself would reach.
     """
     resolved = os.path.realpath(text)
-    return split_lexical(resolved, windows=windows).text
+    return split_lexical(resolved, windows=windows)
 
 
 def compile_pattern(pattern_key: str) -> re.Pattern[str]:

@@ -12,6 +12,7 @@ from core.permissions import (
     PermissionGrant,
     normalize_permission_rules,
 )
+from tests.directory_links import link_directory
 
 
 def test_exact_grant_keeps_hard_refusals_and_subtree_denies(tmp_path: Path) -> None:
@@ -209,6 +210,12 @@ def test_generated_output_grant_is_limited_to_one_folder_and_keeps_hard_denies(
     assert not grant.output_write_allowed(outside / "secret.png", outside)
     assert not grant.output_write_allowed(outside / "nested" / "image.png", outside)
     assert not PermissionGrant(boundary).output_write_allowed(outside / "image.png", outside)
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    link_directory(linked, outside)
+    grant.approve([ApprovalRequirement.path(boundary, linked, "write")])
+    assert grant.output_write_allowed(linked / "image.png", linked)
+    assert not grant.output_write_allowed(linked / "secret.png", linked)
 
 
 @pytest.mark.asyncio
