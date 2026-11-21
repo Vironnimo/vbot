@@ -28,6 +28,8 @@ An Agent group's restore plan records every private member's id, creation timest
 
 Agent and Project restore plans persist `source_created_at` before any file move. Recovery requires a valid timestamp matching the destination's raw persisted `created_at` under the owning store's lock; a reused id cannot attach archived Sessions to a replacement or overwrite its configuration. A plan without that proof, or a document with no persisted timestamp, stays `restoring` for inspection rather than treating synthesized defaults as identity. Ordinary restores remain available for unstamped payloads.
 
+A Project Anchor that moved live before its older configuration was rewritten takes the same conversion path as an ordinary restore. The identity check still uses the persisted creation timestamp.
+
 Agent restore plans also persist the selected `workspace` and `root_project_id`. If the tree is already live, recovery replays that configuration through `AgentStore.complete_restore_files` before the Session commit, using the normal restore rewrite without repairing an archived current-Session pointer. This includes the default Workspace chosen when a moved legacy Workspace's original folder is occupied (`test_archive_recovery.py`).
 
 ## Provenance limits

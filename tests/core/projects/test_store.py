@@ -214,8 +214,9 @@ def _payload(data_dir: Path) -> Path:
     return data_dir / "archive" / "entries" / "arc_test" / "project"
 
 
+@pytest.mark.parametrize("older", [False, True], ids=["current", "older"])
 def test_archive_files_moves_only_the_anchor_and_restore_files_brings_it_back(
-    data_dir: Path, repo: Path
+    data_dir: Path, repo: Path, older: bool
 ) -> None:
     marker = repo / "keep.txt"
     marker.write_text("repo content", encoding="utf-8")
@@ -227,6 +228,8 @@ def test_archive_files_moves_only_the_anchor_and_restore_files_brings_it_back(
         assert archived is not None and archived.display_name == "vBot"
     document = json.loads((payload / "project.json").read_text(encoding="utf-8"))
     document["future_field"] = {"kept": True}
+    if older:
+        document.update(format_version=2, allowed_tools=["read"])
     (payload / "project.json").write_text(json.dumps(document), encoding="utf-8")
 
     assert not (data_dir / "projects" / "vbot").exists()
@@ -249,6 +252,7 @@ def test_archive_files_moves_only_the_anchor_and_restore_files_brings_it_back(
     assert store.get("vbot-old").display_name == "vBot"
     stored = json.loads((data_dir / "projects" / "vbot-old" / "project.json").read_text("utf-8"))
     assert (stored["project_id"], stored["future_field"]) == ("vbot-old", {"kept": True})
+    assert "allowed_tools" not in stored
 
 
 def test_restore_files_refuses_a_taken_id_or_a_claimed_repo_without_changes(

@@ -306,6 +306,11 @@ async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
     target = world.data_dir / f"{kind}s" / "restored"
     os.replace(payload, target)
     config = target / f"{kind}.json"
+    if kind == "project" and identity == "original" and not missing_review_owner:
+        # The process stopped after moving a still-unconverted Project Anchor.
+        raw = json.loads(config.read_text(encoding="utf-8"))
+        raw.update(format_version=2, allowed_tools=["read"])
+        config.write_text(json.dumps(raw), encoding="utf-8")
     if identity == "replacement":
         os.replace(target, tmp_path / "rescued")
         if kind == "agent":

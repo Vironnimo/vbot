@@ -16,7 +16,7 @@ from core.activity import SessionActivity
 from core.agents import LIVE_BACKEND_BUILTIN
 from core.agents.agents import Agent, AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
-from core.archive import ArchiveService, convert_archived_projects
+from core.archive import ArchiveService
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -312,15 +312,9 @@ def bootstrap(runtime: Runtime) -> None:
             secrets=runtime._storage.secrets,
         )
         if runtime.safe_startup_mode == "verification":
-            # An update's verification start converts the Project configurations an
-            # older vBot wrote, live and archived, under the update's data snapshot;
-            # a failure fails the verification, so the update rolls back. Normal
-            # startup never converts: an older document stays unreadable until
-            # `vbot data-store convert` converts it.
+            # Only live Project documents are covered by the update's snapshot.
+            # An archive may keep an older document until the user restores it.
             convert_project_documents(runtime._storage.data_dir)
-            convert_archived_projects(
-                runtime._storage.data_dir, runtime._chat_sessions.archive_ledger
-            )
         runtime._attachment_store.collect_session_orphans(runtime._chat_sessions)
         runtime._usage_recorder = UsageRecorder(
             canonical_database_path(runtime._storage.data_dir, "model_usage"),
@@ -962,9 +956,10 @@ def bootstrap(runtime: Runtime) -> None:
         )
         if pending_rename is not None:
             complete_pending_rename(runtime._agent_rename_services(), pending_rename)
-        # After a settled rename, before Channels, Cron and Runs: finish or undo
-        # interrupted archive operations.
-        runtime._archive.recover()
+        # Archive payloads are outside the update snapshot. Settle interrupted
+        # operations after verification, before Channels, Cron and Runs start.
+        if runtime.safe_startup_mode != "verification":
+            runtime._archive.recover()
         if runtime.safe_startup_mode is None and runtime._operational_producers == "enabled":
             runtime._start_channel_service()
         runtime._sync_channel_tool_registration()

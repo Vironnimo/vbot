@@ -476,8 +476,9 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_conversion", [False, True], ids=["on-restore", "explicit"])
 async def test_a_project_archived_in_format_1_returns_once_converted(
-    world: ArchiveWorld, tmp_path: Path
+    world: ArchiveWorld, tmp_path: Path, explicit_conversion: bool
 ) -> None:
     repo = _repo(tmp_path)
     (repo / "AGENTS.md").write_text("a", encoding="utf-8")
@@ -497,13 +498,17 @@ async def test_a_project_archived_in_format_1_returns_once_converted(
     world.sessions.archive_ledger.update_facts(
         world.entry(archived.entry_id).entry_key, {"payload_format": 1}
     )
+    original = document.read_bytes()
     page = await world.service.list(ArchiveEntryFilter())
-    assert [item.restorable for item in page.entries] == [False]
-
-    assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == (
-        archived.entry_id,
-    )
-    assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == ()
+    assert [item.restorable for item in page.entries] == [True]
+    assert not (await world.service.restore_check(archived.entry_id)).blockers
+    assert document.read_bytes() == original
+    assert world.entry(archived.entry_id).facts["payload_format"] == 1
+    if explicit_conversion:
+        assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == (
+            archived.entry_id,
+        )
+        assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == ()
     await world.service.restore(archived.entry_id)
 
     restored = world.projects.get("vbot")

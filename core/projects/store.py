@@ -30,12 +30,19 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
-from core.config_validation import JsonConfigValidationError, load_validated_json_file
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonObject,
+    JsonValidationReport,
+    format_report_diagnostics,
+    load_validated_json_file,
+)
 from core.database import SnapshotBarrier
 from core.json_documents import (
     JsonDocumentWriteError,
     document_change,
     document_version_state,
+    preserve_unknown_fields,
     write_json_document,
 )
 from core.projects._order import (
@@ -47,6 +54,7 @@ from core.projects._order import (
     load_project_order,
     write_project_order,
 )
+from core.projects.conversion import converted_project_document, is_convertible_project_version
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
     PROJECT_FORMAT_VERSION,
@@ -57,6 +65,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
     build_project,
     load_validated_project_json,
+    project_config_fields,
     project_format,
     project_from_dict,
     validate_project_data,
@@ -118,6 +127,31 @@ class ArchivedProjectPayload:
 
     project: Project | None
     problem: str | None = None
+    format_version: int | None = None
+
+
+def _read_restore_config(path: Path, raw: Any) -> tuple[Project, JsonObject | None]:
+    """Validate a configuration, using the converter for an older archive."""
+    converted = converted_project_document(raw)
+    data = raw if converted is None else converted
+    report = JsonValidationReport(path, True, tuple(validate_project_data(data)))
+    if not report.ok:
+        details = "; ".join(format_report_diagnostics(report))
+        raise ProjectError(f"{path}: {details}")
+    return project_from_dict(project_config_fields(data)), converted
+
+
+def _write_restore_config(path: Path, project: Project, converted: JsonObject | None) -> None:
+    fmt = project_format()
+    body = project.to_dict()
+    if converted is not None:
+        # Its source was validated in memory. Preserve converted data from that
+        # document, since the normal writer cannot merge from an older format.
+        body = preserve_unknown_fields(converted, body, fmt.shape)
+    try:
+        write_json_document(path, body, fmt, reset=converted is not None)
+    except JsonDocumentWriteError as error:
+        raise ProjectError(str(error)) from error
 
 
 class ProjectStore:
@@ -597,7 +631,8 @@ class ProjectStore:
                 _move_back(tree, project_dir, exc, "Project archival failed")
                 raise
 
-    def inspect_archived(self, source: Path) -> ArchivedProjectPayload:
+    @staticmethod
+    def inspect_archived(source: Path) -> ArchivedProjectPayload:
         """Read an archived Anchor directory without changing it; report why it cannot return."""
         path = source / _PROJECT_CONFIG_FILENAME
         try:
@@ -607,10 +642,12 @@ class ProjectStore:
         except OSError, ValueError:
             return ArchivedProjectPayload(None, "payload_invalid")
         version = document_version_state(raw, PROJECT_FORMAT_VERSION)
-        if version != "current":
+        recorded = raw.get("format_version") if isinstance(raw, dict) else None
+        if version != "current" and not is_convertible_project_version(recorded):
             return ArchivedProjectPayload(None, f"{version}_format")
         try:
-            return ArchivedProjectPayload(project_from_dict(load_validated_project_json(path)))
+            project, _converted = _read_restore_config(path, raw)
+            return ArchivedProjectPayload(project, format_version=recorded)
         except ProjectError, OSError, ValueError:
             return ArchivedProjectPayload(None, "payload_invalid")
 
@@ -636,9 +673,13 @@ class ProjectStore:
         """
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_project_id(target_id)
-            project = project_from_dict(
-                load_validated_project_json(source / _PROJECT_CONFIG_FILENAME)
-            )
+            source_config = source / _PROJECT_CONFIG_FILENAME
+            try:
+                archived_document = source_config.read_bytes()
+                raw = json.loads(archived_document.decode("utf-8"))
+            except (OSError, ValueError) as error:
+                raise ProjectError(f"Project restore failed: {error}") from error
+            project, converted = _read_restore_config(source_config, raw)
             # Checked first: Windows reports a device name such as ``nul`` as taken.
             if target_id != project.project_id:
                 _reject_reserved_project_id(target_id)
@@ -649,16 +690,12 @@ class ProjectStore:
             project_dir = self._project_dir(target_id)
             config = project_dir / _PROJECT_CONFIG_FILENAME
             try:
-                archived_document = (source / _PROJECT_CONFIG_FILENAME).read_bytes()
                 project_dir.parent.mkdir(parents=True, exist_ok=True)
                 move_tree(source, project_dir)
             except OSError as exc:
                 raise ProjectError(f"Project restore failed: {exc}") from exc
             try:
-                try:
-                    write_json_document(config, restored.to_dict(), project_format())
-                except JsonDocumentWriteError as error:
-                    raise ProjectError(str(error)) from error
+                _write_restore_config(config, restored, converted)
                 yield self._read_project(config)
             except BaseException as exc:
                 try:
@@ -678,8 +715,11 @@ class ProjectStore:
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_project_id(target_id)
             config = self._project_dir(target_id) / _PROJECT_CONFIG_FILENAME
-            data = load_validated_project_json(config)
-            project = project_from_dict(data)
+            try:
+                raw = json.loads(config.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ProjectError(f"Project restore failed: {error}") from error
+            project, converted = _read_restore_config(config, raw)
             if project.project_id not in (source_id, target_id):
                 raise ProjectError(
                     f"Project restore target belongs to another Project: {target_id}"
@@ -688,7 +728,7 @@ class ProjectStore:
                 if not isinstance(expected_created_at, str):
                     raise ValueError
                 parse_timestamp(expected_created_at)
-                if data.get("created_at") != expected_created_at:
+                if raw.get("created_at") != expected_created_at:
                     raise ValueError
             except ValueError as error:
                 raise ProjectError(
@@ -696,10 +736,7 @@ class ProjectStore:
                 ) from error
             self._reject_duplicate_cwd(project.cwd, exclude_project_id=target_id)
             restored = replace(project, project_id=target_id, updated_at=utc_now_timestamp())
-            try:
-                write_json_document(config, restored.to_dict(), project_format())
-            except JsonDocumentWriteError as error:
-                raise ProjectError(str(error)) from error
+            _write_restore_config(config, restored, converted)
 
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         """Return the agent ids that own at least one session under this anchor.

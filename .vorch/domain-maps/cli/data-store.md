@@ -22,7 +22,7 @@ Offline mutations share `core.utils.server_control.offline_data_change`: after s
 
 ## Format conversion
 
-`convert --yes` runs the JSON document converters (`json-documents.md` -> Document rules) on a loopback target's data directory: today the `project.json` version 1 documents, live and archived (it opens `sessions.db` offline for the archive entries). It checks first without touching the server (live documents, and any version 1 `project.json` under `archive/`) and answers `nothing to convert` when there is none; otherwise it stops and restarts the target through `_change_while_stopped` (`tests/cli/test_data_store.py`).
+`convert --yes` runs the JSON document converters (`json-documents.md` -> Document rules) on a loopback target's data directory. It converts `project.json` versions 1 and 2, including archive entries through `sessions.db`. It checks live and archived documents before stopping the target and restarts it after conversion if it was running (`tests/cli/test_data_store.py`).
 
 ## Secrets
 

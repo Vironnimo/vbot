@@ -73,7 +73,7 @@ Entries `archived` longer than the retention period (`archive.retention_days`: 1
 
 ## Recovery
 
-`recover()` runs after pending Agent renames and before Channels, Cron and Runs, including safe startup (`_recovery.py`, `runtime.md`). Failures are logged and retried next start without blocking startup; steps are idempotent. States and provenance: `archive/recovery.md`.
+`recover()` runs after pending Agent renames and before Channels, Cron and Runs (`_recovery.py`, `runtime.md`). Update verification leaves payloads where they are. Failures are logged and retried next start without blocking startup; steps are idempotent. States and provenance: `archive/recovery.md`.
 
 A partly live Agent group finishes forward or stays pending; live files never move back (`archive/recovery.md` -> Interrupted restores).
 
