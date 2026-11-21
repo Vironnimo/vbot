@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, replace
 from functools import partial
@@ -17,7 +18,7 @@ from core.model_tasks import SpeechError
 from core.tools.read import render_text_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, cancel_and_wait
 
 JsonObject = dict[str, Any]
 
@@ -477,17 +478,39 @@ class ContentBlockResolver:
         """
         if isinstance(content, str):
             return content
-        transcribed: list[ContentBlock] = []
-        for block in content:
+        copies: dict[str, list[tuple[int, MediaBlock]]] = {}
+        for index, block in enumerate(content):
             if (
                 isinstance(block, MediaBlock)
                 and block.media_type.startswith("audio/")
                 and block.transcription is None
             ):
-                text = await self._audio_transcription(block)
+                copies.setdefault(block.attachment_id, []).append((index, block))
+        if not copies:
+            return content
+
+        transcribed = list(content)
+        pending = iter(copies.values())
+
+        async def transcribe_pending() -> None:
+            for occurrences in pending:
+                text = await self._audio_transcription(occurrences[0][1])
                 if text is not None:
-                    block = replace(block, transcription=text)
-            transcribed.append(block)
+                    for index, original in occurrences:
+                        transcribed[index] = replace(original, transcription=text)
+
+        if len(copies) == 1:
+            await transcribe_pending()
+        else:
+            # Two workers claim distinct attachments before reading their blobs.
+            # Speech admission and per-engine serialization still apply to each.
+            workers = [asyncio.create_task(transcribe_pending()) for _ in range(2)]
+            try:
+                async for completed in asyncio.as_completed(workers):
+                    completed.result()
+            except BaseException:
+                await cancel_and_wait(*workers)
+                raise
         return transcribed
 
     async def _audio_transcription(self, block: MediaBlock) -> str | None:
