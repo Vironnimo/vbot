@@ -433,7 +433,7 @@ describe('ChatAssistantRun', () => {
       expect(document.querySelector('.message-copy')).toBeNull();
     });
 
-    it('copies only the sanitized Tool argument display', async () => {
+    it('copies the parameter strip and its result independently', async () => {
       const writeText = stubClipboard();
       run.mount({
         item: assistantRun({
@@ -441,17 +441,22 @@ describe('ChatAssistantRun', () => {
             toolChild(
               'write',
               { path: 'safe.txt', content: 'hidden file body' },
-              { status: 'success' },
+              { status: 'success', finished: true, result: 'Saved.' },
             ),
           ],
         }),
       });
 
       setDisclosureOpen('.tool-event');
-      detailRow('chat.toolArgs').querySelector('.tool-detail-copy').click();
+      const args = detailRow('chat.toolArgs');
+      const result = detailRow('chat.toolResultLabel');
+      expect(args.querySelector('.teb-section-header')).toBeNull();
+      expect(result.querySelector('.teb-section-header')).toBeNull();
+      args.querySelector('.tool-detail-copy').click();
       await flushAsync();
-
-      expect(writeText).toHaveBeenCalledWith('path: safe.txt');
+      result.querySelector('.tool-detail-copy').click();
+      await flushAsync();
+      expect(writeText.mock.calls).toEqual([['path: safe.txt'], ['Saved.']]);
     });
   });
 

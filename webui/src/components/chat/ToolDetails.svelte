@@ -9,7 +9,7 @@
   // with the unfiltered raw call and result behind a disclosure. The live
   // Output (the command's newest output lines) takes the place of an Output
   // block, or follows the blocks while the call runs. Any other Tool shows
-  // Args, live Output and its Result.
+  // a parameter strip, live Output and a framed Result.
   //
   // A row may carry only previews of a long call (`tool.rawTruncated`); the
   // whole call loads through `loadRaw` once a section showing it opens.
@@ -159,6 +159,7 @@
   <ToolDetailSection
     label={t('chat.toolArgs')}
     value={shownArgs}
+    variant={rawDisclosure ? 'default' : 'parameters'}
     {mode}
     {toolName}
     {tool}
@@ -182,6 +183,7 @@
     <ToolDetailSection
       label={t('chat.toolResultLabel')}
       value={shownResult}
+      variant={rawDisclosure ? 'default' : 'result'}
       isError={resultFailed}
       {mode}
       {toolName}

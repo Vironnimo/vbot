@@ -138,10 +138,7 @@
   font-size: var(--fs-label-sm);
 }
 
-/* A shell command and its output as one block (ToolDetailSection's
-   `command` and `joined` variants): the command is a `$` line with its
-   actions inside the box, and the output continues the same box below a
-   hairline. */
+/* Shared frame for a value and its inline actions. */
 .teb-box {
   display: flex;
   min-width: 0;
@@ -170,8 +167,27 @@
   padding: 6px 10px;
 }
 
-/* The block names its sections for screen readers only; the `$` and the
-   joined box say it visually. */
+/* The ordinary Tool call has a wrapping parameter strip above its framed
+   result. Each key travels with its value when the next pair wraps. */
+.teb-section--parameters .teb-box {
+  border-color: transparent;
+  background: none;
+}
+
+.teb-section--parameters .teb-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+}
+
+.teb-section--parameters .teb-fields > .teb-field {
+  max-width: 100%;
+  grid-template-columns: fit-content(24ch) minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+/* Inline sections retain their accessible labels without a header row. */
 .teb-label.teb-label--hidden {
   position: absolute;
   width: 1px;

@@ -3,7 +3,8 @@
   // Copy action and the value in a scroll box of bounded height, so long
   // output never floods the timeline. A section with `clampLines` (a Bash
   // command) shows only that many lines until the reader asks for the rest;
-  // Copy always takes the complete value. `variant` `command` draws a shell
+  // Copy always takes the complete value. The shared call view places both
+  // Copy actions beside their values. `variant` `command` draws a shell
   // command as a `$` line with its actions inside the box instead of a
   // labelled header, and `joined` attaches a section to the box above it
   // (the command's output), so command and output read as one block.
@@ -132,6 +133,7 @@
 
 <div
   class="teb-row teb-section"
+  class:teb-section--parameters={variant === 'parameters'}
   class:teb-section--error={isError}
   class:teb-section--command={variant === 'command'}
   class:teb-section--joined={variant === 'joined'}
