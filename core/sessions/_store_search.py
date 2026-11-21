@@ -177,8 +177,9 @@ def search(
 
 def _search_filter(request: SessionSearchRequest) -> _Filter:
     """Return the eligible live Sessions and the entry filter of one search."""
+    fork_point = "" if request.include_inherited else ", s.fork_point_seq"
     eligible = (
-        "eligible (session_key) AS MATERIALIZED (SELECT s.session_key FROM sessions AS s "
+        f"eligible AS MATERIALIZED (SELECT s.session_key{fork_point} FROM sessions AS s "
         "WHERE s.state = 'live' AND s.project_id = ?"
     )
     if not request.timeline_only:
@@ -200,6 +201,12 @@ def _search_filter(request: SessionSearchRequest) -> _Filter:
     entry_params: list[Any] = []
     if request.timeline_only:
         clauses.append("e.role IN ('user', 'assistant')")
+    if not request.include_inherited:
+        # A fork can store materialized copies of its inherited prefix itself.
+        clauses.append(
+            "e.seq >= (SELECT COALESCE(s.fork_point_seq, 0) FROM eligible AS s "
+            "WHERE s.session_key = e.session_key)"
+        )
     if request.roles is not None:
         clauses.append("e.role IN (SELECT value FROM json_each(?))")
         entry_params.append(json.dumps(list(request.roles)))

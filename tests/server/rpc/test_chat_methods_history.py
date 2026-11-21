@@ -195,9 +195,9 @@ async def test_chat_search_returns_bounded_snippets_from_the_displayed_fork(
         ]
     )
 
-    async def search(query: str) -> dict[str, Any]:
+    async def search(query: str, **scope: bool) -> dict[str, Any]:
         return await history.read(
-            method="chat.search", session_id=fork.address.session_id, query=query
+            method="chat.search", session_id=fork.address.session_id, query=query, **scope
         )
 
     found = await search("pIn NEEDLE")
@@ -209,6 +209,18 @@ async def test_chat_search_returns_bounded_snippets_from_the_displayed_fork(
     snippet = found["hits"][1]
     assert len(snippet["snippet"]) < 180
     assert [snippet["snippet"][a:b] for a, b in snippet["ranges"]] == ["Needle", "PIN"]
+    for query in ("needle", "in"):
+        # Both indexed terms and terms that require scanning use the timeline scope.
+        (own_hit,) = (await search(query, include_inherited=False))["hits"]
+        assert own_hit["message_id"] == answer.id
+    history.sessions.delete(parent.address)
+    # The inherited part can now live in the fork itself. Its visible scope is unchanged.
+    assert [hit["message_id"] for hit in (await search("needle"))["hits"]] == [
+        answer.id,
+        question.id,
+    ]
+    (own_hit,) = (await search("needle", include_inherited=False))["hits"]
+    assert own_hit["message_id"] == answer.id
     assert not (await search("silent"))["hits"]
     long_term = "a" * 180
     imported = ChatMessage.assistant(model="test", content="historical tool needle pin")

@@ -1236,6 +1236,7 @@ class ChatSessionManager:
         include_subagents: bool = False,
         use_fts: bool = True,
         timeline_only: bool = False,
+        include_inherited: bool = True,
     ) -> SessionSearchResult:
         """Return up to ``limit`` active Messages whose conversation text matches.
 
@@ -1262,5 +1263,6 @@ class ChatSessionManager:
                 include_subagents=include_subagents,
                 use_fts=use_fts,
                 timeline_only=timeline_only,
+                include_inherited=include_inherited,
             )
         )
