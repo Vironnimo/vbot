@@ -274,6 +274,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       hasOlderHistory: false,
       historyBefore: '',
       loadingOlderHistory: false,
+      olderHistoryError: '',
       notificationGeneration: '',
       notificationEpoch: 0,
       notificationRevision: -1,

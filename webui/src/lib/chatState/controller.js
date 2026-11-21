@@ -347,8 +347,10 @@ export function createChatController({
       markWidgetStatesSent(sessionState.key, widgetStates);
       return await admitSend(sessionState, run, previousRunId);
     } catch (error) {
-      sessionState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
-      return { kind: 'failed' };
+      return {
+        kind: 'failed',
+        error: `${t('chat.sendError')} ${errorMessage(error)}`,
+      };
     }
   }
 
@@ -398,13 +400,14 @@ export function createChatController({
         };
       }
       if (!sessionState) {
-        chatState.actionError = t('chat.sendError');
-        return { kind: 'failed' };
+        return { kind: 'failed', error: t('chat.sendError') };
       }
       return { ...(await admitSend(sessionState, response)), sessionState };
     } catch (error) {
-      chatState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
-      return { kind: 'failed' };
+      return {
+        kind: 'failed',
+        error: `${t('chat.sendError')} ${errorMessage(error)}`,
+      };
     }
   }
 

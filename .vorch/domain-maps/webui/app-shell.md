@@ -98,7 +98,7 @@ Places per view (details with each view's map):
 |---|---|---|
 | Chat | `[agentAddress, sessionId]` or `[agentAddress]` (a draft), `extra` `{selection, subAgent}` | the selected Agent's current Session or draft |
 | Agents | `[agentId]`; `['~defaults']` or `['~defaults', section]` (section is a scroll target) | the shared selected Agent |
-| Projects | `[projectId]` | the shared managed Project |
+| Projects | `[projectId]` or `[projectId, 'team', agentId]` for a Team member's configuration | the shared managed Project |
 | Terminals | `[groupId]` | the default group |
 | Skills | `[collection]`, `[collection, skillId]`, `['directories']` | `['all']` |
 | Settings | `[pageId]`, `[pageId, sectionId]` (a bare page or section id is corrected), `['archive', entryId]` (an Archive entry), `['debug', traceId]` (a trace) | `['general']` |

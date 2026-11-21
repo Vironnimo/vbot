@@ -190,7 +190,16 @@
         commandProblem = command.problem;
         return;
       }
-      const sent = await onSendCommand?.(command.text);
+      let sent;
+      try {
+        sent = await onSendCommand?.(command.text);
+      } catch (failure) {
+        busy = false;
+        error = [t('chat.secretForm.sendError'), failure?.message]
+          .filter(Boolean)
+          .join(' ');
+        return;
+      }
       if (!sent) {
         busy = false;
         error = t('chat.secretForm.sendError');

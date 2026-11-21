@@ -946,6 +946,14 @@
       {newSessionDisabled}
       onNewSession={navigation.handleNewSession}
       {otherArea}
+      onConfigureAgent={navigator
+        ? (address) => {
+            const { agentId, projectId } = parseAgentAddress(address);
+            if (projectId)
+              navigator.navigate('projects', [projectId, 'team', agentId]);
+            else navigator.navigate('agents', [agentId]);
+          }
+        : null}
       actions={workspaceActions}
       {searchOpen}
       searchDisabled={!target.activeSessionState?.sessionId}
@@ -1071,6 +1079,7 @@
             followSessionRequest={navigation.subAgentLinkFollowRequest}
             hasOlderHistory={target.activeSessionState?.hasOlderHistory ===
               true}
+            olderHistoryError={target.activeSessionState?.olderHistoryError}
             loadingOlderHistory={target.activeSessionState
               ?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
@@ -1122,19 +1131,17 @@
                   <Banner variant="error">
                     {t('chat.historyLoadError')}
                     {chatState.historyError}
-                    {#if boundSession}
-                      <Button
-                        variant="tertiary"
-                        onClick={() => {
-                          const { agentAddress, sessionId } =
-                            target.activeAddressing();
-                          void actions.loadHistoryForSession(
-                            agentAddress,
-                            sessionId,
-                          );
-                        }}>{t('common.retry')}</Button
-                      >
-                    {/if}
+                    <Button
+                      variant="tertiary"
+                      onClick={() => {
+                        const { agentAddress, sessionId } =
+                          target.activeAddressing();
+                        void actions.loadHistoryForSession(
+                          agentAddress,
+                          sessionId,
+                        );
+                      }}>{t('common.retry')}</Button
+                    >
                   </Banner>
                 {/if}
                 {#if chatState.actionError}
@@ -1301,7 +1308,6 @@
                   usage={target.activeSessionState?.usage}
                   sessionUsage={target.activeSessionState?.sessionUsage}
                   {getUIContext}
-                  onSendError={actions.setSessionActionError}
                   onSendMessage={composerSendMessage}
                   onCancelRun={actions.handleCancelRun}
                   backgroundWorkRunning={activity.backgroundWorkRunning}

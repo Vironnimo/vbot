@@ -81,7 +81,8 @@ describe('ProjectsView Team', () => {
         ],
       },
     );
-    view.mount();
+    const navigation = createStandaloneNavigation(['demo']);
+    view.mount({ navigation });
     await selectDemo();
 
     // Collapsed rows show the effective Model; the description is hover help.
@@ -122,7 +123,11 @@ describe('ProjectsView Team', () => {
     );
     header.blur();
 
-    await expandMember('builder');
+    navigation.navigate(['demo', 'team', 'builder']);
+    await waitForCondition(
+      () => header.getAttribute('aria-expanded') === 'true',
+    );
+    expect(document.activeElement).toBe(header);
     const builder = document.querySelector(
       '[data-testid="project-team-member-builder"]',
     );

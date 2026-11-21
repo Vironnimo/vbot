@@ -9,6 +9,7 @@
   import { useNavigation } from '$lib/navigation.svelte.js';
   import Toggle from './ui/Toggle.svelte';
   import Banner from './ui/Banner.svelte';
+  import RowMenuButton from './ui/RowMenuButton.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import TabList from './ui/TabList.svelte';
@@ -1164,21 +1165,12 @@
         </button>
       {/snippet}
       {#snippet sessionActions()}
-        <Button
-          variant="tertiary"
-          icon
+        <RowMenuButton
           class="session-row__menu-trigger"
-          ariaLabel={t('sessions.actions')}
-          aria-haspopup="menu"
-          aria-expanded={rowMenuKey === sessionRowKey(session)}
+          label={t('sessions.actions')}
+          expanded={rowMenuKey === sessionRowKey(session)}
           onClick={(event) => openRowMenu(session, event)}
-        >
-          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <circle cx="3.5" cy="8" r="1.25" />
-            <circle cx="8" cy="8" r="1.25" />
-            <circle cx="12.5" cy="8" r="1.25" />
-          </svg>
-        </Button>
+        />
       {/snippet}
       <ContributionSurface
         surface="chat.session.item"

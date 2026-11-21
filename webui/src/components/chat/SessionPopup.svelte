@@ -107,8 +107,15 @@
           onListFiles={listDraftFiles}
           onListFilesForSubmit={listDraftFiles ?? popup.listFilesOnSend}
           onOpenSecretForm={() => (secretForm = true)}
-          onSendMessage={sendFirst}
-          onSendError={(message) => (error = message)}
+          onSendMessage={async (content, options) => {
+            const result = await sendFirst(content, options);
+            if (!result) {
+              const message = popup.launch.error;
+              popup.launch.error = '';
+              throw new Error(message);
+            }
+            return result;
+          }}
           onTranscriptionError={(message) => (error = message)}
         />
         {#if secretForm}

@@ -87,6 +87,7 @@
     onEditMessage = async () => false,
     hasOlderHistory = false,
     loadingOlderHistory = false,
+    olderHistoryError = '',
     // Whether to show initial History loading feedback; the owner may delay it.
     loadingHistory = false,
     // Only resolved History (or a draft with no Session) can be called empty,
@@ -617,6 +618,14 @@
 </script>
 
 {#snippet timelineContribution()}
+  {#if olderHistoryError && hasOlderHistory}
+    <Banner variant="error" role="alert">
+      <span>{olderHistoryError}</span>
+      <Button variant="tertiary" onClick={() => controller?.retryOlderHistory()}
+        >{t('common.retry')}</Button
+      >
+    </Banner>
+  {/if}
   {#if timelineItems.length === 0 && transientCards.length === 0}
     {#if loadingHistory}
       <!-- While history is loading, a quiet placeholder — flashing the

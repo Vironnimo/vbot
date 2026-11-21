@@ -153,7 +153,10 @@ export function createSessionSearch({ operations, history, errorMessage }) {
       }
       if (current()) {
         target = null;
-        error = source.actionError || t('chat.search.unavailable');
+        error =
+          source.olderHistoryError ||
+          source.actionError ||
+          t('chat.search.unavailable');
       }
       return false;
     } finally {

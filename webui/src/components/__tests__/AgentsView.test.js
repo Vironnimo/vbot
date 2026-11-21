@@ -1109,7 +1109,13 @@ describe('AgentsView', () => {
     flushSync();
     await waitForCondition(() => listedAgentIds().length === 2, 100);
 
-    let items = openRowMenu(agentButton('bravo'));
+    const more = agentButton('bravo').parentElement.querySelector(
+      '[aria-haspopup="menu"]',
+    );
+    more.click();
+    flushSync();
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    let items = [...document.querySelectorAll('[role="menuitem"]')];
     expect(menuLabels(items)).toEqual([
       'Open chat',
       'Open in split view',

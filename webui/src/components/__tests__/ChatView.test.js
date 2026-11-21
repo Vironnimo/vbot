@@ -507,6 +507,17 @@ describe('ChatView', () => {
         const notice = document.querySelector('.chat-view__composer-feedback');
         expect(notice.closest('.chat-view__footer-stack')).not.toBeNull();
         expect(notice.textContent).toContain(owner[field]);
+        if (field === 'historyError') {
+          const previous = rpcCalls('chat.timeline').length;
+          notice.querySelector('button').click();
+          await waitForCondition(
+            () => rpcCalls('chat.timeline').length > previous,
+          );
+          expect(rpcCalls('chat.timeline').at(-1)).toMatchObject({
+            agent_id: 'alpha',
+            session_id: 'session-1',
+          });
+        }
         expect(document.querySelector('.chat-view__notice-stack')).toBeNull();
         owner[field] = '';
         flushSync();
@@ -529,7 +540,8 @@ describe('ChatView', () => {
       sendComposerMessage('test-unsent-draft');
       await waitForText(failure);
       expect(
-        document.querySelector('.chat-view__composer-feedback').textContent,
+        document.querySelector('.chat-view__composer-shell [role="alert"]')
+          .textContent,
       ).toContain(failure);
       expect(document.querySelector('textarea').value).toBe(
         'test-unsent-draft',

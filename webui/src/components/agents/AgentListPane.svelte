@@ -9,6 +9,7 @@
     canDeleteAgent,
   } from '$lib/agentPlacement.js';
   import StatusChip from '../ui/StatusChip.svelte';
+  import RowMenuButton from '../ui/RowMenuButton.svelte';
   import Button from '../ui/Button.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
@@ -99,7 +100,11 @@
   function openMenu(agent, event) {
     if (event.defaultPrevented) return;
     event.preventDefault();
-    menu = { ...contextMenuAnchor(event), ...agentMenu(agent) };
+    menu = {
+      rowId: agent.id,
+      ...contextMenuAnchor(event),
+      ...agentMenu(agent),
+    };
   }
 
   // The row's details card: the full Model (the row shows its short name)
@@ -356,33 +361,41 @@
 <ContextMenu {menu} onClose={() => (menu = null)} />
 
 {#snippet agentRow(agent, privateCount = 0)}
-  <button
-    class:active={agent.id === selectedAgentId}
-    class="agent-item secondary-list__item"
-    type="button"
-    use:tooltip={() => agentDetails(agent)}
-    onclick={() => onSelect(agent.id)}
-    oncontextmenu={(event) => openMenu(agent, event)}
-    onkeydown={(event) => {
-      if (isContextMenuKey(event)) openMenu(agent, event);
-    }}
-  >
-    <div class="agent-item-inner">
-      <div class="agent-item-name">
-        <span>{agent.name || agent.id}</span>{#if privateCount}<span
-            class="agent-placement-count"
-            aria-label={t('agents.list.privateCount', { count: privateCount })}
-            >{privateCount}</span
-          >{/if}
+  <div class="management-action-row">
+    <button
+      class:active={agent.id === selectedAgentId}
+      class="agent-item secondary-list__item"
+      type="button"
+      use:tooltip={() => agentDetails(agent)}
+      onclick={() => onSelect(agent.id)}
+      oncontextmenu={(event) => openMenu(agent, event)}
+      onkeydown={(event) => {
+        if (isContextMenuKey(event)) openMenu(agent, event);
+      }}
+    >
+      <div class="agent-item-inner">
+        <div class="agent-item-name">
+          <span>{agent.name || agent.id}</span>{#if privateCount}<span
+              class="agent-placement-count"
+              aria-label={t('agents.list.privateCount', {
+                count: privateCount,
+              })}>{privateCount}</span
+            >{/if}
+        </div>
+        <div class="agent-item-sub">
+          {modelShortName(agent.model) || agent.id || t('common.unknown')}
+        </div>
       </div>
-      <div class="agent-item-sub">
-        {modelShortName(agent.model) || agent.id || t('common.unknown')}
-      </div>
-    </div>
-    {#if agentPlacement(agent).orphaned}<StatusChip variant="warn"
-        >{t('agents.placement.orphaned')}</StatusChip
-      >{/if}
-  </button>
+      {#if agentPlacement(agent).orphaned}<StatusChip variant="warn"
+          >{t('agents.placement.orphaned')}</StatusChip
+        >{/if}
+    </button>
+    <RowMenuButton
+      label={t('agents.menu.label', { name: agent.name || agent.id })}
+      expanded={menu?.rowId === agent.id}
+      onClick={(event) => openMenu(agent, event)}
+    />
+  </div>
 {/snippet}
 {#snippet groupList(group, id)}
   <SortableList
@@ -431,7 +444,7 @@
   .agent-placement-toggle {
     position: absolute;
     top: 2px;
-    right: 4px;
+    right: 34px;
     display: grid;
     width: 20px;
     height: 20px;

@@ -788,6 +788,7 @@ describe('older History pages', () => {
         has_more: true,
         next_before: 'vh1.opaque',
       })
+      .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({
         messages: [{ id: 'duplicate', role: 'user', content: 'older' }],
         has_more: false,
@@ -798,7 +799,14 @@ describe('older History pages', () => {
 
     await controller.loadHistoryForSession('alpha', 'session-one');
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
-    await controller.loadOlderHistory(sessionState);
+    expect(await controller.loadOlderHistory(sessionState)).toBe(false);
+    expect(sessionState.olderHistoryError).toContain('offline');
+    expect(sessionState.historyBefore).toBe('vh1.opaque');
+    expect(await controller.loadOlderHistory(sessionState)).toBe(true);
+    expect(sessionState.olderHistoryError).toBe('');
+    expect(loadChatHistory.mock.calls[2]).toEqual(
+      loadChatHistory.mock.calls[1],
+    );
 
     expect(loadChatHistory).toHaveBeenNthCalledWith(2, {
       agent_id: 'alpha',

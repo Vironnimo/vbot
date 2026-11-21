@@ -712,7 +712,7 @@ export default Object.freeze({
   'statistics.origin.channel': 'Channels',
   'statistics.origin.extension': 'Extensions',
   'statistics.origin.reflection': 'Reflection',
-  'statistics.origin.subagent': 'Sub-agents',
+  'statistics.origin.subagent': 'Sub-Agents',
   'statistics.origin.system': 'System',
   'statistics.origin.user': 'You',
   'statistics.overview.all': 'All',
