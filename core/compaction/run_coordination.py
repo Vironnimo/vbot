@@ -233,6 +233,7 @@ class CompactionRunCoordinator:
         session = session.for_run(run.id)
         request: Any | None = None
         announced = False
+        committed = False
         # The divider appears at this emit; its visible duration ends when the
         # checkpoint is stamped below.
         compaction_started_perf = time.perf_counter()
@@ -348,14 +349,15 @@ class CompactionRunCoordinator:
                 accounting=accounting,
             )
             # A Stop during the commit still reports a stored checkpoint as completed.
-            if not await self._host.commit_checkpoint(
+            committed = await self._host.commit_checkpoint(
                 run,
                 session,
                 checkpoint,
                 since=snapshot_cursor,
                 prompt_refresh=prompt_refresh,
                 request_state=projected_state,
-            ):
+            )
+            if not committed:
                 run.raise_if_cancelled()
                 raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
@@ -372,11 +374,14 @@ class CompactionRunCoordinator:
             run.terminal_payload_extras["checkpoint_id"] = checkpoint.id
             return checkpoint
         except asyncio.CancelledError:
-            if announced:
+            if announced and not committed:
                 self._emit_compaction_cancelled(run)
             raise
         except Exception:
-            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+            if not committed:
+                run.emit(
+                    COMPACTION_ABORTED_EVENT, {"reason": "failed"}, allow_after_cancel=announced
+                )
             raise
         finally:
             record_span(
@@ -563,6 +568,7 @@ class CompactionRunCoordinator:
         # Chat restarts its request-build measurement after any attempt.
         context.compaction_attempts += 1
         announced = False
+        committed_checkpoint: ChatMessage | None = None
         try:
             # Keep the acquired Adapter owned here even if cancellation wins the
             # worker await after construction has already completed.
@@ -705,7 +711,6 @@ class CompactionRunCoordinator:
             # Context; any other entry makes the summary stale. A writer that lands
             # during the projection fails the commit, so the next attempt absorbs it
             # too, up to a bound: the next boundary starts over.
-            committed_checkpoint: ChatMessage | None = None
             carried_notes = 0
             for _attempt in range(AUTO_COMPACTION_COMMIT_ATTEMPTS):
                 async with self._host.sessions.write_lock(session.address):
@@ -782,8 +787,12 @@ class CompactionRunCoordinator:
             )
             return rebuilt_state
         except asyncio.CancelledError:
-            if announced:
+            if announced and committed_checkpoint is None:
                 self._emit_compaction_cancelled(run)
+            raise
+        except Exception:
+            if announced and committed_checkpoint is None:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"}, allow_after_cancel=True)
             raise
         finally:
             try:

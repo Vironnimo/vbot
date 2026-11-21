@@ -48,7 +48,7 @@ Compact Tool rows retain recorded result status and Command ids, separately from
 
 ## Compaction commit
 
-`commit_compaction(checkpoint, *, since, epoch: PromptEpoch)` appends a `compaction_checkpoint` only while `since` still names the newest entry (same generation, at or above the cursor floor, same `next_seq` and last entry id); otherwise it writes nothing and returns `None`. In the same transaction it replaces the named prompt pins (`epoch.pins`; `None` removes a slot), replaces the seen Skills when `epoch.seen_skills` is given, and leaves the prompt-cache affinity id unchanged; it returns the delta after `since` as a `SessionReadBatch`.
+`commit_compaction(checkpoint, *, since, epoch: PromptEpoch)` appends a `compaction_checkpoint` only while `since` still names the newest entry (same generation, at or above the cursor floor, same `next_seq` and last entry id); otherwise it writes nothing and returns `None`. In the same transaction it replaces the named prompt pins (`epoch.pins`; `None` removes a slot), replaces the seen Skills when `epoch.seen_skills` is given, and leaves the prompt-cache affinity id unchanged; it decodes the delta after `since` as a `SessionReadBatch` before committing, so a decoding failure rolls back both writes.
 
 ## Sub-Agent reply targets
 

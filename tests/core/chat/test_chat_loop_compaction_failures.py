@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,6 +16,7 @@ import pytest
 from core.chat import ChatMessage, _agentic_progression
 from core.chat._message_history import effective_compaction_messages
 from core.chat._run_state import _RequestState
+from core.chat.compaction_host import ChatCompactionHost
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import CompactionError, CompactionService
 from core.compaction.run_coordination import AUTO_COMPACTION_COMMIT_ATTEMPTS
@@ -28,6 +30,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
+from core.sessions import _store_history
 from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_compaction_test_support import (
     WAIT_SECONDS,
@@ -542,5 +545,98 @@ async def test_stop_settles_a_pending_compaction_before_ending_the_run(tmp_path:
         assert aborted.payload == {"reason": "run_finished", "requested_by_user": True}
         assert aborted.sequence < events[-1].sequence
         assert not service.compact_calls
+    finally:
+        await runtime.chat_runs.aclose()
+
+
+@pytest.mark.asyncio
+async def test_compaction_request_is_closed_during_terminal_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    committing = asyncio.Event()
+    release = asyncio.Event()
+    service = StubCompactionService(should_auto=False)
+    runtime = compaction_runtime(tmp_path, adapter=StubAdapter([{"content": "Done"}]))
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    finish = runtime.chat_sessions.finish_run
+
+    async def hold_finish(*args: Any, **kwargs: Any) -> Any:
+        committing.set()
+        await release.wait()
+        return await finish(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.chat_sessions, "finish_run", hold_finish)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    try:
+        run = await loop.start_run("coder", "Finish", session_id=session.id)
+        await asyncio.wait_for(committing.wait(), WAIT_SECONDS)
+        assert run.status == RunStatus.RUNNING
+        assert run.controls()["compaction"] == "unavailable"
+        assert not run.request_compaction()
+        release.set()
+        assert (await run.wait()).content == "Done"
+        events = await runtime.timelines.events(run)
+        compaction_controls = [
+            event.payload["compaction"] for event in events if event.type == "run_controls_changed"
+        ]
+        assert compaction_controls == ["idle", "unavailable"]
+    finally:
+        release.set()
+        await runtime.chat_runs.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True], ids=["automatic", "manual"])
+@pytest.mark.parametrize("fault", ["decode", "stamp"])
+async def test_compaction_reports_whether_the_checkpoint_committed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manual: bool, fault: str
+) -> None:
+    runtime = compaction_runtime(
+        tmp_path, adapter=StubAdapter([{"content": "Done"}]), context_window=1_000_000
+    )
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    attempted_stamps: list[bool] = []
+
+    decode = _store_history.read_batch
+
+    def decode_without_checkpoint(delta: _store_history.HistoryDelta):
+        if any(row["role"] == "compaction_checkpoint" for row in delta.audit_rows):
+            raise ValueError("injected checkpoint decode failure")
+        return decode(delta)
+
+    prepare = ChatCompactionHost._prepare_prompt_refresh
+
+    async def prepare_with_read_path(host: ChatCompactionHost, *args: Any, **kwargs: Any):
+        refresh = await prepare(host, *args, **kwargs)
+        return replace(refresh, prompt_read_paths=((tmp_path / "prompt.md", (0.0, 0)),))
+
+    def fail_stamps(*_args: Any) -> None:
+        attempted_stamps.append(True)
+        raise RuntimeError("injected stamp failure")
+
+    if fault == "decode":
+        monkeypatch.setattr(_store_history, "read_batch", decode_without_checkpoint)
+    else:
+        monkeypatch.setattr(ChatCompactionHost, "_prepare_prompt_refresh", prepare_with_read_path)
+        monkeypatch.setattr("core.chat.compaction_host.stamp_prompt_files_read", fail_stamps)
+    try:
+        if manual:
+            run = await loop.start_compaction_run("coder", session.id)
+        else:
+            run = await loop.start_run("coder", "Continue", session_id=session.id)
+        if fault == "decode":
+            with pytest.raises(ValueError):
+                await run.wait()
+            monkeypatch.setattr(_store_history, "read_batch", decode)
+            expected = COMPACTION_ABORTED_EVENT
+        else:
+            await run.wait()
+            assert attempted_stamps == [True]
+            expected = COMPACTION_COMPLETED_EVENT
+        assert ("compaction_checkpoint" in persisted_roles(session.load())) == (fault == "stamp")
+        events = await runtime.timelines.events(run)
+        assert _outcomes(events) == [COMPACTION_STARTED_EVENT, expected]
     finally:
         await runtime.chat_runs.aclose()
