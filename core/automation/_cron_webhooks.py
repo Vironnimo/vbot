@@ -129,6 +129,25 @@ class CronWebhooks(CronInbox[WebhookRequest]):
         self._secrets[job_id] = secret
         return secret
 
+    async def rotate_secret(self, job_id: str) -> str:
+        secret = await self.issue_secret(job_id)
+        # Queue cleanup under the inbox lock before a new-key request can enter.
+        # Requests already waiting for admission will recheck their old proof.
+        async with self._lock(job_id):
+            try:
+                state = await self._state(job_id)
+                if state.latest_receipt is not None:
+                    updated = state.copy()
+                    updated.latest_receipt = None
+                    await super()._write(updated)
+                    self._states[job_id] = updated
+            except CronStorageError:
+                # The secret already rotated. A leftover digest cannot match
+                # a new-key request; keep an unreadable inbox intact.
+                _LOGGER.warning("Cron webhook receipt checkpoint not cleared (job=%s)", job_id)
+            await self._discard_receipts(job_id)
+        return secret
+
     async def secret(self, job_id: str) -> str | None:
         """The job's secret; None when none is stored. Raises ``CronStorageError``."""
         cached = self._secrets.get(job_id)
@@ -153,6 +172,9 @@ class CronWebhooks(CronInbox[WebhookRequest]):
         """
         await super().discard(job_id, require_removal=require_removal)
         await self.discard_secret(job_id)
+        await self._discard_receipts(job_id)
+
+    async def _discard_receipts(self, job_id: str) -> None:
         try:
             await self._owner._writer.call_async(partial(shutil.rmtree, self._receipt_dir(job_id)))
         except FileNotFoundError:

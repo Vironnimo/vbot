@@ -356,7 +356,7 @@ class CronService:
         """Replace a webhook job's secret; requests proving the old one are refused from now on."""
         async with self._edits:
             self._webhook_job(job_id, owner=owner)
-            secret = await settle_before_cancelling(self._webhooks.issue_secret(job_id))
+            secret = await settle_before_cancelling(self._webhooks.rotate_secret(job_id))
         _LOGGER.info("Cron webhook secret rotated (job=%s actor=%s)", job_id, actor)
         return secret
 
