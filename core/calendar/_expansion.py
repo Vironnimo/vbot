@@ -35,6 +35,7 @@ class _Series:
     start: datetime
     length: timedelta
     rule: rrulebase | None
+    exdates: frozenset[str]
 
 
 def event_series(event: CalendarEvent, system_tz: ZoneInfo) -> _Series:
@@ -43,7 +44,7 @@ def event_series(event: CalendarEvent, system_tz: ZoneInfo) -> _Series:
     start = local_time(event.start)
     length = span_length(event.start, event.end, event.start_utc, event.end_utc)
     rule = None if event.rrule is None else build_rule(event.rrule, start, zone, event.start_utc)
-    return _Series(event, zone, system_tz, start, length, rule)
+    return _Series(event, zone, system_tz, start, length, rule, frozenset(event.exdates))
 
 
 def local_time(text: str) -> datetime:
@@ -109,7 +110,7 @@ def occurrence_keys(event: CalendarEvent, keys: Iterable[str]) -> frozenset[str]
 def occurrence_at(event: CalendarEvent, key: str, system_tz: ZoneInfo) -> EventOccurrence | None:
     """The occurrence of a repeating ``event`` that originally starts at ``key``, if any."""
     series = event_series(event, system_tz)
-    if series.rule is None or key in event.exdates or not has_key(series.rule, key, series.zone):
+    if series.rule is None or key in series.exdates or not has_key(series.rule, key, series.zone):
         return None
     return _occurrence(series, local_time(key), event.overrides.get(key))
 
@@ -143,7 +144,7 @@ def _rule_occurrences(series: _Series, after: datetime) -> Iterator[EventOccurre
             yield heapq.heappop(pending)[2]
         key = occurrence_key(moment, all_day=series.zone is None)
         override = event.overrides.get(key)
-        if key in event.exdates or (override is not None and "start" in override):
+        if key in series.exdates or (override is not None and "start" in override):
             continue
         item = _occurrence(series, moment, override)
         if item.end_utc > after:
@@ -158,7 +159,7 @@ def _moved_occurrences(series: _Series) -> list[EventOccurrence]:
     return [
         _occurrence(series, local_time(key), override)
         for key, override in event.overrides.items()
-        if "start" in override and key not in event.exdates
+        if "start" in override and key not in series.exdates
     ]
 
 

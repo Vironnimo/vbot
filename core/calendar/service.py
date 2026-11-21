@@ -254,15 +254,16 @@ class CalendarService(CalendarProjection):
 
     def projection(self) -> CalendarProjection:
         """Capture committed events and timezone without sharing mutable records."""
+        self._ensure_events_loaded(allow_degraded=True)
         return CalendarProjection(
-            self.list_events(), self._timezone, load_error=self._storage_load_error
+            self._events.values(), self._timezone, load_error=self._storage_load_error
         )
 
     async def create_event_async(self, **fields: Any) -> CalendarEvent:
         """Create durably without blocking; publish only after persistence succeeds."""
         await self.load()
         async with self._edits:
-            event = self._new_event(**fields)
+            event = await _CALENDAR_WORKERS.run(self._new_event, **fields)
             await settle_before_cancelling(self._commit_events({**self._events, event.id: event}))
         _LOGGER.info(
             "Calendar event created (event=%s recurring=%s actor=%s)",
@@ -294,7 +295,7 @@ class CalendarService(CalendarProjection):
             )
         async with self._edits:
             event = self._event(event_id)
-            candidate = self._updated_event(event, fields)
+            candidate = await _CALENDAR_WORKERS.run(self._updated_event, event, fields)
             changed = _changed_fields(event, candidate)
             if not changed:
                 return _clone_event(event)
@@ -363,7 +364,7 @@ class CalendarService(CalendarProjection):
         event, key = self._occurrence_target(occurrence_id)
         if key is None:
             raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
-        current = self._occurrence(event, key)
+        current = await _CALENDAR_WORKERS.run(self._occurrence, event, key)
         override = dict(event.overrides.get(key, {}))
         if "title" in fields:
             override["title"] = _required_text(fields["title"], "title", MAX_TITLE_LENGTH)
@@ -403,7 +404,7 @@ class CalendarService(CalendarProjection):
             ",".join(sorted(fields)),
             actor,
         )
-        return self._occurrence(candidate, key)
+        return await _CALENDAR_WORKERS.run(self._occurrence, candidate, key)
 
     async def delete_occurrence(
         self, occurrence_id: str, *, actor: str = _DEFAULT_ACTOR
@@ -417,7 +418,7 @@ class CalendarService(CalendarProjection):
             event, key = self._occurrence_target(occurrence_id)
             if key is None:
                 raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
-            removed = self._occurrence(event, key)
+            removed = await _CALENDAR_WORKERS.run(self._occurrence, event, key)
             if len(event.exdates) >= MAX_EXDATES_PER_EVENT:
                 raise CalendarValidationError(
                     f"events allow at most {MAX_EXDATES_PER_EVENT} removed occurrences"

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+from calendar import monthrange
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
 from typing import cast, override
@@ -295,6 +296,14 @@ def _check_first_occurrence(
             f"a repeating event must start between the years {FIRST_EVENT_YEAR} and "
             f"{LAST_EVENT_YEAR}"
         )
+    if "BYMONTH" in parts and "BYMONTHDAY" in parts:
+        months = [int(value) for value in parts["BYMONTH"].split(",")]
+        days = [abs(int(value)) for value in parts["BYMONTHDAY"].split(",")]
+        if all(1 <= month <= 12 for month in months) and min(days) > max(
+            monthrange(2000, month)[1] for month in months
+        ):
+            # Even a leap year cannot supply any requested day in these months.
+            raise CalendarValidationError("rrule produces no occurrence")
     interval = int(parts.get("INTERVAL", "1"))
     cycle_years = _CYCLE_YEARS * interval // math.gcd(_CYCLE_PERIODS[parts["FREQ"]], interval)
     shift = max(0, (_MAX_YEAR - 2 * cycle_years - start.year) // _CYCLE_YEARS * _CYCLE_YEARS)

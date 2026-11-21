@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, time, timedelta
 from heapq import merge
 from itertools import islice, takewhile
@@ -48,7 +48,7 @@ class CalendarProjection:
     """
 
     def __init__(
-        self, events: list[CalendarEvent], timezone: ZoneInfo, *, load_error: str | None = None
+        self, events: Iterable[CalendarEvent], timezone: ZoneInfo, *, load_error: str | None = None
     ) -> None:
         self._events = {event.id: _clone_event(event) for event in events}
         self._timezone = timezone
