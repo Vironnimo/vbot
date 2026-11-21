@@ -19,6 +19,9 @@ _LOGGER = get_logger("channels.telegram")
 _ALBUM_FLUSH_SECONDS = 0.5
 _FORWARD_COMMENT_SETTLE_SECONDS = 0.5
 
+# Telegram guarantees album IDs within one chat.
+type _AlbumKey = tuple[str, str]
+
 
 @dataclass(slots=True, frozen=True)
 class _PendingForwardComment:
@@ -40,10 +43,10 @@ class TelegramInboundBuffer:
         self._channel_id = channel_id
         self._text_handler = text_handler
         self._media_handler = media_handler
-        self._album_buffers: dict[str, list[Any]] = {}
-        self._album_conversations: dict[str, ConversationFacts] = {}
-        self._album_comments: dict[str, _PendingForwardComment] = {}
-        self._album_tasks: dict[str, asyncio.Task[None]] = {}
+        self._album_buffers: dict[_AlbumKey, list[Any]] = {}
+        self._album_conversations: dict[_AlbumKey, ConversationFacts] = {}
+        self._album_comments: dict[_AlbumKey, _PendingForwardComment] = {}
+        self._album_tasks: dict[_AlbumKey, asyncio.Task[None]] = {}
         self._pending_forward_comments: dict[str, _PendingForwardComment] = {}
         self._forward_comment_tasks: dict[str, asyncio.Task[None]] = {}
         # Timer slots may be reused once dispatch begins; retain ownership until
@@ -58,12 +61,13 @@ class TelegramInboundBuffer:
         *,
         comment: _PendingForwardComment | None = None,
     ) -> None:
-        existing_messages = self._album_buffers.get(album_id)
+        album_key = (conversation.chat_id, album_id)
+        existing_messages = self._album_buffers.get(album_key)
         if existing_messages is not None:
             existing_messages.append(message)
             # A username/name address or reply-to-bot on any item addresses the whole album.
-            buffered_conversation = self._album_conversations[album_id]
-            self._album_conversations[album_id] = replace(
+            buffered_conversation = self._album_conversations[album_key]
+            self._album_conversations[album_key] = replace(
                 buffered_conversation,
                 mentioned_bot=buffered_conversation.mentioned_bot or conversation.mentioned_bot,
                 is_reply_to_bot=(
@@ -71,35 +75,35 @@ class TelegramInboundBuffer:
                 ),
             )
         else:
-            self._album_buffers[album_id] = [message]
-            self._album_conversations[album_id] = conversation
+            self._album_buffers[album_key] = [message]
+            self._album_conversations[album_key] = conversation
         if comment is not None:
-            self._album_comments[album_id] = comment
-        self._restart_album_flush(album_id)
+            self._album_comments[album_key] = comment
+        self._restart_album_flush(album_key)
 
-    def _restart_album_flush(self, album_id: str) -> None:
+    def _restart_album_flush(self, album_key: _AlbumKey) -> None:
         # The flush window counts from the last buffered item, so slow album delivery
         # does not split one album into multiple Runs.
-        existing_task = self._album_tasks.get(album_id)
+        existing_task = self._album_tasks.get(album_key)
         if existing_task is not None:
             existing_task.cancel()
 
         task = asyncio.create_task(
-            self._flush_album(album_id),
+            self._flush_album(album_key),
             name=f"telegram:{self._channel_id}:album",
         )
-        self._album_tasks[album_id] = task
+        self._album_tasks[album_key] = task
         self._tasks.add(task)
-        task.add_done_callback(partial(self._on_album_task_done, album_id))
+        task.add_done_callback(partial(self._on_album_task_done, album_key))
 
-    async def _flush_album(self, album_id: str) -> None:
+    async def _flush_album(self, album_key: _AlbumKey) -> None:
         await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
-        if self._album_tasks.get(album_id) is asyncio.current_task():
-            self._album_tasks.pop(album_id, None)
+        if self._album_tasks.get(album_key) is asyncio.current_task():
+            self._album_tasks.pop(album_key, None)
 
-        messages = self._album_buffers.pop(album_id, [])
-        conversation = self._album_conversations.pop(album_id, None)
-        comment = self._album_comments.pop(album_id, None)
+        messages = self._album_buffers.pop(album_key, [])
+        conversation = self._album_conversations.pop(album_key, None)
+        comment = self._album_comments.pop(album_key, None)
         if not messages or conversation is None:
             return
 
@@ -119,10 +123,10 @@ class TelegramInboundBuffer:
             companion_message_id=comment.conversation.message_id if comment else None,
         )
 
-    def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
+    def _on_album_task_done(self, album_key: _AlbumKey, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
-        if self._album_tasks.get(album_id) is task:
-            self._album_tasks.pop(album_id, None)
+        if self._album_tasks.get(album_key) is task:
+            self._album_tasks.pop(album_key, None)
 
         if task.cancelled():
             return
@@ -256,11 +260,11 @@ class TelegramInboundBuffer:
         self._pending_forward_comments.clear()
         albums = [
             (
-                self._album_conversations.pop(album_id, None),
+                self._album_conversations.pop(album_key, None),
                 messages,
-                self._album_comments.pop(album_id, None),
+                self._album_comments.pop(album_key, None),
             )
-            for album_id, messages in self._album_buffers.items()
+            for album_key, messages in self._album_buffers.items()
         ]
         self._album_buffers.clear()
         self._album_conversations.clear()
