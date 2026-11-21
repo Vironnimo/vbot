@@ -136,10 +136,13 @@ describe('History reads', () => {
   it('releases a departed History load on a draft and ignores its late completion', async () => {
     const old = deferred();
     const next = deferred();
+    const queue = deferred();
+    const listQueue = vi.fn().mockReturnValue(queue.promise);
     let displayed = 'alpha';
     const { chatState, controller } = setupController({
       isDisplayedSession: (agent) => agent === displayed,
       operationOverrides: {
+        listQueue,
         loadChatHistory: vi
           .fn()
           .mockReturnValueOnce(old.promise)
@@ -151,6 +154,7 @@ describe('History reads', () => {
       { id: 'beta', current_session_id: '' },
     ]);
     const first = controller.loadHistoryForSession('alpha', 'one');
+    expect(listQueue).toHaveBeenCalledWith('alpha', 'one');
     expect(chatState.loadingHistory).toBe(true);
     displayed = 'beta';
     selectAgent(chatState, 'beta');
@@ -164,6 +168,7 @@ describe('History reads', () => {
     next.resolve({ messages: [] });
     await second;
     expect(chatState.loadingHistory).toBe(false);
+    queue.resolve({ items: [] });
   });
   it('keeps Session facts and an in-flight reflection read across an unchanged incremental read', async () => {
     const policy = { enabled: true, trigger: { type: 'context_ratio' } };

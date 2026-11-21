@@ -301,8 +301,8 @@ describe('send and edit admission', () => {
     expect(
       await controller.sendMessage(session, 'Already accepted'),
     ).toMatchObject({ kind: 'accepted' });
-    expect(loadChatHistory).toHaveBeenCalled();
-    expect(listQueue).toHaveBeenCalled();
+    expect(loadChatHistory).toHaveBeenCalledTimes(1);
+    expect(listQueue).toHaveBeenCalledTimes(1);
     expect(runStream.subscribeToRun).not.toHaveBeenCalled();
     expect(session.status).not.toBe('running');
   });

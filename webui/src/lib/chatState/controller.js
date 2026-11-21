@@ -411,10 +411,10 @@ export function createChatController({
   async function admitSend(sessionState, run, previousRunId = undefined) {
     if (run?.accepted === true && !run.sse_url) {
       if (run.session_available !== false) {
-        await Promise.all([
-          syncSessionQueue(sessionState),
-          loadHistoryForSession(sessionState.agentId, sessionState.sessionId),
-        ]);
+        await loadHistoryForSession(
+          sessionState.agentId,
+          sessionState.sessionId,
+        );
       }
       return { kind: 'accepted', runId: run.run_id ?? '' };
     }

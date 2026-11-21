@@ -265,6 +265,8 @@ export function createChatHistory({
       chatState.historyError = '';
       runStream.closeSubscriptionsExcept(sessionState.key);
     }
+    // The Queue owns its freshness and errors. Reading it must not hold the composer.
+    void syncSessionQueue(sessionState);
     try {
       let history;
       let staleRunId;
@@ -309,7 +311,6 @@ export function createChatHistory({
           attachableHistoryRun(sessionState, history?.active_run),
         );
       }
-      await syncSessionQueue(sessionState);
       return true;
     } catch (error) {
       if (isLatestRequest() && isDisplayed()) {
