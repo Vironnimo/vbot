@@ -280,9 +280,9 @@ async def settle_before_cancelling[SettledResult](
 
     For work that mutates state and must not be seen as abandoned halfway, such
     as a started worker call or an edit that saves and then updates memory.
-    Waiting never cancels *work*. The cancellation is re-raised once *work* has
-    settled and wins over a late failure of it; repeated cancellations keep
-    waiting. Nobody receives such a late failure, so it goes to
+    Waiting never cancels *work*. If the wait is interrupted, that exception is
+    re-raised once *work* has settled and wins over a late failure of it; repeated
+    cancellations keep waiting. Nobody receives such a late failure, so it goes to
     *on_late_failure*, which reports it in the owner's words. Without one it is
     logged here: an expected ``VBotError`` at WARNING, anything else at ERROR
     with its traceback.
@@ -293,7 +293,7 @@ async def settle_before_cancelling[SettledResult](
         # Unlike a cancelled ``asyncio.shield``, which marks a late failure as
         # retrieved without reporting it, waiting leaves the failure to this owner.
         await asyncio.wait((future,))
-    except asyncio.CancelledError:
+    except BaseException:
         while not future.done():
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.wait((future,))
@@ -447,13 +447,13 @@ class SharedRefresh[RefreshResult]:
 def _log_late_failure(work: str, error: BaseException) -> None:
     if isinstance(error, VBotError):
         _LOGGER.warning(
-            "Work failed after its caller was cancelled (work=%s error=%s)",
+            "Work failed after its caller was interrupted (work=%s error=%s)",
             work,
             type(error).__name__,
         )
         return
     _LOGGER.error(
-        "Work failed after its caller was cancelled (work=%s error=%s)",
+        "Work failed after its caller was interrupted (work=%s error=%s)",
         work,
         type(error).__name__,
         exc_info=error,

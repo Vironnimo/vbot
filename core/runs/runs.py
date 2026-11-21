@@ -9,7 +9,7 @@ import uuid
 from collections import Counter, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -403,7 +403,7 @@ class ChatRunManager:
         try:
             yield
         finally:
-            await asyncio.shield(self._release_session_admission_guard(guarded_sessions))
+            await settle_before_cancelling(self._release_session_admission_guard(guarded_sessions))
 
     @asynccontextmanager
     async def agent_admission_guard(
@@ -435,7 +435,7 @@ class ChatRunManager:
         try:
             yield
         finally:
-            await asyncio.shield(self._release_agent_admission_guard(agent_key))
+            await settle_before_cancelling(self._release_agent_admission_guard(agent_key))
 
     @asynccontextmanager
     async def project_admission_guard(self, project_id: str) -> AsyncIterator[None]:
@@ -470,7 +470,7 @@ class ChatRunManager:
         try:
             yield
         finally:
-            await asyncio.shield(self._release_project_admission_guard(project_id))
+            await settle_before_cancelling(self._release_project_admission_guard(project_id))
 
     async def start(
         self,
@@ -563,14 +563,19 @@ class ChatRunManager:
                 and not self._queues.get(address)
                 and address not in self._paused_queues
             ):
-                if persist_input is not None:
-                    await persist_input()
                 self._consume_waiting_work_admission(waiting_work_admission)
+                executor = item.executor
+                if persist_input is not None:
+                    # A refusing preparer must leave no receipt for work we cannot start.
+                    if admission.prepare_executor is not None:
+                        executor = admission.prepare_executor(executor)
+                        admission = replace(admission, prepare_executor=None)
+                    await persist_input()
                 run = self._start_run_locked(
                     address=address,
-                    executor=item.executor,
+                    executor=executor,
                     queue_item_id=item.item_id,
-                    admission=item.admission,
+                    admission=admission,
                 )
                 item.future.set_result(run)
                 return item
@@ -1131,21 +1136,18 @@ class ChatRunManager:
         error: BaseException | None = None
         status = RunStatus.COMPLETED
         abort: BaseException | None = None
-        admitted = False
+
+        async def admit(persistence: RunPersistence) -> None:
+            await persistence.start_run(run)
+            run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
+
         try:
             if self._persistence is not None:
-                admission = asyncio.create_task(self._persistence.start_run(run))
-                try:
-                    await asyncio.shield(admission)
-                except asyncio.CancelledError:
-                    # Admission can already be committing in the writer thread.
-                    # Observe its outcome before attempting terminal persistence.
-                    await admission
-                    admitted = True
-                    run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
-                    raise
-                admitted = True
-            run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
+                # Record the commit inside the protected work so an interrupted
+                # waiter still knows whether the Run needs terminal persistence.
+                await settle_before_cancelling(admit(self._persistence))
+            else:
+                run._mark_admitted()  # noqa: SLF001 - manager owns run lifecycle internals.
             run.raise_if_cancelled()
             started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
             if run._started_from_queue_item_id is not None:  # noqa: SLF001
@@ -1179,7 +1181,7 @@ class ChatRunManager:
             if usage:
                 payload["usage"] = usage
             try:
-                if self._persistence is not None and admitted:
+                if self._persistence is not None and run._admitted.is_set():  # noqa: SLF001
                     if status == RunStatus.CANCELLED:
                         reason = run.cancel_reason
                     elif isinstance(error, RunInterruptedError):
@@ -1346,11 +1348,17 @@ class ChatRunManager:
         # Create the task before registering the Run: a failure here leaves no
         # active Session entry behind. The task cannot run before this returns.
         task = asyncio.create_task(self._execute(run, address, executor), name=f"run:{run.id}")
+        task.add_done_callback(self._report_execution_abort)
         self._active_by_session[address] = run
         self._runs[run.id] = run
         run.set_task(task)
         self._notify_run_started(run)
         return run
+
+    @staticmethod
+    def _report_execution_abort(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            _LOGGER.error("Run task aborted (task=%s)", task.get_name(), exc_info=error)
 
     def _notify_run_started(self, run: Run) -> None:
         _notify(self._run_started_callbacks, run, "Run start callback failed")

@@ -197,6 +197,56 @@ async def test_waiting_work_limit_covers_durable_acceptance(outcome: str, reserv
         await manager.aclose()
 
 
+@pytest.mark.parametrize("fault", ["preparer", "persistence", "cancellation"])
+async def test_idle_enqueue_releases_its_reservation_on_failure(fault: str) -> None:
+    manager = ChatRunManager(waiting_work_limit=1)
+    reservation = manager.reserve_waiting_work(scope="channel", scope_limit=1)
+    persisting = asyncio.Event()
+
+    def prepare(executor: RunExecutor) -> RunExecutor:
+        if fault == "preparer":
+            raise ValueError("cannot prepare executor")
+        return executor
+
+    async def persist() -> None:
+        persisting.set()
+        if fault == "persistence":
+            raise OSError("cannot persist input")
+        await asyncio.Event().wait()
+
+    execute, _ = held()
+    pending = asyncio.create_task(
+        manager.enqueue(
+            SESSION,
+            execute,
+            waiting_work_admission=reservation,
+            admission=RunAdmission(accessor_input_id="input", prepare_executor=prepare),
+            persist_input=persist,
+        )
+    )
+    try:
+        if fault == "cancellation":
+            await persisting.wait()
+            pending.cancel()
+        expected = {
+            "preparer": ValueError,
+            "persistence": OSError,
+            "cancellation": asyncio.CancelledError,
+        }
+        with pytest.raises(expected[fault]):
+            await pending
+        assert persisting.is_set() == (fault != "preparer")
+        assert manager.waiting_work_count() == 0
+        assert (
+            manager.active_run(
+                agent_id=SESSION.agent_id, session_id=SESSION.session_id, project_id=None
+            )
+            is None
+        )
+    finally:
+        await manager.aclose()
+
+
 async def test_waiting_work_admission_transfers_to_a_queued_run() -> None:
     manager = ChatRunManager(waiting_work_limit=1)
     release = asyncio.Event()
