@@ -14,6 +14,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.exceptions import InvalidStatus
+from websockets.typing import Origin
 
 from core.access.config import access_config
 from core.sessions import SessionAddress
@@ -181,8 +183,19 @@ async def test_a_portal_bridges_websockets_and_waits_for_an_app_that_is_not_up()
         cookie = f"vbot_portal_{portal.listen_port}={delivery.portal_token(portal.id)}"
         from websockets.asyncio.client import connect
 
+        base = f"http://127.0.0.1:{portal.listen_port}"
+        with pytest.raises(InvalidStatus) as foreign:
+            async with connect(
+                f"ws://127.0.0.1:{portal.listen_port}/hmr",
+                origin=Origin("http://127.0.0.1:1"),
+                additional_headers={"cookie": cookie},
+            ):
+                pytest.fail("cross-origin connection accepted")
+        assert foreign.value.response.status_code == 403
         async with connect(
-            f"ws://127.0.0.1:{portal.listen_port}/hmr", additional_headers={"cookie": cookie}
+            f"ws://127.0.0.1:{portal.listen_port}/hmr",
+            origin=Origin(base),
+            additional_headers={"cookie": cookie},
         ) as socket:
             await socket.send("ping")
             echoed = await socket.recv()
@@ -355,6 +368,53 @@ async def test_signed_in_access_needs_a_capability_bound_to_a_live_principal(
     await access.close()
 
     assert statuses == {"unbound": 401, "unknown device": 401, "other portal": 401, "host": 200}
+
+
+@pytest.mark.asyncio
+async def test_portal_uses_the_admitted_proxy_origin_for_cookies_and_writes() -> None:
+    seen: list[httpx.Headers] = []
+
+    def app(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+    delivery = FileDelivery()
+    access = AccessService(
+        access_config(
+            "authenticated", public_url="https://vbot.example", trusted_proxies=["10.0.0.1"]
+        ),
+        local_token=None,
+        bind_host="127.0.0.1",
+    )
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(app))
+    portal = _PortalApp(server, "shop", 5173)
+    portal.listen_port = 7000
+    origin = "https://vbot.example:7000"
+    token = delivery.bind_payload(delivery.portal_token("shop"), HOST_PRINCIPAL)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=portal, client=("10.0.0.1", 1234)),
+            base_url="http://vbot.example:7000",
+            headers={"x-forwarded-for": "192.0.2.10", "x-forwarded-proto": "https"},
+            cookies={"vbot_portal_7000": token},
+        ) as client:
+            entered = await client.get("/", params={"vbot_portal": token})
+            assert entered.status_code == 302 and "; Secure" in entered.headers["set-cookie"]
+            for origins in (["https://vbot.example:7001"], ["null"], [origin, origin]):
+                assert (
+                    await client.post("/", headers=[("origin", o) for o in origins])
+                ).status_code == 403
+            response = await client.post(
+                "/", headers={"origin": origin, "referer": origin + "/cart"}
+            )
+            assert response.status_code == 200
+        [forwarded] = seen
+        assert forwarded["x-forwarded-proto"] == "https"
+        assert forwarded["origin"] == "http://localhost:5173"
+        assert forwarded["referer"] == "http://localhost:5173/cart"
+    finally:
+        await registry.aclose()
+        await server.aclose()
 
 
 @pytest.mark.asyncio

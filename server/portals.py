@@ -252,6 +252,16 @@ class _PortalApp:
             access.refused(facts.refusal, facts, f"portal:{self._portal_id}{path}")
             await _deny(scope, receive, send, 403, "Access denied.")
             return
+        if facts.proxied:
+            scope = {**scope, "scheme": "wss" if kind == "websocket" else "https"}
+        if kind == "websocket" or scope.get("method") not in {"GET", "HEAD", "OPTIONS"}:
+            origins = _header_values(scope, b"origin")
+            if origins and origins != [self._own_origin(scope)]:
+                if kind == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    await _deny(scope, receive, send, 403, "Cross-origin request forbidden.")
+                return
         query_token, query = _split_query(scope)
         cookie_token = _cookie(scope, self._auth_cookie)
         token = query_token or cookie_token
