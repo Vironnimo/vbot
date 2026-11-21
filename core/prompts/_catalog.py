@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -356,71 +356,63 @@ class PromptBlockCatalog:
         return dedupe_definitions(definitions)
 
     def core_text_definitions(
-        self, prompt_scope: PromptScope, agent_id: str
+        self, prompt_scope: PromptScope, agent_id: str, *, text_ids: Collection[str] | None = None
     ) -> list[BlockDefinition]:
+        """Keep every core block in the layout; read defaults only for the requested texts."""
+
+        def block(
+            block_id: str,
+            owner: str,
+            filename: str,
+            *,
+            shared: bool = False,
+            default_enabled: bool = True,
+            requires_generated: str | None = None,
+        ) -> BlockDefinition:
+            text = (
+                self._read_prompt_fragment(prompt_scope, agent_id, filename, shared=shared)
+                if text_ids is None or block_id in text_ids
+                else ""
+            )
+            return BlockDefinition(
+                id=block_id,
+                owner=owner,
+                default_text=text,
+                default_enabled=default_enabled,
+                requires_generated=requires_generated,
+            )
+
         return [
-            BlockDefinition(
-                id=CORE_RUNTIME_BLOCK_ID,
-                owner=BLOCK_OWNER_ALWAYS,
-                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "runtime.md"),
+            block(CORE_RUNTIME_BLOCK_ID, BLOCK_OWNER_ALWAYS, "runtime.md"),
+            block(CORE_IDENTITY_RUNTIME_BLOCK_ID, BLOCK_OWNER_IDENTITY, "identity_runtime.md"),
+            block(CORE_TOOLS_BLOCK_ID, BLOCK_OWNER_ALWAYS, "tools.md"),
+            # Custom-prompt Agent copies predate these blocks. Every scope reads
+            # the shared text and can still edit or disable the block.
+            block(
+                CORE_SYSTEM_REMINDERS_BLOCK_ID,
+                BLOCK_OWNER_ALWAYS,
+                "system_reminders.md",
+                shared=True,
             ),
-            BlockDefinition(
-                id=CORE_IDENTITY_RUNTIME_BLOCK_ID,
-                owner=BLOCK_OWNER_IDENTITY,
-                default_text=self._read_prompt_fragment(
-                    prompt_scope, agent_id, "identity_runtime.md"
-                ),
+            block(
+                CORE_SUBAGENT_ROLE_BLOCK_ID,
+                BLOCK_OWNER_SUBAGENT_SESSION,
+                "subagent_role.md",
+                shared=True,
             ),
-            BlockDefinition(
-                id=CORE_TOOLS_BLOCK_ID,
-                owner=BLOCK_OWNER_ALWAYS,
-                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "tools.md"),
+            block(
+                CORE_TOOLS_LIST_BLOCK_ID, BLOCK_OWNER_ALWAYS, "tools_list.md", default_enabled=False
             ),
-            BlockDefinition(
-                id=CORE_SYSTEM_REMINDERS_BLOCK_ID,
-                owner=BLOCK_OWNER_ALWAYS,
-                # Every scope reads the bundled text: the Model needs it to trust
-                # vBot's reminders, and custom-prompt Agent copies predate it.
-                # A scope still edits or disables it like any other block.
-                default_text=self._read_prompt_fragment(
-                    prompt_scope, agent_id, "system_reminders.md", shared=True
-                ),
-            ),
-            BlockDefinition(
-                id=CORE_SUBAGENT_ROLE_BLOCK_ID,
-                owner=BLOCK_OWNER_SUBAGENT_SESSION,
-                # Every scope reads the bundled text, like the System reminders
-                # block: custom-prompt Agent copies predate it.
-                default_text=self._read_prompt_fragment(
-                    prompt_scope, agent_id, "subagent_role.md", shared=True
-                ),
-            ),
-            BlockDefinition(
-                id=CORE_TOOLS_LIST_BLOCK_ID,
-                owner=BLOCK_OWNER_ALWAYS,
-                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "tools_list.md"),
-                default_enabled=False,
-            ),
-            BlockDefinition(
-                id=CORE_CHANNELS_BLOCK_ID,
-                # The channel list decides whether the block shows, so a Session's
-                # pinned text (``PromptManager.render_dynamic_blocks``) decides it
-                # for the whole prompt epoch.
-                owner=BLOCK_OWNER_ALWAYS,
-                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "channels.md"),
+            # The channel list determines visibility; Chat pins its rendered text for the epoch.
+            block(
+                CORE_CHANNELS_BLOCK_ID,
+                BLOCK_OWNER_ALWAYS,
+                "channels.md",
                 requires_generated=CHANNEL_LIST_PRODUCER,
             ),
-            BlockDefinition(
-                id=CORE_SKILLS_BLOCK_ID,
-                owner=BLOCK_OWNER_SKILL,
-                default_text=self._read_prompt_fragment(prompt_scope, agent_id, "skills.md"),
-            ),
-            BlockDefinition(
-                id=CORE_SKILL_MAINTENANCE_BLOCK_ID,
-                owner=BLOCK_OWNER_SKILL_MANAGE,
-                default_text=self._read_prompt_fragment(
-                    prompt_scope, agent_id, "skill_maintenance.md"
-                ),
+            block(CORE_SKILLS_BLOCK_ID, BLOCK_OWNER_SKILL, "skills.md"),
+            block(
+                CORE_SKILL_MAINTENANCE_BLOCK_ID, BLOCK_OWNER_SKILL_MANAGE, "skill_maintenance.md"
             ),
         ]
 

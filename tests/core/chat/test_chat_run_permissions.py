@@ -22,6 +22,7 @@ from core.permissions import (
     normalize_permission_rules,
 )
 from core.projects import AgentOverrides
+from core.prompts import BlockDefinition
 from core.sessions import SUBAGENT_PARENT_META_KEY, SessionAddress, is_prompt_block_change_note
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillMetadata, SkillRegistry
@@ -532,10 +533,23 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(
         _agent(tmp_path / "workspace", allowed_tools=["*"]),
         permission_rules=normalize_permission_rules({"web": "listed"}) if restricted else None,
     )
-    runtime.system_prompts = _manager(tmp_path, tools=runtime.tools)
+    rendered_after_calls: list[int] = []
+
+    def render_other_block(_context: Any) -> str:
+        rendered_after_calls.append(len(seen))
+        return "Other block"
+
+    runtime.system_prompts = _manager(
+        tmp_path,
+        tools=runtime.tools,
+        block_definitions=[
+            BlockDefinition(id="extension:other", owner="always", render=render_other_block)
+        ],
+    )
 
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
+    assert rendered_after_calls and set(rendered_after_calls) == {0}
     first, second = seen
     assert first.permissions.restricted is restricted
     assert first.permissions.check_path(tmp_path / "elsewhere.md", "write") is None

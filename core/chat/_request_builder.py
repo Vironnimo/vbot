@@ -234,12 +234,13 @@ class RequestBuilder:
             read_paths,
             only,
         )
-        await _CHAT_TRANSFORM_WORKERS.run(
-            stamp_prompt_files_read,
-            self._dependencies.file_read_state,
-            context.session.generation_id,
-            read_paths,
-        )
+        if read_paths:
+            await _CHAT_TRANSFORM_WORKERS.run(
+                stamp_prompt_files_read,
+                self._dependencies.file_read_state,
+                context.session.generation_id,
+                read_paths,
+            )
         return note
 
     def _plan_prompt_block_change(
@@ -255,8 +256,10 @@ class RequestBuilder:
     ) -> str | None:
         sessions = self._dependencies.sessions
         pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
+        if pin is None:
+            return None
         tool_pin = self.tool_catalog._stored_tool_epoch_pin(address)
-        if pin is None or tool_pin is None:
+        if tool_pin is None:
             return None
         effort_pin = EffortPin.from_payload(
             sessions.prompt_pin(address, PINNED_THINKING_EFFORT_SLOT)
@@ -266,16 +269,18 @@ class RequestBuilder:
         )
         # Complete an older partial inventory before comparing it with live
         # state, so an already visible static block is not announced as new.
-        pin = self._prompt_block_pin(
-            agent,
-            address,
-            render_inputs,
-            fresh=False,
-            session_blocks=session_blocks,
-            read_paths=read_paths,
-        )
+        if not pin.order:
+            pin = self._prompt_block_pin(
+                agent,
+                address,
+                render_inputs,
+                fresh=False,
+                session_blocks=session_blocks,
+                read_paths=read_paths,
+            )
         live = self._dependencies.get_system_prompts().render_dynamic_blocks(
             agent,
+            block_ids=only,
             request_block_definitions=session_blocks,
             failed_blocks=failed_blocks,
             **render_inputs,
