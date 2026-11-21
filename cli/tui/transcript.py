@@ -348,14 +348,17 @@ class Transcript(ScrollView, can_focus=True):
     def _row_at(self, y: int) -> int:
         return min(len(self._rows) - 1, max(0, bisect_right(self._offsets, y) - 1))
 
-    def _paint_row(self, row: _Row, width: int) -> None:
-        lines = self._painter.paint(
+    def _row_lines(self, row: _Row, width: int) -> list[Strip]:
+        return self._painter.paint(
             row,
             width,
             expanded=self.view is not None and row.key in self.view.expanded_rows,
             highlighted=row.key in {self._hover, self._cursor},
             cursor=row.key == self._cursor and self.has_focus,
         )
+
+    def _paint_row(self, row: _Row, width: int) -> None:
+        lines = self._row_lines(row, width)
         row.lines, row.width = lines, width
         # Without the padding Rich adds, so copied lines carry no trailing blanks.
         row.text = [line.text.rstrip() for line in lines]
@@ -648,15 +651,28 @@ class Transcript(ScrollView, can_focus=True):
 
     @override
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
-        lines: list[str] = []
-        for index, row in enumerate(self._rows):
-            lines.extend([""] * row.gap)
-            if row.text is None:
-                self._paint_row(row, self._width())
-            assert row.text is not None
-            lines.extend(row.text)
-            del index
-        return selection.extract("\n".join(lines)), "\n"
+        if not self._rows:
+            return "", "\n"
+        start, end = selection
+        first = self._row_at(start.y) if start else 0
+        last = self._row_at(end.y) if end else len(self._rows) - 1
+        width = self._width()
+        selected: list[str] = []
+        for index in range(first, last + 1):
+            row = self._rows[index]
+            text = row.text if row.width == width else None
+            if text is None:
+                # Copying a large selection must not fill the viewport's strip cache.
+                text = [line.text.rstrip() for line in self._row_lines(row, width)]
+            lines = [""] * row.gap + text
+            top = self._offsets[index]
+            begin = max(0, start.y - top) if start and index == first else 0
+            stop = end.y - top + 1 if end and index == last else len(lines)
+            for line_index in range(begin, min(stop, len(lines))):
+                left = start.x if start and line_index + top == start.y and index == first else 0
+                right = end.x if end and line_index + top == end.y and index == last else None
+                selected.append(lines[line_index][left:right])
+        return "\n".join(selected), "\n"
 
     @override
     def selection_updated(self, selection: Selection | None) -> None:

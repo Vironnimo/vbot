@@ -329,6 +329,9 @@ def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize()
     emulator = TerminalEmulator(12, 3, scrollback_lines=20)
     assert emulator.feed("old\r\nolder\r\nprimary\r\n").alternate_screen is False
     assert history(emulator) == "old"
+    assert emulator.feed("\x1b[?1049hgame").view_change == "new"
+    assert emulator.feed("\x1b[?1049l").view_change == "returned"
+    assert emulator.feed("").view_change == "same"
 
     entered = emulator.feed("\x1b[?1049h\x1b[2J\x1b[Hgame\x1b[2;1Hscore: 7")
     assert (entered.alternate_screen, entered.alternate_exited) == (True, False)

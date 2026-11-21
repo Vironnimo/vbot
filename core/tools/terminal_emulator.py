@@ -91,6 +91,7 @@ class TerminalEmulator:
         )
         self._responses: list[str] = []
         self._signals = SignalScanner()
+        self._row_keys = [0] * rows
         # Keys of the view shown now and of the one shown before it.
         self._shown_view: tuple[int | None, int | None] = (None, None)
 
@@ -143,11 +144,19 @@ class TerminalEmulator:
         every chunk needs it. Equal views can differ in key (cells stored in
         another order), never the other way round."""
         screen = self._screen
-        buffer = screen.buffer
+        if len(self._row_keys) != self.rows:
+            self._row_keys = [0] * self.rows
+        if self._guarded.skipped:
+            # A rejected control can fail after partially applying to its row.
+            screen.dirty.update(range(self.rows))
+        for row in screen.dirty:
+            if 0 <= row < self.rows:
+                self._row_keys[row] = hash(tuple(screen.buffer[row].items()))
+        screen.dirty.clear()
         cursor = screen.cursor
         return hash(
             (
-                tuple(tuple(buffer[row].items()) for row in range(self.rows)),
+                tuple(self._row_keys),
                 cursor.x,
                 cursor.y,
                 cursor.hidden,

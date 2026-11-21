@@ -500,3 +500,4 @@ class _EmulatorScreen(pyte.Screen):
     def _restore_state(self, state: Mapping[str, Any]) -> None:
         for field_name in _SCREEN_STATE_FIELDS:
             setattr(self, field_name, copy.deepcopy(state[field_name]))
+        self.dirty.update(range(self.lines))

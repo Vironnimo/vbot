@@ -6,6 +6,8 @@ import asyncio
 from typing import Any, override
 
 import pytest
+from textual.geometry import Offset
+from textual.selection import Selection
 from textual.widgets import TextArea
 
 from cli.tui.app import ConversationApp
@@ -55,6 +57,12 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position(
         painted = [row for row in transcript._rows if row.lines is not None]
         assert len(painted) < 200
         assert transcript.displays("tool-999")
+        index = transcript._index["tool-999"]
+        line = transcript._offsets[index] + transcript._rows[index].gap
+        text = transcript._text_line(line)
+        selection = Selection(Offset(1, line), Offset(len(text), line))
+        assert transcript.get_selection(selection) == (text[1:], "\n")
+        assert [row for row in transcript._rows if row.lines is not None] == painted
 
         # Opening a step keeps its header on the same screen line.
         header = transcript._offsets[transcript._index["tool-999"]] - transcript.scroll_y
