@@ -453,6 +453,32 @@ function Get-Binding($CommandAst) {
     return @{ bound = $bound; unbound = $unbound; errors = $errors }
 }
 
+function Test-LiteralCliSyntax($Ast) {
+    # Check the original syntax tree: the ordinary command plan deliberately
+    # omits standalone expressions and resolves some variable assignments.
+    if ($null -ne $Ast.ScriptRequirements) { return $false }
+    $other = $Ast.Find({ param($node)
+        switch ($node.GetType().Name) {
+            'ScriptBlockAst' { return ($null -ne $node.Parent) }
+            'NamedBlockAst' { return (-not $node.Unnamed) }
+            'PipelineAst' { return [bool]$node.Background }
+            'PipelineChainAst' { return [bool]$node.Background }
+            'CommandAst' { return ($node.CommandElements[0].Extent.Text -ine 'vbot' -or [string]$node.InvocationOperator -ne 'Unknown') }
+            'CommandParameterAst' { return $false }
+            'ConstantExpressionAst' { return $false }
+            'StringConstantExpressionAst' {
+                if ([string]$node.StringConstantType -ne 'BareWord') { return $false }
+                # Stop-parsing tails have native environment substitution on Windows.
+                return ($node.Value -eq '--%' -or $node.Value -notmatch '^[\w./\\:=,@%+\-]+$')
+            }
+            'FileRedirectionAst' { return $false }
+            'MergingRedirectionAst' { return $false }
+            default { return $true }
+        }
+    }, $true)
+    return ($null -eq $other)
+}
+
 function Get-Analysis([string]$Text) {
     $tokens = $null
     $parseErrors = $null
@@ -463,6 +489,9 @@ function Get-Analysis([string]$Text) {
         if ($parseError.IncompleteInput) { $result.incomplete = $true }
     }
     if ($result.errors.Count -gt 0) { return $result }
+    if ($Text.IndexOf('vbot', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        $result.literal_cli_syntax = Test-LiteralCliSyntax $ast
+    }
 
     $functions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {

@@ -565,7 +565,9 @@ class CommandChecker:
                         _shown(command.source),
                         "protected_location",
                         location="vbot_cli",
-                        hint="Run vbot in a separate shell call from other commands.",
+                        hint=(
+                            "Run vbot in its own shell call with literal arguments and file paths."
+                        ),
                     )
                 continue
             name = command.name.casefold().removesuffix(".ps1")

@@ -53,7 +53,56 @@ def parse_bash(text: str) -> Script:
         return Script(error="bash could not parse the command line")
     lowering = _Lowering(source)
     lowering.statements(tree.root_node, ())
+    if b"vbot" in source:
+        lowering.script.literal_cli_syntax = _literal_cli_syntax(tree.root_node)
     return lowering.script
+
+
+def _literal_cli_syntax(root: Node) -> bool:
+    """Prove the whole script contains only literal commands and file redirections."""
+    containers = {
+        "program",
+        "list",
+        "pipeline",
+        "command",
+        "command_name",
+        "redirected_statement",
+        "file_redirect",
+        "string",
+        "concatenation",
+    }
+    leaves = {
+        "comment",
+        "number",
+        "raw_string",
+        "string_content",
+        "file_descriptor",
+        ";",
+        "&&",
+        "||",
+        "|",
+        "|&",
+        '"',
+        ">&",
+        "<&",
+        *_FILE_REDIRECTS,
+    }
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == "command_name" and node.text != b"vbot":
+            return False
+        if node.type in containers:
+            pending.extend(node.children)
+        elif node.type == "word":
+            # Bare words must not expand globs, tildes, braces or other shell
+            # syntax. Quoted literals accept arbitrary document text.
+            text = node.text
+            if text is None or not re.fullmatch(r"[\w./:=,@%+\-]+", text.decode("utf-8")):
+                return False
+        elif node.type not in leaves:
+            return False
+    return True
 
 
 class _Lowering:

@@ -364,6 +364,7 @@ def lower(result: dict[str, Any]) -> Script:
             reason = "the command line is incomplete"
         return Script(error=reason)
     script = Script(
+        literal_cli_syntax=result.get("literal_cli_syntax") is True,
         assigned={str(name) for name in result.get("assigned") or []},
         functions=frozenset(str(name).lower() for name in result.get("functions") or []),
         environment_changed=bool(result.get("environment_changed")),

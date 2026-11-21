@@ -164,14 +164,14 @@ class CommandPlan:
     urls: tuple[str, ...]
     hosts: tuple[str, ...] = ()
     mentions: tuple[PlannedPathAccess, ...] = ()
-    has_unlisted_shell_work: bool = False
+    literal_cli_syntax: bool = False
 
     @property
     def instance_cli_only(self) -> bool:
         """Only direct instance CLI invocations can share its process-tree grant."""
         return (
             bool(self.commands)
-            and not self.has_unlisted_shell_work
+            and self.literal_cli_syntax
             and all(command.instance_cli for command in self.commands)
         )
 
