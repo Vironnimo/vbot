@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import logging
 import os
 from collections.abc import Callable
@@ -289,6 +290,12 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
         index, asset, fallback = [
             client.get(path) for path in ("/", "/assets/app.js", "/agents/main")
         ]
+        hashed = "/assets/app-a1b2c3d4.js"
+        compressed = client.get(hashed, headers={"Accept-Encoding": "gzip"})
+        identity = client.get(hashed, headers={"Accept-Encoding": "gzip;q=0"})
+        cached = client.get(
+            hashed, headers={"Accept-Encoding": "gzip", "If-None-Match": compressed.headers["etag"]}
+        )
         health = client.get("/health")
         missing_run = client.get("/api/runs/missing/events")
         unknown_method = client.post("/api/rpc", json={"method": "unknown.method"})
@@ -310,6 +317,14 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
     assert '<div id="app"></div>' in index.text
     assert index.headers["cache-control"] == fallback.headers["cache-control"] == document_cache
     assert asset.text == "console.log('webui');"
+    assert compressed.content == identity.content == asset.content
+    assert compressed.headers["content-encoding"] == "gzip"
+    assert "content-encoding" not in identity.headers
+    assert identity.headers["etag"] != compressed.headers["etag"]
+    assert cached.status_code == 304
+    for response in (identity, compressed, cached):
+        assert "immutable" in response.headers["cache-control"]
+        assert "Accept-Encoding" in response.headers["vary"]
     assert '<script type="module" src="/assets/app.js"></script>' in fallback.text
     assert health.json() == {"status": "ok"}
     assert missing_run.status_code == 404
@@ -378,4 +393,7 @@ def _write_webui_build(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (assets_dir / "app.js").write_text("console.log('webui');", encoding="utf-8")
+    hashed = assets_dir / "app-a1b2c3d4.js"
+    hashed.write_bytes((assets_dir / "app.js").read_bytes())
+    (assets_dir / (hashed.name + ".gz")).write_bytes(gzip.compress(hashed.read_bytes()))
     return dist_dir

@@ -1,4 +1,5 @@
 import path from 'path';
+import { gzipSync } from 'node:zlib';
 
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
@@ -7,7 +8,29 @@ import { webuiBuildIdentity } from './scripts/webui-build-identity.mjs';
 import { extensionSdkSourceAliases } from './scripts/extension-sdk.mjs';
 
 export default defineConfig({
-  plugins: [svelte(), webuiBuildIdentity()],
+  plugins: [
+    svelte(),
+    webuiBuildIdentity(),
+    {
+      name: 'precompress-webui-assets',
+      apply: 'build',
+      generateBundle: {
+        order: 'post',
+        handler(_options, bundle) {
+          for (const [fileName, asset] of Object.entries(bundle)) {
+            if (!/^assets\/.+\.(js|css)$/.test(fileName)) continue;
+            const source = asset.type === 'chunk' ? asset.code : asset.source;
+            if (Buffer.byteLength(source) < 1024) continue;
+            this.emitFile({
+              type: 'asset',
+              fileName: fileName + '.gz',
+              source: gzipSync(source),
+            });
+          }
+        },
+      },
+    },
+  ],
   resolve: {
     alias: [
       ...extensionSdkSourceAliases(),

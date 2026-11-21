@@ -4,6 +4,8 @@ Read this reference only for WebUI application-shell, access gate and pairing, n
 
 Before changing editor-replacing navigation or pending-save handling, read `webui/autosave.md` for participant integration. This file owns the App-level transition and failure presentation below.
 
+
+The build emits gzip variants of JavaScript and CSS assets of at least 1 KiB. The server negotiates them under `/assets/` and gives content-hashed assets a one-year immutable cache lifetime.
 ## Ownership
 
 `main.js` mounts the access gate, which mounts `App.svelte` once the server lets the page in (Access gate below). `App.svelte` composes the major views and creates the long-lived application controller and the navigator. `appController.js` owns global loading, server-event dispatch, and refresh coordination; `lib/navigation.svelte.js` owns the displayed Location and browser history (Navigation below). `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. Its private `components/shell/menu.svelte.js` owns action derivation, selection snapshots and editing/native actions; rendering, positioning, keyboard and dismissal come from the shared `components/ui/ContextMenu.svelte` (`design.md` -> Shared controls). The shell keeps navigation and mounting. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigation.svelte.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.

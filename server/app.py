@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from pathlib import Path
@@ -126,6 +127,8 @@ from server.rpc.managed_service_methods import close_services, start_services
 from server.rpc.methods import dispatch_rpc
 
 if TYPE_CHECKING:
+    from starlette.types import Scope
+
     from server.access.tls import TlsContextHolder
 
 JsonObject = dict[str, Any]
@@ -879,11 +882,61 @@ class _WebUIAssetFiles(StaticFiles):
     """
 
     @override
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        from starlette.exceptions import HTTPException as StaticFileError
+
+        # Only content-addressed Vite assets can outlive a deployment.
+        if not re.search(r"-[A-Za-z0-9_-]{8}\.[a-zA-Z0-9]+$", path):
+            return await super().get_response(path, scope)
+        headers = Request(scope).headers
+        media_type = {".js": "text/javascript", ".css": "text/css"}.get(Path(path).suffix)
+        response = None
+        if (
+            media_type
+            and "range" not in headers
+            and _accepts_gzip(headers.get("accept-encoding", ""))
+        ):
+            try:
+                response = await super().get_response(path + ".gz", scope)
+            except StaticFileError as error:
+                if error.status_code != 404:
+                    raise
+            else:
+                response.headers["Content-Type"] = media_type
+                response.headers["Content-Encoding"] = "gzip"
+        if response is None:
+            response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        if media_type:
+            response.headers["Vary"] = "Accept-Encoding"
+        return response
+
+    @override
     def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
         # ``get_path`` passes the request path normalized with the platform's separators.
         if _webui_relative_parts(path.replace(os.sep, "/")) is None:
             return "", None
         return super().lookup_path(path)
+
+
+def _accepts_gzip(header: str) -> bool:
+    wildcard = False
+    for entry in header.lower().split(","):
+        encoding, separator, parameter = entry.strip().partition(";")
+        encoding = encoding.strip()
+        if encoding not in {"gzip", "*"}:
+            continue
+        accepted = not separator
+        if separator:
+            name, _, weight = parameter.partition("=")
+            if name.strip() == "q" and re.fullmatch(
+                r"(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)", weight.strip()
+            ):
+                accepted = float(weight) > 0
+        if encoding == "gzip":
+            return accepted
+        wildcard = accepted
+    return wildcard
 
 
 def _webui_relative_parts(requested_path: str) -> tuple[str, ...] | None:
