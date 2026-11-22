@@ -29,6 +29,7 @@ from desktop import settings as desktop_settings
 from desktop.speech import server_client as speech_server_client
 from desktop.speech.capture import AudioCapture, CaptureStatus, CaptureSubscription
 from desktop.speech.microphone import MicrophoneService
+from desktop.wakeword import engine as engine_module
 from desktop.wakeword.commands import CommandRecorder
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.contracts import VoiceControlError
@@ -927,7 +928,13 @@ def test_catalog_add_selects_only_after_install_and_respects_the_active_limit(
 ) -> None:
     rig = voice_rig(start=False)
     ids = [model["id"] for model in rig.voice.list_models()][:8]
-    rig.voice.update_config({"active_model_ids": ids})
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            engine_module,
+            "_model_digest",
+            lambda _path: pytest.fail("hashed during config validation"),
+        )
+        rig.voice.update_config({"active_model_ids": ids})
     before = rig.voice.status()
     model_id = "catalog/hey_spock"
 

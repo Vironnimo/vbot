@@ -13,7 +13,7 @@ import itertools
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -271,8 +271,8 @@ class VoiceController:
 
     def update_config(self, changes: object) -> dict[str, Any]:
         """Validate, persist and apply one partial config change; returns the status."""
-        known_model_ids = self._known_model_ids()
         with self._mutation_lock:
+            known_models = self._refresh_labels()
             with self._lock:
                 server_url = self._server_url
             section = desktop_settings.update_section(
@@ -281,7 +281,7 @@ class VoiceController:
                     raw,
                     changes,
                     server_url=server_url,
-                    known_model_ids=known_model_ids.__contains__,
+                    known_model_ids=known_models.__contains__,
                 ),
                 self._settings_path,
             )
@@ -324,28 +324,29 @@ class VoiceController:
         """Return the downloadable catalog and the imported models."""
         with self._catalog_lock:
             models = self._catalog.list_models()
-        self._store_labels(models)
+            self._store_labels({model.id: model.label for model in models})
         return [model.to_dict() for model in models]
 
     def import_model(self, filename: str, content: bytes) -> dict[str, Any]:
         """Install one model; activates it while fewer than the maximum phrases are active."""
         with self._catalog_lock:
             descriptor = self._catalog.import_model(filename, content)
-        self._ensure_labels(force=True)
         return self._select_model(descriptor)
 
     def model_label(self, model_id: object) -> str:
         """Validate a catalog selection before native page consent."""
+        return self._resolve_model(model_id).label
+
+    def _resolve_model(self, model_id: object) -> WakewordModelDescriptor:
         if not isinstance(model_id, str):
             raise WakewordModelError("Wakeword model id must be text")
         with self._catalog_lock:
-            return self._catalog.resolve(model_id).label
+            return self._catalog.resolve(model_id)
 
     def add_model(self, model_id: object) -> dict[str, Any]:
         """Install and select a catalog phrase; failed downloads never select it."""
-        self.model_label(model_id)
-        assert isinstance(model_id, str)
-        descriptor = self._catalog.resolve(model_id)
+        descriptor = self._resolve_model(model_id)
+        model_id = descriptor.id
         cancelled = threading.Event()
         with self._lock:
             if self._model_download is not None or self._closed:
@@ -373,7 +374,6 @@ class VoiceController:
 
         try:
             descriptor = self._catalog.install_model(model_id, progress=report, cancelled=cancelled)
-            self._ensure_labels(force=True)
             result = self._select_model(descriptor, cancelled=cancelled)
             with self._lock:
                 retry = (
@@ -406,7 +406,7 @@ class VoiceController:
                 raise WakewordModelError(
                     "Wakeword download cancelled", error_code="wakeword_model_download_cancelled"
                 )
-            known_model_ids = self._known_model_ids()
+            known_models = self._refresh_labels()
             with self._lock:
                 server_url = self._server_url
 
@@ -429,7 +429,7 @@ class VoiceController:
                         ),
                     },
                     server_url=server_url,
-                    known_model_ids=known_model_ids.__contains__,
+                    known_model_ids=known_models.__contains__,
                 )
 
             section = desktop_settings.update_section(
@@ -1108,27 +1108,24 @@ class VoiceController:
 
     # -- Catalog helpers -------------------------------------------------------
 
-    def _known_model_ids(self) -> frozenset[str]:
+    def _refresh_labels(self) -> dict[str, str]:
         with self._catalog_lock:
-            models = self._catalog.list_models()
-        self._store_labels(models)
-        return frozenset(model.id for model in models)
+            labels = self._catalog.model_labels()
+            self._store_labels(labels)
+            return labels
 
     def _ensure_labels(self, *, force: bool = False) -> None:
         with self._lock:
             if self._labels_loaded and not force:
                 return
         try:
-            with self._catalog_lock:
-                models = self._catalog.list_models()
+            self._refresh_labels()
         except Exception:
             logger.warning("Wakeword model labels could not be read", exc_info=True)
-            return
-        self._store_labels(models)
 
-    def _store_labels(self, models: Sequence[WakewordModelDescriptor]) -> None:
+    def _store_labels(self, labels: dict[str, str]) -> None:
         with self._lock:
-            self._labels = {model.id: model.label for model in models}
+            self._labels = labels
             self._labels_loaded = True
 
 
