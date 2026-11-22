@@ -193,8 +193,27 @@ def reserved_model_name(name: str) -> bool:
 
 
 def called_tool_name(
-    name: str, offered: Collection[str], *, registered: Container[str] = ()
+    name: str,
+    offered: Collection[str],
+    *,
+    registered: Container[str] = (),
+    arguments: object = None,
 ) -> str:
+    """Resolve a Model call before scheduling, authorization and persistence."""
+    resolved = _called_name(name, offered, registered=registered)
+    if (
+        resolved == "computer"
+        and resolved in offered
+        and "computer_batch" in offered
+        and isinstance(arguments, dict)
+        and isinstance(arguments.get("actions"), list)
+        and arguments.keys() <= {"actions", "computer_id", "window_id"}
+    ):
+        return "computer_batch"
+    return resolved
+
+
+def _called_name(name: str, offered: Collection[str], *, registered: Container[str]) -> str:
     """Return the offered Tool that the called ``name`` clearly means, else ``name``.
 
     ``offered`` holds the registry names of the Tools in the Model request. A
@@ -210,7 +229,7 @@ def called_tool_name(
         return name
     markup = _LEAKED_MARKUP.search(name)
     if markup is not None and markup.start() > 0 and name[: markup.start()].strip():
-        return called_tool_name(name[: markup.start()].strip(), offered, registered=registered)
+        return _called_name(name[: markup.start()].strip(), offered, registered=registered)
     bare = name.strip()
     for prefix in _WRAPPER_PREFIXES:
         if bare.casefold().startswith(prefix):

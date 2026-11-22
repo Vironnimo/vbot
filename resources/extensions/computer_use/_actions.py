@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._keys import KeyChordError, chord_text, parse_chords, parse_modifiers
-from ._tools import ACTIONS, MAX_PATH_POINTS
+from ._tools import ACTIONS, MAX_PATH_POINTS, WINDOW_ACTIONS
 
 type Point = tuple[int, int]
 
@@ -64,7 +64,7 @@ _FIELDS: dict[str, frozenset[str]] = {
 # Window selection applies to observations and input; an element is an alternative
 # to screenshot coordinates for an ordinary left click.
 _FIELDS = {
-    name: fields | ({"window_id"} if name not in {"zoom", "cursor_position", "wait"} else set())
+    name: fields | ({"window_id"} if name in WINDOW_ACTIONS else set())
     for name, fields in _FIELDS.items()
 }
 _FIELDS["left_click"] |= {"element_id"}

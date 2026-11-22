@@ -45,6 +45,7 @@ ACTIONS = (
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
 APPS_ACTIONS = ("list", "windows", "open", "request", "release")
+WINDOW_ACTIONS = frozenset(ACTIONS) - {"zoom", "cursor_position", "wait"}
 MAX_BATCH_ACTIONS = 60
 MAX_PATH_POINTS = 200
 
@@ -796,13 +797,33 @@ def normalize_batch(arguments: Any) -> Any:
     )
     if not isinstance(repaired, dict) or not isinstance(repaired.get("actions"), list):
         return repaired
+    window = repaired.pop("window_id", None)
+    if window is not None and (not isinstance(window, str) or not window.strip()):
+        raise _refuse("computer_batch", "window_id needs the window id returned by computer_apps.")
     items = []
+    scoped = False
     for number, item in enumerate(repaired["actions"], start=1):
         try:
-            items.append(_normalized_action(_ITEM_CONTRACT, item, "computer_batch"))
+            action = _normalized_action(_ITEM_CONTRACT, item, "computer_batch")
+            if window is not None and (
+                not isinstance(action, dict)
+                or not isinstance(action.get("action"), str)
+                or action["action"] not in ACTIONS
+            ):
+                raise _refuse(
+                    "computer_batch", "supply one action from: " + ", ".join(ACTIONS) + "."
+                )
+            if window is not None and action["action"] in WINDOW_ACTIONS:
+                if action.get("window_id", window) != window:
+                    raise _refuse("computer_batch", "window_id disagrees with the batch window.")
+                action["window_id"] = window
+                scoped = True
+            items.append(action)
         except ToolContractError as error:
             message = str(error).removeprefix("computer_batch was not run: ")
             raise _refuse("computer_batch", f"action {number}: {message}") from None
+    if window is not None and items and not scoped:
+        raise _refuse("computer_batch", "None of these actions takes a window_id. Omit it.")
     repaired["actions"] = items
     return repaired
 

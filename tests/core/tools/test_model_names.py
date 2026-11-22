@@ -135,6 +135,17 @@ def test_file_edit_names_resolve_to_the_offered_edit_dialect(
 
 
 def test_a_real_tool_wins_over_a_harness_name() -> None:
+    batch = {"actions": [{"action": "screenshot"}]}
+    desktop = ("computer", "computer_batch")
+    assert called_tool_name("computer", desktop, arguments=batch) == "computer_batch"
+    assert called_tool_name("computer", ("computer",), arguments=batch) == "computer"
+    assert (
+        called_tool_name("computer", ("computer_batch",), registered=desktop, arguments=batch)
+        == "computer"
+    )
+    assert (
+        called_tool_name("computer", desktop, arguments={**batch, "action": "type"}) == "computer"
+    )
     assert called_tool_name("terminal", (BASH_TOOL_NAME, "terminal")) == "terminal"
     assert called_tool_name("Terminal", (BASH_TOOL_NAME, "terminal")) == "terminal"
     assert called_tool_name("terminal", (BASH_TOOL_NAME,)) == BASH_TOOL_NAME
