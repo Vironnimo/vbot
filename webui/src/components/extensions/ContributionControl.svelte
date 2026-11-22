@@ -50,32 +50,42 @@
     sourceHandle?.refresh();
   }
 
-  $effect(() => {
-    const active = !repeated || visible;
-    let parameters;
-    let bindingError;
+  const sourceBinding = $derived.by(() => {
     try {
-      parameters = bindContributionParams(descriptor.source?.params, context);
+      return {
+        params: bindContributionParams(descriptor.source?.params, context),
+      };
     } catch (failure) {
-      parameters = null;
-      bindingError = failure;
+      return { error: failure.message };
     }
-    JSON.stringify([
-      descriptor.id,
-      descriptor.epoch,
-      descriptor.source,
-      parameters,
-    ]);
+  });
+  // Streaming can replace the composer context while the bound request stays the same.
+  const sourceKey = $derived(
+    descriptor.source &&
+      JSON.stringify([
+        descriptor.id,
+        descriptor.epoch,
+        descriptor.source,
+        sourceBinding,
+      ]),
+  );
+
+  $effect(() => {
+    const active = sourceKey && (!repeated || visible);
     return untrack(() => {
       const generation = ++revision;
       response = null;
-      error = bindingError?.message ?? '';
-      if (!descriptor.source || !active || parameters === null) return;
-      sourceHandle = registry.watchSource(descriptor, parameters, (next) => {
-        if (generation !== revision || busy) return;
-        response = next.result;
-        error = next.error?.message ?? '';
-      });
+      error = sourceBinding.error ?? '';
+      if (!active || !sourceBinding.params) return;
+      sourceHandle = registry.watchSource(
+        descriptor,
+        sourceBinding.params,
+        (next) => {
+          if (generation !== revision || busy) return;
+          response = next.result;
+          error = next.error?.message ?? '';
+        },
+      );
       const current = sourceHandle;
       return () => {
         ++revision;

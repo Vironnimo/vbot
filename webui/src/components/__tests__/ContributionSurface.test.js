@@ -86,9 +86,9 @@ async function settle() {
   }
 }
 
-function mountSurface() {
+function mountSurface(entry = descriptor) {
   const source = reactiveProps({
-    entries: [descriptor],
+    entries: [entry],
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -96,7 +96,7 @@ function mountSurface() {
     notifyError,
   });
   const props = reactiveProps({
-    surface: descriptor.surface,
+    surface: entry.surface,
     context: { session_id: 'first' },
   });
   instance = mount(ContributionContextHost, {
@@ -284,6 +284,32 @@ describe('ContributionSurface operations', () => {
     expect(document.body.textContent).toContain('Computer idle');
     expect(stopButton()).toBeNull();
     expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('keeps the desktop stop button mounted while streaming updates the composer', async () => {
+    const refresh = deferred();
+    invoke.mockResolvedValueOnce(stop).mockReturnValueOnce(refresh.promise);
+    const { props } = mountSurface({
+      ...descriptor,
+      source: { operation: 'read', resource: 'control' },
+    });
+    await settle();
+    const button = stopButton();
+    button.focus();
+    invalidate();
+    await settle();
+
+    for (const output_speed of [12, 15, 21]) {
+      props.context = { ...props.context, output_speed };
+      await settle();
+      expect(stopButton()).toBe(button);
+      expect(document.activeElement).toBe(button);
+      expect(button.disabled).toBe(false);
+    }
+    expect(invoke).toHaveBeenCalledTimes(2);
+    refresh.resolve({ items: [] });
+    await settle();
+    expect(stopButton()).toBeNull();
   });
 
   it('matches custom Resource sources locally or across owners, only within the current epoch', async () => {
