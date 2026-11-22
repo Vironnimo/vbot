@@ -199,25 +199,21 @@ def test_transcribe_accepts_another_container(make_client: Callable[..., Any]) -
 )
 def test_transcribe_retries_retryable_failures(
     make_client: Callable[..., Any],
-    cancel: threading.Event,
     monkeypatch: pytest.MonkeyPatch,
     reply: httpx.Response,
     delay: float,
 ) -> None:
     waits: list[float] = []
 
-    def wait(seconds: float) -> bool:
-        waits.append(seconds)
-        return False
-
-    monkeypatch.setattr(cancel, "wait", wait)
     server = ScriptedServer(
         reply,
         connect_error(),
         httpx.Response(200, json={"text": "hi"}),
     )
 
-    assert make_client(server).transcribe(b"audio") == "hi"
+    client = make_client(server)
+    monkeypatch.setattr(client, "_wait_before_retry", waits.append)
+    assert client.transcribe(b"audio") == "hi"
     assert len(server.requests) == 3
     assert waits == [delay, 0.0]
 
@@ -296,11 +292,13 @@ def test_wav_upload_budget_counts_the_header_once_and_honors_small_limits(
     client = make_client(ScriptedServer(rpc_ok({"setting": {"value": limit}})))
 
     if expected is None:
-        with pytest.raises(SpeechServerError) as raised:
-            client.wav_upload_budget_bytes()
-        assert raised.value.error_code == "speech_to_text_unavailable"
+        for budget in (client.wav_upload_budget_bytes, client.upload_budget_bytes):
+            with pytest.raises(SpeechServerError) as raised:
+                budget()
+            assert raised.value.error_code == "speech_to_text_unavailable"
     else:
         assert client.wav_upload_budget_bytes() == expected
+        assert client.upload_budget_bytes() == expected - 44
 
 
 @pytest.mark.parametrize(
@@ -309,7 +307,7 @@ def test_wav_upload_budget_counts_the_header_once_and_honors_small_limits(
         [rpc_error("invalid_request")],
         [rpc_ok({"setting": {"value": "big"}})],
         [rpc_ok({"setting": {"value": True}})],
-        [rpc_ok({"setting": {"value": 44}})],
+        [rpc_ok({"setting": {"value": 0}})],
         [rpc_ok({})],
         [connect_error() for _ in range(MAX_ATTEMPTS)],
     ],
@@ -355,17 +353,45 @@ def test_a_cancelled_client_sends_nothing(
     assert server.requests == []
 
 
+@pytest.mark.parametrize("stop", ["cancel", "close"])
 def test_cancellation_interrupts_a_retry_backoff(
-    make_client: Callable[..., Any], cancel: threading.Event
+    make_client: Callable[..., Any],
+    cancel: threading.Event,
+    monkeypatch: pytest.MonkeyPatch,
+    stop: str,
 ) -> None:
-    def fail_and_cancel(_request: httpx.Request) -> httpx.Response:
+    waiting = threading.Event()
+
+    def backoff(_attempt: int) -> float:
+        waiting.set()
+        return 30.0
+
+    monkeypatch.setattr(server_client_module, "_backoff_delay", backoff)
+    server = ScriptedServer(httpx.Response(503))
+    client = make_client(server)
+    errors: list[Exception] = []
+
+    def transcribe() -> None:
+        try:
+            client.transcribe(b"audio")
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=transcribe)
+    worker.start()
+    try:
+        assert waiting.wait(1)
+        if stop == "cancel":
+            cancel.set()
+        else:
+            client.close()
+            assert not cancel.is_set()
+        worker.join(1)
+        assert not worker.is_alive()
+    finally:
         cancel.set()
-        return httpx.Response(503)
-
-    server = ScriptedServer(fail_and_cancel)
-
-    with pytest.raises(SpeechRequestCancelled):
-        make_client(server).transcribe(b"audio")
+        worker.join(1)
+    assert len(errors) == 1 and isinstance(errors[0], SpeechRequestCancelled)
     assert len(server.requests) == 1
 
 

@@ -700,17 +700,18 @@ def test_a_failed_recording_start_releases_the_recording_and_keeps_listening(
 
 
 @pytest.mark.parametrize(
-    ("speech", "problem"),
+    ("speech", "upload_limit", "problem"),
     [
-        ({"configured": False, "usable": False}, "speech_to_text_unconfigured"),
-        ({"configured": True, "usable": False}, "speech_to_text_unavailable"),
+        ({"configured": False, "usable": False}, None, "speech_to_text_unconfigured"),
+        ({"configured": True, "usable": False}, None, "speech_to_text_unavailable"),
+        ({"configured": True, "usable": True}, 45, "speech_to_text_unavailable"),
     ],
 )
 def test_speech_to_text_problems_block_command_phrases_only(
-    voice_rig: Callable[..., Rig], speech: dict[str, Any], problem: str
+    voice_rig: Callable[..., Rig], speech: dict[str, Any], upload_limit: int | None, problem: str
 ) -> None:
     rig = voice_rig(
-        server=FakeVoiceServer(speech=speech),
+        server=FakeVoiceServer(speech=speech, upload_limit=upload_limit),
         settings={
             "server_profiles": {
                 SERVER: {

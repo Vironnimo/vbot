@@ -41,6 +41,7 @@ import concurrent.futures
 import logging
 import random
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol, Self
 
@@ -167,7 +168,7 @@ class SpeechServerClient:
         self._request_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._closed = False
+        self._closed = threading.Event()
 
     @property
     def server_url(self) -> str:
@@ -177,9 +178,9 @@ class SpeechServerClient:
     def close(self) -> None:
         """Cancel outstanding requests and release their connections and loop."""
         with self._request_lock:
-            if self._closed:
+            if self._closed.is_set():
                 return
-            self._closed = True
+            self._closed.set()
             loop, thread = self._loop, self._thread
             if loop is None:
                 return  # No request opened the transport.
@@ -339,12 +340,9 @@ class SpeechServerClient:
         the limit minus the WAV header, keeping :data:`UPLOAD_SAFETY_FRACTION`
         of it. When the limit cannot be read, the server default is used, so a
         recording is never unbounded; an unreachable server is asked again on
-        the next call. Only cancellation raises.
+        the next call. An explicit limit too small for PCM16 makes speech unavailable.
         """
-        limit = self._get_upload_limit_bytes()
-        if limit <= WAV_HEADER_BYTES:
-            return DEFAULT_UPLOAD_BUDGET_BYTES
-        return _upload_budget_for_limit(limit)
+        return self.wav_upload_budget_bytes() - WAV_HEADER_BYTES
 
     def wav_upload_budget_bytes(self) -> int:
         """Return a complete WAV budget, including its header and one PCM sample."""
@@ -460,14 +458,14 @@ class SpeechServerClient:
                         f"{path} could not reach the server: {type(exc).__name__}"
                     ) from exc
                 logger.info("Retrying %s after %s", path, type(exc).__name__)
-                self._wait_before_retry(attempt)
+                self._wait_before_retry(_backoff_delay(attempt))
                 continue
             if response.status_code in RETRYABLE_STATUS_CODES and not last_attempt:
                 logger.info("Retrying %s after HTTP %s", path, response.status_code)
                 retry_after = retry_after_seconds(response.headers) or 0.0
                 if _error_code(_json_object(response)) == "devices_unavailable":
                     retry_after = max(30.0, retry_after)
-                self._wait_before_retry(attempt, retry_after=retry_after)
+                self._wait_before_retry(max(_backoff_delay(attempt), retry_after))
                 continue
             return response
         raise AssertionError("attempts must be at least 1")
@@ -487,12 +485,17 @@ class SpeechServerClient:
             authorization.rejected(self._server_url, header)
         return response
 
-    def _wait_before_retry(self, attempt: int, *, retry_after: float = 0.0) -> None:
-        if self._cancel.wait(max(_backoff_delay(attempt), retry_after)):
-            raise SpeechRequestCancelled("Speech server request cancelled")
+    def _wait_before_retry(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while True:
+            self._raise_if_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._closed.wait(min(remaining, _CANCELLATION_POLL_SECONDS))
 
     def _raise_if_cancelled(self) -> None:
-        if self._cancel.is_set() or self._closed:
+        if self._cancel.is_set() or self._closed.is_set():
             raise SpeechRequestCancelled("Speech server request cancelled")
 
 
@@ -501,16 +504,12 @@ def _backoff_delay(attempt: int) -> float:
     return float(min(2**attempt + random.random(), MAX_BACKOFF_SECONDS))
 
 
-def _pcm_budget_with_headroom(limit_bytes: int) -> int:
-    return int((limit_bytes - WAV_HEADER_BYTES) * UPLOAD_SAFETY_FRACTION)
-
-
 def _upload_budget_for_limit(limit_bytes: int) -> int:
-    return max(_MIN_WAV_UPLOAD_BYTES, _pcm_budget_with_headroom(limit_bytes))
+    return max(2, int((limit_bytes - WAV_HEADER_BYTES) * UPLOAD_SAFETY_FRACTION))
 
 
 def _wav_upload_budget_for_limit(limit_bytes: int) -> int:
-    return max(_MIN_WAV_UPLOAD_BYTES, WAV_HEADER_BYTES + _pcm_budget_with_headroom(limit_bytes))
+    return WAV_HEADER_BYTES + _upload_budget_for_limit(limit_bytes)
 
 
 DEFAULT_UPLOAD_BUDGET_BYTES = _upload_budget_for_limit(DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES)

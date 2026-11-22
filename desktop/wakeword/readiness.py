@@ -103,7 +103,11 @@ class ReadinessWorker:
                 agent_problems = {
                     agent_id: _agent_problem(self._client, agent_id) for agent_id in agent_ids
                 }
-                budget = self._client.upload_budget_bytes() if actions else None
+                try:
+                    budget = self._client.upload_budget_bytes() if actions else None
+                except SpeechServerError as exc:
+                    speech_problem = speech_problem or exc.error_code
+                    budget = None
             except SpeechRequestCancelled:
                 return
             except Exception:
