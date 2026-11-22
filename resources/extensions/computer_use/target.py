@@ -125,8 +125,8 @@ class CaptureChangedError(TargetError):
 
 
 class DesktopTarget(Protocol):
-    def activate(self, window: WindowInfo) -> None:
-        """Activate this exact window; refuse a closed/replaced window or blocking modal."""
+    def activate(self, window: WindowInfo, *, keep_focus: bool = False) -> None:
+        """Select an available, unblocked window. With keep_focus it must already be in front."""
         ...
 
     def inspect(self, window: WindowInfo) -> dict[str, Any]:

@@ -274,14 +274,14 @@ class ComputerExecution:
                     "The selected app is no longer available. List apps again.", "app_not_found"
                 )
             return {"value": target.open(app)}
-        if operation in {"activate", "inspect", "element"}:
+        if operation in {"activate", "check_foreground_window", "inspect", "element"}:
             window = window_value(params.get("window"))
             if window is None:
                 raise TargetError(
                     "A selected window is required. Nothing was done.", "invalid_arguments"
                 )
-            if operation == "activate":
-                target.activate(window)
+            if operation in {"activate", "check_foreground_window"}:
+                target.activate(window, keep_focus=operation == "check_foreground_window")
                 return {}
             if operation == "inspect":
                 return target.inspect(window)

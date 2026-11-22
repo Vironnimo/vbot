@@ -196,8 +196,11 @@ class RemoteDesktopTarget:
     def open(self, app: AppInfo) -> bool:
         return bool(self._call("open", app=app_data(app))["value"])
 
-    def activate(self, window: WindowInfo) -> None:
-        self._call("activate", window=window_data(window))
+    def activate(self, window: WindowInfo, *, keep_focus: bool = False) -> None:
+        # An older Desktop must refuse the check instead of performing an activation.
+        self._call(
+            "check_foreground_window" if keep_focus else "activate", window=window_data(window)
+        )
 
     def inspect(self, window: WindowInfo) -> dict[str, Any]:
         return self._call("inspect", window=window_data(window))

@@ -246,6 +246,13 @@ COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "computer_id": _COMPUTER_PROPERTY,
+        "window_id": {
+            "type": "string",
+            "description": (
+                "Use one window for the batch. After input, the batch stops if another step "
+                "would bring that window back to the front. Omit to choose windows per action."
+            ),
+        },
         "actions": {
             "type": "array",
             "items": _BATCH_ITEM,
@@ -797,7 +804,7 @@ def normalize_batch(arguments: Any) -> Any:
     )
     if not isinstance(repaired, dict) or not isinstance(repaired.get("actions"), list):
         return repaired
-    window = repaired.pop("window_id", None)
+    window = repaired.get("window_id")
     if window is not None and (not isinstance(window, str) or not window.strip()):
         raise _refuse("computer_batch", "window_id needs the window id returned by computer_apps.")
     items = []
