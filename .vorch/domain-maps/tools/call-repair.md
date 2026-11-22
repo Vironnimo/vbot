@@ -62,3 +62,5 @@ A validation failure reports every problem at once in Agent-readable sentences (
 Each replay case has its own synthetic Session generation, shared by its reconstructed read stamps and dispatch context. Tool probes pass their persisted Session's generation so read-before-replacement checks behave as they do in Chat.
 
 `scripts/tool_lab/replay.py::Dispatcher` permits only `apply_patch`, `edit`, `write` and `read`. Before setup or dispatch it checks reconstructed file keys and every target after current production argument normalization, including move destinations, against the fresh case directory. External paths, traversal, links and indeterminate targets fail closed. An older corpus can omit targets that a new argument repair makes executable; an empty file list is not evidence of no effects. Coverage: `tests/scripts/tool_lab/test_tool_lab.py`.
+
+The `tool_lab sessions` audit reports Model and nested calls separately. Each group distinguishes Tool envelopes, program outcomes (including an ordinary nonzero exit), and partial effects recorded in display notices. A nested result forwarded by call_tool appears in each group without inflating the Model call count.

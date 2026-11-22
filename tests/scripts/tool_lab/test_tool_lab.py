@@ -66,14 +66,44 @@ def test_sessions_reads_a_copy_and_leaves_the_source_untouched(
     live.mkdir()
     write_bootstrap_marker(live)
     manager = ChatSessionManager(live)
-    manager.create("main", session_id="s1")
+    session = manager.create("main", session_id="s1")
+    seed_history(
+        session,
+        [
+            ChatMessage.assistant(
+                model="model",
+                content=None,
+                tool_calls=[
+                    ToolCall(id="command", name="bash", arguments={"command": "exit 3"}),
+                    ToolCall(id="edit", name="edit", arguments={}),
+                ],
+            ),
+            ChatMessage.tool(
+                tool_call_id="command",
+                name="bash",
+                content=json.dumps({"ok": True, "data": {"status": "exited", "exit_code": 3}}),
+            ),
+            ChatMessage.tool(
+                tool_call_id="edit",
+                name="edit",
+                content=json.dumps({"ok": True, "data": {"content": "One edit applied."}}),
+                tool_display={
+                    "details": [{"type": "notice", "level": "error", "text": "Second edit failed."}]
+                },
+            ),
+        ],
+    )
     manager.close()
     before = (live / "sessions.db").read_bytes()
 
     assert main(["sessions", str(live)]) == 0
 
     assert (live / "sessions.db").read_bytes() == before
-    assert capsys.readouterr().out.strip()
+    report = capsys.readouterr().out
+    assert "2 Model calls and 0 nested calls" in report
+    assert "2 ok, 0 failed" in report
+    assert "nonzero exit: 1" in report
+    assert "Partial Tool results: 1" in report
 
 
 def _patch_call(number: int, patch: str, result: dict[str, Any]) -> list[ChatMessage]:
