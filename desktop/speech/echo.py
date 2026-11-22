@@ -94,7 +94,7 @@ class WebRtcEchoStage:
         self,
         *,
         processor_factory: Callable[[int], EchoProcessor],
-        loopback: echo_reference.LoopbackBackend | None,
+        loopback_factory: Callable[[], echo_reference.LoopbackBackend | None],
         clock: Callable[[], float] = time.perf_counter,
         poll_interval: float = echo_reference._POLL_INTERVAL_S,
         retry_interval: float = echo_reference._RETRY_INTERVAL_S,
@@ -102,7 +102,7 @@ class WebRtcEchoStage:
         self.rate: int = ECHO_SAMPLE_RATE
         self.state: str = echo_reference.STATE_NO_REFERENCE
         self._processor_factory = processor_factory
-        self._loopback = loopback
+        self._loopback_factory = loopback_factory
         self._clock = clock
         self._poll_interval = poll_interval
         self._retry_interval = retry_interval
@@ -141,14 +141,17 @@ class WebRtcEchoStage:
         with self._lock:
             self._reference_stats = alignment._PlacementStats("reference", ECHO_SAMPLE_RATE)
             self._reset_reference()
-        if self._loopback is None:
+        # A retired monitor may still be unwinding after its bounded join. Each
+        # monitor owns the backend whose COM objects it initializes and releases.
+        loopback = self._loopback_factory()
+        if loopback is None:
             self._set_state(
                 echo_reference.STATE_NO_REFERENCE, "no playback loopback on this platform"
             )
             return
         self._set_state(echo_reference.STATE_ACTIVE, "opening the playback loopback")
         monitor = echo_reference.ReferenceMonitor(
-            self, self._loopback, self._poll_interval, self._retry_interval
+            self, loopback, self._poll_interval, self._retry_interval
         )
         with self._lock:
             self._monitor = monitor
@@ -406,4 +409,6 @@ def create_echo_stage() -> WebRtcEchoStage | None:
     except Exception as error:
         logger.warning("Echo cancellation unavailable: %s", type(error).__name__)
         return None
-    return WebRtcEchoStage(processor_factory=_LiveKitProcessor, loopback=windows.default_loopback())
+    return WebRtcEchoStage(
+        processor_factory=_LiveKitProcessor, loopback_factory=windows.default_loopback
+    )
