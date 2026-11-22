@@ -161,7 +161,8 @@ def test_bundled_hey_nabu_model_has_pinned_checksum(catalog: WakewordModelCatalo
 
 
 @pytest.mark.parametrize(
-    "response", ["valid", "checksum", "short", "oversized", "http-error", "invalid-model"]
+    "response",
+    ["valid", "busy-staging", "checksum", "short", "oversized", "http-error", "invalid-model"],
 )
 def test_catalog_installs_verified_models_atomically_and_reuses_downloads(
     catalog: WakewordModelCatalog,
@@ -202,7 +203,11 @@ def test_catalog_installs_verified_models_atomically_and_reuses_downloads(
             raise ValueError("incompatible shape")
 
         monkeypatch.setattr(engine_module, "_create_phrase_head", invalid)
-    if response == "valid":
+    if response == "busy-staging":
+        staging = target.parent / ".downloads" / entry["sha256"]
+        staging.mkdir(parents=True)
+        (staging / "busy").touch()
+    if response in {"valid", "busy-staging"}:
         assert catalog.install_model(model_id).installed
         assert catalog.resolve(model_id).installed
         assert target.read_bytes() == content

@@ -638,25 +638,38 @@ def test_a_failing_stage_is_replaced_by_pass_through(
     assert run.capture.status.state == "capturing"
 
 
+@pytest.mark.parametrize("mid_capture", [False, True], ids=["startup", "mid-capture"])
 def test_a_stage_that_cannot_open_passes_the_microphone_through(
     start_capture: Callable[..., Running],
+    mid_capture: bool,
 ) -> None:
     stage = FakeEchoStage()
     stage.fail_open = True
-    pool, _ = pool_of(stage)
     subscriptions: list[CaptureSubscription] = []
-
-    run = start_capture(
-        FakeSoundDevice(),
-        echo_cancellation=True,
-        echo_stages=pool,
-        subscribe=subscribe_to(subscriptions),
-    )
-    items = read_items(subscriptions[0], 2)
-
-    assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in items)
-    assert run.statuses[0].echo_state == "unavailable"
-    assert "stage.close" in stage.log
+    with gated_pool(stage) as (pool, ready, _):
+        if not mid_capture:
+            ready.set()
+        run = start_capture(
+            FakeSoundDevice(default_samplerate=44100),
+            echo_cancellation=True,
+            echo_stages=pool,
+            echo_stage_wait=0 if mid_capture else 5,
+            subscribe=subscribe_to(subscriptions),
+        )
+        if mid_capture:
+            first = read_items(subscriptions[0], 1)[0]
+            assert isinstance(first, AudioBlock) and first.recording_rate == 48000
+            assert run.statuses[0].echo_state == "starting"
+            ready.set()
+        items = read_items_until(
+            subscriptions[0],
+            lambda item: isinstance(item, AudioBlock) and item.recording_rate == 44100,
+        )
+        assert [item for item in items if isinstance(item, CaptureGap)] == (
+            [CaptureGap("echo_failed")] if mid_capture else []
+        )
+        assert run.capture.status.echo_state == "unavailable"
+        assert "stage.close" in stage.log
 
 
 def test_an_unavailable_echo_canceller_is_asked_once(

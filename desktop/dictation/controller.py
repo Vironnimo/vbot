@@ -38,10 +38,10 @@ import functools
 import logging
 import queue
 import threading
-import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any, Protocol
 
 from desktop import settings as desktop_settings
@@ -134,6 +134,7 @@ _SUBSCRIPTION_SECONDS = 30.0
 _READ_TIMEOUT_SECONDS = 0.05
 _CAPTURE_JOIN_SECONDS = 2.0
 _STOP_JOIN_SECONDS = 2.0
+_DONE_CUE_WAIT_SECONDS = 2.0  # Bound the Live hold when the playback driver stalls.
 _SERVER_NOT_READY = frozenset(
     {ERROR_SERVER_UNREACHABLE, ERROR_SPEECH_TO_TEXT_UNCONFIGURED, ERROR_SPEECH_TO_TEXT_UNAVAILABLE}
 )
@@ -211,7 +212,7 @@ class DictationController:
         own_server: Callable[[str], bool] = lambda _url: False,
         hotkey_supported: bool | None = None,
         hotkey_api_factory: Callable[[], HotkeyApi] | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = monotonic,
         piece_target_seconds: float = PIECE_TARGET_SECONDS,
         piece_search_seconds: float = PIECE_SEARCH_SECONDS,
     ) -> None:
@@ -449,11 +450,11 @@ class DictationController:
                 self._announce_recording(True)
                 try:
                     self._record(take, transcriber)
+                    self._play_done(take)
                 finally:
                     with self._lock:
                         self._state = STATE_TRANSCRIBING
                     self._announce_recording(False)
-                self._play(CUE_DONE)
                 text = transcriber.finish()
             finally:
                 transcriber.stop()
@@ -466,6 +467,30 @@ class DictationController:
     def _play(self, cue: str) -> None:
         if self._cues is not None:
             self._cues.play(cue)
+
+    def _play_done(self, take: _Take) -> None:
+        """Keep Live voice held through playback. Cancelling drops a still-queued cue."""
+        if take.cancelled.is_set():
+            raise _Cancelled
+        if self._cues is None:
+            return
+        deadline = monotonic() + _DONE_CUE_WAIT_SECONDS
+        finished = self._cues.play(CUE_DONE)
+        while True:
+            if take.cancelled.is_set():
+                with self._lock:
+                    stopping = self._stopped
+                if finished.cancel() or stopping:
+                    raise _Cancelled
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                finished.cancel()  # A cue still queued must not sound after releasing the hold.
+                return
+            try:
+                finished.result(timeout=min(_READ_TIMEOUT_SECONDS, remaining))
+                return
+            except TimeoutError:
+                continue
 
     def _announce_recording(self, recording: bool) -> None:
         """While a take records, the page holds a Live call and wake phrases pause."""

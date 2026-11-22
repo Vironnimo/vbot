@@ -23,6 +23,7 @@ import sys
 import threading
 import wave
 from collections.abc import Callable
+from concurrent.futures import Future
 
 logger = logging.getLogger("vbot.desktop.speech.cues")
 
@@ -103,25 +104,25 @@ class CuePlayer:
     def __init__(self, play_wav: Callable[[bytes], None] | None = None) -> None:
         self._play_wav = play_wav if play_wav is not None else _default_player()
         self._sounds: dict[str, bytes] = {}
-        self._queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
+        self._queue: queue.SimpleQueue[tuple[str, Future[None]] | None] = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._closed = False
 
-    def play(self, cue: str) -> None:
-        """Queue one cue (``CUE_*``)."""
-
-        if self._play_wav is None:
-            return
+    def play(self, cue: str) -> Future[None]:
+        """Queue one cue. Its future settles after playback, including a failed or silent cue."""
+        finished: Future[None] = Future()
         with self._lock:
-            if self._closed:
-                return
+            if self._closed or self._play_wav is None:
+                finished.set_result(None)
+                return finished
             if self._thread is None:
                 self._thread = threading.Thread(
                     target=self._run, name="vbot-desktop-cues", daemon=True
                 )
                 self._thread.start()
-        self._queue.put(cue)
+            self._queue.put((cue, finished))
+        return finished
 
     def close(self) -> None:
         """Stop after the queued cues; idempotent."""
@@ -136,7 +137,10 @@ class CuePlayer:
             thread.join(timeout=1.0)
 
     def _run(self) -> None:
-        while (cue := self._queue.get()) is not None:
+        while (item := self._queue.get()) is not None:
+            cue, finished = item
+            if not finished.set_running_or_notify_cancel():
+                continue
             try:
                 sound = self._sounds.get(cue)
                 if sound is None:
@@ -145,6 +149,8 @@ class CuePlayer:
                 self._play_wav(sound)
             except Exception:
                 logger.warning("Cue %s could not be played", cue, exc_info=True)
+            finally:
+                finished.set_result(None)
 
 
 def _default_player() -> Callable[[bytes], None] | None:

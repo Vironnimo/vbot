@@ -66,7 +66,8 @@ class ListenerSession:
         self.detection: DetectionLoop | None = None
         self.recorder: CommandRecorder | None = None
         self.pipeline: CommandPipeline | None = None
-        self.threads: list[threading.Thread] = []
+        self._threads_lock = threading.Lock()
+        self._threads: list[threading.Thread] = []
         self.budget_bytes = DEFAULT_UPLOAD_BUDGET_BYTES
         self.readiness: ReadinessWorker | None = None
 
@@ -83,17 +84,18 @@ class ListenerSession:
             return max(0.0, deadline - time.monotonic())
 
         stopped = True
+        if self.client is not None:
+            self.client.close()
         for component in (self.capture, self.detection, self.recorder):
             if component is not None and not component.join(remaining()):
                 stopped = False
-        if self.client is not None:
-            # Aborts requests still in flight so their workers end promptly.
-            self.client.close()
         if self.pipeline is not None and not self.pipeline.close(remaining()):
             stopped = False
         if self.readiness is not None and not self.readiness.join(remaining()):
             stopped = False
-        for thread in self.threads:
+        with self._threads_lock:
+            threads = self._threads.copy()
+        for thread in threads:
             thread.join(remaining())
             stopped = stopped and not thread.is_alive()
         if not stopped:
@@ -109,9 +111,18 @@ class ListenerSession:
         thread = threading.Thread(
             target=client.prepare_transcription, name="vbot-voice-prepare", daemon=True
         )
-        self.threads = [known for known in self.threads if known.is_alive()]
-        thread.start()
-        self.threads.append(thread)
+        self._start_thread(thread)
+
+    def start_mock(self, model_id: str, runtime: VoiceRuntime, events: MockEvents) -> None:
+        self._start_thread(MockListener(self, model_id, runtime, events))
+
+    def _start_thread(self, thread: threading.Thread) -> None:
+        with self._threads_lock:
+            if self.stop_event.is_set():
+                return
+            self._threads = [known for known in self._threads if known.is_alive()]
+            thread.start()
+            self._threads.append(thread)
 
 
 class ListenerEvents(MockEvents, Protocol):
@@ -232,11 +243,7 @@ class ListenerFactory:
         if mode == voice.MODE_UNAVAILABLE:
             raise ListenerStartError(voice.ERROR_VOICE_STACK_UNAVAILABLE)
         if mode == voice.MODE_MOCK:
-            session = ListenerSession(generation, threading.Event(), None)
-            session.threads.append(
-                MockListener(session, config.active_model_ids[0], self._runtime, events)
-            )
-            return session
+            return ListenerSession(generation, threading.Event(), None)
         if not server_url:
             raise ListenerStartError(ERROR_NO_SERVER)
         if refresh_devices:

@@ -44,21 +44,31 @@ def test_the_listen_cue_rings_out_past_its_loud_start() -> None:
 def test_cues_play_in_order_on_their_own_thread_past_a_failing_one() -> None:
     played: list[bytes] = []
     threads: set[str] = set()
-    done = threading.Event()
+    playing_first = threading.Event()
+    release_first = threading.Event()
 
     def play(sound: bytes) -> None:
         threads.add(threading.current_thread().name)
         played.append(sound)
         if len(played) == 1:
+            playing_first.set()
+            assert release_first.wait(2)
             raise RuntimeError("audio device busy")
-        if len(played) == 3:
-            done.set()
 
     player = CuePlayer(play)
-    for cue in (CUE_LISTEN, CUE_DONE, CUE_FAILED):
-        player.play(cue)
+    first = player.play(CUE_LISTEN)
+    try:
+        assert playing_first.wait(2)
+        assert not first.done()
+        assert player.play(CUE_CANCEL).cancel()
+        second = player.play(CUE_DONE)
+        last = player.play(CUE_FAILED)
+        assert not second.done()
+    finally:
+        release_first.set()
+        player.close()
 
-    assert done.wait(2)
-    player.close()
+    assert first.done() and second.done() and last.done()
+    assert player.play(CUE_DONE).done()
     assert played == [render_cue(CUE_LISTEN), render_cue(CUE_DONE), render_cue(CUE_FAILED)]
     assert threads == {"vbot-desktop-cues"}

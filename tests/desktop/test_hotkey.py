@@ -329,30 +329,53 @@ def _wait(predicate: Any, timeout: float = 2.0) -> None:
         deadline.cancel()
 
 
-def test_a_held_combination_reports_its_release_and_escape_while_held(tmp_path: Path) -> None:
+@pytest.mark.parametrize("escape", ["modified", "bare", "unarmed", "held-at-start", "held-at-arm"])
+def test_a_held_combination_reports_its_release_and_escape_while_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escape: str
+) -> None:
     events: list[str] = []
-    controller, created = _controller(
+    api = FakeHotkeyApi()
+    controller, _ = _controller(
         tmp_path,
+        api,
         on_press=lambda: events.append("press"),
         on_release=lambda: events.append("release"),
         on_escape=lambda: events.append("escape"),
     )
-    controller.update({"enabled": True})
+    shortcut = {0x7C} if escape == "bare" else {0x20, hotkey.VK_CONTROL, hotkey.VK_MENU}
+    with_escape = shortcut | {hotkey.VK_ESCAPE}
+    poll = (hotkey.WM_NULL, 0)
+    # Sample exact key states when Windows delivers each message. For a bare
+    # F13 hold, Escape can be polled before its registered message is read.
+    steps = [
+        (
+            (hotkey.WM_HOTKEY, hotkey.HOTKEY_ID),
+            with_escape if escape == "held-at-start" else shortcut,
+        ),
+        ((hotkey.WM_ARM_ESCAPE, 1) if escape == "held-at-arm" else poll, with_escape),
+    ]
+    if escape == "bare":
+        steps.append(((hotkey.WM_HOTKEY, hotkey.ESCAPE_HOTKEY_ID), with_escape))
+    steps.append((poll, set()))
+    next_message = api.next_message
+
+    def sample(timeout: float | None) -> tuple[int, int] | None:
+        if steps:
+            message, api.down = steps.pop(0)
+            return message
+        return next_message(timeout)
+
+    monkeypatch.setattr(api, "next_message", sample)
+    setting = {**BARE, "key": "F13"} if escape == "bare" else {}
+    controller.update({**setting, "enabled": True})
+    controller.arm_escape(escape not in {"unarmed", "held-at-arm"})
     controller.start()
-    api = created[0]
-    api.down |= {0x20, hotkey.VK_CONTROL, hotkey.VK_MENU}
-
-    api.messages.put((hotkey.WM_HOTKEY, hotkey.HOTKEY_ID))
-    _wait(lambda: events == ["press"])
-    # Escape with the modifiers still held is not the registered bare Escape.
-    api.down.add(hotkey.VK_ESCAPE)
-    _wait(lambda: events == ["press", "escape"])
-    api.down.discard(hotkey.VK_MENU)  # letting go of any key of the combination ends the hold
-    _wait(lambda: events == ["press", "escape", "release"])
-
-    controller.stop()
-    assert api.unregistered.wait(timeout=2)
-    assert events == ["press", "escape", "release"]
+    try:
+        _wait(lambda: "release" in events)
+        expected = ["escape"] if escape in {"modified", "bare"} else []
+        assert events == ["press", *expected, "release"]
+    finally:
+        controller.stop()
 
 
 def test_escape_is_claimed_only_while_armed_and_survives_a_new_combination(

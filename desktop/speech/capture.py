@@ -736,10 +736,10 @@ class AudioCapture:
         )
         return True
 
-    def _prepare_stage(self, capture_rate: int) -> None:
-        """Open the stage for ``capture_rate`` (again when the rate changed)."""
+    def _prepare_stage(self, capture_rate: int) -> bool:
+        """Open the stage for this rate. Return false when it needed a fallback."""
         if self._stage_rate and self._stage_open_rate == capture_rate:
-            return
+            return True
         if self._stage_rate:
             self._close_stage()
         try:
@@ -753,10 +753,11 @@ class AudioCapture:
             )
             self._stage_rate = 0
             self._replace_failed_stage()
-            return
+            return False
         self._stage_open_rate = capture_rate
         self._stage_rate = rate
         self._resampler = _create_resampler(rate)
+        return True
 
     def _replace_failed_stage(self) -> None:
         """Pass the microphone through (``unavailable``) for the rest of this capture.
@@ -846,12 +847,13 @@ class AudioCapture:
         self._emit(self._stage.flush())
         self._stage = stage
         self._stage_rate = 0  # the pass-through holds nothing to close
-        self._prepare_stage(capture_format.sample_rate)
+        attached = self._prepare_stage(capture_format.sample_rate)
         if self._stage_rate == pass_through_rate:
             self._resampler = resampler  # the 16 kHz projection continues seamlessly
         else:
-            self._deliver_gap(GAP_ECHO_ATTACHED)
-        logger.info("Echo cancellation became ready mid-capture (state=%s)", self._stage.state)
+            self._deliver_gap(GAP_ECHO_ATTACHED if attached else GAP_ECHO_FAILED)
+        if attached:
+            logger.info("Echo cancellation became ready mid-capture (state=%s)", self._stage.state)
         self._publish_echo_state()
 
     def _publish_echo_state(self) -> None:

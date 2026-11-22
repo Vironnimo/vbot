@@ -418,7 +418,8 @@ class DesktopBridge:
         """Switch recording destinations atomically with their consent checks."""
         with self._speech_lock:
             self._voice.set_server_url(url)
-            self._require_dictation().set_server_url(url)
+            if self._dictation is not None:
+                self._dictation.set_server_url(url)
 
     # -- Update restart --------------------------------------------------------
 

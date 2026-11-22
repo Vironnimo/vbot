@@ -170,6 +170,12 @@ class WakewordModelCatalog:
             except WakewordModelError:
                 logger.info("Selected wakeword needs a download (model=%s)", model_id)
 
+    def model_labels(self) -> dict[str, str]:
+        """Return selectable ids and labels without inspecting catalog binaries."""
+        labels = {entry["id"]: entry["label"] for entry in _CATALOG_ENTRIES}
+        labels.update((model.id, model.label) for model in self._custom_models())
+        return labels
+
     def list_models(self) -> list[WakewordModelDescriptor]:
         """Return catalog entries followed by valid imported models."""
         custom_models = sorted(
@@ -273,9 +279,6 @@ class WakewordModelCatalog:
             if cancelled.is_set():
                 raise ModelFilesCancelledError
             candidate.replace(target)
-            # A previously interrupted attempt can leave a redundant .part file.
-            _remove_file(staging / f"{filename}.part")
-            staging.rmdir()
         except ModelFilesCancelledError as exc:
             raise WakewordModelError(
                 "Wakeword download cancelled", error_code="wakeword_model_download_cancelled"
@@ -296,6 +299,12 @@ class WakewordModelCatalog:
                 "Wakeword model could not be downloaded. Try again.",
                 error_code="wakeword_model_download_failed",
             ) from exc
+        # The model is installed. A busy staging directory can be reused later.
+        _remove_file(staging / f"{filename}.part")
+        try:
+            staging.rmdir()
+        except OSError:
+            logger.debug("Wakeword staging directory cleanup deferred (model=%s)", model_id)
         logger.info("Wakeword model installed (model=%s)", model_id)
         return replace(descriptor, installed=True)
 

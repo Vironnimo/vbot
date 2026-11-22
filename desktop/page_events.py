@@ -34,8 +34,8 @@ in order from one queue. Producers never block:
   delivery is dropped, so a call never starts long after the user asked;
 - Voice events: at most :data:`MAX_PENDING_VOICE_EVENTS` wait; the oldest is
   dropped (the page notices the sequence gap and reads the status again);
-- Voice status: at most one snapshot waits; a newer one replaces its content
-  where it waits;
+- Voice status: at most one snapshot waits; a newer one replaces it at the
+  tail so intervening events keep their sequence order;
 - Session requests: at most one waits; a newer one replaces it where it waits;
 - update status and dictation state: at most one of each waits, like the Voice
   status;
@@ -329,9 +329,7 @@ class PageEventDispatcher:
             if self._closed or not origin:
                 return
             if self._pending_status is not None:
-                self._pending_status.detail = detail
-                self._pending_status.origin = origin
-                return
+                self._queue.remove(self._pending_status)
             push = _VoicePush(detail, origin)
             self._pending_status = push
             self._enqueue_locked(push)

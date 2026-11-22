@@ -29,6 +29,7 @@ from desktop import settings as desktop_settings
 from desktop.speech import server_client as speech_server_client
 from desktop.speech.capture import AudioCapture, CaptureStatus, CaptureSubscription
 from desktop.speech.microphone import MicrophoneService
+from desktop.wakeword import engine as engine_module
 from desktop.wakeword.commands import CommandRecorder
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.contracts import VoiceControlError
@@ -700,17 +701,18 @@ def test_a_failed_recording_start_releases_the_recording_and_keeps_listening(
 
 
 @pytest.mark.parametrize(
-    ("speech", "problem"),
+    ("speech", "upload_limit", "problem"),
     [
-        ({"configured": False, "usable": False}, "speech_to_text_unconfigured"),
-        ({"configured": True, "usable": False}, "speech_to_text_unavailable"),
+        ({"configured": False, "usable": False}, None, "speech_to_text_unconfigured"),
+        ({"configured": True, "usable": False}, None, "speech_to_text_unavailable"),
+        ({"configured": True, "usable": True}, 45, "speech_to_text_unavailable"),
     ],
 )
 def test_speech_to_text_problems_block_command_phrases_only(
-    voice_rig: Callable[..., Rig], speech: dict[str, Any], problem: str
+    voice_rig: Callable[..., Rig], speech: dict[str, Any], upload_limit: int | None, problem: str
 ) -> None:
     rig = voice_rig(
-        server=FakeVoiceServer(speech=speech),
+        server=FakeVoiceServer(speech=speech, upload_limit=upload_limit),
         settings={
             "server_profiles": {
                 SERVER: {
@@ -926,7 +928,13 @@ def test_catalog_add_selects_only_after_install_and_respects_the_active_limit(
 ) -> None:
     rig = voice_rig(start=False)
     ids = [model["id"] for model in rig.voice.list_models()][:8]
-    rig.voice.update_config({"active_model_ids": ids})
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            engine_module,
+            "_model_digest",
+            lambda _path: pytest.fail("hashed during config validation"),
+        )
+        rig.voice.update_config({"active_model_ids": ids})
     before = rig.voice.status()
     model_id = "catalog/hey_spock"
 
@@ -1057,6 +1065,7 @@ def test_a_routing_change_applies_without_reopening_the_microphone(
 @pytest.mark.parametrize("phase", ["recording", "transcribing"])
 def test_a_server_switch_mid_command_rebuilds_the_listener_and_drops_the_old_command(
     voice_rig: Callable[..., Rig],
+    monkeypatch: pytest.MonkeyPatch,
     phase: str,
 ) -> None:
     gate = threading.Event()
@@ -1068,8 +1077,27 @@ def test_a_server_switch_mid_command_rebuilds_the_listener_and_drops_the_old_com
         rig.say_command()
         wait_until(rig.server.transcribing.is_set)
 
-    rig.voice.set_server_url("http://other.lan:9000/")
-    gate.set()
+    reading, release = threading.Event(), threading.Event()
+    read_section = desktop_settings.read_section
+
+    def read_server_config(key: str, path: Path | None = None) -> dict[str, Any]:
+        reading.set()
+        assert release.wait(2)
+        return read_section(key, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desktop_settings, "read_section", read_server_config)
+        switch = threading.Thread(target=rig.voice.set_server_url, args=("http://other.lan:9000/",))
+        switch.start()
+        try:
+            assert reading.wait(2)
+            assert rig.voice.status()["recording"] is None
+            assert rig.engine.stopped.wait(2)
+            gate.set()
+        finally:
+            release.set()
+            switch.join(2)
+    assert not switch.is_alive()
     assert rig.sink.event_origins["recording_ended"] == SERVER
     assert rig.wait_state("off")["enabled"] is False
     assert rig.voice.retry()["enabled"] is False
@@ -1085,18 +1113,27 @@ def test_a_server_switch_mid_command_rebuilds_the_listener_and_drops_the_old_com
     assert len(rig.sd.streams) == 2
 
 
+@pytest.mark.parametrize("stop", ["disable", "listener_failed"])
 def test_stopping_voice_mid_transcription_discards_the_command(
     voice_rig: Callable[..., Rig],
+    stop: str,
 ) -> None:
+    before = set(threading.enumerate())
     gate = threading.Event()
     rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
     rig.wait_ready()
     rig.say_command()
     wait_until(rig.server.transcribing.is_set)
 
-    assert rig.voice.set_enabled(False) == {"enabled": False, "error_code": None}
+    if stop == "disable":
+        assert rig.voice.set_enabled(False) == {"enabled": False, "error_code": None}
+        rig.wait_state("off")
+    else:
+        rig.engine.fail_detect = True
+        rig.sd.feed(silence(0.5, 16000))
+        rig.wait_state("error", "detection_failed")
+    wait_until(lambda: not _voice_threads(before))
     gate.set()
-    rig.wait_state("off")
     rig.voice.close()
 
     assert "sent" not in rig.sink.kinds()
@@ -1249,6 +1286,16 @@ def test_calibration_suppresses_commands_and_throttles_its_status_pushes(
     assert status["calibration"]["phase"] == "noise"
     assert frozen_pushes == 0
     assert len(rig.sink.statuses) - pushes == 1
+    assert engine.score_listener is not None
+    rig.now[0] += 2.75
+    engine.score_listener({OKAY: 0.0})
+    assert rig.sink.statuses[-1]["calibration"]["phase"] == "noise"
+    rig.now[0] += 0.06
+    engine.score_listener({OKAY: 0.0})
+    assert rig.sink.statuses[-1]["calibration"]["phase"] == "phrases"
+    for score in (0.0, 0.9, 0.0, 0.0):
+        engine.score_listener({OKAY: score})
+    assert rig.sink.statuses[-1]["calibration"]["sample_count"] == 1
     assert engine.pending == 0
     assert "detected" not in rig.sink.kinds()
     assert rig.voice.stop_calibration()["calibration"] is None

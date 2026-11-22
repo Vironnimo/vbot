@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from desktop.speech import _echo_alignment as alignment
+from desktop.speech import _echo_reference as reference
 from desktop.speech import _echo_windows as windows
 from desktop.speech import echo
 from desktop.speech._echo_reference import STATE_ACTIVE, STATE_NO_REFERENCE, ReferenceBlockCallback
@@ -148,7 +149,7 @@ class Harness:
         self.processors: list[RecordingProcessor] = []
         self.stage = WebRtcEchoStage(
             processor_factory=processor_factory or self._processor,
-            loopback=loopback,
+            loopback_factory=lambda: loopback,
             clock=self.clock,
             poll_interval=0.005,
             retry_interval=retry_interval,
@@ -770,6 +771,41 @@ def test_factory_initialises_the_library_once_and_builds_a_stage(
     assert stage.rate == RATE
     assert len(fake_livekit) == 1 and fake_livekit[0]._ffi_handle.disposed
     assert fake_livekit[0].options == {"echo_cancellation": True, "high_pass_filter": True}
+
+
+def test_reopening_while_a_monitor_retires_keeps_its_backend_isolated(
+    fake_livekit: list[FakeApm],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retired, current = FakeLoopback(), FakeLoopback()
+    backends = iter((retired, current))
+    allow_cleanup = threading.Event()
+    cleanup_finished = threading.Event()
+
+    def finish_late() -> None:
+        allow_cleanup.wait()
+        cleanup_finished.set()
+
+    monkeypatch.setattr(retired, "stop", finish_late)
+    monkeypatch.setattr(windows, "default_loopback", lambda: next(backends))
+    stage = echo.create_echo_stage()
+    assert stage is not None
+    try:
+        stage.open(RATE)
+        wait_for(lambda: bool(retired.streams))
+        with monkeypatch.context() as patch:
+            patch.setattr(reference, "_MONITOR_JOIN_S", 0)
+            stage.close()
+        stage.open(RATE)
+        wait_for(lambda: bool(current.streams))
+        allow_cleanup.set()
+        assert cleanup_finished.wait(2)
+        assert current.started == 1 and current.stopped == 0
+        assert not current.streams[0].closed
+    finally:
+        allow_cleanup.set()
+        stage.close()
+    assert current.stopped == 1
 
 
 def test_webrtc_processor_validates_frames_and_releases_its_handle(
