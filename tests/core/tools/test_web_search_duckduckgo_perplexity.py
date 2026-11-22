@@ -119,6 +119,10 @@ async def test_duckduckgo_domains_use_the_site_operator(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     assert data["domains"] == "example.com"
     assert result_urls(data) == ["https://example.com/vbot", "https://example.com/guide"]
+    filtered, _ = await _search_duckduckgo(
+        tmp_path, {"query": "guide site:example.com/guide", "count": 1}
+    )
+    assert result_urls(assert_success_envelope(filtered)) == ["https://example.com/guide"]
 
 
 @pytest.mark.asyncio

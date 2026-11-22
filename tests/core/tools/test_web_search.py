@@ -278,26 +278,34 @@ async def test_other_spellings_run_the_same_search(
             None,
         ),
         (
-            # A path narrows to its site, and the note says so: engines that ignore
-            # the operator returned other sites without any sign (Swarm run 2026-10-12).
-            # Its words stay search words, or the search loses what the path named
-            # (Swarm run 2026-10-13: site:host/rutherfordium/... returned Dubnium).
             {"query": "asyncio site:docs.python.org/3/library -site:reddit.com"},
-            "asyncio library site:docs.python.org -site:reddit.com",
+            "asyncio site:docs.python.org/3/library -site:reddit.com",
             {"domains": "docs.python.org", "excluded_domains": "reddit.com"},
             "site:docs.python.org/3/library",
         ),
         (
-            # A path alone still searches: its words become the search words.
+            # An operator backend can search the path alone.
             {"query": "site:docs.python.org/3/library/asyncio-task.html"},
-            "library asyncio task site:docs.python.org",
+            "site:docs.python.org/3/library/asyncio-task.html",
             {"domains": "docs.python.org"},
             "site:docs.python.org/3/library/asyncio-task.html",
         ),
         (
+            {"query": "site:docs.python.org/index.html"},
+            "site:docs.python.org/index.html",
+            {"domains": "docs.python.org"},
+            "site:docs.python.org/index.html",
+        ),
+        (
+            {"query": "(site:docs.python.org/library OR site:example.com/guide)"},
+            "(site:docs.python.org/library OR site:example.com/guide)",
+            {"domains": "docs.python.org, example.com"},
+            "site:example.com/guide",
+        ),
+        (
             # With several sites the paths are alternatives and add no words.
             {"query": "asyncio (site:docs.python.org/3/library OR site:example.com/docs)"},
-            "asyncio (site:docs.python.org OR site:example.com)",
+            "asyncio (site:docs.python.org/3/library OR site:example.com/docs)",
             {"domains": "docs.python.org, example.com"},
             "site:example.com/docs",
         ),
@@ -317,11 +325,46 @@ async def test_site_restrictions_in_any_form_filter_the_results(
     shown = assert_success_envelope(result)
     assert {key: shown[key] for key in data} == data
     assert "reddit.com" not in shown["content"]
-    assert "https://docs.python.org/3/" in shown["content"]
     if read_as is None:
+        assert "https://docs.python.org/3/" in shown["content"]
         assert "note" not in shown
     else:
         assert read_as in shown["note"]
+        assert result_urls(shown) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["brave", "tavily"])
+async def test_site_paths_filter_parsed_urls_before_count(tmp_path: Path, provider: str) -> None:
+    urls = [
+        "https://example.com/repository",
+        "https://example.com/Repo",
+        "https://example.com/repo/../outside",
+        "https://example.com/repo%2Fwrong",
+        "https://example.com/repo/private/one",
+        "https://other.test/repo",
+        "https://example.com/%72epo",
+        "https://example.com/repo/child?q=1",
+        "https://other.test/docs",
+    ]
+    hits = [{"title": f"Hit {i}", "url": url} for i, url in enumerate(urls)]
+    with respx.mock() as router:
+        if provider == "brave":
+            router.get(BRAVE_ENDPOINT).respond(200, json={"web": {"results": hits}})
+        else:
+            router.post(TAVILY_ENDPOINT).respond(200, json={"results": hits})
+        result = await search(
+            tmp_path,
+            {
+                "query": (
+                    "topic (site:example.com/repo OR site:other.test/docs) "
+                    "-site:example.com/repo/private"
+                ),
+                "count": 3,
+            },
+            provider=provider,
+        )
+    assert result_urls(assert_success_envelope(result)) == urls[-3:]
 
 
 @pytest.mark.asyncio
@@ -356,6 +399,18 @@ async def test_site_operators_become_native_filters_for_other_providers(tmp_path
             tmp_path, {"query": 'asyncio "task group" site:python.org'}, provider="tavily"
         )
 
+        path_only = await search(
+            tmp_path, {"query": "site:docs.python.org/index.html"}, provider="tavily"
+        )
+        assert path_only["ok"] and request_json(route.calls[-1].request)["query"] == "index.html"
+        alternative = await search(
+            tmp_path,
+            {"query": "(site:docs.python.org/a OR site:docs.python.org/b)"},
+            provider="tavily",
+        )
+        assert_failure_envelope(alternative, "invalid_arguments")
+        assert route.call_count == 2
+
     body = request_json(route.calls[0].request)
     assert body["query"] == 'asyncio "task group"'
     assert body["include_domains"] == ["python.org"]
@@ -376,8 +431,6 @@ async def test_site_operators_become_native_filters_for_other_providers(tmp_path
         "rust (site:docs.rs AND site:docs.python.org)",
         "rust NOT site:docs.rs",
         "rust (site:docs.rs OR -site:docs.python.org)",
-        "rust -site:docs.rs/private",
-        "rust site:docs.rs/public AND site:docs.rs/private",
     ],
 )
 @pytest.mark.parametrize("provider", ["brave", "tavily", "exa", "firecrawl", "perplexity"])
@@ -547,9 +600,7 @@ async def test_a_start_date_uses_the_shortest_covering_window(tmp_path: Path, br
         ),
         (
             {"query": "python", "domains": ["docs.python.org/3/library"]},
-            "domains take site names such as example.com, not addresses with a path "
-            '("docs.python.org/3/library"). Pass {"domains": ["docs.python.org"]} and put '
-            "words from the path in query.",
+            'put "site:docs.python.org/3/library" in query',
         ),
         ({"query": "python", "domains": [{"domain": "example.com"}]}, '"domains[0]" must be'),
         ({"query": "python", "domains": [1]}, '"domains[0]"'),

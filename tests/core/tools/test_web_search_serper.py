@@ -83,14 +83,14 @@ async def test_recency_is_native_and_domains_are_site_operators(
             200,
             json={
                 "organic": [
+                    {"title": "Off-path leak", "link": "https://example.com/other"},
                     {"title": "On-domain result", "link": "https://example.com/vbot"},
-                    {"title": "Off-domain leak", "link": "https://other.test/vbot"},
                 ]
             },
         )
         result = await search(
             tmp_path,
-            {"query": "vbot", "domains": ["example.com"], "recency": recency},
+            {"query": "vbot site:example.com/vbot", "count": 1, "recency": recency},
             provider="serper",
         )
 
