@@ -39,7 +39,7 @@ def first_difference(
     ``character`` on when that is known. Lines compare with runs of
     whitespace collapsed. The result names the file line and the copied line
     with 1-based character positions, and both lines whole when they hold at
-    most 80 characters, else 80-character windows of them from 30 characters
+    most 48 characters, else 48-character windows of them from 16 characters
     before the difference on. ``None`` means every copied line matches
     the file from the aligned position on. ``whole_lines`` says the copy's
     first line is a whole line; otherwise only a copy that starts with a line
@@ -539,8 +539,8 @@ def _difference_window(
 # A first difference quotes a line of at most this many characters whole; a longer
 # line shows this many of its characters, from a few before the difference on.
 # Swarm run 2026-10-20: a whole 120-character line hid a ' that differed from ".
-_FIRST_DIFFERENCE_WIDTH = 80
-_FIRST_DIFFERENCE_BEFORE = 30
+_FIRST_DIFFERENCE_WIDTH = 48
+_FIRST_DIFFERENCE_BEFORE = 16
 
 
 def _first_difference_window(text: str, position: int) -> tuple[int, str]:

@@ -791,7 +791,7 @@ async def test_old_string_with_line_breaks_in_other_places_than_the_file(
     code, lines = outcome
     assert result["error"]["code"] == code
     assert (tmp_path / "a.py").read_bytes() == content.encode()
-    assert set(re.findall(r"\blines? (\d+(?:-\d+)?)", text(result))) == lines
+    assert set(re.findall(r"(?<!copied )\blines? (\d+(?:-\d+)?)", text(result))) == lines
 
 
 @pytest.mark.asyncio

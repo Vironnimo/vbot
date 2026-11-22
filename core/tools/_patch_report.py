@@ -416,14 +416,21 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         f"character {difference['copy_character']} (excerpts truncated):"
     ]
     copy_label = "old_string" if source == "old_string" else "The patch"
+    marks = []
     for key, label in (("file", "Line" if after else "File"), ("copy", copy_label)):
         start = difference[f"{key}_start"]
         end = start + len(difference[key]) - 1
+        index = difference["character" if key == "file" else "copy_character"] - start
+        char = difference[key][index : index + 1]
+        marks.append(quoted(char) if char else "end of line")
         lines.append(
             f"{label} characters {start}-{end}: {quoted(difference[key], quote)}"
             if difference[key]
             else f"{label} character {start}: end of line."
         )
+    if not spacing and marks[0] != marks[1]:
+        where = f"after {after}" if after else "in the file"
+        lines.append(f"At the mismatch: {marks[0]} {where}, {marks[1]} in {source}.")
     return [*lines, *unprefixed]
 
 
