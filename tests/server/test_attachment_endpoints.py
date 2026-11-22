@@ -36,14 +36,14 @@ class _RecordingAttachmentStore(AttachmentStore):
         return super().store(filename, data)
 
     @override
-    def get(self, attachment_id: str) -> AttachmentRecord:
+    def get(self, attachment_id: str, *, generation_id: str | None = None) -> AttachmentRecord:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             self.reads_on_event_loop.append(False)
         else:
             self.reads_on_event_loop.append(True)
-        return super().get(attachment_id)
+        return super().get(attachment_id, generation_id=generation_id)
 
 
 def test_upload_returns_metadata_serves_the_original_and_blocks_executables(

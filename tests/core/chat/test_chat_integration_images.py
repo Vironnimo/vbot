@@ -860,6 +860,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
+            permission_profile="restricted",
             tool_access={"mode": "selected", "allowed": ["read"]},
         )
         Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
@@ -894,3 +895,35 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
         assert all(
             not isinstance(message.content, list) for message in messages if message.role == "user"
         )
+
+        published = Path(note["text"].rsplit("Path: ", 1)[1].removesuffix("]"))
+        assert published.read_bytes() == _PNG_BYTES
+        for session_id, fresh, allowed in [
+            ("session-one", False, True),
+            ("another-session", False, False),
+            ("session-one", True, False),
+        ]:
+            if fresh:
+                runtime.chat_sessions.delete(session_address("coder", session_id))
+            adapter.response = [
+                {
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "reopen", "name": "read", "arguments": {"path": str(published)}}
+                    ],
+                },
+                {"content": "done", "tool_calls": None},
+            ]
+            await runtime.chat_loop.send("coder", "Read the saved image.", session_id=session_id)
+            result = next(
+                message
+                for message in reversed(
+                    runtime.chat_sessions.get(session_address("coder", session_id)).load()
+                )
+                if message.role == "tool"
+            )
+            assert isinstance(result.content, str)
+            envelope = json.loads(result.content)
+            assert envelope["ok"] is allowed
+            if not allowed:
+                assert envelope["error"]["code"] == "permission_denied"

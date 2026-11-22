@@ -6,6 +6,7 @@ import stat
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from core.attachments._session_files import remove_session_files, session_files_for_ids
 from core.attachments.attachments import AttachmentError, AttachmentNotFoundError
 from core.database import DatabaseError
 from core.storage.layout import DataDirectoryLayout
@@ -36,6 +37,7 @@ def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager
         candidates = sessions.unreferenced_attachment_ids(additional=expired)
         if not candidates:
             return 0
+        copies = session_files_for_ids(store._data_dir, set(candidates))
     except (AttachmentError, DatabaseError, OSError) as exc:
         _LOGGER.warning("Attachment collection deferred (reason=%s)", type(exc).__name__)
         return 0
@@ -61,6 +63,7 @@ def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager
                 continue
             # Remove only the pair the validated record owns. A failed second
             # unlink leaves the ledger candidate for a retry, never a fresh id.
+            remove_session_files(copies.get(record.id, ()))
             blob.unlink(missing_ok=True)
             sidecar.unlink()
             forgotten.append(record.id)

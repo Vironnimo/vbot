@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from core.agents import Agent, TemporaryAgent, default_workspace_dir
 from core.agents.temporary import OwnedIdentityAgent
+from core.attachments import session_attachment_dir
 from core.chat._scratch_context import SCRATCH_RUN_KINDS
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
@@ -133,6 +134,7 @@ class SessionPermissions:
         data_dir: Path,
         *,
         owner: SessionAddress | None,
+        generation_id: str | None = None,
         scratch_root: Path | None = None,
         skill_dirs: Sequence[Path] = (),
         loopback_port: int | None = None,
@@ -152,6 +154,13 @@ class SessionPermissions:
             else None
         )
         artifacts = session_artifact_dirs(data_dir, artifact_folder) if artifact_folder else ()
+        if generation_id is not None:
+            try:
+                attachments = session_attachment_dir(data_dir, generation_id)
+            except OSError as exc:
+                _LOGGER.warning("Session attachment folder unavailable (%s)", type(exc).__name__)
+            else:
+                artifacts = (*artifacts, attachments)
         terminal_logs = terminal_log_scope(data_dir, artifact_folder)
         home = Path.home()
         context = BoundaryContext(
@@ -354,6 +363,7 @@ async def run_permission_boundary(
     agent: RuntimeAgent,
     *,
     overrides: AgentOverrides,
+    generation_id: str | None = None,
     address: SessionAddress,
     project_root: Path | None,
     skill_registry: SkillRegistry,
@@ -405,6 +415,7 @@ async def run_permission_boundary(
     port = dependencies.server_port() if dependencies.server_port else None
     return await _CHAT_TRANSFORM_WORKERS.run(
         _build_run_permissions,
+        generation_id,
         permissions,
         documents,
         data_dir,
@@ -427,6 +438,7 @@ async def live_run_permission_boundary(
     run: Run,
     resolve_agent: _ResolvePermissionAgent,
     *,
+    generation_id: str | None = None,
     address: SessionAddress,
     project_root: Path | None,
     skill_registry: SkillRegistry,
@@ -451,6 +463,7 @@ async def live_run_permission_boundary(
             dependencies,
             run,
             agent,
+            generation_id=generation_id,
             overrides=before.overrides,
             address=address,
             project_root=project_root,
@@ -470,6 +483,7 @@ async def live_run_permission_boundary(
 
 
 def _build_run_permissions(
+    generation_id: str | None,
     permissions: SessionPermissions,
     documents: int,
     data_dir: Path,
@@ -487,6 +501,7 @@ def _build_run_permissions(
     boundary = permissions.boundary(
         data_dir,
         owner=address,
+        generation_id=generation_id,
         scratch_root=scratch_root,
         skill_dirs=_skill_dirs(skill_registry, permissions.allowed_skills, data_dir),
         loopback_port=port,

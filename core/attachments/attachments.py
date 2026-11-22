@@ -190,11 +190,17 @@ class AttachmentRecord:
     media_type: str
     size_bytes: int
     stored_at: str
-    # The blob's current location, derived on load and never stored in the sidecar.
+    # The blob path, or its published Session copy. Neither is stored in the sidecar.
     file_path: str
     # Cached speech-to-text result for audio attachments; written once on first
     # transcription so later requests reuse it instead of re-calling STT.
     transcription: str | None = None
+
+    def session_path(self, data_dir: Path, generation_id: str) -> Path:
+        """The stable, readable copy of this attachment delivered to one Session."""
+        from core.attachments._session_files import publish
+
+        return publish(data_dir, generation_id, self)
 
 
 class AttachmentStore:
@@ -316,10 +322,14 @@ class AttachmentStore:
 
         return await _STORE_WORKERS.run(self.store, filename, data)
 
-    def get(self, attachment_id: str) -> AttachmentRecord:
-        """Load one attachment record by id from sidecar metadata."""
-
-        return self._get_record(attachment_id, require_blob=True)
+    def get(self, attachment_id: str, *, generation_id: str | None = None) -> AttachmentRecord:
+        """Load a record, presenting a Session-readable copy when a Session is given."""
+        record = self._get_record(attachment_id, require_blob=True)
+        if generation_id is not None:
+            return replace(
+                record, file_path=str(record.session_path(self._data_dir, generation_id))
+            )
+        return record
 
     async def get_async(self, attachment_id: str) -> AttachmentRecord:
         """Event-Loop-safe :meth:`get`, run on the ``attachments`` worker pool."""
@@ -392,8 +402,12 @@ class AttachmentStore:
     def delete(self, attachment_id: str) -> None:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
+        from core.attachments._session_files import remove_session_files, session_files_for_ids
+
         normalized_id = _normalize_attachment_id(attachment_id)
         self._require_canonical_directory()
+        copies = session_files_for_ids(self._data_dir, {normalized_id})
+        remove_session_files(copies.get(normalized_id, ()))
         blob_paths = (
             self._attachments_dir / f"{normalized_id}{extension}"
             for extension in _CANONICAL_BLOB_EXTENSIONS

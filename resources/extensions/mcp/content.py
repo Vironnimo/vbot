@@ -122,25 +122,31 @@ class ContentStore:
         result = copy.deepcopy(payload)
         # Only protocol-owned content positions contain media. Application JSON,
         # schemas and metadata can use the same keys with unrelated meanings.
+        generation_id = context.session_generation_id if context is not None else None
         for block in result.get("content", []):
-            await self._visit(block, artifacts)
+            await self._visit(block, artifacts, generation_id)
         for resource in result.get("contents", []):
-            await self._visit(resource, artifacts, resource=True)
+            await self._visit(resource, artifacts, generation_id, resource=True)
         for message in result.get("messages", []):
             content = message.get("content", [])
             for block in content if isinstance(content, list) else [content]:
-                await self._visit(block, artifacts)
+                await self._visit(block, artifacts, generation_id)
         if context is not None:
             result = await self.protect(result, context)
         return result, artifacts
 
     async def _visit(
-        self, value: Any, artifacts: list[dict[str, Any]], *, resource: bool = False
+        self,
+        value: Any,
+        artifacts: list[dict[str, Any]],
+        generation_id: str | None,
+        *,
+        resource: bool = False,
     ) -> None:
         if not isinstance(value, dict):
             return
         if not resource and value.get("type") == "resource":
-            await self._visit(value.get("resource"), artifacts, resource=True)
+            await self._visit(value.get("resource"), artifacts, generation_id, resource=True)
             return
         field = self._binary_field(value, resource=resource)
         if field is not None:
@@ -157,7 +163,12 @@ class ContentStore:
                 value["content_omitted"] = True
                 value["media_delivery_error"] = str(error)
             else:
-                value["path"] = Path(record.file_path).as_posix()
+                path = (
+                    await run_tool_worker(record.session_path, self.host.data_dir, generation_id)
+                    if generation_id is not None
+                    else Path(record.file_path)
+                )
+                value["path"] = path.as_posix()
                 value["attachment_id"] = record.id
                 if value.get("type") in {"image", "audio"}:
                     artifacts.append(

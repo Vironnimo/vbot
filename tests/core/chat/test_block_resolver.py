@@ -21,6 +21,7 @@ from core.tools.read import render_text_file
 from tests.core.chat.block_resolver_test_support import (
     CURRENT,
     EARLIER,
+    GENERATION,
     IMAGE_WIRE,
     TEXT_IMAGE,
     TEXT_IMAGE_AUDIO,
@@ -302,11 +303,11 @@ async def test_attachment_reads_run_off_the_event_loop(
     release = threading.Event()
     threads: list[int] = []
 
-    def blocked_get(attachment_id: str) -> Any:
+    def blocked_get(attachment_id: str, **kwargs: Any) -> Any:
         threads.append(threading.get_ident())
         entered.set()
         release.wait(timeout=5)
-        return get_record(attachment_id)
+        return get_record(attachment_id, **kwargs)
 
     monkeypatch.setattr(store, "get", blocked_get)
     messages = [
@@ -316,6 +317,7 @@ async def test_attachment_reads_run_off_the_event_loop(
     resolving = asyncio.create_task(
         resolver.resolve_messages(
             messages,
+            generation_id=GENERATION,
             input_modalities=frozenset({"text", "pdf"}),
             wire_media_types=frozenset({"application/pdf"}),
         )

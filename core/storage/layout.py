@@ -67,6 +67,10 @@ class DataDirectoryLayout:
         return self.artifacts / "attachments"
 
     @property
+    def session_attachments(self) -> Path:
+        return self.artifacts / "session-attachments"
+
+    @property
     def speech(self) -> Path:
         return self.artifacts / "speech"
 

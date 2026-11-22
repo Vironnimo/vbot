@@ -57,6 +57,7 @@ class RequestMedia:
         if current_user_message is not None:
             request_messages = await self._attachment_resolver.resolve_messages(
                 request_messages,
+                generation_id=session.generation_id,
                 input_modalities=input_modalities,
                 wire_media_types=inputs.wire_media_types,
                 max_image_bytes=inputs.max_image_bytes,
@@ -67,6 +68,7 @@ class RequestMedia:
             read_media_outputs,
             input_modalities,
             inputs.wire_media_types,
+            generation_id=session.generation_id,
             max_image_bytes=inputs.max_image_bytes,
         )
         image_budget = inputs.image_budget or RequestImageBudget()
@@ -150,6 +152,7 @@ class RequestMedia:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         *,
+        generation_id: str | None,
         max_image_bytes: int | None = None,
     ) -> None:
         """Attach resolved media blocks to their correlated Tool Results.
@@ -215,6 +218,7 @@ class RequestMedia:
                         "content": content_blocks,
                     }
                 ],
+                generation_id=generation_id,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,

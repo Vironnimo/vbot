@@ -953,6 +953,7 @@ class AgenticProgression:
                         media_outputs,
                         target.input_modalities,
                         target.wire_media_types,
+                        generation_id=session.generation_id,
                         max_image_bytes=target.max_image_bytes,
                     )
                     if binding is not None:

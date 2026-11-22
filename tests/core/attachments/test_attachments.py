@@ -575,6 +575,20 @@ def test_get_rejects_unavailable_blob_with_existing_sidecar(
             assert "transcription" not in json.loads(target.read_text(encoding="utf-8"))
 
 
+def test_session_attachment_paths_refuse_a_redirected_generation(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("report.txt", b"session report")
+    first = record.session_path(tmp_path, "first")
+    redirected = first.parent.with_name("second")
+    try:
+        redirected.symlink_to(first.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises(OSError):
+        store.get(record.id, generation_id="second")
+    assert first.read_bytes() == b"session report"
+
+
 @pytest.mark.parametrize("redirect", ["attachment-folder", "artifacts-parent", "configured-root"])
 def test_attachment_paths_allow_configured_aliases_but_refuse_redirected_managed_children(
     tmp_path: Path, redirect: str

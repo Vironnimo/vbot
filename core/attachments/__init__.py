@@ -3,6 +3,7 @@
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from core.attachments._session_files import session_attachment_dir
 from core.attachments.attachments import (
     AttachmentError,
     AttachmentNotFoundError,
@@ -28,6 +29,7 @@ __all__ = [
     "AttachmentTypeNotAllowedError",
     "ImageTarget",
     "canonical_extension_for_media_type",
+    "session_attachment_dir",
     "sniff_media_type",
     "validate_attachment_metadata_file",
 ]
