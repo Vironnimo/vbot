@@ -390,10 +390,8 @@ def _shape_success(
         return tool_failure("access_denied", wall, retryable=False)
     if target := client_redirect(
         final_url,
-        page,
-        title=metadata.get("title", ""),
-        refresh=metadata.pop("refresh", ""),
-        base=metadata.pop("refresh_base", ""),
+        reference=metadata.pop("redirect_reference", ""),
+        base=metadata.pop("redirect_base", ""),
     ):
         return tool_failure(
             "no_content", _redirect_stub_message(final_url, target), retryable=False
@@ -798,6 +796,7 @@ def make_web_fetch_handler(
                 raise FetchServiceError(wall)
             if target := client_redirect(data["url"], data["content"], title=data.get("title", "")):
                 raise FetchServiceError(_redirect_stub_message(data["url"], target))
+            data["content"] = clean_service_text(data["content"], include_links=output != "text")
             return tool_success(data)
         except (FetchServiceError, PublicFetchError, ValueError) as error:
             return tool_failure("extraction_error", str(error), retryable=False)

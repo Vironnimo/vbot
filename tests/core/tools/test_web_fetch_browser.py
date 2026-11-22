@@ -140,9 +140,25 @@ async def test_redirect_page_names_its_destination_without_hiding_readable_pages
     raw = await fetch(tmp_path, {"url": URL, "output": "raw"})
     assert raw["ok"] and head in raw["data"]["content"]
     head = head.replace("0;Url=", "60;Url=")
-    body += "<a href='/new'>Redirecting from <code>/old</code> to <code>/new</code></a>"
+    link = "<a href='/new'>Redirecting from <code>/old</code> to <code>/new</code></a>"
+    body += link
     article = await fetch(tmp_path, {"url": URL})
     assert article["ok"] and "Documentation about redirects." in article["data"]["content"]
+    body = link
+    plain = await fetch(tmp_path, {"url": URL, "output": "text"})
+    assert plain["error"]["code"] == "no_content"
+    assert "https://example.com/new" in plain["error"]["message"]
+    with respx.mock() as router:
+        target_url = "https://example.com/new"
+        stub = f"[Redirecting from `/old` to `{target_url}`]({target_url})"
+        router.post(TAVILY).respond(json={"results": [{"url": URL, "raw_content": stub}]})
+        service = await fetch(
+            tmp_path,
+            {"url": URL, "output": "text"},
+            **_options(FakeBrowser("", installed=False), provider="tavily"),
+        )
+    assert service["error"]["code"] == "no_content"
+    assert "tavily" in service["error"]["message"] and target_url in service["error"]["message"]
 
 
 @pytest.mark.asyncio

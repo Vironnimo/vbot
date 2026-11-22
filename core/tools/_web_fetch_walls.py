@@ -41,25 +41,25 @@ _SEARCH_CHROME = re.compile(rf"\[{_DECORATIVE_SVG}\]\([^()\n]+\)|{_DECORATIVE_SV
 
 
 def client_redirect(
-    url: str, text: str, *, title: str = "", refresh: str = "", base: str = ""
+    url: str, text: str = "", *, title: str = "", reference: str = "", base: str = ""
 ) -> str | None:
     """An immediate meta refresh, or a whole page that only links to its destination."""
-    if not refresh and len(text) <= 2048:
+    if not reference and text and len(text) <= 2048:
         stub = re.fullmatch(
             r"\[Redirecting from `[^`\n]+` to `([^`\n]+)`\]\(([^\s]+)\)", text.strip(), re.I
         )
         if stub and stub[1] == stub[2]:
-            refresh = stub[2]
+            reference = stub[2]
         elif title.lower().startswith("redirecting to: "):
             target = title.split(":", 1)[1].strip()
             if re.fullmatch(
                 rf"Redirecting from `?[^`\n]+`? to `?{re.escape(target)}`?", text.strip(), re.I
             ):
-                refresh = target
-    if not refresh or any(char.isspace() for char in refresh):
+                reference = target
+    if not reference or any(char.isspace() for char in reference):
         return None
     try:
-        target_url = urljoin(base or url, refresh)
+        target_url = urljoin(base or url, reference)
         parts = urlsplit(target_url)
         if (
             parts.scheme not in {"http", "https"}
