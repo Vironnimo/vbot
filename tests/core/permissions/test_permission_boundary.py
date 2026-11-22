@@ -208,6 +208,8 @@ def test_a_subtree_access_is_refused_for_what_lies_below(
         # The refusal names the denied part it would reach.
         assert refusal is not None and refusal.below is not None
         assert "/secrets" in refusal.below or refusal.below.endswith(".lock")
+    if reason == "protected_location":
+        assert refusal is not None and "scope" in (refusal.detail or "")
     # Without subtree the folder itself is permitted.
     assert boundary.check_path(target, access) is None
 
