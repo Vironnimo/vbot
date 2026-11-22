@@ -160,10 +160,12 @@ class FakeTarget:
     def foreground(self) -> WindowInfo:
         return self.windows_[0]
 
-    def activate(self, window: WindowInfo) -> None:
+    def activate(self, window: WindowInfo, *, keep_focus: bool = False) -> None:
         current = next((item for item in self.windows_ if item.same_window(window)), None)
         if current is None:
             raise TargetError("Window closed", "window_unavailable")
+        if keep_focus and not current.same_window(self.foreground()):
+            raise TargetError("The selected window lost focus.", "focus_changed")
         self.windows_.remove(current)
         self.windows_.insert(0, current)
 

@@ -8,9 +8,11 @@ and the analysis agree on the plan's shape.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -22,15 +24,17 @@ from core.permissions import (
     CommandChecker,
     PermissionBoundary,
     PermissionCeiling,
+    PermissionGrant,
     normalize_permission_rules,
 )
-from core.permissions.commands.commands import CommandAnalyzer, UnresolvedElement
+from core.permissions.commands.commands import CommandAnalyzer, PlannedPathAccess, UnresolvedElement
 from tests.core.permissions.command_check_support import (
     UNAVAILABLE,
     FakeAnalyzer,
     fake_checker,
     plan,
 )
+from tests.directory_links import link_directory
 
 PORT = 22333
 
@@ -331,6 +335,16 @@ async def test_reviewed_instance_cli_only_grants_the_bare_command(
         ("node --import tools/setup.mjs --eval='1'", "unanalyzable"),
         ("node -p '1 + 1'", "unanalyzable"),
         ("node tools/build.js -e literal", None),
+        ("node", None),
+        ("node --version", None),
+        ("node --help", None),
+        (
+            "node --experimental-vm-modules --test --test-name-pattern sample "
+            "tools/a.js tools/b.js",
+            None,
+        ),
+        ("node --unclassified-mode input", "unanalyzable"),
+        ("node inspect target", "unanalyzable"),
         ("BASH_ENV=setup.sh bash -c 'echo ok'", "unanalyzable"),
         ("env NODE_OPTIONS=--trace-warnings node --version", "unanalyzable"),
     ],
@@ -341,7 +355,7 @@ async def test_restricted_commands_refuse_unchecked_inline_code_and_startup_hook
 ) -> None:
     checker = CommandChecker(lambda: real_analyzer)
 
-    refusal = await checker.check_line(
+    checked, decision = await checker.prepare_line(
         boundary(tmp_path, RESTRICTED),
         command,
         shell="bash",
@@ -350,7 +364,15 @@ async def test_restricted_commands_refuse_unchecked_inline_code_and_startup_hook
         home=tmp_path,
     )
 
-    assert (refusal.reason if refusal else None) == reason
+    assert (decision.refusals[0].reason if decision.refusals else None) == reason
+    if command.startswith("node tools/build.js"):
+        assert checked and ("read", tmp_path / "tools/build.js") in {
+            (access.kind, access.path) for access in checked.paths
+        }
+    if command.startswith("node --experimental-vm-modules"):
+        assert checked and {tmp_path / "tools/a.js", tmp_path / "tools/b.js"} <= {
+            access.path for access in checked.paths if access.kind == "read"
+        }
 
 
 @pytest.mark.asyncio
@@ -510,6 +532,9 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
             "bash", "../data/viewer.exe --version", "protected_location", id="native-protected"
         ),
         pytest.param("bash", "../tools/run.sh", "not_permitted", id="script-outside"),
+        pytest.param(
+            "bash", "node --check -- ../other.js", "not_permitted", id="node-script-outside"
+        ),
         *[
             pytest.param(
                 "powershell",
@@ -537,6 +562,8 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
                     "bits-destination-outside-denied-subtree-stays-allowed",
                 ),
                 ("pytest -q | Select-String passed", None, "native-output-is-text"),
+                (r'rg "prefix\"label" src', "unanalyzable", "misquoted-pattern"),
+                ("Get-ChildItem (", "unanalyzable", "incomplete-powershell"),
                 ("pytest -q | Remove-Item", "unanalyzable", "native-output-is-not-a-file-list"),
                 (
                     "$s=Get-Content a.txt -Raw; $s=$s.Replace('a','b'); Set-Content a.txt $s",
@@ -696,9 +723,118 @@ async def test_real_analysis_reaches_the_same_decisions(
     )
 
     assert (refusal.reason if refusal else None) == reason
+    if line in (r'rg "prefix\"label" src', "Get-ChildItem ("):
+        assert refusal and "line 1, column " in (refusal.detail or "")
+        assert ("backtick" in (refusal.hint or "")) == line.startswith("rg")
     if line.endswith("Select-Object -First"):
         assert refusal is not None and "-First" in (refusal.detail or "")
         assert "count" in (refusal.hint or "")
+
+
+@pytest.mark.asyncio
+async def test_node_test_files_request_only_their_exact_read(
+    real_analyzer: CommandAnalyzer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    target = tmp_path / "other.test.js"
+    target.touch()
+    policy = boundary(work, {"read": "work_area", "write": "work_area"})
+    grant = PermissionGrant(policy)
+    checker = CommandChecker(lambda: real_analyzer)
+
+    def unexpected_scan(directory: object) -> None:
+        pytest.fail(f"enumerated a directory before permission: {directory}")
+
+    monkeypatch.setattr(os, "scandir", unexpected_scan)
+
+    async def assess(argument: str):
+        _, decision = await checker.prepare_argv(
+            policy, ["node", "--test", argument], cwd=work, env={}, home=work
+        )
+        return decision
+
+    before = await assess("../other.test.js")
+    assert before.refused
+    for refusal, required in before.refused:
+        assert refusal.reason == "not_permitted"
+        assert required and required.access == "read" and Path(required.target) == target
+        assert not required.subtree and required.glob is None
+        grant.approve([required])
+    assert grant.check_path(target, "read") is None
+    assert (await assess("../other.test.js")).path_identities == before.path_identities
+
+    target.unlink()
+    target.mkdir()
+    for argument in ("../other.test.js", "../other.test.js/*.js"):
+        after = await assess(argument)
+        assert any(refusal.reason == "unanalyzable" for refusal in after.refusals)
+        assert before.path_identities != after.path_identities
+        assert any(
+            required and required.subtree and not grant.permits(required)
+            for _, required in after.refused
+        )
+
+
+@pytest.mark.asyncio
+async def test_consumed_listing_checks_links_under_the_current_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    source = work / "source"
+    assets = work / "assets"
+    outside = tmp_path / "other"
+    protected = tmp_path / "data"
+    for directory in (source, assets, outside, protected):
+        directory.mkdir(parents=True)
+    alias = source / "include"
+    link_directory(alias, assets)
+    policy = boundary(work, {"read": "work_area", "write": "work_area"})
+
+    async def assess(folder: Path, glob: str | None = None):
+        access = PlannedPathAccess(
+            "read", folder, "listing", subtree=glob is None, glob=glob, enumerated=True
+        )
+        checker = fake_checker(FakeAnalyzer(replace(plan("list"), paths=(access,))))
+        _, decision = await checker.prepare_line(
+            policy, "list", shell="bash", cwd=work, env={}, home=work
+        )
+        return decision
+
+    allowed = await assess(source)
+    assert not allowed.refusals
+    assert any(item.resolved and Path(item.resolved) == assets for item in allowed.path_identities)
+
+    link_directory(assets / "second", protected)
+    blocked = await assess(source)
+    assert any(
+        refusal.reason == "protected_location" and grant is None
+        for refusal, grant in blocked.refused
+    )
+    assert not (await assess(source, glob="wanted.*")).refusals
+
+    scans: list[Path] = []
+    scandir = os.scandir
+
+    def record(directory: Path):
+        scans.append(Path(directory))
+        return scandir(directory)
+
+    monkeypatch.setattr(os, "scandir", record)
+    link_directory(work / "external", outside)
+    for folder in (outside, work / "external"):
+        blocked = await assess(folder)
+        assert any(
+            refusal.reason == "unanalyzable" and grant is None for refusal, grant in blocked.refused
+        )
+    normal = work / "with-link"
+    normal.mkdir()
+    link_directory(normal / "external", outside)
+    blocked = await assess(normal)
+    assert any(
+        refusal.reason == "unanalyzable" and grant is None for refusal, grant in blocked.refused
+    )
+    assert scans == [normal]
 
 
 @pytest.mark.parametrize(

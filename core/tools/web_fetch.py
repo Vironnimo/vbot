@@ -50,6 +50,7 @@ from core.tools._web_fetch_services import FetchServiceError, clean_service_text
 from core.tools._web_fetch_walls import (
     WALL_GUIDANCE,
     bot_wall,
+    client_redirect,
     firewall_block,
     is_script_shell,
 )
@@ -311,6 +312,10 @@ def _fetch_document_result(
     return tool_success({"content": output, "url": url, "source": "document"})
 
 
+def _redirect_stub_message(url: str, target: str) -> str:
+    return f"{url} returned a redirect page. Fetch {target} to read the destination."
+
+
 def _shape_success(
     attachment_store: Any,
     result: PublicResponse,
@@ -357,6 +362,10 @@ def _shape_success(
                 raw_body, include_links=not (output_mode == "text" and "markdown" in media_type)
             )
         )
+        if output_mode != "raw" and (target := client_redirect(final_url, raw_body)):
+            return tool_failure(
+                "no_content", _redirect_stub_message(final_url, target), retryable=False
+            )
         return tool_success(
             {
                 "content": body,
@@ -379,6 +388,14 @@ def _shape_success(
     wall = bot_wall(final_url, metadata, main)
     if wall is not None:
         return tool_failure("access_denied", wall, retryable=False)
+    if target := client_redirect(
+        final_url,
+        reference=metadata.pop("redirect_reference", ""),
+        base=metadata.pop("redirect_base", ""),
+    ):
+        return tool_failure(
+            "no_content", _redirect_stub_message(final_url, target), retryable=False
+        )
     if is_script_shell(main, page=page, url=final_url, title=metadata.get("title", "")):
         return tool_failure(
             "no_content",
@@ -777,6 +794,9 @@ def make_web_fetch_handler(
             wall = bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
             if wall:
                 raise FetchServiceError(wall)
+            if target := client_redirect(data["url"], data["content"], title=data.get("title", "")):
+                raise FetchServiceError(_redirect_stub_message(data["url"], target))
+            data["content"] = clean_service_text(data["content"], include_links=output != "text")
             return tool_success(data)
         except (FetchServiceError, PublicFetchError, ValueError) as error:
             return tool_failure("extraction_error", str(error), retryable=False)

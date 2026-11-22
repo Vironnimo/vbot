@@ -489,9 +489,7 @@ FIRST_DIFFERENCE_CASES = {
         "+    'c': 3,\n     'b': 2,\n }\n \n \n-def check(rows):\n+def check(rowz):\n"
         "     return rowz",
         # Both lines share the quotes, so a ' in one is not read as a difference.
-        "First difference, line 15, character 5: the file has \"    'b': 2,\" where the patch "
-        'has "    # and its continuation line that the Agent forgot to mark as added text".\n'
-        "That patch line has no + prefix",
+        "First difference, file line 15, character 5; copied line 3, character 5",
     ),
     # Reworded lines are compared with their counterpart, not a quote line.
     "reworded": (
@@ -503,9 +501,7 @@ FIRST_DIFFERENCE_CASES = {
         "@@ def describe():\n"
         "     Each record names its owner and the time of the last review.\n"
         '     Records that have no owner are left out.\n     """\n+    rows = load()',
-        "First difference, line 26, character 11: the file has '    Each row lists the owner "
-        "and the date it was last checked.' where the patch has '    Each record names its "
-        "owner and the time of the last review.'.\n",
+        "First difference, file line 26, character 11; copied line 1, character 11",
     ),
     # Joined lines are compared from the first of them.
     "joined": (
@@ -518,7 +514,7 @@ FIRST_DIFFERENCE_CASES = {
         "     query = select(table.c.title, from_=table, limit=100)\n"
         "     rows = execute(query)\n-    return [row.title for row in rows]\n"
         "+    return sorted(row.title for row in rows)",
-        "First difference, line 24, character 28: the file has '    query = select(",
+        "First difference, file line 24, character 28; copied line 1, character 28",
     ),
     # Long new lines without a prefix do not hide the copied ones.
     "hidden": (
@@ -571,8 +567,7 @@ FIRST_DIFFERENCE_CASES = {
         f"def check(total):\n{LOGGED}\n    return total\n",
         {"old_string": f"{LOGGED[:-2]}')\n    return totals_by_owner", "new_string": "x"},
         "First difference, file line 2, character 92; copied line 1, character 92 "
-        "(excerpts truncated):\nFile characters 62-93: ' limit allows; check the rows.\")'\n"
-        "old_string characters 62-93: ' limit allows; check the rows.')'\n",
+        "(excerpts truncated):",
     ),
     # Session 2026-10-21: a sentence copied from inside a long line, with one word
     # changed, compares from where it starts there, not from the line's start.
@@ -580,9 +575,7 @@ FIRST_DIFFERENCE_CASES = {
         f"def check(total):\n{LOGGED}\n    return total\n",
         {"old_string": "is more than the configured limit permits; check", "new_string": "x"},
         "First difference, file line 2, character 69; copied line 1, character 35 "
-        "(excerpts truncated):\nFile characters 39-93: 'ore than the configured limit allows; "
-        "check the rows.\")'\nold_string characters 1-48: 'is more than the configured limit "
-        "permits; check'\n",
+        "(excerpts truncated):",
     ),
 }
 
@@ -605,13 +598,14 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
     if case == "unprefixed":
         marked = body.replace('\n            "values', '\n+            "values')
         assert "no + prefix" not in text(apply(tmp_path, update(marked, "file.py")))
+    if case in {"shifted", "hidden"}:
+        assert "no + prefix" in text(result)
     if case == "hidden":
         assert "No similar text" not in text(result)
-        assert (
-            "First difference, line 44, character 5: the file has '    rest = tokens[1:]' where "
-            "the patch has '    # An empty stream has no head, so it is rejected here with a "
-            "clear message'."
-        ) in text(result)
+        assert "First difference, file line 44, character 5; copied line 3" in text(result)
+        assert "File characters 1-21: '    rest = tokens[1:]'" in text(result)
+    if case == "long-line":
+        assert """At the mismatch: '"' in the file, "'" in old_string.""" in text(result)
 
 
 def test_a_rewritten_line_is_compared_with_the_line_of_its_name(tmp_path):

@@ -70,6 +70,19 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
         make_result(status_code=302, headers={"Location": URL}, url=URL),
         make_result(
             headers={"content-type": "text/html"},
+            text="<html><head><meta http-equiv='refresh' content='0; URL=/new'></head>"
+            "<body>Page moved</body></html>",
+            url=URL,
+        ),
+        make_result(
+            headers={"content-type": "text/html"},
+            text="<html><head><title>Redirecting to: /new</title></head><body>"
+            "<a href='/new'>Redirecting from <code>/old</code> to <code>/new</code></a>"
+            "</body></html>",
+            url=URL,
+        ),
+        make_result(
+            headers={"content-type": "text/html"},
             text="<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
             "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>",
             url=URL,
@@ -80,7 +93,15 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
             url="https://example.com/.enodia/challenge?redirect=%2Farticle",
         ),
     ],
-    ids=["bot-check", "javascript-shell", "redirect-loop", "localized-captcha", "challenge"],
+    ids=[
+        "bot-check",
+        "javascript-shell",
+        "redirect-loop",
+        "meta-refresh",
+        "redirect-link",
+        "localized-captcha",
+        "challenge",
+    ],
 )
 async def test_browser_reads_what_direct_reading_could_not_before_any_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: PublicResponse
@@ -95,6 +116,49 @@ async def test_browser_reads_what_direct_reading_could_not_before_any_service(
     assert "Rendered article text" in result["data"]["content"]
     assert browser.urls == [URL]
     assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_redirect_page_names_its_destination_without_hiding_readable_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = "next?tab=docs"
+    head = f'<base href="/guide/"><meta http-equiv="Refresh" content="0;Url={target}">'
+    body = "<p>Documentation about redirects.</p>"
+
+    def serve(url: str) -> PublicResponse:
+        return make_result(
+            headers={"content-type": "text/html"},
+            text=f"<html><head>{head}</head><body>{body}</body></html>",
+            url=url,
+        )
+
+    install_http_get(monkeypatch, serve)
+    result = await fetch(tmp_path, {"url": URL})
+    assert result["error"]["code"] == "no_content"
+    assert "https://example.com/guide/next?tab=docs" in result["error"]["message"]
+    raw = await fetch(tmp_path, {"url": URL, "output": "raw"})
+    assert raw["ok"] and head in raw["data"]["content"]
+    head = head.replace("0;Url=", "60;Url=")
+    link = "<a href='/new'>Redirecting from <code>/old</code> to <code>/new</code></a>"
+    body += link
+    article = await fetch(tmp_path, {"url": URL})
+    assert article["ok"] and "Documentation about redirects." in article["data"]["content"]
+    body = link
+    plain = await fetch(tmp_path, {"url": URL, "output": "text"})
+    assert plain["error"]["code"] == "no_content"
+    assert "https://example.com/new" in plain["error"]["message"]
+    with respx.mock() as router:
+        target_url = "https://example.com/new"
+        stub = f"[Redirecting from `/old` to `{target_url}`]({target_url})"
+        router.post(TAVILY).respond(json={"results": [{"url": URL, "raw_content": stub}]})
+        service = await fetch(
+            tmp_path,
+            {"url": URL, "output": "text"},
+            **_options(FakeBrowser("", installed=False), provider="tavily"),
+        )
+    assert service["error"]["code"] == "no_content"
+    assert "tavily" in service["error"]["message"] and target_url in service["error"]["message"]
 
 
 @pytest.mark.asyncio

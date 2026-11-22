@@ -359,10 +359,27 @@ def lower(result: dict[str, Any]) -> Script:
     """
     errors = result.get("errors") or []
     if errors:
-        reason = "PowerShell could not parse the command line"
-        if result.get("incomplete"):
-            reason = "the command line is incomplete"
-        return Script(error=reason)
+        first = result.get("syntax_error") or {}
+        issue = {
+            "TerminatorExpectedAtEndOfString": "an unterminated string",
+            "MissingEndParenthesisInExpression": "a missing closing parenthesis",
+            "MissingEndCurlyBrace": "a missing closing brace",
+            "MissingTypename": "a missing type name after an opening bracket",
+            "UnexpectedToken": "an unexpected token",
+        }.get(
+            str(first.get("id", "")),
+            "incomplete syntax" if result.get("incomplete") else "invalid syntax",
+        )
+        reason = f"PowerShell found {issue}"
+        if first.get("line") and first.get("column"):
+            reason += f" at line {first['line']}, column {first['column']}"
+        hint = (
+            "Check the quotes. In PowerShell, a double quote inside single-quoted text is literal. "
+            "Inside double-quoted text, escape it with a backtick."
+            if first.get("backslash_quote")
+            else "Check the reported position and its surrounding PowerShell syntax."
+        )
+        return Script(error=reason, error_hint=hint)
     script = Script(
         literal_cli_syntax=result.get("literal_cli_syntax") is True,
         assigned={str(name) for name in result.get("assigned") or []},

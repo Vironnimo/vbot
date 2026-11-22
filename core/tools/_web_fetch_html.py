@@ -350,6 +350,28 @@ def _drop_navigation(root: Tag, selectors: str) -> bool:
     return removed
 
 
+def _redirect_reference(soup: BeautifulSoup) -> str:
+    """Read the document's redirect before text mode discards link targets."""
+    head = soup.head or soup.html or soup
+    refresh = head.find(
+        "meta", attrs={"http-equiv": re.compile("^refresh$", re.I)}, recursive=False
+    )
+    if isinstance(refresh, Tag):
+        target = re.fullmatch(
+            r"\s*0+(?:\.0+)?\s*;\s*url\s*=\s*(.+?)\s*", _attr(refresh, "content"), re.I
+        )
+        if target:
+            return target[1].strip("\"'")
+    body = soup.body or soup
+    link = body.find("a", href=True)
+    if isinstance(link, Tag):
+        label = link.get_text(" ", strip=True)
+        match = re.fullmatch(r"Redirecting from \S+ to (\S+)", label, re.I)
+        if match and match[1] == _attr(link, "href") and label == body.get_text(" ", strip=True):
+            return match[1]
+    return ""
+
+
 def extract_views(
     html: str, url: str, include_links: bool = True
 ) -> tuple[str, str, dict[str, str], list[str]]:
@@ -369,6 +391,9 @@ def extract_views(
     base_tag = soup.find("base", href=True)
     base = _safe_url(_attr(base_tag, "href"), url) if isinstance(base_tag, Tag) else url
     base = base or url
+    if redirect := _redirect_reference(soup):
+        metadata["redirect_reference"] = redirect
+        metadata["redirect_base"] = base
     # Bound recursive conversion independently of the download limit.
     stack: list[tuple[Tag, int]] = [(soup, 0)]
     count = 0

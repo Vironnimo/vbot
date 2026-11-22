@@ -885,6 +885,7 @@ class ComputerUseService:
 
         async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             actions = []
+            desktop.keep_batch_focus = arguments.get("window_id") is not None
             for number, item in enumerate(arguments["actions"], start=1):
                 try:
                     actions.append(parse_action(item))

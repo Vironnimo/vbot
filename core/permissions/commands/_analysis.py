@@ -169,7 +169,7 @@ class Analysis:
         if script is None:
             return
         if script.error is not None:
-            self.unresolve("command", text, script.error)
+            self.unresolve("command", text, script.error, hint=script.error_hint)
             return
         start = tuple(dict.fromkeys(Location(cwd) for cwd in cwds))
         context = Context(
@@ -985,7 +985,16 @@ class Analysis:
         """Record *kind* for each entry *listing* names; changing a folder reaches below it."""
         for path, source, glob in listing.roots or ():
             below = subtree or listing.recursive or kind == "write"
-            self.add(kind, path, source, subtree=below, glob=glob)
+            self.add(
+                kind,
+                path,
+                source,
+                subtree=below,
+                glob=glob,
+                enumerated=bool(
+                    (listing.filesystem_items or listing.full_names) and (glob or listing.recursive)
+                ),
+            )
 
     # Words and paths --------------------------------------------------------
 
@@ -1358,14 +1367,15 @@ class Analysis:
         pruned: tuple[str, ...] = (),
         work_tree: bool = False,
         git: bool = False,
+        enumerated: bool = False,
     ) -> None:
-        whole = (kind, path, None, True, (), False, False)
+        whole = (kind, path, None, True, (), False, False, enumerated)
         if whole in self._paths and not work_tree:
             return  # the whole subtree is already in the plan
-        key = (kind, path, glob, subtree, pruned, work_tree, git)
+        key = (kind, path, glob, subtree, pruned, work_tree, git, enumerated)
         if key not in self._paths:
             self._paths[key] = PlannedPathAccess(
-                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned, work_tree, git
+                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned, work_tree, git, enumerated
             )
 
     def add_url(self, url: str, source: str) -> None:
@@ -1378,9 +1388,13 @@ class Analysis:
         del source
         self._hosts.setdefault(host.strip("[]").lower(), None)
 
-    def unresolve(self, kind: UnresolvedKind, source: str, reason: str) -> None:
+    def unresolve(
+        self, kind: UnresolvedKind, source: str, reason: str, *, hint: str | None = None
+    ) -> None:
         source = source[:SOURCE_LIMIT]
-        self._unresolved.setdefault((kind, source, reason), UnresolvedElement(kind, source, reason))
+        self._unresolved.setdefault(
+            (kind, source, reason), UnresolvedElement(kind, source, reason, hint)
+        )
 
     def path_or_none(self, text: str | None) -> Path | None:
         if not text:

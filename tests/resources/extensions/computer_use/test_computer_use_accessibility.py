@@ -180,6 +180,39 @@ async def test_batch_validates_all_explicit_targets_before_input(computer: Harne
     assert scoped["ok"] and computer.target.inputs == [("type", "scoped")]
 
 
+@pytest.mark.parametrize("remote", [False, True])
+async def test_batch_window_stays_in_front_until_dialog_opens(computer: Harness, remote: bool):
+    link = NativeLink(computer.computers) if remote else None
+    if link:
+        await link.connect()
+    target = link.target if link else computer.target
+    context = remote_context(computer, link) if link else computer.context_for("computer")
+    try:
+        shot = await computer.call("computer", {"action": "screenshot"}, context)
+        click = {"action": "left_click", "coordinate": [20, 20]}
+        keys = {"action": "key", "text": "enter"}
+        steps = {"window_id": identifier(shot, "win"), "actions": [click, keys]}
+        batch = replace(context, tool_name="computer_batch")
+        completed = await computer.call("computer_batch", steps, batch)
+        assert completed["ok"], completed.get("error")
+        dialog = replace(target.foreground(), handle=12, title="New dialog")
+        target.windows_.append(dialog)
+
+        def open_dialog(event: tuple) -> None:
+            if event[0] == "click":
+                target.activate(dialog)
+
+        target.on_input = open_dialog
+        before = len(target.inputs)
+        stopped = await computer.call("computer_batch", steps, batch)
+        assert stopped["error"]["code"] == "focus_changed"
+        assert [event[0] for event in target.inputs[before:]] == ["click"]
+        assert target.foreground().same_window(dialog)
+    finally:
+        if link:
+            await link.close(computer)
+
+
 async def test_inspection_obeys_app_access_and_never_exposes_unapproved_titles(
     computer: Harness,
 ) -> None:

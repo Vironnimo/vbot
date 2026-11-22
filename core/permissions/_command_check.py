@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Final
 
 from core.permissions._addresses import canonical_host
 from core.permissions._approval_access import ApprovalRequirement
+from core.permissions._listed_paths import check_listed_links, concrete_listing_access
 from core.permissions._paths import is_inside, path_key, split_lexical
 from core.permissions._refusal import PathAccess, PermissionRefusal
 from core.permissions.permissions import PermissionBoundary
@@ -70,7 +71,7 @@ _UNRESOLVED: Final[dict[str, tuple[str, str]]] = {
     ),
     "inline_code": (
         "whose effects the check cannot inspect",
-        "Use individual shell commands whose file paths and arguments can be checked.",
+        "Express the operation with Tools or shell commands whose access can be checked.",
     ),
     "environment": (
         "which can change what code the command runs",
@@ -347,7 +348,8 @@ class CommandChecker:
                 and refusal.reason == "not_permitted"
                 else None,
             )
-        for access in plan.paths:
+        for planned in plan.paths:
+            access = concrete_listing_access(boundary, planned)
             kind: PathAccess = access.kind
             path = access.path
             if access.work_tree:
@@ -401,7 +403,56 @@ class CommandChecker:
                 and not access.work_tree
             ):
                 refused = replace(refused, hint=_DENIED_BELOW_HINT)
+            if (
+                refused is not None
+                and windows
+                and kind == "read"
+                and path.parent == path
+                and access.source == "\\"
+                and any(
+                    command.shell == "powershell"
+                    and command.name.lower() == "rg"
+                    and '\\"' in command.source
+                    and any(word.static and word.text == "\\" for word in command.words)
+                    for command in plan.commands
+                )
+            ):
+                refused = replace(
+                    refused,
+                    hint=(
+                        "PowerShell passed a lone backslash to rg as the drive root. "
+                        "If you intended it as part of the search pattern, "
+                        "check the pattern's quotes."
+                    ),
+                )
             add(refused, identity)
+            if access.enumerated and (refused is None or refused.reason == "not_permitted"):
+                try:
+                    if refused is not None:
+                        raise PermissionError  # The root cannot be inspected before approval.
+                    for link, deeper, linked in check_listed_links(
+                        boundary, access, windows=windows
+                    ):
+                        if linked is not None and linked.reason != "not_permitted":
+                            add(linked)
+                            break
+                        requirement = None
+                        if computer_id is not None:
+                            requirement = ApprovalRequirement.path(
+                                boundary, link, kind, computer_id=computer_id, subtree=deeper
+                            )
+                            identities.append(requirement)
+                        add(linked, requirement)
+                except OSError, RuntimeError:
+                    add(
+                        boundary.refusal(
+                            "command",
+                            _shown(text),
+                            "unanalyzable",
+                            detail="the links in the requested listing could not be checked",
+                            hint="Name the required target files or directories directly.",
+                        )
+                    )
         for mention in plan.mentions:
             add(boundary.check_path(mention.path, "read", glob=mention.glob, deny_only=True))
         for element in plan.unresolved:
@@ -699,7 +750,7 @@ def _unresolved_refusal(
         _shown(text),
         "unanalyzable",
         detail=f"{reason}{where}, {consequence}",
-        hint=hint,
+        hint=element.hint or hint,
     )
 
 

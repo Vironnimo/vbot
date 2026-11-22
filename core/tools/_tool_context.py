@@ -147,6 +147,8 @@ def _windows_name_problem(text: str, candidate: Path, access: PathResolveAccess)
     Windows drops the dots and spaces that end a name, so a change refuses such
     a name and names the path it would change instead; a read just opens it.
     """
+    if re.match(r'^\s*\[\s*"', text):
+        return "this looks like a list of paths. Send one path as plain text"
     names = _names(candidate)
     if any(":" in name for name in names[:-1]) or (access != "read" and names and ":" in names[-1]):
         return _COLON_IN_NAME

@@ -114,7 +114,8 @@ class PlannedPathAccess:
     may change; a read with ``glob`` reads that path below the top (the index
     path ``:secrets/key.pem``). ``git``: a git operation across the files
     below ``path``, which deny rules and rule files below it do not refuse
-    (``PermissionBoundary.check_path``).
+    (``PermissionBoundary.check_path``). ``enumerated`` marks names supplied by
+    a filesystem listing for a path consumer; the checker verifies matching links.
     """
 
     kind: PathAccessKind
@@ -125,6 +126,7 @@ class PlannedPathAccess:
     pruned: tuple[str, ...] = ()
     work_tree: bool = False
     git: bool = False
+    enumerated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +145,7 @@ class UnresolvedElement:
     kind: UnresolvedKind
     source: str
     reason: str
+    hint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

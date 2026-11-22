@@ -16,10 +16,12 @@ from ._shell_hint_code import (
     _QUOTES,
     _RUN_START,
     _SINGLE_QUOTES,
+    _element_program,
     _powershell_code,
     _PowerShellCode,
     _program_name,
     _program_strings,
+    _run_starts,
     _top_level_statements,
 )
 from ._shell_hint_common import (
@@ -568,9 +570,10 @@ def _hint_nested_powershell(command: str) -> str | None:
 
 # A program reports a wildcard word it was given; at most this many such words are checked.
 _NATIVE_GLOB_WORDS = 20
+_PROGRAM_PATH_ERROR = re.compile(r"^([\w.-]+): ([^\r\n]+?): [^\r\n]*\(os error \d+\)\r?$", re.M)
 
 
-def _hint_native_glob(failure: _Failure) -> str | None:
+def _hint_native_glob(failure: _Failure, *, failed_programs: Sequence[str] = ()) -> str | None:
     """Name the wildcard PowerShell passed to a program unexpanded.
 
     Bash expands ``minidb/*.py`` before the program starts; PowerShell expands
@@ -583,11 +586,30 @@ def _hint_native_glob(failure: _Failure) -> str | None:
     command, output = failure.command, failure.output
     if not _common._POWERSHELL or "ParserError" in output or "did not match any file" in output:
         return None
+    # Behind a successful exit, the path must occur in the failing child's
+    # own path diagnostic and be an argument to that program. Another stage
+    # can print arbitrary paths, including lines read from a log or source file.
+    path_errors: set[tuple[str, str]] = set()
+    if failed_programs:
+        for path_error in _PROGRAM_PATH_ERROR.finditer(output):
+            name = path_error[1].casefold().removesuffix(".exe")
+            if _exit_codes(failed_programs, name):
+                path_errors.add((name, path_error[2]))
+        if not path_errors:
+            return None
+    code = _powershell_code(command)
+    starts = _run_starts(code.flat) if failed_programs else []
     words: dict[str, None] = {}
     # Strings, here-strings and comments are blanked: no word comes from inside them.
-    for match in _COMMAND_WORD.finditer(_powershell_code(command).text):
+    for match in _COMMAND_WORD.finditer(code.text):
         word = match[0]
         if "*" in word and not word.startswith("-") and any(mark in word for mark in "/\\."):
+            if (
+                failed_programs
+                and (_element_program(command, code.flat, starts, match.start()), word)
+                not in path_errors
+            ):
+                continue
             words[word] = None
             if len(words) == _NATIVE_GLOB_WORDS:
                 break

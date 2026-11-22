@@ -66,6 +66,7 @@ class Desktop:
         self.context = context
         # Set right before the first input method runs: from then on, input may have been sent.
         self.input_started = False
+        self.keep_batch_focus = False
         # A completed single action remains visible if its following screenshot fails.
         self.completed_action: str | None = None
         # The text of the screenshot taken after a failure that followed input.
@@ -223,7 +224,7 @@ class Desktop:
         if window_id is not None:
             selected = self.window(window_id)
             self._allow(Action("screenshot"), selected, "The selected window")
-            self.target.activate(selected)
+            self._activate_window(selected)
             view = "window"
         observed = self.target.snapshot([])
         if window_id is not None and (
@@ -532,9 +533,12 @@ class Desktop:
             lines.append("This window exposes no visible UI elements. Use screenshot coordinates.")
         return "\n".join(lines)
 
+    def _activate_window(self, window: WindowInfo) -> None:
+        self.target.activate(window, keep_focus=self.keep_batch_focus and self.input_started)
+
     def _element_action(self, action: Action) -> str:
         window, reference = self.element_reference(action)
-        self.target.activate(window)
+        self._activate_window(window)
         if action.name == "left_click":
             current = self.target.element(window, reference, "resolve", "")
             if current.get("password") or not current.get("enabled") or current.get("offscreen"):
@@ -598,7 +602,7 @@ class Desktop:
                         "sent. Take a screenshot of the intended window first."
                     ),
                 )
-            self.target.activate(selected)
+            self._activate_window(selected)
         points = self._points(action, frame)
         observed = self.target.snapshot(points)
         windows = observed.windows

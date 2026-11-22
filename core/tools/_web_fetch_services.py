@@ -161,7 +161,6 @@ async def fetch_service(provider: str, key: str, url: str, output: str) -> dict[
         raise FetchServiceError(
             f"{provider} returned no readable page content. Try another source."
         )
-    content = clean_service_text(content, include_links=output != "text")
     return {
         "content": content,
         "url": final_url if isinstance(final_url, str) else url,

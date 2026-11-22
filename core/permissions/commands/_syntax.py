@@ -192,6 +192,7 @@ class Script:
     assigned: set[str] = field(default_factory=set)
     environment_changed: bool = False
     error: str | None = None
+    error_hint: str | None = None
     assignments: list[Assignment] = field(default_factory=list)
     functions: frozenset[str] = frozenset()
     literal_cli_syntax: bool = False

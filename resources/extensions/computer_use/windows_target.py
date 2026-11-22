@@ -303,9 +303,15 @@ class WindowsTarget(WindowsInput):
             )
         return current
 
-    def activate(self, window: WindowInfo) -> None:
+    def activate(self, window: WindowInfo, *, keep_focus: bool = False) -> None:
         self._checked_window(window)
         self._check()
+        if keep_focus and _win32.foreground_window() != window.handle:
+            raise TargetError(
+                "The batch window lost focus after an earlier input. Check the current "
+                "window before continuing.",
+                "focus_changed",
+            )
         if not _win32.is_enabled(window.handle):
             raise TargetError(
                 (
@@ -314,7 +320,8 @@ class WindowsTarget(WindowsInput):
                 ),
                 "window_unavailable",
             )
-        self._activate(window.handle, window.app.name)
+        if not keep_focus:
+            self._activate(window.handle, window.app.name)
         if _win32.foreground_window() != window.handle:
             raise TargetError(
                 (

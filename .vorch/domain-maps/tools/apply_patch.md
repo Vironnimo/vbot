@@ -376,8 +376,8 @@ Every parsed source and destination is preflighted together before the first ope
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven
   lines too early (Sessions, 2026-09). The first difference always names the
-  file line's 1-based character. A differing line of more than 80 characters
-  shows an 80-character window from 30 characters before the first substantive
+  file line's 1-based character. A differing line of more than 48 characters
+  shows a 48-character window from 16 characters before the first substantive
   mismatch (`_first_difference_window`), with 1-based file/copied-line character
   coordinates and explicit truncation (Swarm run 2026-10-20: two whole
   120-character lines hid that only their last quote differed; `edit.md` ->

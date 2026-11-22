@@ -646,7 +646,16 @@ function Get-Analysis([string]$Text) {
         $result.errors.Add($parseError.Message)
         if ($parseError.IncompleteInput) { $result.incomplete = $true }
     }
-    if ($result.errors.Count -gt 0) { return $result }
+    if ($result.errors.Count -gt 0) {
+        $first = $parseErrors[0]
+        $result.syntax_error = @{
+            id = $first.ErrorId; line = $first.Extent.StartLineNumber; column = $first.Extent.StartColumnNumber
+            backslash_quote = [bool]($tokens | Where-Object {
+                $_.Kind -eq 'StringExpandable' -and $_.Text.Contains('\"')
+            } | Select-Object -First 1)
+        }
+        return $result
+    }
     if ($Text.IndexOf('vbot', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
         $result.literal_cli_syntax = Test-LiteralCliSyntax $ast
     }

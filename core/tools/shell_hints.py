@@ -150,6 +150,13 @@ def annotate_failure(
     else:
         try:
             hint = _hint_hidden_failure(command, exit_code, output, offers, permissions)
+            if hint is None and exit_code == 0 and failed_programs:
+                hint = _hint_native_glob(
+                    _Failure(
+                        command, _scan_window(output), workdir, offers, permissions=permissions
+                    ),
+                    failed_programs=failed_programs,
+                )
         except Exception:
             hint = None
     if hint:
