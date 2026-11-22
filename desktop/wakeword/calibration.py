@@ -151,6 +151,11 @@ class PhraseCalibration:
         return self._model_id
 
     @property
+    def progress(self) -> tuple[str, int]:
+        """The calibration milestones the page should see immediately."""
+        return self._phase, len(self._sample_peaks)
+
+    @property
     def recommended_sensitivity(self) -> float | None:
         """The recommendation once the run is ``ready``, else ``None``."""
         return self._recommended_sensitivity

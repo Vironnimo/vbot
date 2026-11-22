@@ -323,16 +323,16 @@ def test_a_waiting_status_is_replaced_by_the_newest_snapshot(dispatchers: Any) -
 
     dispatcher.publish_status({"sequence": 2}, origin="https://test.example")
     dispatcher.publish_event({"sequence": 3, "kind": "detected"}, origin="https://test.example")
-    dispatcher.publish_status({"sequence": 4}, origin="https://test.example")
+    dispatcher.publish_status({"sequence": 4}, origin="https://next.example")
     dispatcher.publish_event(SENTINEL, origin="https://test.example")
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 4)
-    # The waiting snapshot keeps its place in the queue but carries the newest content.
+    assert window.scripts[2].startswith('window.location.origin === "https://next.example"')
     assert [_voice_detail(script) for script in window.scripts] == [
         {"type": "status", "status": {"sequence": 1}},
-        {"type": "status", "status": {"sequence": 4}},
         {"type": "event", "event": {"sequence": 3, "kind": "detected"}},
+        {"type": "status", "status": {"sequence": 4}},
         {"type": "event", "event": SENTINEL},
     ]
 

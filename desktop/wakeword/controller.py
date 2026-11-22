@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -113,9 +114,7 @@ class VoiceController:
         self._lock = threading.Lock()
 
         self._destination = SpeechDestination(server_url, own_server)
-        self._config = self._parse_config(
-            desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, settings_path)
-        )
+        self._config = self._read_config()
         self._catalog.adopt_existing_models(self._config.selected_model_ids)
         self._server_url = _normalized_url(server_url)
         self._listeners = listener.ListenerFactory(
@@ -155,6 +154,7 @@ class VoiceController:
         self._readiness_checked_at: float | None = None
         self._calibration: PhraseCalibration | None = None
         self._calibration_pushed_at = 0.0
+        self._pushed_calibration_progress: tuple[str, int] | None = None
         self._reported_state = self._derive_state_locked()
         microphone.add_listener(self._on_microphone_changed)
 
@@ -193,18 +193,18 @@ class VoiceController:
     def set_server_url(self, server_url: str) -> None:
         """Follow the window's server: a different server rebuilds the listener."""
         url = _normalized_url(server_url)
-        with self._mutation_lock, self._lock:
+        with self._mutation_lock:
             if url == self._server_url:
                 return
             logger.info("Voice follows the server %s", url or "(none)")
-            self._end_recording_locked()
-            self._server_url = url
-            self._destination.origin = url_origin(url)
-            self._config = self._parse_config(
-                desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
-            )
-            self._transition_locked()
-            self._commit_locked()
+            with self._lock:
+                # Retire the old recording and its workers before looking up
+                # the new origin's consent. Settings and token reads can block.
+                self._config = replace(self._config, enabled=False)
+                self._transition_locked()
+                self._server_url = url
+                self._destination.origin = url_origin(url)
+            self._apply_config(self._read_config())
 
     def _on_microphone_changed(self, _settings: MicrophoneSettings) -> None:
         """A new microphone or echo setting rebuilds a running listener."""
@@ -242,6 +242,10 @@ class VoiceController:
             return self._recording is not None or self._active_calibration_locked() is not None
 
     # -- Config --------------------------------------------------------------
+
+    def _read_config(self) -> VoiceConfig:
+        section = desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
+        return self._parse_config(section)
 
     def _parse_config(self, section: dict[str, Any]) -> VoiceConfig:
         return parse_voice_config({**section, "enabled": self._destination.enabled(section)})
@@ -296,9 +300,7 @@ class VoiceController:
         input changed since then is used.
         """
         with self._mutation_lock:
-            config = self._parse_config(
-                desktop_settings.read_section(desktop_settings.WAKEWORD_KEY, self._settings_path)
-            )
+            config = self._read_config()
             with self._lock:
                 logger.info("Voice listener retry requested")
                 self._listeners.retry()
@@ -485,7 +487,6 @@ class VoiceController:
                 )
             now = self._clock()
             self._calibration = PhraseCalibration(model_id, now=now)
-            self._calibration_pushed_at = now
             logger.info("Voice calibration started (model=%s)", model_id)
             self._commit_locked()
             return self._status_locked()
@@ -527,7 +528,9 @@ class VoiceController:
                     self._request_readiness_locked(self._session)
             self._commit_locked()
 
-    def _transition_locked(self, *, refresh_devices: bool = False) -> None:
+    def _transition_locked(
+        self, *, refresh_devices: bool = False, fatal_error: str | None = None
+    ) -> None:
         """Stop the running session and start the next one on a background thread.
 
         ``refresh_devices`` refreshes the PortAudio device list once the old
@@ -539,8 +542,10 @@ class VoiceController:
         if session is not None:
             session.signal()
         self._reset_runtime_locked()
+        self._fatal_error = fatal_error
         should_run = (
-            self._started
+            fatal_error is None
+            and self._started
             and not self._closed
             and self._config.enabled
             and bool(self._config.phrases)
@@ -566,7 +571,6 @@ class VoiceController:
         """Forget the runtime state of a stopped session; a recording ends for the page."""
         self._end_recording_locked()
         self._commands = {}
-        self._fatal_error = None
         self._capture_state = None
         self._capture_error = None
         self._active_microphone = None
@@ -575,7 +579,6 @@ class VoiceController:
         self._readiness = ReadinessResult()
         self._readiness_checked_at = None
         self._calibration = None
-        self._calibration_pushed_at = 0.0
 
     def _run_transition(
         self,
@@ -595,7 +598,7 @@ class VoiceController:
                 self._build_session(generation, refresh_devices=refresh_devices)
         except Exception:
             logger.exception("Voice listener could not start")
-            self._fail_start(generation, voice.ERROR_PIPELINE_FAILED)
+            self._on_listener_failed(generation, voice.ERROR_PIPELINE_FAILED)
 
     def _build_session(self, generation: int, *, refresh_devices: bool = False) -> None:
         with self._lock:
@@ -609,7 +612,7 @@ class VoiceController:
                 generation, config, server_url, self, refresh_devices=refresh_devices
             )
         except listener.ListenerStartError as exc:
-            self._fail_start(generation, exc.error_code)
+            self._on_listener_failed(generation, exc.error_code)
             return
         with self._lock:
             if generation == self._generation:
@@ -618,7 +621,7 @@ class VoiceController:
                     self._listener_ready = True
                     logger.info("Voice mock listener started")
                     self._commit_locked()
-                    session.threads[0].start()
+                    session.start_mock(config.active_model_ids[0], self._runtime, self)
                 else:
                     assert session.capture is not None and session.detection is not None
                     session.capture.start()
@@ -630,27 +633,7 @@ class VoiceController:
                         server_url,
                     )
                 return
-        if session.client is not None:
-            session.client.close()
-
-    def _fail_start(self, generation: int, error_code: str) -> None:
-        with self._lock:
-            if generation != self._generation:
-                return
-            self._fatal_error = error_code
-            self._commit_locked()
-
-    def _fail_session_locked(self, error_code: str) -> None:
-        """Stop the current session after a fatal listener failure."""
-        self._fatal_error = error_code
-        if self._session is not None:
-            self._session.signal()
-        if self._recording is not None:
-            self._emit_recording_locked(voice.EVENT_RECORDING_ENDED, self._recording)
-            self._recording = None
-        self._commands.clear()
-        self._calibration = None
-        self._listener_ready = False
+        session.shutdown(self._runtime.join_timeout)
 
     # -- Session callbacks ---------------------------------------------------
 
@@ -665,7 +648,9 @@ class VoiceController:
             )
             self._echo_state = status.echo_state
             if status.state == _CAPTURE_FAILED:
-                self._fail_session_locked(status.error_code or voice.ERROR_PIPELINE_FAILED)
+                self._transition_locked(
+                    fatal_error=status.error_code or voice.ERROR_PIPELINE_FAILED
+                )
             self._commit_locked()
 
     def _on_listener_started(self, generation: int) -> None:
@@ -679,7 +664,7 @@ class VoiceController:
         with self._lock:
             if generation != self._generation:
                 return
-            self._fail_session_locked(error_code)
+            self._transition_locked(fatal_error=error_code)
             self._commit_locked()
 
     def _calibrating(self, generation: int) -> bool:
@@ -697,8 +682,10 @@ class VoiceController:
                 logger.info("Voice calibration timed out (model=%s)", calibration.model_id)
                 self._calibration = None
                 self._commit_locked()
-            elif now - self._calibration_pushed_at >= voice.CALIBRATION_PUSH_INTERVAL_SECONDS:
-                self._calibration_pushed_at = now
+            elif (
+                calibration.progress != self._pushed_calibration_progress
+                or now - self._calibration_pushed_at >= voice.CALIBRATION_PUSH_INTERVAL_SECONDS
+            ):
                 self._push_status_locked()
 
     def _on_detection(self, generation: int, detection: Detection) -> None:
@@ -1077,6 +1064,9 @@ class VoiceController:
     def _push_status_locked(self) -> None:
         self._sequence += 1
         status = self._status_locked()
+        if self._calibration is not None:
+            self._pushed_calibration_progress = self._calibration.progress
+            self._calibration_pushed_at = self._clock()
         try:
             self._sink.publish_status(status, origin=self._destination.origin)
         except Exception:

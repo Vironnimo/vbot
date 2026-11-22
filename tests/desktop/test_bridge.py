@@ -958,7 +958,9 @@ def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(
 
 
 def test_optional_services_raise_without_their_owner() -> None:
-    bridge, _ = _bridge()
+    bridge, voice = _bridge()
+    bridge._follow_speech_server(OWN_SERVER)
+    assert voice.calls == [("set_server_url", (OWN_SERVER,))]
 
     hotkey_calls: tuple[Callable[[], object], ...] = (
         bridge.getLiveHotkey,
