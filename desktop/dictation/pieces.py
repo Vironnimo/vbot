@@ -34,6 +34,7 @@ _NOISE_FLOOR_PERCENTILE = 10
 _LOUD_LEVEL_PERCENTILE = 90
 _QUIET_FACTOR = 2.0
 _MIN_QUIET_RMS = 30.0
+_QUIET_LEVEL_REFRESH_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,8 @@ class PieceCutter:
         self._rate = 0
         self._seconds = 0.0
         self._bytes = 0
+        self._quiet_rms = _MIN_QUIET_RMS
+        self._refresh_quiet_at = 0.0
 
     def add(self, pcm: bytes, rate: int, seconds: float) -> list[Piece]:
         """Add one block; returns the pieces it completed, in order."""
@@ -126,6 +129,7 @@ class PieceCutter:
         pcm = b"".join(block.pcm for block in taken)
         self._seconds -= seconds
         self._bytes -= len(pcm)
+        self._refresh_quiet_at = 0.0
         return Piece(pcm, self._rate, seconds)
 
     def _quiet_level(self) -> float:
@@ -136,10 +140,12 @@ class PieceCutter:
         return max(_MIN_QUIET_RMS, min(floor * _QUIET_FACTOR, loud / _QUIET_FACTOR))
 
     def _ends_in_pause(self) -> bool:
-        quiet = self._quiet_level()
+        if self._seconds >= self._refresh_quiet_at:
+            self._quiet_rms = self._quiet_level()
+            self._refresh_quiet_at = self._seconds + _QUIET_LEVEL_REFRESH_SECONDS
         held = 0.0
         for block in reversed(self._blocks):
-            if block.rms > quiet:
+            if block.rms > self._quiet_rms:
                 return False
             held += block.seconds
             if held >= PAUSE_SECONDS:

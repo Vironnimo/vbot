@@ -576,20 +576,28 @@ class _HotkeyThread:
                 return
             message_id, wparam = message
             if message_id == WM_HOTKEY and wparam == HOTKEY_ID:
-                self._call(self._handlers.on_press)
                 if self._handlers.on_release is not None:
-                    holding, escape_down = True, False
+                    holding = True
+                    escape_down = self._api.key_down(VK_ESCAPE)
+                self._call(self._handlers.on_press)
             elif message_id == WM_HOTKEY and wparam == ESCAPE_HOTKEY_ID:
                 if self._escape_registered:
+                    escape_down = self._api.key_down(VK_ESCAPE)
                     self._call(self._handlers.on_escape)
             elif message_id == WM_ARM_ESCAPE:
+                if holding and wparam and not self._escape_wanted:
+                    escape_down = self._api.key_down(VK_ESCAPE)
                 self._set_escape(bool(wparam))
             if not holding:
                 continue
-            # Escape with the combination's modifiers held is a different
-            # combination than the registered bare Escape, so watch it here.
+            # Windows reports bare Escape through WM_HOTKEY. Poll only edges
+            # that its registration cannot deliver, including modified Escape.
             escape_now = self._api.key_down(VK_ESCAPE)
-            if escape_now and not escape_down:
+            pressed = self._escape_wanted and escape_now and not escape_down
+            if pressed and (
+                not self._escape_registered
+                or any(self._api.key_down(key) for _, keys in _MODIFIER_KEYS for key in keys)
+            ):
                 self._call(self._handlers.on_escape)
             escape_down = escape_now
             if not all(any(self._api.key_down(key) for key in group) for group in held_keys):

@@ -7,6 +7,7 @@ import json
 import threading
 import wave
 from collections.abc import Iterator
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ import numpy as np
 import pytest
 
 from desktop import hotkey
+from desktop.dictation import controller as dictation
 from desktop.dictation.controller import (
     DictationController,
 )
@@ -172,9 +174,15 @@ class FakeInserter:
 @dataclass
 class FakeCues:
     played: list[str] = field(default_factory=list)
+    done_playback: Future[None] | None = None
 
-    def play(self, cue: str) -> None:
+    def play(self, cue: str) -> Future[None]:
         self.played.append(cue)
+        if cue == "done" and self.done_playback is not None:
+            return self.done_playback
+        finished: Future[None] = Future()
+        finished.set_result(None)
+        return finished
 
 
 @dataclass
@@ -317,7 +325,15 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
 
     monkeypatch.setattr(rig.page, "publish_dictation", record_with_snapshot)
 
-    rig.dictate()
+    rig.cues.done_playback = Future()
+    rig.start_take()
+    rig.press()
+    wait_until(lambda: "done" in rig.cues.played)
+    assert rig.server.transcribing.wait(1)
+    assert rig.page.recording == [True]
+    assert rig.controller.status()["state"] == "recording"
+    rig.cues.done_playback.set_result(None)
+    rig.wait_idle()
 
     assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
     assert rig.cues.played == ["listen", "done"]
@@ -334,6 +350,36 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     wait_until(lambda: ("unregister", hotkey.ESCAPE_HOTKEY_ID) in rig.api.calls)
     status = rig.controller.status()
     assert (status["state"], status["last_failure"]) == ("idle", None)
+
+
+@pytest.mark.parametrize("playback", ["queued", "blocked", "blocked-at-escape"])
+def test_a_stalled_done_cue_releases_the_hold_after_its_budget(
+    make_rig: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    playback: str,
+) -> None:
+    rig: Rig = make_rig()
+    now = 0.0
+    monkeypatch.setattr(dictation, "monotonic", lambda: now)
+    finished: Future[None] = Future()
+    rig.cues.done_playback = finished
+    if playback != "queued":
+        assert finished.set_running_or_notify_cancel()
+    rig.start_take()
+    rig.press()
+    wait_until(lambda: "done" in rig.cues.played)
+    if playback == "blocked-at-escape":
+        rig.escape()
+        wait_until(lambda: "cancel" in rig.cues.played)
+    assert rig.page.recording == [True]
+    now += dictation._DONE_CUE_WAIT_SECONDS
+    rig.wait_idle()
+
+    assert rig.page.recording[-1] is False
+    assert finished.cancelled() == (playback == "queued")
+    assert rig.inserter.inserted == (
+        [] if playback == "blocked-at-escape" else [("Hallo Welt", TARGET_WINDOW)]
+    )
 
 
 @pytest.mark.parametrize("tap_stage", ["opening", "awaiting-pcm"])
@@ -380,13 +426,18 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     assert rig.controller.status()["last_failure"] is None
 
 
-@pytest.mark.parametrize("during", ["recording", "transcribing", "inserting"])
+@pytest.mark.parametrize("during", ["recording", "queued-done-cue", "transcribing", "inserting"])
 def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -> None:
     rig = make_rig()
     rig.inserter.wait_for_cancel = during == "inserting"
     if during != "inserting":
         rig.server.release_transcription.clear()
+    if during == "queued-done-cue":
+        rig.cues.done_playback = Future()
     rig.start_take()
+    if during == "queued-done-cue":
+        rig.press()
+        wait_until(lambda: "done" in rig.cues.played)
     if during in {"transcribing", "inserting"}:
         rig.press()
         wait_until(lambda: rig.controller.status()["state"] == "transcribing")
@@ -401,6 +452,9 @@ def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -
     assert rig.inserter.inserted == []
     assert rig.cues.played[-1] == "cancel"
     assert rig.controller.status()["last_failure"] is None
+    if during == "queued-done-cue":
+        assert rig.cues.done_playback.cancelled()
+        assert rig.page.recording[-1] is False
 
     if during == "transcribing":
         # A cancelled request that replies late cannot end or insert into the next take.
@@ -658,7 +712,7 @@ def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
     assert stored["hotkey"]["key"] == "KeyJ"
 
 
-@pytest.mark.parametrize("during", ["recording", "transcribing"])
+@pytest.mark.parametrize("during", ["recording", "playing-done-cue", "transcribing"])
 def test_stop_cancels_a_running_take_and_is_final(
     make_rig: Any, monkeypatch: pytest.MonkeyPatch, during: str
 ) -> None:
@@ -667,6 +721,14 @@ def test_stop_cancels_a_running_take_and_is_final(
         rig.press()
         wait_until(lambda: "listen" in rig.cues.played)
         rig.controller.stop()
+    elif during == "playing-done-cue":
+        rig.cues.done_playback = Future()
+        assert rig.cues.done_playback.set_running_or_notify_cancel()
+        rig.start_take()
+        rig.press()
+        wait_until(lambda: "done" in rig.cues.played)
+        rig.controller.stop()
+        assert rig.page.recording[-1] is False
     else:
         rig.server.release_transcription.clear()
         rig.start_take()
