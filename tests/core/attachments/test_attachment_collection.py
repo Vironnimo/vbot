@@ -79,8 +79,11 @@ def test_unused_uploads_expire_only_with_a_valid_ten_day_old_timestamp(
         store.store("draft.txt", b"unsubmitted draft"),
         (clock - age).isoformat() if age is not None else "not a timestamp",
     )
+    published = record.session_path(tmp_path, "test-generation")
+    assert published.read_bytes() == b"unsubmitted draft"
     assert sessions.unreferenced_attachment_ids() == ()
     assert store.collect_session_orphans(sessions) == int(expired)
+    assert published.exists() is not expired
     assert Path(record.file_path).exists() is not expired
     assert Path(record.file_path).with_suffix(".json").exists() is not expired
 

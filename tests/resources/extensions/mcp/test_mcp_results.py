@@ -7,12 +7,13 @@ import base64
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import mcp.types as types
 import pytest
 from mcp.server import Server
 
-from core.attachments import AttachmentTooLargeError
+from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.secrets.agent_secrets import AgentSecrets
 from core.tools.availability import ToolAccess
 from resources.extensions.mcp._transport import ConnectionTransport
@@ -481,9 +482,14 @@ async def test_unknown_metadata_and_media_are_preserved(host, programmatic):
         "structuredContent": {"answer": 42},
         "_meta": {"vendor": {"future": True}},
     }
+    host = replace(host, store_attachment=AttachmentStore(host.data_dir).store)
     store = ContentStore(host)
     result, artifacts = (
-        await store.present(payload, replace(context(host), programmatic=True), "example")
+        await store.present(
+            payload,
+            replace(context(host), programmatic=True, session_generation_id="test-generation"),
+            "example",
+        )
         if programmatic
         else await store.preserve(payload)
     )
@@ -492,7 +498,12 @@ async def test_unknown_metadata_and_media_are_preserved(host, programmatic):
     assert result["content"][0]["_meta"] == {"detail": "original"}
     assert result["content"][0]["size_bytes"] == len(b"image-bytes")
     assert "data" not in result["content"][0]
-    assert result["content"][0]["attachment_id"] == "blob"
+    saved = result["content"][0]
+    assert saved["attachment_id"] == artifacts[0]["attachment_id"]
+    image_path = Path(saved["path"])
+    assert image_path.read_bytes() == b"image-bytes"
+    if programmatic:
+        assert image_path.parent.name == "test-generation"
     assert len(artifacts) == 1
     assert "data" in payload["content"][0]
 

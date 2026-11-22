@@ -1183,6 +1183,16 @@ def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_pat
         "first",
         "second",
     ]
+    note = next(
+        entry["content"][0]["text"] for entry in attached_request if entry["role"] == "user"
+    )
+    delivered = Path(note.rsplit("Path: ", 1)[1].removesuffix("]"))
+    assert delivered != Path(record.file_path)
+    assert delivered.read_bytes() == image.getvalue()
+    delivered.unlink()
+    replay = asyncio.run(build_request_messages(loop, agent, attached))
+    assert next(entry["content"][0]["text"] for entry in replay if entry["role"] == "user") == note
+    assert delivered.read_bytes() == image.getvalue()
     assert [entry["content"] for entry in attached_request if entry["role"] == "user"] == [
         [
             {
@@ -1190,7 +1200,7 @@ def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_pat
                 "text": (
                     "[Image: old-photo.png (image/png) — this model has no vision capability, "
                     "so the image itself cannot be shown; only the stored file path is provided "
-                    f"— Path: {model_path(record.file_path)}]"
+                    f"— Path: {model_path(delivered)}]"
                 ),
             }
         ],

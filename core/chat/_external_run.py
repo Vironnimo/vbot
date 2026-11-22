@@ -339,6 +339,7 @@ class ExternalRun:
                 self.agent_id,
                 session_id=self.session_id,
             ),
+            generation_id=self._session.generation_id,
             address=SessionAddress(
                 project_id=None, agent_id=self.agent_id, session_id=self.session_id
             ),

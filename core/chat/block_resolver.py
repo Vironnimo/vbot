@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
-from core.attachments import AttachmentError, AttachmentStore
+from core.attachments import AttachmentError, AttachmentRecord, AttachmentStore
 from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError
@@ -128,6 +127,7 @@ class ContentBlockResolver:
         self,
         messages: list[JsonObject],
         *,
+        generation_id: str | None,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -149,11 +149,14 @@ class ContentBlockResolver:
             if message.get("role") != "user" or not isinstance(content, list):
                 resolved_messages.append(dict(message))
                 continue
+            if generation_id is None:
+                raise AttachmentResolveError("Attachment delivery requires a bound Session")
             resolved_messages.append(
                 {
                     **message,
                     "content": await self._resolve_content(
                         content,
+                        generation_id=generation_id,
                         input_modalities=input_modalities,
                         wire_media_types=wire_media_types,
                         max_image_bytes=max_image_bytes,
@@ -166,11 +169,12 @@ class ContentBlockResolver:
         self,
         content: list[Any],
         *,
+        generation_id: str,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None,
     ) -> list[JsonObject]:
-        parts = await _ATTACHMENT_WORKERS.run(self._expand_text_attachments, content)
+        parts = await _ATTACHMENT_WORKERS.run(self._expand_text_attachments, content, generation_id)
         resolved_content: list[JsonObject] = []
         for part in parts:
             if isinstance(part, _ResolvedBlocks):
@@ -179,6 +183,7 @@ class ContentBlockResolver:
             resolved_content.extend(
                 await self._resolve_block(
                     part,
+                    generation_id=generation_id,
                     input_modalities=input_modalities,
                     wire_media_types=wire_media_types,
                     max_image_bytes=max_image_bytes,
@@ -186,7 +191,9 @@ class ContentBlockResolver:
             )
         return resolved_content
 
-    def _expand_text_attachments(self, content: list[Any]) -> list[_ResolvedBlocks | Any]:
+    def _expand_text_attachments(
+        self, content: list[Any], generation_id: str
+    ) -> list[_ResolvedBlocks | Any]:
         """Resolve text attachments in turn order; keep every other block as is. Blocking.
 
         A text attachment renders the same on every turn. Its full text, which
@@ -197,7 +204,7 @@ class ContentBlockResolver:
         while block_index < len(content):
             block = content[block_index]
             if self._is_text_attachment_block(block):
-                attachment_blocks, raw = self._resolve_text_attachment_block(block)
+                attachment_blocks, raw = self._resolve_text_attachment_block(block, generation_id)
                 parts.append(_ResolvedBlocks(attachment_blocks))
                 if raw is not None and block_index + 1 < len(content):
                     following_block = content[block_index + 1]
@@ -214,6 +221,7 @@ class ContentBlockResolver:
         self,
         block: Any,
         *,
+        generation_id: str,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -227,13 +235,14 @@ class ContentBlockResolver:
         if block_type == "media":
             return await self._resolve_media_block(
                 block,
+                generation_id=generation_id,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,
             )
         if block_type == "file":
             return await _ATTACHMENT_WORKERS.run(
-                self._resolve_file_block, block, input_modalities, wire_media_types
+                self._resolve_file_block, block, input_modalities, wire_media_types, generation_id
             )
         raise ChatError(f"unsupported content block type: {block_type}")
 
@@ -248,6 +257,7 @@ class ContentBlockResolver:
         self,
         block: JsonObject,
         *,
+        generation_id: str,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -256,9 +266,12 @@ class ContentBlockResolver:
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
 
+        record = await _ATTACHMENT_WORKERS.run(
+            self._load_record_or_none, attachment_id, generation_id
+        )
         if media_type.startswith("image/"):
             return await self._resolve_image_block(
-                attachment_id,
+                record,
                 filename,
                 media_type,
                 self._optional_positive_integer(block, "image_reference"),
@@ -268,7 +281,7 @@ class ContentBlockResolver:
             )
         if media_type.startswith("audio/"):
             return await self._resolve_audio_block(
-                attachment_id,
+                record,
                 filename,
                 media_type,
                 self._optional_string(block, "transcription"),
@@ -278,7 +291,7 @@ class ContentBlockResolver:
         if media_type.startswith("video/"):
             return await _ATTACHMENT_WORKERS.run(
                 self._resolve_video_block,
-                attachment_id,
+                record,
                 filename,
                 media_type,
                 input_modalities,
@@ -288,8 +301,8 @@ class ContentBlockResolver:
         # An unexpected media prefix cannot be shown natively — hand over the file
         # path rather than aborting the run.
         return [
-            await self._path_note(
-                "Media", attachment_id, filename, media_type, reason=_UNSUPPORTED_MEDIA_REASON
+            self._record_path_note(
+                "Media", record, filename, media_type, reason=_UNSUPPORTED_MEDIA_REASON
             )
         ]
 
@@ -329,7 +342,7 @@ class ContentBlockResolver:
 
     async def _resolve_image_block(
         self,
-        attachment_id: str,
+        record: AttachmentRecord | None,
         filename: str,
         media_type: str,
         image_reference: int | None,
@@ -344,9 +357,9 @@ class ContentBlockResolver:
         # otherwise fail on any inbound image.
         if "image" not in input_modalities:
             return [
-                await self._path_note(
+                self._record_path_note(
                     image_label,
-                    attachment_id,
+                    record,
                     filename,
                     media_type,
                     reason=_VISION_UNAVAILABLE_REASON,
@@ -355,20 +368,20 @@ class ContentBlockResolver:
 
         if not any(kind.startswith("image/") for kind in wire_media_types):
             return [
-                await self._path_note(
+                self._record_path_note(
                     image_label,
-                    attachment_id,
+                    record,
                     filename,
                     media_type,
                     reason=_UNSUPPORTED_MEDIA_REASON,
                 )
             ]
 
-        if await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id) is None:
+        if record is None:
             # A turn stays in every later request, so a removed blob must degrade
             # to a note there instead of failing each later Run.
-            return [await self._path_note(image_label, attachment_id, filename, media_type)]
-        blob_data = await _IMAGE_WORKERS.run(self._read_attachment_bytes, attachment_id)
+            return [self._record_path_note(image_label, record, filename, media_type)]
+        blob_data = await _IMAGE_WORKERS.run(self._read_attachment_bytes, record.id)
         try:
             prepared = await self._image_converter.convert(
                 blob_data,
@@ -382,9 +395,7 @@ class ContentBlockResolver:
             )
         except ImageConversionError as exc:
             return [
-                await self._path_note(
-                    image_label, attachment_id, filename, media_type, reason=str(exc)
-                )
+                self._record_path_note(image_label, record, filename, media_type, reason=str(exc))
             ]
         encoded = await _IMAGE_WORKERS.run(lambda: base64.b64encode(prepared.data).decode("ascii"))
         native_block = {
@@ -396,14 +407,12 @@ class ContentBlockResolver:
         # the original file (e.g. to forward it), not only the pixels.
         return [
             native_block,
-            await self._path_note(
-                image_label, attachment_id, filename, media_type, reason=prepared.note
-            ),
+            self._record_path_note(image_label, record, filename, media_type, reason=prepared.note),
         ]
 
     def _resolve_video_block(
         self,
-        attachment_id: str,
+        record: AttachmentRecord | None,
         filename: str,
         media_type: str,
         input_modalities: frozenset[str],
@@ -411,23 +420,21 @@ class ContentBlockResolver:
     ) -> list[JsonObject]:
         """Pass video only when both Model and wire support it. Blocking."""
 
-        if not ("video" in input_modalities and media_type in wire_media_types) or (
-            self._load_record_or_none(attachment_id) is None
-        ):
-            return [self._path_note_block("Video", attachment_id, filename, media_type)]
+        if not ("video" in input_modalities and media_type in wire_media_types) or (record is None):
+            return [self._record_path_note("Video", record, filename, media_type)]
 
         return [
             {
                 "type": "media",
-                "base64": self._read_attachment_base64(attachment_id),
+                "base64": self._read_attachment_base64(record.id),
                 "media_type": media_type,
             },
-            self._path_note_block("Video", attachment_id, filename, media_type),
+            self._record_path_note("Video", record, filename, media_type),
         ]
 
     async def _resolve_audio_block(
         self,
-        attachment_id: str,
+        record: AttachmentRecord | None,
         filename: str,
         media_type: str,
         transcription: str | None,
@@ -439,19 +446,16 @@ class ContentBlockResolver:
             # The Session stores the transcript independently of the recording.
             return [
                 self._transcription_block(filename, media_type, transcription),
-                await self._path_note("Audio", attachment_id, filename, media_type),
+                self._record_path_note("Audio", record, filename, media_type),
             ]
 
-        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
         if record is None:
-            return [await self._path_note("Audio", attachment_id, filename, media_type)]
+            return [self._record_path_note("Audio", record, filename, media_type)]
 
         if "audio" in input_modalities and media_type in wire_media_types:
             native_block = {
                 "type": "media",
-                "base64": await _ATTACHMENT_WORKERS.run(
-                    self._read_attachment_base64, attachment_id
-                ),
+                "base64": await _ATTACHMENT_WORKERS.run(self._read_attachment_base64, record.id),
                 "media_type": media_type,
             }
             return [
@@ -584,52 +588,21 @@ class ContentBlockResolver:
             ),
         }
 
-    async def _path_note(
-        self,
+    @classmethod
+    def _record_path_note(
+        cls,
         label: str,
-        attachment_id: str,
+        record: AttachmentRecord | None,
         filename: str,
         media_type: str,
         *,
         reason: str | None = None,
     ) -> JsonObject:
-        """Event-Loop-safe :meth:`_path_note_block`."""
-        return await _ATTACHMENT_WORKERS.run(
-            partial(
-                self._path_note_block, label, attachment_id, filename, media_type, reason=reason
-            )
-        )
-
-    def _path_note_block(
-        self,
-        label: str,
-        attachment_id: str,
-        filename: str,
-        media_type: str,
-        *,
-        reason: str | None = None,
-    ) -> JsonObject:
-        # Media that is not resent as binary content keeps the blob path visible
-        # so the agent can still open the file with the read tool. An optional
-        # reason explains why the binary content itself was withheld. Blocking.
-        record = self._load_record_or_none(attachment_id)
         if record is None:
             return {
                 "type": "text",
                 "text": f"[{label}: {filename} ({media_type}) — file no longer available]",
             }
-        return self._record_path_note(label, record, filename, media_type, reason=reason)
-
-    @classmethod
-    def _record_path_note(
-        cls,
-        label: str,
-        record: Any,
-        filename: str,
-        media_type: str,
-        *,
-        reason: str | None = None,
-    ) -> JsonObject:
         return cls._file_path_note(label, filename, media_type, record.file_path, reason=reason)
 
     @staticmethod
@@ -647,6 +620,7 @@ class ContentBlockResolver:
         block: JsonObject,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
+        generation_id: str,
     ) -> list[JsonObject]:
         """Resolve a file block, natively when Model and wire accept it. Blocking."""
         attachment_id = self._require_string(block, "attachment_id")
@@ -659,7 +633,9 @@ class ContentBlockResolver:
             and modality in input_modalities
             and media_type in wire_media_types
         )
-        if native and self._load_record_or_none(attachment_id) is not None:
+        record = self._load_record_or_none(attachment_id, generation_id)
+        note = self._record_path_note("File", record, filename, media_type)
+        if native and record is not None:
             document_block = {
                 "type": "document",
                 "base64": self._read_attachment_base64(attachment_id),
@@ -670,15 +646,15 @@ class ContentBlockResolver:
             # handle to the original file, not only the parsed document.
             return [
                 document_block,
-                self._path_note_block("File", attachment_id, filename, media_type),
+                note,
             ]
 
         # Not native (text or an unsupported model/wire): the path note keeps the
         # blob openable with the read tool and forwardable as a file.
-        return [self._path_note_block("File", attachment_id, filename, media_type)]
+        return [note]
 
     def _resolve_text_attachment_block(
-        self, block: JsonObject
+        self, block: JsonObject, generation_id: str
     ) -> tuple[list[JsonObject], bytes | None]:
         """Render a text attachment through the read tool's shared text renderer.
 
@@ -689,10 +665,10 @@ class ContentBlockResolver:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
-        record = self._load_record_or_none(attachment_id)
-        if record is None:
-            return [self._path_note_block("File", attachment_id, filename, media_type)], None
+        record = self._load_record_or_none(attachment_id, generation_id)
         path_note = self._record_path_note("File", record, filename, media_type)
+        if record is None:
+            return [path_note], None
         raw = self._read_attachment_bytes(attachment_id)
 
         content = render_text_file(raw)
@@ -723,9 +699,11 @@ class ContentBlockResolver:
         text = block.get("text")
         return isinstance(text, str) and text.encode("utf-8") == raw
 
-    def _load_record_or_none(self, attachment_id: str) -> Any | None:
+    def _load_record_or_none(
+        self, attachment_id: str, generation_id: str | None = None
+    ) -> AttachmentRecord | None:
         try:
-            return self._attachment_store.get(attachment_id)
+            return self._attachment_store.get(attachment_id, generation_id=generation_id)
         except (AttachmentError, OSError) as exc:
             if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
                 raise AttachmentResolveError(

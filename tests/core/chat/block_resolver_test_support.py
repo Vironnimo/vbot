@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from core.chat.block_resolver import ContentBlockResolver
 from core.utils.paths import model_path
+
+GENERATION = "test-generation"
 
 TEXT_ONLY = frozenset({"text"})
 TEXT_IMAGE = frozenset({"text", "image"})
@@ -46,7 +49,9 @@ def attachment_message(
 
 def path_note(record: Any, template: str) -> dict:
     """Render a path-note text block; ``template`` may use ``{path}``."""
-    return {"type": "text", "text": template.format(path=model_path(record.file_path))}
+    blob = Path(record.file_path)
+    path = blob.parent.parent / "session-attachments" / GENERATION / blob.name
+    return {"type": "text", "text": template.format(path=model_path(path))}
 
 
 def resolve(
@@ -59,6 +64,7 @@ def resolve(
     return asyncio.run(
         resolver.resolve_messages(
             messages,
+            generation_id=GENERATION,
             input_modalities=input_modalities,
             wire_media_types=wire_media_types,
         )
