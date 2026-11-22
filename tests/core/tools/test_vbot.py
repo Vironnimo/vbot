@@ -144,7 +144,7 @@ async def test_vbot_requires_the_app_profile_and_session_grant_and_rechecks_revi
     ]
     assert approval.await_args.args[2][0].key != first_review.key
 
-    protected_file = tmp_path.parent / f"{tmp_path.name}-vbot-data" / "settings.json"
+    protected_file = tmp_path.parent / f"{tmp_path.name}-vbot-data" / "secrets.json"
     read = {"argv": ["extensions", "run", "demo", "import", str(protected_file)]}
     cli.reset_mock()
     approval.reset_mock()

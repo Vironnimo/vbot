@@ -10,7 +10,8 @@ refusal through a Tool; Tools report it as ``permission_denied``.
 Decision order for a path: an unsafe form (network or device path, alternate data
 stream) is refused lexically unless an allow rule names it; then protected
 locations; then a deny rule of any layer; then every layer must permit through its
-base or an allow rule. Both the lexical and the resolved form of the path must
+base or an allow rule (in vBot's data folder only through an allow rule or Session
+read folder inside it). Both the lexical and the resolved form of the path must
 pass. ``PermissionBoundary.UNRESTRICTED`` (full access) answers every check
 without any work.
 """
@@ -153,12 +154,17 @@ class BoundaryContext:
     ``{workspace}`` (a rule using a missing one is dropped). The Workspace (an
     Identity Agent's own) is readable and writable under every layer, wherever
     the Session works; only deny rules and the protected locations below refuse
-    there. ``data_dir`` is protected except for the Workspace (only within the
-    Agent's own folder beside ``agent_config``), the Scratch Area
-    and ``readable_dirs`` (vBot-owned folders this Session may read, such as its
-    Skill directories and artifact folders). A ``scoped_artifact_reads`` category
-    requires its own provenance even inside an otherwise readable directory.
-    ``agent_config`` (the Agent's ``agent.json``) is never
+    there. ``data_dir`` is never writable except for the Workspace (only within the
+    Agent's own folder beside ``agent_config``) and the Scratch Area. Reading it
+    needs, in every layer, an allow rule or a Session read folder that lies inside
+    it, not just a base, except in those two areas and ``readable_dirs``
+    (vBot-owned folders this Session may read, such as its Skill directories and
+    artifact folders); a missing grant there is ``not_permitted``, so the user can
+    approve it. A ``scoped_artifact_reads`` category requires its own provenance
+    even inside an otherwise readable directory. ``credential_paths`` are
+    absolute patterns (``*`` matches one name) of files and folders that hold
+    vBot's credentials, access tokens and Agent settings: never readable or
+    writable, wherever they lie. ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
     writable. ``rule_files`` are the repository locations a Team member's rules come
     from (its profile, the settings files its translation reads and every location
@@ -181,6 +187,7 @@ class BoundaryContext:
     rule_files: tuple[PathLike, ...] = ()
     install_dirs: tuple[PathLike, ...] = ()
     readable_dirs: tuple[PathLike, ...] = ()
+    credential_paths: tuple[str, ...] = ()
     scoped_artifact_reads: ScopedArtifactReads | None = None
     loopback_port: int | None = None
     own_hosts: tuple[str, ...] = ()
@@ -208,6 +215,7 @@ class PermissionBoundary:
         "_own_data",
         "_scratch",
         "_readable",
+        "_credentials",
         "_scoped_root",
         "_scope_fingerprints",
         "_agent_config",
@@ -247,6 +255,10 @@ class PermissionBoundary:
         self._scratch = _Area.optional(context.scratch_root, windows=windows)
         self._readable = tuple(
             _Area.of(os.fspath(folder), windows=windows) for folder in context.readable_dirs
+        )
+        self._credentials = tuple(
+            _PathRule.of(PermissionRule("Read", pattern), windows=windows)
+            for pattern in context.credential_paths
         )
         scoped = context.scoped_artifact_reads
         self._scoped_root = _Area.optional(
@@ -485,17 +497,43 @@ class PermissionBoundary:
             )
             if refused is not None:
                 return refused
+            # Reading into the data folder from outside it needs a grant like a
+            # direct read there; the hard checks above come first.
+            if not deny_only and access != "write" and self._reaches_data_dir(keys, reach):
+                first = self._compiled[0].layer
+                refusal = self.refusal(
+                    access,
+                    target,
+                    "not_permitted",
+                    source=first.source,
+                    base=first.read,
+                    location="data_dir",
+                    resolved=shown,
+                )
+                assert self._context is not None
+                data_dir = lexical_text(os.fspath(self._context.data_dir), windows=self._windows)
+                return replace(refusal, below=data_dir)
         for layer in () if deny_only else self._compiled:
-            if not all(
-                key in scoped or self._granted(key, access) or layer.permits(key, access)
-                for key in keys
-            ):
+            missing = next(
+                (
+                    key
+                    for key in keys
+                    if not (
+                        key in scoped
+                        or self._granted(key, access)
+                        or self._layer_permits(layer, key, access)
+                    )
+                ),
+                None,
+            )
+            if missing is not None:
                 return self.refusal(
                     access,
                     target,
                     "not_permitted",
                     source=layer.layer.source,
                     base=layer.layer.write if access == "write" else layer.layer.read,
+                    location="data_dir" if self._needs_data_grant(missing, access) else None,
                     resolved=shown,
                 )
         return None
@@ -519,9 +557,27 @@ class PermissionBoundary:
             ("agent_config", self._agent_config)
         ]
         # A folder in a part of the data directory the access may reach (the
-        # Scratch Area, the Workspace, a readable folder) has only such parts below.
-        if not all(key in scoped or self._data_dir_allowed(key, access) for key in keys):
+        # Scratch Area, the Workspace) has only such parts below. Reads below
+        # need a grant instead, which the folder's own check asks for.
+        if access == "write" and not all(
+            key in scoped or self._data_dir_allowed(key, access) for key in keys
+        ):
             protected.append(("data_dir", self._data_dirs))
+        if any(
+            reaches(key, reach, pattern)
+            for rule in self._credentials
+            for pattern in rule.keys
+            for key in keys
+        ):
+            return self.refusal(
+                access,
+                target,
+                "protected_location",
+                location="vbot_secrets",
+                resolved=shown,
+                detail="the requested scope includes files that hold vBot's credentials, "
+                "access tokens or Agent settings",
+            )
         if self._scoped_root is not None and any(
             reaches(key, reach, folder)
             for key in keys
@@ -631,6 +687,8 @@ class PermissionBoundary:
         writes = (self._rule_files, *self._install_dirs) if access == "write" else ()
         for area in (self._agent_config, *writes):
             sources.extend((key, None) for key in (area.keys if area is not None else ()))
+        sources.extend((key, None) for rule in self._credentials for key in rule.keys)
+        # Below a folder outside the readable parts, reading the data folder needs a grant.
         if not all(key in scoped or self._data_dir_allowed(key, access) for key in folders):
             sources.extend((key, None) for key in self._data_dirs.keys)
         for key, written in sources:
@@ -838,7 +896,8 @@ class PermissionBoundary:
         return path_key(text, windows=self._windows)
 
     def _granted(self, key: str, access: PathAccess) -> bool:
-        if _contains(self._workspace, key):
+        # A Workspace around the data directory opens none of it.
+        if _contains(self._workspace, key) and not self._needs_data_grant(key, access):
             return True
         return access != "write" and any(area.contains(key) for area in self._readable)
 
@@ -865,17 +924,43 @@ class PermissionBoundary:
         for key in keys:
             if self._agent_config is not None and self._agent_config.contains(key):
                 return "agent_config"
+            if any(rule.matches(key) for rule in self._credentials):
+                return "vbot_secrets"
             if access == "write" and self._rule_files.contains(key):
                 return "agent_config"
             if access == "write" and any(area.contains(key) for area in self._install_dirs):
                 return "installation"
             if key in scoped:
                 continue
+            # Reading elsewhere in the data folder needs a grant, not protection.
             if _contains(self._scoped_root, key) or (
-                self._data_dirs.contains(key) and not self._data_dir_allowed(key, access)
+                access == "write"
+                and self._data_dirs.contains(key)
+                and not self._data_dir_allowed(key, access)
             ):
                 return "data_dir"
         return None
+
+    def _layer_permits(self, layer: _CompiledLayer, key: str, access: PathAccess) -> bool:
+        """Whether ``layer`` permits ``key``; in the data folder only by an explicit grant."""
+        if self._needs_data_grant(key, access):
+            return layer.grants_inside(key, access, self._data_dirs)
+        return layer.permits(key, access)
+
+    def _reaches_data_dir(self, keys: tuple[str, ...], reach: tuple[str, ...]) -> bool:
+        """Whether an access to ``reach`` below a folder outside the data folder enters it."""
+        return any(
+            not self._data_dirs.contains(key) and reaches(key, reach, folder)
+            for key in keys
+            for folder in self._data_dirs.keys
+        )
+
+    def _needs_data_grant(self, key: str, access: PathAccess) -> bool:
+        return (
+            access != "write"
+            and self._data_dirs.contains(key)
+            and not self._data_dir_allowed(key, access)
+        )
 
     def _data_dir_allowed(self, key: str, access: PathAccess) -> bool:
         """Whether ``key`` lies in a part of the data directory ``access`` may reach."""
@@ -948,19 +1033,29 @@ class _PathRule:
     keys: tuple[str, ...]
     patterns: tuple[re.Pattern[str], ...]
     literal: str | None
+    # Comparison keys of the folder the pattern names before its first wildcard.
+    prefixes: tuple[str, ...]
 
     @classmethod
     def of(cls, rule: PermissionRule, *, windows: bool) -> _PathRule:
         lexical = split_lexical(rule.pattern, windows=windows)
         variants = [lexical.text]
         prefix = literal_prefix(lexical)
+        prefixes = [prefix.text]
         if lexical.unsafe is None and prefix.segments:
             resolved = resolve_path(prefix.text, windows=windows)
             rest = lexical.segments[len(prefix.segments) :]
             variants.append(LexicalPath(resolved.root, resolved.segments + rest).text)
+            prefixes.append(resolved.text)
         keys = tuple(dict.fromkeys(path_key(variant, windows=windows) for variant in variants))
         literal = None if has_wildcard(lexical.text) else path_key(lexical.text, windows=windows)
-        return cls(rule, keys, tuple(compile_pattern(key) for key in keys), literal)
+        return cls(
+            rule,
+            keys,
+            tuple(compile_pattern(key) for key in keys),
+            literal,
+            tuple(dict.fromkeys(path_key(text, windows=windows) for text in prefixes)),
+        )
 
     def matches(self, key: str) -> bool:
         return any(pattern.fullmatch(key) is not None for pattern in self.patterns)
@@ -1034,6 +1129,22 @@ class _CompiledLayer:
         if self.workdir.contains(key):
             return True
         return any(rule.matches(key) for rule in self.read_allow + self.edit_allow)
+
+    def grants_inside(self, key: str, access: PathAccess, area: _Area) -> bool:
+        """Whether a grant lying inside ``area`` permits reading ``key``, whatever the base.
+
+        A Session read folder (reads only) or an allow rule whose literal folder
+        is ``area`` or below it; a wider rule or folder that merely contains
+        ``area`` does not count.
+        """
+        if access == "read" and any(
+            area.contains(root) and is_inside(key, root) for root in self.session_read_folders
+        ):
+            return True
+        return any(
+            rule.matches(key) and any(area.contains(prefix) for prefix in rule.prefixes)
+            for rule in self.read_allow + self.edit_allow
+        )
 
     def names_exactly(self, key: str, access: PathAccess) -> bool:
         rules = self.edit_allow if access == "write" else self.read_allow + self.edit_allow

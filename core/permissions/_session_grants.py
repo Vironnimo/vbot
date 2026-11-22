@@ -174,12 +174,13 @@ def _read_folder_choices(
             for r in requirements
         ):
             continue
-        # The narrowest common folder must actually permit every read. Broader
-        # folders cannot change a protected path, deny or independent ceiling.
-        if not choices and not permitted_folder_reads(
-            boundary.with_read_folder(folder.text), requirements
-        ):
-            return (), False
+        # Each offered folder must actually permit every read. A broader one
+        # cannot change a protected path, deny or independent ceiling, but in
+        # vBot's data folder only a folder inside it counts, so the list ends there.
+        if not permitted_folder_reads(boundary.with_read_folder(folder.text), requirements):
+            if not choices:
+                return (), False
+            break
         choices.append(folder.text)
     # A shared ancestor across different directories or a link target needs an explicit choice.
     direct = LexicalPath(path.root, segments)

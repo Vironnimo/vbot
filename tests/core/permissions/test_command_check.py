@@ -50,6 +50,7 @@ def boundary(
         workdir=work,
         home=work / "home",
         data_dir=work.parent / "data",
+        credential_paths=((work.parent / "data" / "runtime").as_posix(),),
         loopback_port=PORT,
         own_hosts=("192.168.1.20",),
     )
@@ -528,8 +529,12 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
         pytest.param(
             "bash", "./secrets/viewer.exe --version", "deny_rule", id="native-read-denied"
         ),
+        pytest.param("bash", "../data/viewer.exe --version", None, id="native-data-folder"),
         pytest.param(
-            "bash", "../data/viewer.exe --version", "protected_location", id="native-protected"
+            "bash",
+            "../data/runtime/viewer.exe --version",
+            "protected_location",
+            id="native-protected",
         ),
         pytest.param("bash", "../tools/run.sh", "not_permitted", id="script-outside"),
         pytest.param(

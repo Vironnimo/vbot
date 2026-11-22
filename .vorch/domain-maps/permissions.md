@@ -20,6 +20,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 8. With the bundled `vbot-docs` Skill, a restricted Agent can use the CLI through its shell. Changes to any Agent's access require one-time user approval (`permissions/approvals.md`). Its own `agent.json` is protected for reading and writing. The repository definitions that supply or could replace its own rules (`projects/resolution.md` -> Permission Rules) are protected for writing.
 9. An Agent always reads and changes its Workspace, also under ceilings; deny rules apply (user decision 2026-10-23). In the data directory only within `agents/<id>/`.
 10. A restricted Agent reads only its own Session's temporary files (`storage.md`); raw Terminal logs also need matching launch scope (`tools/terminal.md` -> Permission Rules).
+11. Reads elsewhere in vBot's data folder are approvable, never writes (user decision 2026-11-23; `permissions/approvals.md`). Its credentials, access tokens and every Agent's `agent.json` stay refused even with approval.
 
 Honest limits, stated wherever "restricted" is shown: programs a command starts act with the server user's full rights and are not inspected inside; terminal input is checked only at an integrated shell prompt (`tools/terminal.md` -> Permission Rules); the local browser's redirect hops and the subresources of a page are not checked against web rules; MCP servers and Extensions are outside the checks; hardlinks to outside files are not detected; git can show files from its history, and git work across a folder or repository (`git pull`, `git restore .`, `git add .`) can read and change denied files and permission settings files below it (`permissions/commands.md` -> Paths); under only its own rules an Agent's `session_search` also finds its Sessions from before the rules; an older vBot ignores the rules after a downgrade.
 
@@ -47,9 +48,8 @@ Additional access the user allows while approving a Tool call for one Session (`
 Rule language, profiles, inline presets and editor data: `permissions/rule-language.md`. `resolve_rule_set` resolves rules per part. `PermissionRules.restricts` decides full access.
 
 **Boundary:**
-- `PermissionBoundary.build(rules, context, *, ceilings=()) -> PermissionBoundary`; `BoundaryContext(workdir, home, data_dir, project_root, scratch_root, workspace, agent_config, rule_files, install_dirs, readable_dirs, loopback_port, own_hosts, platform)`. A rule whose placeholder has no value in this Run is dropped.
+- `PermissionBoundary.build(rules, context, *, ceilings=()) -> PermissionBoundary`; `BoundaryContext` carries the Run's folders, protected locations and hosts; its `credential_paths` (absolute patterns, `*` allowed) no grant opens. A rule whose placeholder has no value in this Run is dropped.
 - `check_path(path, access, *, base=None, subtree=False, glob=None, pruned=(), git=False, deny_only=False)` with `access` `read`, `write` or `start_dir` (the directory a process starts in, decided like a read); recursive and wildcard accesses, `refusable_below` and `readable_entries`: `permissions/paths.md`. `check_host(host, access="web"|"connect", *, by_program=False)` and `check_url(url, *, by_program=False)` (http/https only; refuses the vBot server's own port; `by_program`: a command's program, every IDNA form must pass; `permissions/rule-language.md` -> Bases, kinds and placeholders). Each returns `None` or a `PermissionRefusal`.
-- For command checks: `restricted`, `layers` (`PermissionLayer.commands`, `shell_allow`, `shell_deny`), `context`, `loopback_port`, `refusal(...)` (builds a refusal with the allowed summary) and `allowed_summary(access)`.
 - `to_ceiling_dict(*, source)` / `ceiling(*, source)` turn the boundary into a ceiling for a Run it causes (its own layer retagged as `source`, inherited layers keep theirs); `PermissionCeiling.from_ceiling_dict(value)` reads one strictly (exact fields, every base present, absolute placeholder-free path patterns).
 
 **Command checks:** `CommandChecker`, one per Runtime (`runtime._command_checker`), owns analysis and decisions for shell Tool calls, terminal lines/programs and Cron watch commands. `check_line` / `check_argv` return a refusal or `None`; `check_*_all` return every refusal; `prepare_line` / `prepare_argv` pair refusals with exact approval requirements and path identities (`permissions/approvals.md`). Full access returns before analysis. Failed analysis refuses (`retryable`), and every unresolved element refuses (`unanalyzable`, with a rewrite hint). Signatures, plans and decision order: `permissions/commands.md` -> Command checks.
@@ -70,8 +70,6 @@ Rule language, profiles, inline presets and editor data: `permissions/rule-langu
 - Ceilings: `AgentOverrides.permission_ceiling` of a Session, joined and never widened (`source` `parent` by delegation and `send`, `cron` for a fired Session), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).
 - Editors and summaries: Agent and Session permission RPCs (`server/session-agent-rpcs.md` -> Permission Rules), CLI permission flags (`cli/agent-commands.md`), WebUI editors, Session badge and refused Tool rows (`webui/settings.md`, `webui/projects.md`, `webui/chat.md`). `permissions_block_text(boundary)` gives the text every Agent reads.
 
-## Approval ownership
-
 Runs own pending decisions, Tools prepare and revalidate access, and `_session_grants.py` suggests grants (`permissions/approvals.md`).
 
 ## Decision order
@@ -79,9 +77,9 @@ Runs own pending decisions, Tools prepare and revalidate access, and `_session_g
 For a path, in this order (normalization, unsafe forms and links in detail: `permissions/paths.md`):
 1. Normalize the path; refuse unsafe forms (network, device, alternate-stream and drive-relative paths) unless an allow rule without wildcards in every layer names them.
 2. Resolve links and junctions; the lexical and the resolved form must both pass every later step.
-3. Protected locations: the Agent's `agent.json` (always); the locations a Team member's rules come from (`rule_files`) and the installation, interpreter and Windows PowerShell host cache (writes); the data directory, except the Workspace and the Scratch Area, and for reading also `readable_dirs` (the Run's own artifact folders and Skill folders).
+3. Protected locations: the Agent's `agent.json` and `credential_paths` (always); the locations a Team member's rules come from (`rule_files`), the installation, interpreter and Windows PowerShell host cache, and the data directory except the Workspace and the Scratch Area (writes).
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.
-5. Every layer must permit by base or allow rule (`Edit` covers reads), or by a Session read folder in Agent and Parent layers. All layers grant the Workspace, Scratch Area and reading `readable_dirs`.
+5. Every layer must permit by base or allow rule (`Edit` covers reads), or by a Session read folder in Agent and Parent layers. All layers grant the Workspace, Scratch Area and reading `readable_dirs` (the Run's own artifact and Skill folders). Elsewhere in the data directory, reads (also ones reaching in from outside) need an allow rule or Session read folder inside it; else `not_permitted`, location `data_dir`.
 
 Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `permissions/rule-language.md` -> Bases, kinds and placeholders.
 
