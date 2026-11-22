@@ -54,6 +54,10 @@ def _score(requested: Path, candidate: Path) -> tuple[int, float] | None:
         # A shared extension says nothing about which file was meant: parser.py
         # is not like ast.py.
         ratio = stem_ratio
+        if candidate_stem.startswith(
+            (f"{requested_stem}-", f"{requested_stem}_", f"{requested_stem}.")
+        ):
+            return 3, ratio
     else:
         name_ratio = SequenceMatcher(None, requested_name, candidate_name).ratio()
         ratio = max(name_ratio, stem_ratio)

@@ -164,7 +164,13 @@ async def test_read_refuses_invalid_arguments_before_reading(
 async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> None:
     ranked = tmp_path / "ranked"
     ranked.mkdir()
-    for name in ["settings.yaml", "settngs.txt", "release-notes.md"]:
+    for name in [
+        "settings.yaml",
+        "settngs.txt",
+        "release-notes.md",
+        "card-guide.md",
+        "cardinal.md",
+    ]:
         ranked.joinpath(name).write_text(name, encoding="utf-8")
     ranked.joinpath("settings.txt.backup").mkdir()
     many = tmp_path / "many"
@@ -185,6 +191,8 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
         checks.joinpath(name).write_text(name, encoding="utf-8")
 
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
+    guide = failure(await read(tmp_path, {"path": "ranked/card.md"}), "file_not_found")
+    assert "ranked/card-guide.md" in guide and "cardinal" not in guide
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
     elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
     module = failure(await read(tmp_path, {"path": "modules/parser.py"}), "file_not_found")

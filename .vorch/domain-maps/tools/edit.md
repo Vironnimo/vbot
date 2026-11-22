@@ -55,7 +55,7 @@ Every explicit edit target is preflighted together before any file change.
   including `file_path`/`target_file`, `search`/`find`/`original`,
   `replace`/`replacement`/`replace_with`, and `all`/`global` for `replace_all`,
   with any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
-  or one of its items sent as JSON text, also with unescaped `"` or raw line
+  or one of its items sent as JSON text, also with unescaped `"` or missing opening quotes on declared field names, or raw line
   breaks inside `old_string`/`new_string` (`decode_json_argument`, the shared
   quote repair in `tools/call-repair.md` -> Shared argument repair, against the schema of an
   edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
