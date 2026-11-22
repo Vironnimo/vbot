@@ -369,6 +369,17 @@ def extract_views(
     base_tag = soup.find("base", href=True)
     base = _safe_url(_attr(base_tag, "href"), url) if isinstance(base_tag, Tag) else url
     base = base or url
+    head = soup.head or soup.html or soup
+    refresh = head.find(
+        "meta", attrs={"http-equiv": re.compile("^refresh$", re.I)}, recursive=False
+    )
+    if isinstance(refresh, Tag):
+        target = re.fullmatch(
+            r"\s*0+(?:\.0+)?\s*;\s*url\s*=\s*(.+?)\s*", _attr(refresh, "content"), re.I
+        )
+        if target:
+            metadata["refresh"] = target[1].strip("\"'")
+            metadata["refresh_base"] = base
     # Bound recursive conversion independently of the download limit.
     stack: list[tuple[Tag, int]] = [(soup, 0)]
     count = 0

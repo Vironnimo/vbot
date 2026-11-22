@@ -12,7 +12,7 @@ exactly that while carrying readable content).
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse, urlsplit
 
 WALL_GUIDANCE = "Try another source."
 
@@ -38,6 +38,40 @@ _SCRIPT_DEMAND = re.compile(
 )
 _DECORATIVE_SVG = r"\[Embedded svg: (?:visual content|[^\]\n]*\blogo)\]"
 _SEARCH_CHROME = re.compile(rf"\[{_DECORATIVE_SVG}\]\([^()\n]+\)|{_DECORATIVE_SVG}", re.I)
+
+
+def client_redirect(
+    url: str, text: str, *, title: str = "", refresh: str = "", base: str = ""
+) -> str | None:
+    """An immediate meta refresh, or a whole page that only links to its destination."""
+    if not refresh and len(text) <= 2048:
+        stub = re.fullmatch(
+            r"\[Redirecting from `[^`\n]+` to `([^`\n]+)`\]\(([^\s]+)\)", text.strip(), re.I
+        )
+        if stub and stub[1] == stub[2]:
+            refresh = stub[2]
+        elif title.lower().startswith("redirecting to: "):
+            target = title.split(":", 1)[1].strip()
+            if re.fullmatch(
+                rf"Redirecting from `?[^`\n]+`? to `?{re.escape(target)}`?", text.strip(), re.I
+            ):
+                refresh = target
+    if not refresh or any(char.isspace() for char in refresh):
+        return None
+    try:
+        target_url = urljoin(base or url, refresh)
+        parts = urlsplit(target_url)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+        ):
+            return None
+        if parts._replace(fragment="") == urlsplit(url)._replace(fragment=""):
+            return None
+    except ValueError:
+        return None
+    return target_url
 
 
 def bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
@@ -148,4 +182,4 @@ def is_script_shell(main: str, *, page: str, url: str, title: str) -> bool:
     return False
 
 
-__all__ = ["WALL_GUIDANCE", "bot_wall", "firewall_block", "is_script_shell"]
+__all__ = ["WALL_GUIDANCE", "bot_wall", "client_redirect", "firewall_block", "is_script_shell"]
