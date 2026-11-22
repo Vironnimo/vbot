@@ -936,6 +936,8 @@ def _handle_node(
 ) -> None:
     location = analysis.first(context, raw)
     skip_value = False
+    test_runner = False
+    entries: Sequence[Word] = ()
     for index, word in enumerate(arguments):
         if skip_value:
             skip_value = False
@@ -945,14 +947,22 @@ def _handle_node(
             analysis.unresolve("command", raw.source, "Node's entry point is computed at runtime")
             return
         if index == 0 and text == "inspect":
-            continue
-        if text in ("-", "--") or not text.startswith("-"):
+            analysis.unresolve("command", raw.source, "Node's debugger target cannot be verified")
+            return
+        if text == "--":
+            entries = arguments[index + 1 :]
             break
+        if text == "-" or not text.startswith("-"):
+            entries = () if text == "-" else arguments[index:]
+            break
+        if text == "--test":
+            test_runner = True
+            continue
         option = text.partition("=")[0]
         if option in ("--eval", "--print") or re.match(r"^-[ep]", option):
             analysis.unresolve("inline_code", raw.source, "the command runs inline JavaScript code")
             return
-        skip_value = text in {
+        takes_value = option in {
             "-r",
             "--require",
             "--import",
@@ -961,7 +971,55 @@ def _handle_node(
             "--env-file",
             "--env-file-if-exists",
             "--input-type",
+            "--test-name-pattern",
+            "--test-skip-pattern",
+            "--test-concurrency",
+            "--test-timeout",
+            "--test-isolation",
         }
+        skip_value = takes_value and "=" not in text
+        if not takes_value and text not in {
+            "--no-warnings",
+            "--trace-warnings",
+            "--enable-source-maps",
+            "--check",
+            "-c",
+            "--help",
+            "-h",
+            "--version",
+            "-v",
+            "--v8-options",
+            "--completion-bash",
+            "--no-deprecation",
+            "--trace-deprecation",
+            "--trace-uncaught",
+            "--trace-exit",
+            "--use-strict",
+            "--experimental-vm-modules",
+            "--experimental-strip-types",
+            "--no-experimental-strip-types",
+        }:
+            # Another option can consume the next word or select a different entry mode.
+            analysis.unresolve(
+                "command",
+                raw.source,
+                "Node's options do not identify a verifiable entry point",
+                hint="Use an explicit entry point and options the permission check can interpret.",
+            )
+            return
+    if test_runner:
+        # Discovery can descend into a directory, and every positional input is a target.
+        roots = entries or [Word.literal(".", source=raw.source)]
+        listing = analysis.resolve_listing(context, raw, roots, recursive=True)
+        if listing.roots is None:
+            analysis.unresolve(
+                "path_read", raw.source, "Node's test targets are computed at runtime"
+            )
+        else:
+            listing.filesystem_items = True
+            analysis.listed_targets(listing, "read")
+    elif entries:
+        analysis.access(context, raw, "read", entries[0], glob=False, tier="a")
     program_outputs(analysis, context, raw, name, arguments)
 
 
