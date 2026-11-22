@@ -6,7 +6,7 @@ import html
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import idna
 
@@ -72,24 +72,64 @@ def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def _site(operand: str) -> tuple[str | None, list[str] | None]:
-    """Return the host a ``site:`` operand names, and the words of its path, if it has one."""
-    parts = urlsplit(operand if "://" in operand else f"//{operand}")
+@dataclass(frozen=True)
+class _Site:
+    domain: str
+    path: str
+
+    def matches(self, url: str) -> bool:
+        if not _url_matches_domains(url, [self.domain]):
+            return False
+        path = _url_path(urlsplit(url).path)
+        return not self.path or path == self.path or path.startswith(self.path + "/")
+
+
+@dataclass(frozen=True)
+class SiteClause:
+    """One required site (or group of alternatives), or a single excluded site."""
+
+    sites: tuple[_Site, ...]
+    excluded: bool
+
+    def operator(self) -> str:
+        alternatives = " OR ".join(f"site:{site.domain}{site.path}" for site in self.sites)
+        if self.excluded:
+            return "-" + alternatives
+        return f"({alternatives})" if len(self.sites) > 1 else alternatives
+
+    def admits(self, url: str) -> bool:
+        return any(site.matches(url) for site in self.sites) != self.excluded
+
+
+def _url_path(path: str) -> str:
+    """Compare URL paths by segment, preserving case and escaped separators."""
+    encoded = quote(path, safe="/!$&'()*+,;=:@%-._~")
+
+    def normalized_escape(match: re.Match[str]) -> str:
+        char = chr(int(match[0][1:], 16))
+        return char if char.isascii() and (char.isalnum() or char in "-._~") else match[0].upper()
+
+    segments: list[str] = []
+    for segment in re.sub(r"%[0-9a-fA-F]{2}", normalized_escape, encoded).split("/")[1:]:
+        if segment == "..":
+            if segments:
+                segments.pop()
+        elif segment != ".":
+            segments.append(segment)
+    return ("/" + "/".join(segments)).rstrip("/")
+
+
+def _site(operand: str) -> _Site | None:
     try:
-        host = parts.hostname or ""
+        parts = urlsplit(operand if "://" in operand else f"//{operand}")
+        domain, error = _canonicalize_domain(parts.hostname or "")
+        if error or not domain or parts.port is not None or parts.username is not None:
+            return None
+        if parts.query or parts.fragment or parts.scheme not in {"", "http", "https"}:
+            return None
     except ValueError:
-        return None, None
-    domain, error = _canonicalize_domain(host)
-    if error is not None:
-        return None, None
-    if not (parts.path.strip("/") or parts.query or parts.fragment):
-        return domain, None
-    words = [
-        word
-        for word in re.split(r"[\W_]+", unquote(parts.path))
-        if any(char.isalpha() for char in word) and word.lower() not in _GENERIC_PATH_WORDS
-    ]
-    return domain, words
+        return None
+    return _Site(domain, _url_path(parts.path))
 
 
 def _site_factors(query: str) -> list[str] | None:
@@ -156,19 +196,8 @@ def _has_site_operator(query: str) -> bool:
 
 def split_site_operators(
     query: str,
-) -> tuple[str, list[str], list[str], list[tuple[str, str]]] | None:
-    """Move only globally conjoined site restrictions out of the query.
-
-    Restrictions cover whole sites, so ``site:host/path`` restricts to ``host``.
-    When it is the only site restriction, the words of its path (``iron`` in
-    ``site:host/iron/index.html``) join the search words, so the search still
-    aims at what the path names; with several sites, the paths belong to
-    alternatives and add no words. The last list pairs each such operator with
-    how it was read. Quoted operators stay literal. ``None`` means the filters
-    cannot express the query: keep the complete query for operator providers,
-    or refuse it for native-filter providers. In particular, never flatten
-    branch-specific sites, disjoint site conjunctions, NOT, or a negative site path.
-    """
+) -> tuple[str, list[str], list[str], list[SiteClause]] | None:
+    """Extract global restrictions, keeping paths paired with their own site alternatives."""
     if not _has_site_operator(query):
         return query, [], [], []
     factors = _site_factors(query)
@@ -176,7 +205,7 @@ def split_site_operators(
         return None
     included: list[str] = []
     excluded: list[str] = []
-    paths: list[tuple[str, str, list[str]]] = []
+    paths: list[SiteClause] = []
     words: list[str] = []
     for factor in factors:
         if not _has_site_operator(factor):
@@ -185,42 +214,29 @@ def split_site_operators(
         matches = _site_alternatives(factor)
         if not matches:
             return None
-        factor_domains: list[str] = []
-        factor_paths: list[tuple[str, str, list[str]]] = []
+        sites: list[_Site] = []
         for match in matches:
-            domain, path_words = _site(match[2])
-            if domain is None or (path_words is not None and match[1]):
+            site = _site(match[2])
+            if site is None:
                 return None
-            factor_domains.append(domain)
-            if path_words is not None:
-                factor_paths.append((match[0], domain, path_words))
-        if matches[0][1]:
-            excluded.extend(factor_domains)
+            sites.append(site)
+        domains = [site.domain for site in sites]
+        negative = bool(matches[0][1])
+        has_path = any(site.path for site in sites)
+        if has_path:
+            paths.append(SiteClause(tuple(sites), negative))
+        if negative:
+            if not has_path:
+                excluded.extend(domains)
         elif included:
-            # Independent required site clauses intersect; an empty intersection
-            # or conjoined paths cannot become a broader list of alternatives.
-            if paths or factor_paths:
-                return None
-            included = _intersect_domains(included, factor_domains)
+            included = _intersect_domains(included, domains)
             if not included:
                 return None
         else:
-            included = _unique(factor_domains)
-        paths.extend(factor_paths)
-    added: list[str] = []
-    if len(included) == 1 and paths:
-        present = {word.casefold() for word in re.findall(r"\w+", " ".join(words))}
-        for word in paths[0][2]:
-            if word.casefold() not in present:
-                present.add(word.casefold())
-                added.append(word)
-    if not words and not added:
+            included = _unique(domains)
+    if not words and not any(not clause.excluded for clause in paths):
         return None
-    readings = [
-        (operator, " ".join([f"site:{domain}", *(added if index == 0 else ())]))
-        for index, (operator, domain, _) in enumerate(paths)
-    ]
-    return " ".join([*words, *added]), _unique(included), _unique(excluded), readings
+    return " ".join(words), _unique(included), _unique(excluded), paths
 
 
 def _intersect_domains(first: list[str], second: list[str]) -> list[str]:
@@ -280,6 +296,7 @@ class WebSearchRequest:
     count: int
     page: int
     recency: str
+    path_clauses: tuple[SiteClause, ...] = ()
 
     @staticmethod
     def resolve_sites(
@@ -288,29 +305,53 @@ class WebSearchRequest:
         raw_exclude: Any,
         *,
         supports_site_expressions: bool = False,
-    ) -> tuple[str, list[str], list[str], list[tuple[str, str]], str | None]:
+    ) -> tuple[str, list[str], list[str], list[SiteClause], str | None]:
         domains, error = _normalize_domains(raw_domains)
         if error is not None:
             return query, [], [], [], error
         exclude, error = _normalize_domains(raw_exclude, field="exclude_domains")
         if error is not None:
             return query, [], [], [], error
-        widened: list[tuple[str, str]] = []
+        paths: list[SiteClause] = []
         split = split_site_operators(query)
         if split is None:
-            if not supports_site_expressions:
+            if not supports_site_expressions or any(
+                "/" in match[2].removeprefix("https://").removeprefix("http://").rstrip("/")
+                for token in _QUERY_TOKEN.findall(query)
+                if (match := _SITE_OPERATOR.fullmatch(token))
+            ):
                 return (
                     query,
                     domains,
                     exclude,
-                    widened,
+                    paths,
                     "No search was run. This provider cannot preserve the site conditions "
                     "in this query. Use separate calls for branches with different sites. "
                     "For a global restriction, pass sites in domains or exclude_domains; "
-                    "check result URLs for path restrictions.",
+                    "use site:host/path for a URL path.",
                 )
         else:
-            query, inline_domains, inline_exclude, widened = split
+            query, inline_domains, inline_exclude, paths = split
+            if not query and not supports_site_expressions:
+                positive = [clause for clause in paths if not clause.excluded]
+                if len(positive) != 1 or len(positive[0].sites) != 1:
+                    return (
+                        query,
+                        domains,
+                        exclude,
+                        paths,
+                        (
+                            "No search was run. Add search words that apply to all the requested "
+                            "paths, or search each path separately."
+                        ),
+                    )
+                path = positive[0].sites[0].path
+                terms = [
+                    word
+                    for word in re.split(r"[\W_]+", unquote(path))
+                    if word and word.lower() not in _GENERIC_PATH_WORDS
+                ]
+                query = " ".join(terms) or path.rsplit("/", 1)[-1]
             if domains and inline_domains:
                 intersection = _intersect_domains(domains, inline_domains)
                 if not intersection:
@@ -318,7 +359,7 @@ class WebSearchRequest:
                         query,
                         domains,
                         exclude,
-                        widened,
+                        paths,
                         "No search was run. domains and the query's site conditions require "
                         "different sites. Keep the intended sites in domains and remove the "
                         "site conditions from query.",
@@ -333,26 +374,32 @@ class WebSearchRequest:
                 query,
                 domains,
                 exclude,
-                widened,
+                paths,
                 (
                     f"{both[0]} is both required and excluded. Keep it in domains or in "
                     "exclude_domains, not both."
                 ),
             )
-        return query, domains, exclude, widened, None
+        return query, domains, exclude, paths, None
 
     def operator_query(self) -> str:
         query = self.query
         if (self.domains or self.exclude) and _site_factors(query) is None:
             query = f"({query})"
-        terms = [query]
-        if self.domains:
+        terms = [query] if query else []
+        if self.domains and not any(
+            not clause.excluded and {site.domain for site in clause.sites} == set(self.domains)
+            for clause in self.path_clauses
+        ):
             sites = " OR ".join(f"site:{domain}" for domain in self.domains)
             terms.append(f"({sites})" if len(self.domains) > 1 else sites)
+        terms.extend(clause.operator() for clause in self.path_clauses)
         terms.extend(f"-site:{domain}" for domain in self.exclude)
         return " ".join(terms)
 
-    def restrict(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def restrict(
+        self, results: list[dict[str, Any]], *, offset: int = 0, limit: int | None = None
+    ) -> list[dict[str, Any]]:
         """Keep results inside required domains and outside excluded ones."""
         kept = []
         for result in results:
@@ -361,5 +408,6 @@ class WebSearchRequest:
                 continue
             if self.exclude and _url_matches_domains(url, self.exclude):
                 continue
-            kept.append(result)
-        return kept[: self.count]
+            if all(clause.admits(url) for clause in self.path_clauses):
+                kept.append(result)
+        return kept[offset : offset + (self.count if limit is None else limit)]

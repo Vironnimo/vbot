@@ -529,7 +529,12 @@ class PermissionBoundary:
             for folder in self._scoped_root.keys
         ):
             return self.refusal(
-                access, target, "protected_location", location="data_dir", resolved=shown
+                access,
+                target,
+                "protected_location",
+                location="data_dir",
+                resolved=shown,
+                detail="the requested scope includes part of vBot's protected data folder",
             )
         if access == "write" and not git:
             protected.append(("agent_config", self._rule_files))
@@ -540,7 +545,16 @@ class PermissionBoundary:
                 reaches(key, reach, folder) for folder in area.keys for key in keys
             ):
                 return self.refusal(
-                    access, target, "protected_location", location=location, resolved=shown
+                    access,
+                    target,
+                    "protected_location",
+                    location=location,
+                    resolved=shown,
+                    detail=(
+                        "the requested scope includes part of vBot's protected data folder"
+                        if location == "data_dir"
+                        else "the requested scope includes a protected location"
+                    ),
                 )
         for layer in () if git else self._compiled:
             rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny

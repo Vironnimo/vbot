@@ -46,7 +46,15 @@ SELECT c.call_key, c.name, c.status, c.result_ok, c.error_code, c.rejection_code
        p.arguments_json, p.rejection_message,
        e.session_key, e.run_key, e.seq, c.ordinal, e.created_at, e.model,
        s.agent_id, s.project_id, s.is_subagent, r.run_kind,
-       length(rt.content) AS result_chars,
+       length(rt.content) AS result_chars, e.programmatic,
+       CASE WHEN json_valid(rt.content) THEN json_extract(rt.content, '$.data.exit_code') END
+         AS exit_code,
+       CASE WHEN json_valid(rt.content)
+            THEN json_array_length(rt.content, '$.data.failed_programs') END
+         AS failed_programs,
+       EXISTS (SELECT 1 FROM json_each(p.display_json, '$.details') AS d
+               WHERE d.type = 'object' AND json_extract(d.value, '$.type') = 'notice'
+               AND json_extract(d.value, '$.level') = 'error') AS partial,
        CASE WHEN json_valid(rt.content) THEN json_extract(rt.content, '$.error.message') END
          AS error_message,
        CASE WHEN json_valid(rt.content) THEN json_extract(rt.content, '$.data.status') END
@@ -57,6 +65,7 @@ JOIN sessions AS s ON s.session_key = e.session_key
 JOIN tool_call_payloads AS p ON p.call_key = c.call_key
 LEFT JOIN runs AS r ON r.run_key = e.run_key
 LEFT JOIN entry_text AS rt ON rt.entry_key = c.result_entry_key
+WHERE e.created_at >= ? AND e.created_at < ?
 ORDER BY e.session_key, e.seq, c.ordinal
 """
 
@@ -96,6 +105,10 @@ class CallRecord:
     subagent: bool
     run_kind: str | None
     result_chars: int
+    programmatic: bool
+    exit_code: int | None
+    failed_programs: bool
+    partial: bool
 
     @property
     def failed(self) -> bool:
@@ -181,11 +194,16 @@ def _shape(path: Path) -> str:
     return "legacy" if "messages" in tables else "unknown"
 
 
-def load_calls(database: Path) -> list[CallRecord]:
+def load_calls(
+    database: Path, *, since: str | None = None, until: str | None = None
+) -> list[CallRecord]:
     connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
-        return [_record(row) for row in connection.execute(_CALLS_SQL)]
+        return [
+            _record(row)
+            for row in connection.execute(_CALLS_SQL, (since or "", until or "9999-12-31T24"))
+        ]
     finally:
         connection.close()
 
@@ -211,20 +229,34 @@ def _record(row: sqlite3.Row) -> CallRecord:
         subagent=bool(row["is_subagent"]),
         run_kind=row["run_kind"],
         result_chars=row["result_chars"] or 0,
+        programmatic=bool(row["programmatic"]),
+        exit_code=row["exit_code"] if type(row["exit_code"]) is int else None,
+        failed_programs=bool(row["failed_programs"]),
+        partial=bool(row["partial"]),
     )
 
 
 def overview(records: list[CallRecord]) -> str:
     if not records:
         return "No Tool calls match."
-    first = min(record.created_at for record in records)[:10]
-    last = max(record.created_at for record in records)[:10]
+    direct = [record for record in records if not record.programmatic]
+    nested = [record for record in records if record.programmatic]
     sessions = len({record.session for record in records})
+    dates = [record.created_at[:10] for record in records]
     lines = [
-        f"{len(records)} Tool calls in {sessions} Sessions, {first} to {last}",
-        "",
+        f"{len(direct)} Model calls and {len(nested)} nested calls in {sessions} Sessions, "
+        f"{min(dates)} to {max(dates)}."
+    ]
+    for title, group in (("Model calls", direct), ("Nested calls", nested)):
+        if group:
+            lines.extend(["", title, *_overview_rows(group), *_outcome_lines(group)])
+    return "\n".join(lines)
+
+
+def _overview_rows(records: list[CallRecord]) -> list[str]:
+    lines = [
         f"  {'Tool':<22} {'calls':>7} {'failed':>7} {'fail%':>6} {'p50 chars':>9} "
-        f"{'p90 chars':>9}  top errors",
+        f"{'p90 chars':>9}  top Tool errors",
     ]
     by_tool: dict[str, list[CallRecord]] = defaultdict(list)
     for record in records:
@@ -238,7 +270,48 @@ def overview(records: list[CallRecord]) -> str:
             f"{_quantile(sizes, 0.5):>9} {_quantile(sizes, 0.9):>9}  "
             + ", ".join(f"{code} {count}" for code, count in codes)
         )
-    return "\n".join(lines)
+    return lines
+
+
+def _outcome_lines(calls: list[CallRecord]) -> list[str]:
+    """Count Tool envelopes separately from program results and partial effects."""
+    ok = sum(call.ok is True for call in calls)
+    failed = sum(call.failed for call in calls)
+    lines = [f"Tool results: {ok} ok, {failed} failed, {len(calls) - ok - failed} unsettled."]
+    programs: Counter[str] = Counter()
+    partial = 0
+    for call in calls:
+        if not call.ok:
+            continue
+        name = call.name
+        if name == "call_tool":
+            args = call.arguments()
+            target = args.get("name") if isinstance(args, dict) else None
+            if isinstance(target, str):
+                name = target
+        stopped = name in {"bash", "powershell", "execute_code"} and call.data_status == "stopped"
+        program_failed = name == "execute_code" and call.data_status in {"failed", "timed_out"}
+        partial += call.partial and not (stopped or program_failed)
+        if name not in {"bash", "powershell", "execute_code", "vbot"}:
+            continue
+        if call.data_status in {"failed", "timed_out", "stopped", "running"}:
+            outcome = str(call.data_status)
+        elif call.exit_code is not None:
+            outcome = "exit 0" if call.exit_code == 0 else "nonzero exit"
+            if call.exit_code == 0 and call.failed_programs:
+                outcome = "exit 0 with reported child failures"
+        elif call.data_status == "completed":
+            outcome = "completed"
+        else:
+            continue
+        programs[outcome] += 1
+    if programs:
+        lines.append(
+            "Program outcomes: " + ", ".join(f"{k}: {v}" for k, v in sorted(programs.items()))
+        )
+    if partial:
+        lines.append(f"Partial Tool results: {partial}.")
+    return lines
 
 
 def tool_view(
@@ -257,6 +330,10 @@ def tool_view(
         f"{tool}: {len(calls)} calls, {len(failed)} failed ({_percent(len(failed), len(calls))})",
         "",
     ]
+    for label, programmatic in (("Model", False), ("Nested", True)):
+        group = [call for call in calls if call.programmatic == programmatic]
+        if group:
+            lines.extend([f"{label} calls ({len(group)}):", *_outcome_lines(group), ""])
     lines.extend(_argument_keys(calls, schema_keys))
     lines.extend(_error_clusters(failed, examples))
     lines.extend(_after_failure(records, tool))
@@ -264,10 +341,10 @@ def tool_view(
     lines.extend(_by_model(calls))
     if by_argument:
         lines.extend(_by_argument(calls, by_argument))
-    partial = Counter(call.data_status for call in calls if call.ok and call.data_status)
-    if partial:
-        lines.append("Result data.status of successful calls:")
-        lines.extend(f"  {status:<24} {count:>7}" for status, count in partial.most_common())
+    statuses = Counter(call.data_status for call in calls if call.ok and call.data_status)
+    if statuses:
+        lines.append("Recorded data.status of ok Tool results:")
+        lines.extend(f"  {status:<24} {count:>7}" for status, count in statuses.most_common())
     return "\n".join(lines).rstrip()
 
 
@@ -394,9 +471,9 @@ def _by_argument(calls: list[CallRecord], key: str) -> list[str]:
 
 
 def _runs(records: list[CallRecord]) -> Iterator[list[CallRecord]]:
-    runs: dict[tuple[int, int | None], list[CallRecord]] = defaultdict(list)
+    runs: dict[tuple[int, int | None, bool], list[CallRecord]] = defaultdict(list)
     for record in records:
-        runs[record.run_scope].append(record)
+        runs[(*record.run_scope, record.programmatic)].append(record)
     for calls in runs.values():
         calls.sort(key=lambda call: (call.seq, call.ordinal))
         yield calls

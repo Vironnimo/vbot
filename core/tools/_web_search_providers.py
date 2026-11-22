@@ -108,9 +108,6 @@ def _duckduckgo_recency_warning(recency: str) -> str:
     )
 
 
-_SERPER_MAX_PAGES_PER_CALL = 5
-
-
 _SERPER_RECENCY_MAP = {"day": "qdr:d", "week": "qdr:w", "month": "qdr:m", "year": "qdr:y"}
 
 
@@ -436,9 +433,7 @@ async def _search_duckduckgo(
 
     start = (request.page - 1) * request.count
     results = request.restrict(
-        [{"rank": index, **row} for index, row in enumerate(parsed, start=1)][
-            start : start + request.count
-        ]
+        [{"rank": index, **row} for index, row in enumerate(parsed, start=1)], offset=start
     )
     envelope: dict[str, Any] = {"results": results}
     # recency is echoed nowhere: DuckDuckGo cannot filter by age at all.
@@ -699,14 +694,16 @@ async def _search_serper(
     search_query = request.operator_query()
     headers = {"X-API-KEY": api_key}
     start = (request.page - 1) * request.count
-    collected: list[Any] = []
+    results: list[dict[str, Any]] = []
     serper_page = start // _SERPER_PAGE_SIZE + 1
     skip = start % _SERPER_PAGE_SIZE
-    fetched = 0
-    while len(collected) < request.count and fetched < _SERPER_MAX_PAGES_PER_CALL:
+    remaining = request.count
+    filtered = bool(request.domains or request.exclude or request.path_clauses)
+    while remaining > 0:
+        slots = min(_SERPER_PAGE_SIZE - skip, remaining)
         payload: dict[str, Any] = {
             "q": search_query,
-            "num": min(_SERPER_PAGE_SIZE, request.count - len(collected) + skip),
+            "num": _SERPER_PAGE_SIZE if filtered else skip + slots,
             "page": serper_page,
         }
         if request.recency:
@@ -724,15 +721,15 @@ async def _search_serper(
         organic = response_payload.get("organic") if isinstance(response_payload, dict) else None
         if not isinstance(organic, list) or not organic:
             break
-        collected.extend(organic[skip : skip + (request.count - len(collected))])
+        # Each provider page owns ten stable result positions. Filter its complete
+        # response before selecting this call's window within those positions.
+        page = await run_tool_worker(_standardize_serper_results, organic[:_SERPER_PAGE_SIZE])
+        results.extend(request.restrict(page, offset=skip, limit=slots))
+        remaining -= slots
         skip = 0
-        fetched += 1
         serper_page += 1
         if len(organic) < _SERPER_PAGE_SIZE:
             break
-    results = request.restrict(
-        await run_tool_worker(_standardize_serper_results, collected[: request.count])
-    )
     envelope: dict[str, Any] = {"results": results}
     if request.recency:
         envelope["recency"] = request.recency

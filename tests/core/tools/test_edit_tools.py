@@ -922,6 +922,16 @@ _PART_EDITS = '[{"old_string": "x = 1", '
             b"x = 2\ny = 4\nz = 5\n",
             id="line-breaks-differ-between-items",
         ),
+        pytest.param(
+            {"edits": '[{old_string":"x = 1",new_string":"literal old_string\\": 3"}]'},
+            b'literal old_string": 3\n',
+            id="missing-opening-quotes-on-field-names",
+        ),
+        pytest.param(
+            {"edits": '[{old_string":"x = 1","old_string":"different","new_string":"oops"}]'},
+            "No file was changed",
+            id="repaired-field-conflicts",
+        ),
         # A quote before ":" ends the text only where a value follows the colon.
         pytest.param(
             {"edits": '[{"old_string": "x = 1", "new_string": "got "x": not a number"}]'},

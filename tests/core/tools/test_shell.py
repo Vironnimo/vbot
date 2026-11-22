@@ -187,6 +187,23 @@ async def test_explicit_argv_executable_survives_dispatch(
         # An earlier rg with no matches is a normal search result, even beside another command.
         ("rg absent .; build", (ProgramExit("rg.exe", 1),), 0, None, False),
         (
+            "git merge-base --is-ancestor a b; build",
+            (ProgramExit("git.exe", 1, "merge-base --is-ancestor"),),
+            0,
+            None,
+            False,
+        ),
+        (
+            "git merge-base --is-ancestor a b; git status; build",
+            (ProgramExit("git.exe", 128, "merge-base --is-ancestor"), ProgramExit("git.exe", 1)),
+            0,
+            [
+                "git.exe exited with code 128 (merge-base --is-ancestor)",
+                "git.exe exited with code 1",
+            ],
+            True,
+        ),
+        (
             "rg invalid .; build",
             (ProgramExit("rg.exe", 2),),
             0,
@@ -1158,15 +1175,30 @@ _INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("command", "output", "exit_code", "expected"),
+    ("command", "output", "exit_code", "expected", "notice_level"),
     [
-        ("make", _MISSING_MAKE, 127, "`make`"),
-        ("python -c \"print('$field')\"", "\n", 0, "`$field`"),
+        ("make", _MISSING_MAKE, 127, "`make`", "info"),
+        ("python -c \"print('$field')\"", "\n", 0, "`$field`", "info"),
+        (
+            "Select-String -Recurse -Pattern needle; 'done'",
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            0,
+            "recursive search did not run",
+            "error",
+        ),
+        (
+            "Get-Content 'missing.txt'; 'done'",
+            "Get-Content: Cannot find path 'C:\\work\\missing.txt' because it does not exist.",
+            0,
+            "PowerShell reported an error",
+            "error",
+        ),
         (
             "Get-Childltem; Get-ChildItem -File",
             _MISSING_CMDLET,
             0,
             "`Get-ChildItem`",
+            "info",
         ),
         # Quoted text, comments and a different operation are not spelling evidence.
         (
@@ -1174,18 +1206,21 @@ _INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future
             _MISSING_CMDLET,
             0,
             "`Get-Command Get-Childltem`",
+            "info",
         ),
         (
             "Get-Childltem; Set-Childltem",
             _MISSING_CMDLET,
             1,
             "`Get-Command Get-Childltem`",
+            "info",
         ),
         (
             "Get-Childltem; Get-ChildItem; Get-Childltems",
             _MISSING_CMDLET,
             1,
             "`Get-Command Get-Childltem`",
+            "info",
         ),
         # < leaked from the regex after an escaped quote ended its outer string.
         (
@@ -1193,6 +1228,7 @@ _INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future
             _INPUT_REDIRECTION_ERROR,
             1,
             "`@'...'@ | python -`",
+            "info",
         ),
         # A real redirection in another statement keeps its own diagnosis.
         (
@@ -1200,6 +1236,7 @@ _INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future
             _INPUT_REDIRECTION_ERROR,
             1,
             "`Get-Content input.txt | python script.py`",
+            "info",
         ),
     ],
 )
@@ -1210,6 +1247,7 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     output: str,
     exit_code: int,
     expected: str,
+    notice_level: str,
 ) -> None:
     monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
     call = shell.call({"command": command})
@@ -1224,9 +1262,8 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     assert launched(shell.launcher)[0] == command
     assert data(result).get("output", "") == output.rstrip("\n")
     # The user sees the hint as well.
-    assert {"type": "notice", "level": "info", "text": f"Hint: {hint}"} in shell_detail_blocks(
-        {"command": command}, result
-    )
+    notice = {"type": "notice", "level": notice_level, "text": f"Hint: {hint}"}
+    assert notice in shell_detail_blocks({"command": command}, result)
 
     command_id = data(await shell.call({"command": command, "run_in_background": True}))[
         "command_id"
@@ -1244,6 +1281,15 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     assert body.splitlines()[1] == f"Hint: {hint}"
     # A single failed program with the exit code the status line names is not repeated.
     assert "Failed programs" not in body
+    if notice_level == "error":
+        register_background_tasks_tool(shell.registry, shell.manager)
+        arguments: JsonObject = {"action": "status", "id": command_id}
+        context = dataclasses.replace(shell.context(), tool_name=BACKGROUND_TASKS_TOOL_NAME)
+        status = await dispatch_as_executor(shell.registry, context, arguments, list(COMPANIONS))
+        display = shell.registry.display_for_call(
+            BACKGROUND_TASKS_TOOL_NAME, arguments, context=context, result=status
+        )
+        assert notice in display["details"]
 
 
 @pytest.mark.parametrize(

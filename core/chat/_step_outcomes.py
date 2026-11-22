@@ -202,7 +202,12 @@ def _offered_tool_calls(
         return list(tool_calls)
     registered = _RegisteredNames(registry, frozenset(removed))
     return [
-        replace(call, name=called_tool_name(call.name, offered, registered=registered))
+        replace(
+            call,
+            name=called_tool_name(
+                call.name, offered, registered=registered, arguments=call.arguments
+            ),
+        )
         for call in tool_calls
     ]
 

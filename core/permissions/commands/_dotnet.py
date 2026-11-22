@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.permissions.commands import _paths
@@ -226,6 +227,8 @@ def target_listing(
     """The bounded filesystem items a command, pipeline or literal loop supplies."""
     if target.variable is not None:
         names = {target.variable}
+        if target.list_variable is not None:
+            names.add(target.list_variable)
         if target.variable in ("_", "psitem"):
             names.update(("_", "psitem"))
         if (
@@ -239,7 +242,24 @@ def target_listing(
         return listing if listing is not None and listing.filesystem_items else None
     if target.kind == "item" and target.feed is not None:
         listing = analysis.listing_before(context, target.feed)
-        return listing if listing is not None and listing.filesystem_items else None
+        return (
+            listing
+            if listing is not None and (listing.filesystem_items or listing.full_names)
+            else None
+        )
+    if target.kind == "projected":
+        if context.values_unknown or context.redefined:
+            return None
+        if raw.projected is None and any(
+            not Path(analysis.literal_of(context, raw, arg) or "").is_absolute()
+            for arg in target.arguments
+        ):
+            return None
+        listing = analysis.resolve_listing(
+            context, raw, target.arguments, recursive=False, children=target.children
+        )
+        listing.full_names = True
+        return listing
     if target.kind == "paths":
         from core.permissions.commands._state import items
 

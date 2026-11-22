@@ -375,6 +375,7 @@ def lower(result: dict[str, Any]) -> Script:
                 None if entry.get("value") is None else _word(entry["value"]),
                 bool(entry.get("text")),
                 entry.get("text_from"),
+                bool(entry.get("initial")),
             )
             for entry in result.get("assignments") or []
         ],
@@ -447,6 +448,7 @@ def _command(entry: dict[str, Any], pipeline: Pipeline | None) -> RawCommand:
             top_level=bool(entry.get("top_level")),
             output_text=bool(entry.get("output_text")),
             output_variable=entry.get("output_variable"),
+            projected=_target(entry["projected"]) if entry.get("projected") else None,
         )
     binding = None
     if isinstance(entry.get("binding"), dict):
@@ -494,6 +496,7 @@ _TARGET_KINDS: dict[str, CallTargetKind] = {
     "variable": "variable",
     "property": "property",
     "paths": "paths",
+    "projected": "projected",
 }
 _PART_KINDS = {"s": "text", "v": "variable", "d": "dynamic"}
 
@@ -508,6 +511,8 @@ def _target(raw: dict[str, Any]) -> CallTarget:
         feed=Pipeline(int(feed["id"]), int(feed["index"])) if feed else None,
         variable=raw.get("variable"),
         receiver=_target(raw["receiver"]) if raw.get("receiver") else None,
+        list_variable=raw.get("list_variable"),
+        children=bool(raw.get("children")),
     )
 
 
@@ -538,5 +543,6 @@ def _word(raw: dict[str, Any], *, expands: bool = False, element: bool = False) 
         parameter=raw.get("parameter"),
         argument=_word(argument, expands=expands) if isinstance(argument, dict) else None,
         target=_target(raw["target"]) if raw.get("target") else None,
+        variable_test=_target(raw["variable_test"]) if raw.get("variable_test") else None,
         join=tuple(_word(part) for part in raw["join"]) if raw.get("join") else None,
     )

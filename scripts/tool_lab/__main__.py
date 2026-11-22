@@ -50,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     mined = commands.add_parser(
-        "sessions", help="measure real Tool calls in a copy of a sessions database"
+        "sessions",
+        help="report Model and nested calls, Tool failures, program outcomes and partial effects",
+        description=(
+            "Measure Model and nested calls separately in a copy of a Sessions database. "
+            "Program outcomes and partial effects can accompany an ok Tool result."
+        ),
     )
     mined.add_argument("source", type=Path, help="a sessions.db or a vBot data directory")
     mined.add_argument("--work", type=Path, help="keep the prepared copy here and reuse it")
@@ -150,7 +155,13 @@ def _sessions(args: argparse.Namespace) -> int:
     )
     try:
         with sessions.prepared_database(args.source, work=args.work) as database:
-            records = [record for record in sessions.load_calls(database) if filters.admit(record)]
+            records = [
+                record
+                for record in sessions.load_calls(
+                    database, since=filters.since, until=filters.until
+                )
+                if filters.admit(record)
+            ]
     except sessions.SessionsSourceError as error:
         print(f"Cannot read sessions: {error}", file=sys.stderr)
         return 2

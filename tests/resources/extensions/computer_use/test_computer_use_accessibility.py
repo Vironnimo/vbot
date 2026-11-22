@@ -154,6 +154,31 @@ async def test_batch_validates_all_explicit_targets_before_input(computer: Harne
         assert not result["ok"]
         assert computer.target.inputs == []
 
+    conflict = await computer.call(
+        "computer_batch",
+        {
+            "window_id": first_id,
+            "actions": [
+                {"action": "type", "text": "first"},
+                {"action": "type", "window_id": other_id, "text": "second"},
+            ],
+        },
+    )
+    assert not conflict["ok"] and not computer.target.inputs
+    invalid = await computer.call(
+        "computer_batch", {"window_id": first_id, "actions": [{"action": ["key"]}]}
+    )
+    assert invalid["error"]["code"] == "invalid_arguments"
+    assert "action 1" in model_text(invalid).lower()
+    scoped = await computer.call(
+        "computer_batch",
+        {
+            "window_id": first_id,
+            "actions": [{"action": "wait", "duration": 0.01}, {"action": "type", "text": "scoped"}],
+        },
+    )
+    assert scoped["ok"] and computer.target.inputs == [("type", "scoped")]
+
 
 async def test_inspection_obeys_app_access_and_never_exposes_unapproved_titles(
     computer: Harness,

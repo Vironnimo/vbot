@@ -66,6 +66,7 @@ class Listing:
     # FileSystem items or match/path objects, distinct from native programs'
     # textual output which can contain arbitrary paths in file content.
     filesystem_items: bool = False
+    full_names: bool = False
 
 
 @dataclass(slots=True)

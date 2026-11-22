@@ -414,7 +414,7 @@ def _repaired_json_text(
     if not fields:
         return _NOT_REPAIRED
     readings: list[Any] = []
-    for candidate in (text, escape_inner_quotes(text, fields)):
+    for candidate in (text, escape_inner_quotes(text, fields), _quote_missing_keys(text, fields)):
         if candidate is None:
             continue
         value = _schema_reading(
@@ -425,6 +425,28 @@ def _repaired_json_text(
         ):
             readings.append(value)
     return readings[0] if len(readings) == 1 else _NOT_REPAIRED
+
+
+def _quote_missing_keys(text: str, fields: set[str]) -> str | None:
+    """Restore opening quotes only where strict JSON expects a declared property name."""
+    candidate = text
+    # Bound repeated decoding of a malformed argument. A valid candidate still passes
+    # the ordinary schema, duplicate-key and competing-reading checks.
+    for _ in range(16):
+        try:
+            json.loads(candidate)
+        except json.JSONDecodeError as error:
+            if error.msg != "Expecting property name enclosed in double quotes":
+                return None
+            match = re.compile(r'([\w-]+)"\s*:').match(candidate, error.pos)
+            if match is None or match[1] not in fields:
+                return None
+            candidate = candidate[: error.pos] + '"' + candidate[error.pos :]
+        except ValueError, RecursionError:
+            return None
+        else:
+            return candidate if candidate != text else None
+    return None
 
 
 def _schema_reading(

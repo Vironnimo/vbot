@@ -228,7 +228,7 @@ def _query(value: Any) -> Any:
     return queries[0] if queries else ""
 
 
-def _domain(item: str) -> str:
+def _domain(item: str, field: str) -> str:
     """Reduce one written site to a host name, keeping a leading "-" exclusion mark."""
     text = _unwrapped(item)
     mark = ""
@@ -243,10 +243,11 @@ def _domain(item: str) -> str:
     except ValueError:
         return item
     if parts.path.strip("/") or parts.query or parts.fragment:
-        suggestion = host.removeprefix("*.").strip(".") or "example.com"
+        prefix = "-site:" if mark or field == "exclude_domains" else "site:"
+        host = host.removeprefix("*.").strip(".") or "example.com"
         raise ToolContractError(
-            f'domains take site names such as example.com, not addresses with a path ("{item}"). '
-            f'Pass {{"domains": ["{suggestion}"]}} and put words from the path in query.'
+            f"{field} takes hostnames. To filter URLs by path, "
+            f'put "{prefix}{host}{parts.path}" in query.'
         )
     if not host:
         return item
@@ -264,7 +265,7 @@ def _domains(value: Any, field: str = "domains") -> Any:
     for index, item in enumerate(value):
         if isinstance(item, int | float | bool):
             raise _domain_type_error(f"{field}[{index}]", item)
-        domain = _domain(item) if isinstance(item, str) else item
+        domain = _domain(item, field) if isinstance(item, str) else item
         if domain == "":
             continue
         if domain not in domains:

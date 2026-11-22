@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 type ShellKind = Literal["powershell", "bash", "cmd"]
 type PathAccessKind = Literal["read", "write", "start_dir"]
 type UnresolvedKind = Literal[
-    "path_read", "path_write", "cwd", "command", "url", "inline_code", "environment"
+    "path_read", "path_write", "cwd", "command", "url", "inline_code", "environment", "count"
 ]
 
 PowerShellHelperLimits = HelperLimits

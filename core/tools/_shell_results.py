@@ -422,11 +422,17 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
 
 
 def counted_failures(report: CommandReport) -> tuple[str, ...]:
-    """The regular search no-match status and a closed output pipe are not errors."""
+    """Keep failures apart from normal negative answers and intentional pipe closes."""
     return tuple(
         failure
         for failure in without_closed_pipes(report.command, report.failed_programs)
-        if failure.casefold() not in {"rg exited with code 1", "rg.exe exited with code 1"}
+        if failure.casefold()
+        not in {
+            "rg exited with code 1",
+            "rg.exe exited with code 1",
+            "git exited with code 1 (merge-base --is-ancestor)",
+            "git.exe exited with code 1 (merge-base --is-ancestor)",
+        }
     )
 
 

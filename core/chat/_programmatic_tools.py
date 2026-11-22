@@ -119,6 +119,7 @@ class ProgrammaticTools(_EmittingToolRegistry):
         name = called_tool_name(
             name,
             self._config.allowed_tools or (),
+            arguments=arguments if not positional else None,
             registered={
                 *context.removed_tool_names,
                 *(tool.name for tool in context.registry.list_tools(include_internal=True)),

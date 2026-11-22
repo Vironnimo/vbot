@@ -58,6 +58,33 @@ function Add-Text($Parts, [string]$Text) {
     if ($Text.Length -gt 0) { $Parts.Add(@{ k = 's'; v = $Text }) }
 }
 
+function Get-FullNameTargets($Node) {
+    if ($Node -isnot [System.Management.Automation.Language.MemberExpressionAst] -or
+        $Node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or $Node.Static -or
+        $Node.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $Node.Member.Value -ne 'FullName' -or $Node.Expression -isnot [System.Management.Automation.Language.ParenExpressionAst]) { return $null }
+    $pipeline = $Node.Expression.Pipeline
+    if ($pipeline -isnot [System.Management.Automation.Language.PipelineAst] -or $pipeline.PipelineElements.Count -ne 1) { return $null }
+    $cmd = $pipeline.PipelineElements[0]
+    if ($cmd -isnot [System.Management.Automation.Language.CommandAst] -or $cmd.Redirections.Count) { return $null }
+    $name = $cmd.GetCommandName()
+    if ($name -notin 'Get-Item', 'Get-ChildItem' -or $functions.Contains($name)) { return $null }
+    $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($cmd, $true)
+    if ($binding.BindingExceptions.Count -or @($binding.BoundParameters.Keys | Where-Object { $_ -notin 'Path', 'LiteralPath', 'Filter', 'File' }).Count) { return $null }
+    $paths = $binding.BoundParameters['Path']
+    if (-not $paths) { $paths = $binding.BoundParameters['LiteralPath'] }
+    if (-not $paths) { return $null }
+    $values = $paths.Value
+    if ($values -is [System.Management.Automation.Language.ArrayLiteralAst]) { $values = $values.Elements }
+    $arguments = New-List
+    foreach ($value in $values) {
+        if ($value -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            $value.Value.IndexOfAny([char[]]'*?[]') -ge 0) { return $null }
+        $arguments.Add((ConvertTo-Word $value))
+    }
+    return @{ kind = 'projected'; arguments = $arguments; children = ($name -eq 'Get-ChildItem') }
+}
+
 function ConvertTo-Word($Ast) {
     $word = @{ source = $Ast.Extent.Text; parts = (New-List) }
     switch ($Ast.GetType().Name) {
@@ -103,6 +130,7 @@ function ConvertTo-Word($Ast) {
                 # A literal string list names paths itself; its elements have
                 # no FullName/Path property to use as a file target.
                 if ($target -and $target.kind -ne 'paths') { $word.target = $target }
+                elseif ($Ast.Member.Value -eq 'FullName') { $word.target = Get-FullNameTargets $Ast }
             }
         }
         'ArrayLiteralAst' {
@@ -120,6 +148,22 @@ function ConvertTo-Word($Ast) {
                 $converted.Remove('quoted')
                 return $converted
             }
+            $pipeline = $Ast.Pipeline
+            if ($pipeline -is [System.Management.Automation.Language.PipelineAst] -and $pipeline.PipelineElements.Count -eq 1) {
+                $cmd = $pipeline.PipelineElements[0]
+                if ($cmd -is [System.Management.Automation.Language.CommandAst] -and -not $cmd.Redirections.Count) {
+                    $name = $cmd.GetCommandName()
+                    if ($name -eq 'Get-Location' -and $cmd.CommandElements.Count -eq 1 -and -not $functions.Contains($name)) {
+                        $word.parts.Add(@{ k = 'v'; v = 'pwd' })
+                        $word.current_location = $true
+                        return $word
+                    }
+                    if ($name -eq 'Join-Path' -and -not $functions.Contains($name)) {
+                        $join = Get-LiteralJoin $cmd
+                        if ($join) { return $join }
+                    }
+                }
+            }
             $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text })
         }
         'CommandParameterAst' {
@@ -129,6 +173,43 @@ function ConvertTo-Word($Ast) {
         default { $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text }) }
     }
     return $word
+}
+
+function Get-VariableDriveTest($Node) {
+    if ($Node -is [System.Management.Automation.Language.ParenExpressionAst]) {
+        $Node = Get-SoleExpression $Node.Pipeline
+    }
+    if ($Node -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -and
+        $Node.NestedExpressions.Count -eq 1 -and
+        $Node.Value -ceq ('Variable:' + $Node.NestedExpressions[0].Extent.Text)) {
+        $ref = $Node.NestedExpressions[0]
+    } elseif ($Node -is [System.Management.Automation.Language.BinaryExpressionAst] -and
+        [string]$Node.Operator -eq 'Plus' -and $Node.Left -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+        $Node.Left.Value -eq 'Variable:') { $ref = $Node.Right }
+    else { return $null }
+    if ($ref -isnot [System.Management.Automation.Language.VariableExpressionAst]) { return $null }
+    $target = Get-LoopTarget $ref
+    if (-not $target) { return $null }
+    if ($target.kind -eq 'item') {
+        $pipeline = $ref.Parent
+        while ($pipeline -and -not ($pipeline -is [System.Management.Automation.Language.PipelineAst] -and
+            $pipeline.Extent.StartOffset -eq $target.feed.id)) { $pipeline = $pipeline.Parent }
+        if (-not $pipeline -or $target.feed.index -ne 1 -or
+            $pipeline.PipelineElements[0] -isnot [System.Management.Automation.Language.CommandExpressionAst] -or
+            $pipeline.PipelineElements[0].Redirections.Count) { return $null }
+        $source = $pipeline.PipelineElements[0].Expression
+        $list = Get-LiteralList $source
+        if (-not $list) { return $null }
+        $target = @{ kind = 'paths'; variable = $target.variable; list_variable = (Get-ReferenceName $source); arguments = @((ConvertTo-Word $list)) }
+    }
+    if ($target.kind -ne 'paths') { return $null }
+    foreach ($word in $target.arguments) {
+        foreach ($item in @($word.items)) {
+            if ($null -eq $item -or $item.parts.Count -ne 1 -or $item.parts[0].k -ne 's' -or
+                $item.parts[0].v -notmatch '^[a-zA-Z_][a-zA-Z0-9_]*$') { return $null }
+        }
+    }
+    return $target
 }
 
 function Get-SoleExpression($Pipeline) {
@@ -222,6 +303,30 @@ function Get-Feed($Ast) {
     }
     if ($null -eq $node) { return $null }
     $command = $node.Parent
+    # Only the expression of a calculated Select-Object property receives the input item.
+    if ($command -is [System.Management.Automation.Language.CommandExpressionAst] -and
+        $command.Redirections.Count -eq 0 -and
+        $command.Parent -is [System.Management.Automation.Language.PipelineAst] -and
+        $command.Parent.PipelineElements.Count -eq 1 -and
+        $command.Parent.Parent -is [System.Management.Automation.Language.HashtableAst]) {
+        $table = $command.Parent.Parent
+        $pair = @($table.KeyValuePairs | Where-Object {
+            $_.Item1 -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $_.Item1.Value -in 'Expression', 'Expr', 'E' -and
+            [object]::ReferenceEquals($_.Item2, $command.Parent)
+        })
+        $owner = $table.Parent
+        if ($owner -is [System.Management.Automation.Language.ArrayLiteralAst]) { $owner = $owner.Parent }
+        if ($pair.Count -eq 1 -and $owner -is [System.Management.Automation.Language.CommandAst] -and
+            $owner.GetCommandName() -eq 'Select-Object' -and -not $functions.Contains('Select-Object')) {
+            $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($owner, $true)
+            $property = $binding.BoundParameters['Property']
+            if ($property -and -not $binding.BoundParameters.ContainsKey('InputObject') -and
+                $table.Extent.StartOffset -ge $property.Value.Extent.StartOffset -and
+                $table.Extent.EndOffset -le $property.Value.Extent.EndOffset) { return Get-Pipeline $owner }
+        }
+        return $null
+    }
     if ($command -is [System.Management.Automation.Language.CommandParameterAst]) {
         if ($command.ParameterName -notin 'Process', 'FilterScript', 'Parallel') { return $null }
         $command = $command.Parent
@@ -241,6 +346,7 @@ function Get-Feed($Ast) {
     if ($info -and $info.Name -in 'ForEach-Object', 'Where-Object') {
         try {
             $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($command, $true)
+            if ($binding.BoundParameters.ContainsKey('InputObject')) { return $null }
             foreach ($parameter in 'Begin', 'End', 'RemainingScripts') {
                 $bound = $binding.BoundParameters[$parameter]
                 if ($bound -and $bound.Value -and
@@ -250,6 +356,30 @@ function Get-Feed($Ast) {
         } catch { return $null }
         return Get-Pipeline $command
     }
+    return $null
+}
+
+function Get-LiteralList($Reference) {
+    if ($Reference -isnot [System.Management.Automation.Language.VariableExpressionAst]) { return $null }
+    $name = Get-ReferenceName $Reference
+    $definition = $literalLists[$name]
+    if (-not $definition -or $definition.Extent.EndOffset -ge $Reference.Extent.StartOffset -or
+        -not (Test-ValueScope $Reference)) { return $null }
+    # An array can be changed through another reference. Accept an immediately
+    # following read-only enumeration, with no other reference to the array.
+    if ($listUses[$name] -ne 2) { return $null }
+    $statements = $definition.Parent.Statements
+    $index = $statements.IndexOf($definition) + 1
+    if ($index -ge $statements.Count) { return $null }
+    $next = $statements[$index]
+    if ($Reference.Extent.StartOffset -lt $next.Extent.StartOffset -or
+        $Reference.Extent.EndOffset -gt $next.Extent.EndOffset) { return $null }
+    $unknown = $next.Find({ param($n)
+        $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+        ($n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.GetCommandName() -notin 'Get-Content', 'Measure-Object', 'Test-Path', 'ForEach-Object', 'Select-String', 'rg')
+    }, $true)
+    if (-not $unknown) { return $definition.Right.Expression }
     return $null
 }
 
@@ -275,6 +405,12 @@ function Get-LoopTarget($Expression) {
             elseif ($value.SubExpression.Statements.Count -eq 1) { $condition = $value.SubExpression.Statements[0] }
             else { return $null }
             $value = Get-SoleExpression $condition
+        }
+        if ($value -is [System.Management.Automation.Language.VariableExpressionAst]) {
+            $list = Get-LiteralList $value
+            if ($list) {
+                return @{ kind = 'paths'; arguments = @((ConvertTo-Word $list)); variable = $name; list_variable = (Get-ReferenceName $value) }
+            }
         }
         if ($null -ne $value) {
             # An arbitrary variable's output is not a bounded file list.
@@ -380,6 +516,12 @@ function Test-ExpressionString($Node) {
         if ($ancestor -is [System.Management.Automation.Language.UnaryExpressionAst] -and
             [string]$ancestor.TokenKind -match '^(I|C)?Split$') { return $false }
     }
+    # A separator appended to replacement text is not a separate filesystem read.
+    if ($parent -is [System.Management.Automation.Language.BinaryExpressionAst] -and
+        [string]$parent.Operator -eq 'Plus' -and $Node.Value -in '/', '\' -and
+        $parent.Parent -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $parent.Parent.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+        $parent.Parent.Member.Value -eq 'Replace') { return $false }
     # Method arguments have their own semantics; file APIs are checked by
     # member_call. String replacement text is never an extra file access.
     if ($parent -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
@@ -446,11 +588,27 @@ function Get-Binding($CommandAst) {
         } elseif ($null -eq $value -or $value -is [System.Management.Automation.Language.CommandParameterAst]) {
             $bound[$entry.Key] = $null
         } else {
-            $bound[$entry.Key] = (ConvertTo-Word $value)
+            $word = ConvertTo-Word $value
+            if ($CommandAst.GetCommandName() -eq 'Test-Path' -and $entry.Key -in 'Path', 'LiteralPath') {
+                $word.variable_test = Get-VariableDriveTest $value
+            }
+            $bound[$entry.Key] = $word
         }
     }
     foreach ($key in $binding.BindingExceptions.Keys) { $errors.Add([string]$key) }
     return @{ bound = $bound; unbound = $unbound; errors = $errors }
+}
+
+function Get-LiteralJoin($Command) {
+    $binding = Get-Binding $Command
+    if ($binding.errors.Count -or $binding.unbound.Count -or
+        @($binding.bound.Keys | Where-Object { $_ -notin 'Path', 'ChildPath', 'AdditionalChildPath' }).Count -or
+        -not $binding.bound.ContainsKey('Path') -or -not $binding.bound.ContainsKey('ChildPath')) { return $null }
+    $parts = New-List
+    $parts.Add($binding.bound.Path)
+    $parts.Add($binding.bound.ChildPath)
+    if ($binding.bound.ContainsKey('AdditionalChildPath')) { $parts.Add($binding.bound.AdditionalChildPath) }
+    return @{ source = $Command.Extent.Text; parts = @(@{ k = 'd'; v = $Command.Extent.Text }); join = $parts }
 }
 
 function Test-LiteralCliSyntax($Ast) {
@@ -546,6 +704,7 @@ function Get-Analysis([string]$Text) {
     $assignmentCounts = @{}
     foreach ($name in $result.assigned) { $assignmentCounts[$name] = 1 + $assignmentCounts[$name] }
     $script:AssignmentCounts = $assignmentCounts
+    $literalLists = @{}
     $directCounts = @{}
     foreach ($node in $ast.EndBlock.Statements) {
         if ($node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -553,6 +712,20 @@ function Get-Analysis([string]$Text) {
             $node.Left -is [System.Management.Automation.Language.VariableExpressionAst]) {
             $name = Get-ReferenceName $node.Left
             $directCounts[$name] = 1 + $directCounts[$name]
+            if ($assignmentCounts[$name] -eq 1 -and -not $script:FixedVariables.ContainsKey($name) -and
+                $node.Right -is [System.Management.Automation.Language.CommandExpressionAst] -and
+                $node.Right.Expression -is [System.Management.Automation.Language.ArrayLiteralAst] -and
+                $node.Right.Redirections.Count -eq 0 -and
+                @($node.Right.Expression.Elements | Where-Object {
+                    $_ -isnot [System.Management.Automation.Language.StringConstantExpressionAst]
+                }).Count -eq 0) { $literalLists[$name] = $node }
+        }
+    }
+    $listUses = @{}
+    if ($literalLists.Count) {
+        foreach ($ref in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+            $name = Get-VariableName $ref
+            if ($literalLists.ContainsKey($name)) { $listUses[$name] = 1 + $listUses[$name] }
         }
     }
     foreach ($node in $ast.EndBlock.Statements) {
@@ -578,15 +751,11 @@ function Get-Analysis([string]$Text) {
             $entry.text = $info -and $info.Name -in 'Get-Content', 'Out-String' -and
                 -not ($node.Right.Extent.Text -match '-AsByteStream\b')
             if ($info -and $info.Name -eq 'Join-Path' -and $assignmentCounts[$name] -eq 1) {
-                $binding = Get-Binding $node.Right.PipelineElements[0]
-                if ($binding.errors.Count -eq 0 -and -not $binding.bound.ContainsKey('Resolve') -and
-                    $binding.bound.ContainsKey('Path') -and $binding.bound.ContainsKey('ChildPath')) {
-                    $parts = New-List
-                    $parts.Add($binding.bound.Path)
-                    $parts.Add($binding.bound.ChildPath)
-                    if ($binding.bound.ContainsKey('AdditionalChildPath')) { $parts.Add($binding.bound.AdditionalChildPath) }
-                    $entry.value = @{ source = $node.Right.Extent.Text; join = $parts }
-                }
+                $entry.value = Get-LiteralJoin $node.Right.PipelineElements[0]
+                $entry.initial = -not $ast.ParamBlock -and -not $ast.BeginBlock -and -not $ast.ProcessBlock -and
+                    -not $ast.DynamicParamBlock -and $ast.EndBlock.Unnamed -and
+                    [object]::ReferenceEquals($node, $ast.EndBlock.Statements[0]) -and
+                    $entry.value -and $entry.value.join[0].current_location
             }
         }
         $result.assignments.Add($entry)
@@ -597,6 +766,8 @@ function Get-Analysis([string]$Text) {
         if ($node -isnot [System.Management.Automation.Language.CommandAst]) {
             $entry.expression = $true
             $entry.output_text = Test-TextExpression $node.Expression
+            $projection = Get-FullNameTargets $node.Expression
+            if ($projection) { $entry.projected = $projection }
             if ($node.Expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
                 $entry.output_variable = Get-ReferenceName $node.Expression
             }

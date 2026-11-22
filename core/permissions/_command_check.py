@@ -51,6 +51,7 @@ _VBOT_MODULE: Final = re.compile(r"^(?:cli|server)(?:\.|$)", re.IGNORECASE)
 # ``host:port`` inside a word, as in ``localhost:8765/api`` or ``ws://[::1]:8765``.
 _HOST_PORT: Final = re.compile(r"(\[[0-9A-Za-z:.%]+\]|[A-Za-z0-9._-]+):(\d{1,5})(?!\d)")
 _UNRESOLVED: Final[dict[str, tuple[str, str]]] = {
+    "count": ("so PowerShell cannot bind the command", "Supply the missing count and retry."),
     "path_read": (
         "so the check cannot tell what it reads",
         "Write each path literally in the command.",

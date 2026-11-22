@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -156,10 +157,13 @@ class ExternalRun:
             masker.mask_value(dict(tool), include_keys=True) for tool in self._tool_definitions
         )
 
-    def tool_name(self, name: str) -> str:
+    def tool_name(self, name: str, *, arguments: object = None) -> str:
         """Resolve an incoming name against the Tools admitted to this Run."""
         return called_tool_name(
-            name, self._allowed_tools, registered=_RegisteredNames(self._dependencies.tools)
+            name,
+            self._allowed_tools,
+            registered=_RegisteredNames(self._dependencies.tools),
+            arguments=arguments,
         )
 
     def model_tool_result(self, name: str, result: JsonObject) -> JsonObject:
@@ -226,12 +230,13 @@ class ExternalRun:
             without_lone_surrogates(
                 normalize_tool_call_candidate(
                     tool_call_id=call_id,
-                    name=self.tool_name(name),
+                    name=name,
                     arguments=arguments,
                     fallback_id=new_id("call"),
                 )
             )
         )
+        call = replace(call, name=self.tool_name(call.name, arguments=call.arguments))
         self._iteration += 1
         assistant_id = _new_message_id()
         execution = normalize_execution(

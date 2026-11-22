@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from core.permissions.commands import _paths
 from core.permissions.commands._directories import change_directory, switch_drive
-from core.permissions.commands._dotnet import FILE_OBJECTS
+from core.permissions.commands._dotnet import FILE_OBJECTS, target_listing
 from core.permissions.commands._handlers import add_web_target
 from core.permissions.commands._nesting import nested, split_windows_arguments
 from core.permissions.commands._specs import (
@@ -326,6 +326,17 @@ def cmdlet(
     if lowered in LISTING_CMDLETS:
         _register_listing(analysis, context, raw, lowered, binding)
     elif (
+        lowered == "select-object"
+        and raw.pipeline is not None
+        and set(binding.bound) == {"ExpandProperty"}
+        and analysis.literal_of(context, raw, binding.bound["ExpandProperty"]) == "FullName"
+    ):
+        previous = analysis.listing_before(context, raw.pipeline)
+        if previous is not None and previous.filesystem_items:
+            context.listings[(raw.pipeline.id, raw.pipeline.index)] = Listing(
+                roots=previous.roots, recursive=previous.recursive, text=True, full_names=True
+            )
+    elif (
         lowered in FILTER_CMDLETS
         and raw.pipeline is not None
         # ExpandProperty can turn the input into arbitrary objects, including files.
@@ -358,9 +369,19 @@ def _path_parameters(
     if any(error.lower() not in harmless_errors for error in binding.errors) or any(
         word.splat for word in raw.words[1:]
     ):
-        analysis.unresolve(
-            UNRESOLVED_KIND[strongest], raw.source, "its parameters cannot be bound before it runs"
-        )
+        last = raw.words[-1]
+        if (
+            lowered == "select-object"
+            and (last.parameter or "").lower() in {"first", "last", "skip"}
+            and last.argument is None
+        ):
+            analysis.unresolve("count", raw.source, f"-{last.parameter} needs a number")
+        else:
+            analysis.unresolve(
+                UNRESOLVED_KIND[strongest],
+                raw.source,
+                "its parameters cannot be bound before it runs",
+            )
     recursive = _recursive(lowered, binding)
     for parameter, spec in parameters.items():
         if parameter not in binding.bound:
@@ -369,6 +390,12 @@ def _path_parameters(
             isinstance(spec.subtree, tuple) and any(name in binding.bound for name in spec.subtree)
         )
         for item in items(binding.bound[parameter]):
+            if (
+                lowered == "test-path"
+                and item.variable_test is not None
+                and target_listing(analysis, context, raw, item.variable_test) is not None
+            ):
+                continue  # Existence of a variable from a fixed list, no filesystem path.
             if (lowered, parameter) in NAME_OR_PATH_PARAMETERS:
                 text = analysis.literal_of(context, raw, item)
                 if text is not None and not MODULE_FILE.search(text):

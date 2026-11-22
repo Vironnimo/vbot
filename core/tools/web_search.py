@@ -437,17 +437,6 @@ def _engines_did_not_answer(
     )
 
 
-def _widened_note(widened: list[tuple[str, str]], *, can_fetch: bool) -> str:
-    """Say how ``site:`` operators with a path were read, or return ""."""
-    if not widened:
-        return ""
-    (operator, reading), *rest = widened
-    readings = [f"{operator} was read as {reading}"]
-    readings += [f"{operator} as {reading}" for operator, reading in rest]
-    fetch = " To read a page whose address you know, use web_fetch." if can_fetch else ""
-    return f"Site restrictions cover whole sites, so {', '.join(readings)}.{fetch}"
-
-
 def _model_view(
     payload: dict[str, Any],
     *,
@@ -493,7 +482,7 @@ async def web_search_handler(
         return _configuration_failure(settings_error or "they could not be resolved")
 
     provider = _PROVIDERS[settings["provider"]]
-    query, domains, exclude, widened, sites_error = WebSearchRequest.resolve_sites(
+    query, domains, exclude, path_clauses, sites_error = WebSearchRequest.resolve_sites(
         query,
         arguments.get("domains"),
         arguments.get("exclude_domains"),
@@ -520,8 +509,9 @@ async def web_search_handler(
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
         return _invalid(age_error)
-    widened_note = _widened_note(widened, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME))
-    notes = [note for note in (widened_note, age_note) if note]
+    notes = [age_note] if age_note else []
+    if path_clauses:
+        notes.append("URL filter: " + " ".join(clause.operator() for clause in path_clauses))
 
     api_key = ""
     if provider.credential_key is not None:
@@ -529,7 +519,7 @@ async def web_search_handler(
         if not api_key:
             return _missing_key(provider)
     search = provider.search(api_key, settings)
-    request = WebSearchRequest(query, domains, exclude, count, page, recency)
+    request = WebSearchRequest(query, domains, exclude, count, page, recency, tuple(path_clauses))
     try:
         payload, failure = await search(request)
     except _ResponseTooLargeError as error:

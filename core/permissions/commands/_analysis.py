@@ -281,7 +281,9 @@ class Analysis:
                 word = assignment.value
                 if word is not None and word.items is None:
                     # Location-dependent values cannot be frozen before the walk.
-                    if _location_dependent(word):
+                    if _location_dependent(word) and not (
+                        assignment.initial and len(context.start) == 1 and not context.redefined
+                    ):
                         continue
                     value = self.value(context, word, context.locations(())[0])
                     if value.text is not None:
@@ -333,6 +335,12 @@ class Analysis:
         ):
             defined_at = context.text_variables.get(raw.output_variable)
             raw.output_text |= defined_at is not None and defined_at < raw.offset
+        if raw.projected is not None and raw.pipeline is not None:
+            listing = _dotnet.target_listing(self, context, raw, raw.projected)
+            if listing is not None:
+                context.listings[(raw.pipeline.id, raw.pipeline.index)] = replace(
+                    listing, text=True, full_names=True
+                )
         if raw.output_text:
             self.text_output(context, raw)
         if raw.call is not None:
@@ -962,7 +970,7 @@ class Analysis:
             self.unresolve(UNRESOLVED_KIND[kind], raw.source, "it takes its targets from its input")
             return
         listing = self.listing_before(context, raw.pipeline)
-        if listing is None or listing.roots is None:
+        if listing is None or listing.roots is None or (listing.full_names and kind != "read"):
             self.unresolve(
                 UNRESOLVED_KIND[kind],
                 raw.source,
@@ -986,6 +994,8 @@ class Analysis:
 
     def value(self, context: Context, word: Word, location: Location) -> Value:
         if word.join is not None:
+            if context.redefined or context.values_unknown:
+                return Value(None, word.source)
             parts = [self.value(context, part, location).text for part in word.join]
             if any(part is None for part in parts) or any(part.items for part in word.join):
                 return Value(None, word.source)
@@ -1191,7 +1201,11 @@ class Analysis:
         for item in items(word):
             if tier == "a" and item.target is not None:
                 listing = _dotnet.target_listing(self, context, raw, item.target)
-                if listing is not None and listing.roots is not None:
+                if (
+                    listing is not None
+                    and listing.roots is not None
+                    and (kind == "read" or not listing.full_names)
+                ):
                     self.listed_targets(listing, kind, subtree=subtree)
                     continue
             for location in context.locations(raw.scope):

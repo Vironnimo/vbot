@@ -14,7 +14,7 @@ from typing import Literal
 type PartKind = Literal["text", "variable", "dynamic"]
 type RedirectKind = Literal["read", "write"]
 type CallTargetKind = Literal[
-    "type", "new", "command", "item", "text", "variable", "property", "paths", "other"
+    "type", "new", "command", "item", "text", "variable", "property", "paths", "projected", "other"
 ]
 
 
@@ -52,6 +52,7 @@ class Word:
     argument: Word | None = None
     target: CallTarget | None = None
     join: tuple[Word, ...] | None = None
+    variable_test: CallTarget | None = None
 
     @classmethod
     def literal(cls, text: str, *, source: str | None = None, glob: bool = False) -> Word:
@@ -110,6 +111,8 @@ class CallTarget:
     feed: Pipeline | None = None
     variable: str | None = None
     receiver: CallTarget | None = None
+    list_variable: str | None = None
+    children: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +166,7 @@ class RawCommand:
     top_level: bool = False
     output_text: bool = False
     output_variable: str | None = None
+    projected: CallTarget | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +181,7 @@ class Assignment:
     value: Word | None = None
     text: bool = False
     text_from: str | None = None
+    initial: bool = False
 
 
 @dataclass(slots=True)

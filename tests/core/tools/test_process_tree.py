@@ -299,6 +299,13 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
             "npx create-vite@5.2.0",
         ),
         ("node.exe", ["node", "npx-cli.js", "https://SECRET@host/x.tgz"], "npx"),
+        (
+            "git.exe",
+            ["git", "-C", "SECRET", "merge-base", "--is-ancestor", "SECRET", "HEAD"],
+            "merge-base --is-ancestor",
+        ),
+        ("git.exe", ["git", "log", "--grep", "merge-base", "--is-ancestor", "a", "b"], ""),
+        ("git.exe", ["git", "merge-base", "--is-ancestor", "--help", "HEAD"], ""),
         ("pwsh.exe", ["pwsh", "-File", "SECRET.ps1"], ""),
         # The host of a PowerShell job (& or Start-Job), which PowerShell ends as it exits.
         ("pwsh.exe", ["pwsh", "-s", "-NoLogo", "-NoProfile", "-wd", "C:/work"], None),
@@ -331,6 +338,9 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
         "npm-option-first",
         "npx-package",
         "npx-url",
+        "git-ancestry-predicate",
+        "git-other-subcommand",
+        "git-other-option",
         "powershell-script",
         "powershell-job-host",
     ],

@@ -189,6 +189,8 @@ class PermissionRefusal:
                 return f"the rule {self.rule}, {inherited}, denies it"
             return f"the rule {self.rule} denies it"
         if self.reason == "protected_location":
+            if self.detail is not None:
+                return self.detail
             # Also a Team member's repository locations: they decide its rules as well.
             if self.location == "agent_config":
                 return voice.rule_file

@@ -585,6 +585,77 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
                     "deny_rule",
                     "listing-loop-denied",
                 ),
+                (
+                    "Get-ChildItem src -Recurse | Select-Object "
+                    "@{n='name';e={$_.FullName.Replace((Get-Location).Path + '\\','')}}, "
+                    "@{n='lines';e={(Get-Content $_.FullName).Length}}",
+                    None,
+                    "calculated-property-reads-the-listed-files",
+                ),
+                (
+                    "(Get-Item src/a,src/b).FullName | ForEach-Object { Get-Content $_ }; "
+                    "Get-ChildItem src | Select-Object -ExpandProperty FullName | "
+                    "ForEach-Object { rg pattern $_ }; "
+                    "rg pattern (Get-ChildItem '{work}/src').FullName",
+                    None,
+                    "file-name-projections-remain-bounded",
+                ),
+                *(
+                    (
+                        f"rg pattern (Get-ChildItem '{{work}}/src/{pattern}').FullName",
+                        "unanalyzable",
+                        f"computed-wildcard-directory-{label}",
+                    )
+                    for label, pattern in (
+                        ("star", "part*"),
+                        ("question-mark", "part?"),
+                        ("bracket", "part[ab]"),
+                    )
+                ),
+                (
+                    "$files='src/a','secrets/b'; foreach ($f in $files) { Get-Content $f }",
+                    "deny_rule",
+                    "literal-list-reads-check-every-file",
+                ),
+                (
+                    "$files='src/a','src/b'; $copy=$files; "
+                    "foreach ($f in $files) { Get-Content $f }",
+                    "unanalyzable",
+                    "an-aliased-array-is-not-an-immutable-path-list",
+                ),
+                (
+                    "$names='alpha','beta'; "
+                    "$names | ForEach-Object { Test-Path ('Variable:' + $_) }",
+                    None,
+                    "variable-drive-existence-only",
+                ),
+                (
+                    "$names='alpha','beta'; $names | ForEach-Object { Test-Path ('src/' + $_) }",
+                    "unanalyzable",
+                    "variable-drive-proof-does-not-apply-to-files",
+                ),
+                (
+                    "$names='alpha','beta'; "
+                    'foreach ($name in $names) { Test-Path "Variable:$name" }',
+                    None,
+                    "interpolated-variable-drive-existence",
+                ),
+                (
+                    '$p=Join-Path (Get-Location) src; Copy-Item a "$p/b"; '
+                    "Get-Content (Join-Path (Get-Location) src/a)",
+                    None,
+                    "current-location-remains-a-checked-path",
+                ),
+                (
+                    '$p=Join-Path (Get-Location) secrets; Copy-Item a "$p/b"',
+                    "deny_rule",
+                    "current-location-join-reaches-denied-child",
+                ),
+                (
+                    "Get-ChildItem src | Select-Object -First",
+                    "unanalyzable",
+                    "missing-select-count",
+                ),
             )
         ],
         # curl.exe on Windows requests fass.at for this name, other programs xn--fa-hia.at.
@@ -606,7 +677,9 @@ async def test_real_analysis_reaches_the_same_decisions(
 ) -> None:
     work = tmp_path / "work"
     work.mkdir()
-    line = line.replace("{native}", (tmp_path / "tools" / "viewer.exe").as_posix())
+    line = line.replace("{work}", work.as_posix()).replace(
+        "{native}", (tmp_path / "tools" / "viewer.exe").as_posix()
+    )
     checker = CommandChecker(lambda: real_analyzer)
     rules: dict[str, object] = {
         "read": "work_area",
@@ -623,6 +696,9 @@ async def test_real_analysis_reaches_the_same_decisions(
     )
 
     assert (refusal.reason if refusal else None) == reason
+    if line.endswith("Select-Object -First"):
+        assert refusal is not None and "-First" in (refusal.detail or "")
+        assert "count" in (refusal.hint or "")
 
 
 @pytest.mark.parametrize(

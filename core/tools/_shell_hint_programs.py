@@ -360,6 +360,9 @@ def _hint_powershell_alias_flags(failure: _Failure) -> str | None:
 # An attempt ends at the next Select-String, which starts its own, so a long
 # command is scanned once.
 _SELECT_STRING_RECURSE = re.compile(r"Select-String\b(?:(?!Select-String\b)[^|;\n])*-Recurse", re.I)
+_SELECT_STRING_RECURSE_HINT = (
+    "Select-String has no -Recurse. Search recursively with `rg -n 'text' .`."
+)
 
 
 def _hint_select_string_recurse(failure: _Failure) -> str | None:
@@ -367,7 +370,7 @@ def _hint_select_string_recurse(failure: _Failure) -> str | None:
         return None
     if not _SELECT_STRING_RECURSE.search(_powershell_code(failure.command).flat):
         return None
-    return "Select-String has no -Recurse. Search recursively with `rg -n 'text' .`."
+    return _SELECT_STRING_RECURSE_HINT
 
 
 _CONFLICT = re.compile(r"^CONFLICT |Automatic merge failed|needs merge", re.M)
