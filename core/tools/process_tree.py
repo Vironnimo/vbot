@@ -77,8 +77,7 @@ class ProgramExit:
 
     name: str
     exit_code: int
-    # Best-effort Python or Node selector (module, script, npm script or npx
-    # package), without code or program arguments.
+    # Best-effort invocation selector, without code, revisions or trailing arguments.
     invocation: str = ""
 
     def describe(self) -> str:
@@ -793,7 +792,7 @@ def _job_host(pid: int, name: str) -> bool:
 
 
 def _invocation(pid: int, name: str) -> str:
-    """Read a Python or Node child's selector once at its start, never code or arguments.
+    """Retain only a known interpreter selector or Git predicate from the child's argv.
 
     The command line can already be unavailable for a short-lived child. Its
     retained process handle still lets the exit code be recorded without it.
@@ -804,6 +803,8 @@ def _invocation(pid: int, name: str) -> str:
         selector = _python_selector
     elif _NODE_IMAGE.fullmatch(name):
         selector = _node_selector
+    elif name.casefold() in {"git", "git.exe"}:
+        selector = _git_selector
     else:
         return ""
     try:
@@ -811,6 +812,21 @@ def _invocation(pid: int, name: str) -> str:
     except psutil.Error, OSError:
         return ""
     return selector(arguments[1:])
+
+
+def _git_selector(arguments: list[str]) -> str:
+    """Identify the ancestry predicate without retaining paths, config or object names."""
+    index = 0
+    while index < len(arguments) and arguments[index] in ("-C", "-c"):
+        index += 2
+    if arguments[index : index + 2] != ["merge-base", "--is-ancestor"]:
+        return ""
+    revisions = arguments[index + 2 :]
+    if revisions[:1] == ["--"]:
+        revisions = revisions[1:]
+    if len(revisions) != 2 or any(not rev or rev.startswith("-") for rev in revisions):
+        return ""
+    return "merge-base --is-ancestor"
 
 
 def _script(argument: str) -> str:

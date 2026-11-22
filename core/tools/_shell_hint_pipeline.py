@@ -34,7 +34,11 @@ from ._shell_hint_common import (
     _Failure,
     _scan_window,
 )
-from ._shell_hint_programs import _hint_powershell_command_not_found, _hint_powershell_prompt
+from ._shell_hint_programs import (
+    _SELECT_STRING_RECURSE_HINT,
+    _hint_powershell_command_not_found,
+    _hint_powershell_prompt,
+)
 
 _FIRST_COUNT = re.compile(
     r"(?:^|[ \t])-f(?:i(?:r(?:st?)?)?)?(?:[ \t]*+:[ \t]*+|[ \t]++)(\d+)", re.I
@@ -71,6 +75,18 @@ _LITERAL_ASSIGNMENT = re.compile(r"\$(\w+)[ \t]*=[ \t]*(['\"])([^'\"`$\r\n]+)\2[
 _VARIABLE_WRITE = re.compile(r"\$(\w+)\b[ \t]*(?:[-+*/]?=|(?:\+\+|--)(?!\w))")
 _ERROR_SOURCE = re.compile(r"\s*\nLine \|\r?\n[ \t]*(\d+) \|[ \t]*(.+)\r?\n[ \t]*\|[ \t]*~+")
 _MISSING_PATH = re.compile(r"Cannot find path ['\"]([^'\"]+)['\"] because it does not exist\.")
+_RECURSE_ERROR = re.compile(
+    r"^Select-String:[ \t]*(?:\r?\nLine \|\r?\n[ \t]*\d+ \|[^\n]*\n"
+    r"[ \t]*\|[ \t]*~+[ \t]*\r?\n[ \t]*\|[ \t]*)?"
+    r"A parameter cannot be found that matches parameter name 'Recurse'\.\r?$",
+    re.M | re.I,
+)
+_RECURSE_OR_END = re.compile(r"(?<!\S)-Recurse(?=\s|:|$)|&&|\|\||(?<!\S)--%(?=\s|$)", re.I)
+_RECURSIVE_SEARCH_FAILED = (
+    "The recursive search did not run, although the command exited with code 0. "
+    f"{_SELECT_STRING_RECURSE_HINT}"
+)
+_REPORTED_CMDLET = "PowerShell reported an error from "
 
 
 def _invocations(command: str) -> list[tuple[str, str, int]]:
@@ -176,13 +192,22 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
     if not cmdlets and traceback is None:
         return None
     invocations = _invocations(command)
+    # The bad switch on a real invocation identifies this binding error even when
+    # PowerShell omits the source line or prints only its middle. Reading or
+    # searching a log containing the same diagnostic does not supply the switch.
+    if cmdlets and _RECURSE_ERROR.search(window):
+        for name, args, _ in invocations:
+            if name in ("select-string", "sls"):
+                positions = _top_level_split(args, 0, len(args), _RECURSE_OR_END)
+                if positions and args[positions[0] : positions[0] + 8].casefold() == "-recurse":
+                    return _RECURSIVE_SEARCH_FAILED
     for error in cmdlets:
         name = error[1]
         if any(called == name.casefold() for called, _, _ in invocations) and _own_cmdlet_error(
             command, window, error
         ):
             return (
-                f"PowerShell reported an error from {name}, although the command exited with "
+                f"{_REPORTED_CMDLET}{name}, although the command exited with "
                 "code 0. Later statements can still run after a cmdlet error. Check what "
                 "completed before retrying; use -ErrorAction Stop on a cmdlet when later "
                 "statements depend on it."
@@ -199,6 +224,13 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
             "--python-expr to report Python exceptions through the exit code."
         )
     return None
+
+
+def reported_cmdlet_error_hint(hint: str) -> bool:
+    """Whether an issued hint records a verified cmdlet error. Never inspect shell output."""
+    # A hint can be followed by a sentence about PowerShell jobs. Recognize the
+    # two owned diagnoses for both live and persisted foreground/background results.
+    return hint.startswith((_RECURSIVE_SEARCH_FAILED, _REPORTED_CMDLET))
 
 
 def _blender_exits_zero(args: str) -> bool:

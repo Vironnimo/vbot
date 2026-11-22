@@ -995,6 +995,10 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
         ("python -c \"print('``$field')\"", ("$field",)),
         ("python -c \"print('`$literal $expanded')\"", ("$expanded",)),
         ("python -c \"print('$one $two $three $four $five')\"", ("$one", "$two", "$three")),
+        ("$p = 'check.py'; python -c \"print(open(r'$p').read())\"", ()),
+        ("$P = 'check.py'; python -c \"print('${p}', '$key')\"", ("$key",)),
+        ("""python -c "print('$field')"; $field = 1""", ("$field",)),
+        ("function unused { $field = 1 }; python -c \"print('$field')\"", ("$field",)),
         pytest.param(
             "python -c \"print('$" + "x" * 40_000 + "')\"",
             ("$" + "x" * 36 + "...",),
@@ -1333,6 +1337,30 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
             "     | ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
             "     | Cannot find path 'C:\\work\\missing.txt' because it does not exist.\nafter",
             (),
+        ),
+        (
+            "Select-String -Path src -Pattern needle -Recurse; 'after'",
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'."
+            "\nafter",
+            ("recursive search did not run", "code 0", "rg -n"),
+        ),
+        (
+            "'before'\nSelect-String -Path src -Pattern 'needle|hay' -Recurse | "
+            "Select-Object -First 1",
+            "before\nSelect-String: \nLine |\n   2 |  … 'needle|hay' -Recurse | Selec …\n"
+            "     |                 ~~~~~~~~\n"
+            "     | A parameter cannot be found that matches parameter name 'Recurse'.",
+            ("recursive search did not run", "code 0", "rg -n"),
+        ),
+        (
+            "Get-ChildItem -Recurse | Select-String -Pattern 'Select-String -Recurse'",
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            None,
+        ),
+        (
+            "Select-String -Pattern (Get-ChildItem -Recurse) && Get-ChildItem -Recurse",
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            None,
         ),
         # An error read from a log is data, even when it names the reading cmdlet.
         (

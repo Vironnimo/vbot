@@ -20,6 +20,7 @@ from ._shell_hint_code import (
     _PowerShellCode,
     _program_name,
     _program_strings,
+    _top_level_statements,
 )
 from ._shell_hint_common import (
     _BASH_SYNTAX_HINT,
@@ -454,6 +455,7 @@ def _names(window: str, piece: str) -> bool:
 
 _PYTHON_SOURCE_FLAGS = re.compile(r"[ \t]+(?:(?:-[BEOIPqsuUv]+|-3(?:\.\d+)?)[ \t]+)*-c[ \t]+")
 _EXPANDED_VARIABLE = re.compile(r"`[\s\S]|\$(?:\{[\w:]+\}|[\w]+(?::[\w]+)?)")
+_SHELL_ASSIGNMENT = re.compile(r"[ \t]*\$(?:\{(\w+)\}|(\w+))[ \t]*=(?!=)")
 
 
 def _shown_variables(names: Sequence[str]) -> str:
@@ -471,11 +473,21 @@ def _hint_python_interpolation(command: str, exit_code: int | None) -> str | Non
     """
     if not _common._POWERSHELL or exit_code != 0 or "$" not in command:
         return None
+    assignments: dict[str, int] | None = None
     for program, flags, start, stop in _program_strings(command):
         if re.fullmatch(r"(?:pythonw?|py)(?:[\d.]+)?", program) is None:
             continue
         if not _PYTHON_SOURCE_FLAGS.fullmatch(flags):
             continue
+        # Passing a value the shell command itself set is intentional evidence
+        # of interpolation. A later assignment or an uncalled block is not.
+        if assignments is None:
+            assignments = {}
+            flat = _powershell_code(command).flat
+            for left, right in _top_level_statements(flat):
+                if assignment := _SHELL_ASSIGNMENT.match(flat, left, right):
+                    name = assignment[1] or assignment[2]
+                    assignments.setdefault(name.casefold(), right)
         # Scoped variables explicitly name PowerShell state; a whole $code
         # argument deliberately passes that variable's Python source.
         names = list(
@@ -483,7 +495,9 @@ def _hint_python_interpolation(command: str, exit_code: int | None) -> str | Non
                 dict.fromkeys(
                     match[0]
                     for match in _EXPANDED_VARIABLE.finditer(command, start + 1, stop)
-                    if match[0].startswith("$") and ":" not in match[0]
+                    if match[0].startswith("$")
+                    and ":" not in match[0]
+                    and assignments.get(match[0][1:].strip("{}").casefold(), stop) >= start
                 ),
                 4,
             )

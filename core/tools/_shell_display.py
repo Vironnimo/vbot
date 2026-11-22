@@ -1,6 +1,7 @@
 """Command details shared by shell calls and background task status and stop calls."""
 
 from core.tools._shell_arguments import shell_display_values
+from core.tools._shell_hint_pipeline import reported_cmdlet_error_hint
 from core.tools._shell_results import duration, exit_code_text, stopped_because
 from core.tools._tool_display import display_notice, display_text
 from core.tools.command_manager import CommandReport
@@ -68,7 +69,8 @@ def command_result_details(data: JsonObject) -> list[JsonObject]:
         blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))
     hint = data.get("hint")
     if isinstance(hint, str) and hint.strip():
-        blocks.append(display_notice("info", f"Hint: {hint.strip()}"))
+        partial = status == "exited" and code == 0 and reported_cmdlet_error_hint(hint)
+        blocks.append(display_notice("error" if partial else "info", f"Hint: {hint.strip()}"))
     processes = data.get("still_running")
     if isinstance(processes, list) and processes:
         names = ", ".join(str(item) for item in processes)
