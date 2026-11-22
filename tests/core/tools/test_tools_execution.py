@@ -104,6 +104,9 @@ _POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX path grammar")
         # A final name with ":" reads an alternate data stream, but cannot be written.
         pytest.param("10:30.md", "read", "ws/10:30.md", id="stream", marks=_WINDOWS_ONLY),
         pytest.param("10:30.md", "write", None, id="colon-in-name", marks=_WINDOWS_ONLY),
+        pytest.param('["C:/notes.txt', "read", None, id="unfinished-list", marks=_WINDOWS_ONLY),
+        pytest.param("[notes].txt", "write", "ws/[notes].txt", id="brackets-in-name"),
+        pytest.param('["notes', "write", 'ws/["notes', id="posix-quote-in-name", marks=_POSIX_ONLY),
     ],
 )
 @pytest.mark.asyncio
@@ -127,6 +130,8 @@ async def test_tool_paths_take_file_urls_and_refuse_names_that_lead_elsewhere(
 
     if expected is None:
         assert (result["error"]["code"], seen) == ("invalid_arguments", [])
+        if str(spelling).startswith('["'):
+            assert "one path" in result["error"]["message"]
     else:
         assert seen == [(tmp_path / expected).resolve()]
 
