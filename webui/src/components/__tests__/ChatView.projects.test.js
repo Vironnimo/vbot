@@ -15,6 +15,7 @@ import {
   listSessionsMock,
   listedSessions,
   message,
+  openSessionList,
   projectAgentName,
   projectChatProps,
   rpcCalls,
@@ -32,7 +33,6 @@ import {
   vbotProject,
   waitForCondition,
   waitForText,
-  sessionListButton,
   allAgentsTrigger,
   agentPill,
 } from './ChatView.support.js';
@@ -765,7 +765,7 @@ describe('ChatView Projects', () => {
         ready: 'Builder project reply',
       });
 
-      sessionListButton().click();
+      await openSessionList();
       await waitForCondition(
         () => document.querySelectorAll('.session-row__select').length === 2,
       );
@@ -824,7 +824,7 @@ describe('ChatView Projects', () => {
       });
       await chat.mountChat(projectChatProps(), { ready: 'Newest reply' });
 
-      sessionListButton().click();
+      await openSessionList();
       await waitForCondition(
         () => document.querySelectorAll('.session-row').length === 2,
       );

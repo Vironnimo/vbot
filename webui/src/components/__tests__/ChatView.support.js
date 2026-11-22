@@ -690,6 +690,14 @@ export function sessionListButton(root = document) {
   );
 }
 
+export async function openSessionList() {
+  sessionListButton().click();
+  flushSync();
+  await vi.dynamicImportSettled();
+  flushSync();
+  expect(document.querySelector('.session-drawer')).toBeTruthy();
+}
+
 let agentBarLayout = null;
 
 // jsdom lays nothing out, so every Agent fits on the Agent bar; this makes

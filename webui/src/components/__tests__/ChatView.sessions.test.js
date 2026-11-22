@@ -16,6 +16,7 @@ import {
   historyReads,
   listedSessions,
   message,
+  openSessionList,
   rpcCalls,
   rpcMock,
   runningRun,
@@ -33,7 +34,6 @@ import {
   tick,
   waitForCondition,
   waitForText,
-  sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -45,7 +45,6 @@ const returnToCurrentButton = () =>
 const returnToParentButton = () =>
   findButtonByText(t('chat.returnToParentSession'));
 const composerInput = () => document.querySelector('.msg-input');
-const sessionsButton = () => sessionListButton();
 
 // Serves `session.get` point reads from `sessions` keyed `address::sessionId`.
 function serveSessions(sessions) {
@@ -55,7 +54,7 @@ function serveSessions(sessions) {
 }
 
 async function openFromDrawer(title) {
-  sessionsButton().click();
+  await openSessionList();
   await waitForCondition(() => Boolean(findButtonByText(title)));
   const row = findButtonByText(title);
   row.focus();
@@ -457,8 +456,7 @@ describe('ChatView Sessions', () => {
         expect(barButton()).toBeTruthy();
 
         // The open list offers New session itself, in place of the bar.
-        sessionsButton().click();
-        flushSync();
+        await openSessionList();
         expect(barButton()).toBeNull();
         if (trigger === 'list') {
           document.querySelector('button.session-drawer__new').click();
@@ -582,8 +580,7 @@ describe('ChatView Sessions', () => {
         onSessionFiltersChange: vi.fn(),
       });
 
-      sessionsButton().click();
-      flushSync();
+      await openSessionList();
       document
         .querySelector(
           `.session-drawer__view [aria-label="${t('sessions.view.projects')}"]`,

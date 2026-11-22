@@ -11,13 +11,13 @@ import {
   getSessionMock,
   handledCommand,
   listedSessions,
+  openSessionList,
   projectChatProps,
   rpcCalls,
   rpcMock,
   runningRun,
   selectedAgentName,
   sendComposerMessage,
-  sessionListButton,
   settle,
   setInputValue,
   setupChatViewTestSuite,
@@ -291,7 +291,7 @@ describe('ChatView Session settings', () => {
       { id: 2, scope: { agent_id: 'alpha', session_id: 'session-1' } },
     ];
     flushSync();
-    sessionListButton().click();
+    await openSessionList();
     await waitForCondition(() =>
       Boolean(findButtonByText('Previous conversation')),
     );
@@ -845,7 +845,7 @@ describe('ChatView Session settings', () => {
         if (destination === 'agent') agentPill('Beta').click();
         else if (destination === 'draft') findNewSessionButton().click();
         else {
-          sessionListButton().click();
+          await openSessionList();
           await waitForCondition(() =>
             Boolean(findButtonByText('Other conversation')),
           );

@@ -14,6 +14,7 @@ import {
   listQueueMock,
   listedSessions,
   message,
+  openSessionList,
   rpcCalls,
   rpcMock,
   runEventSource,
@@ -27,7 +28,6 @@ import {
   testChatStateRefs,
   waitForCondition,
   waitForText,
-  sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -52,7 +52,7 @@ const subAgentState = () => {
 };
 
 async function reopenCurrentSessionFromDrawer() {
-  sessionListButton().click();
+  await openSessionList();
   await waitForCondition(() =>
     Boolean(document.querySelector('.session-row__select')),
   );
