@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.permissions._paths import path_key, reaches
-from core.utils.file_status import is_dir_strict
+from core.utils.file_status import is_dir_strict, is_file_strict
 
 if TYPE_CHECKING:
     from core.permissions._refusal import PermissionRefusal
     from core.permissions.commands.commands import PlannedPathAccess
     from core.permissions.permissions import PermissionBoundary
+
+
+def concrete_listing_access(
+    boundary: PermissionBoundary, access: PlannedPathAccess
+) -> PlannedPathAccess:
+    """An existing regular file can only be read as a single entry.
+
+    Verify its type from metadata without opening it or enumerating its parent.
+    Keep the wider scope on stat failure. This runs again on approval rechecks,
+    so a directory and a file at the same path have different grant identities.
+    """
+    if access.kind == "read" and access.enumerated and access.subtree and access.glob is None:
+        direct = boundary.check_path(access.path, "read")
+        if direct is None or direct.reason == "not_permitted":
+            try:
+                if is_file_strict(access.path):
+                    return replace(access, subtree=False, enumerated=False)
+            except OSError:
+                pass
+    return access
 
 
 def check_listed_links(

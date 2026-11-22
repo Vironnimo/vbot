@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Final
 
 from core.permissions._addresses import canonical_host
 from core.permissions._approval_access import ApprovalRequirement
-from core.permissions._listed_paths import check_listed_links
+from core.permissions._listed_paths import check_listed_links, concrete_listing_access
 from core.permissions._paths import is_inside, path_key, split_lexical
 from core.permissions._refusal import PathAccess, PermissionRefusal
 from core.permissions.permissions import PermissionBoundary
@@ -348,7 +348,8 @@ class CommandChecker:
                 and refusal.reason == "not_permitted"
                 else None,
             )
-        for access in plan.paths:
+        for planned in plan.paths:
+            access = concrete_listing_access(boundary, planned)
             kind: PathAccess = access.kind
             path = access.path
             if access.work_tree:

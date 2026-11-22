@@ -1010,14 +1010,22 @@ def _handle_node(
     if test_runner:
         # Discovery can descend into a directory, and every positional input is a target.
         roots = entries or [Word.literal(".", source=raw.source)]
-        listing = analysis.resolve_listing(context, raw, roots, recursive=True)
+        listing = analysis.resolve_listing(context, raw, roots, recursive=False)
         if listing.roots is None:
             analysis.unresolve(
                 "path_read", raw.source, "Node's test targets are computed at runtime"
             )
         else:
-            listing.filesystem_items = True
-            analysis.listed_targets(listing, "read")
+            for path, source, pattern in listing.roots:
+                # Node expands its own test patterns. Cover all descendants of a wildcard root.
+                analysis.add(
+                    "read",
+                    path,
+                    source,
+                    subtree=True,
+                    glob="*" if pattern else None,
+                    enumerated=True,
+                )
     elif entries:
         analysis.access(context, raw, "read", entries[0], glob=False, tier="a")
     program_outputs(analysis, context, raw, name, arguments)

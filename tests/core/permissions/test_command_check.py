@@ -24,6 +24,7 @@ from core.permissions import (
     CommandChecker,
     PermissionBoundary,
     PermissionCeiling,
+    PermissionGrant,
     normalize_permission_rules,
 )
 from core.permissions.commands.commands import CommandAnalyzer, PlannedPathAccess, UnresolvedElement
@@ -728,6 +729,51 @@ async def test_real_analysis_reaches_the_same_decisions(
     if line.endswith("Select-Object -First"):
         assert refusal is not None and "-First" in (refusal.detail or "")
         assert "count" in (refusal.hint or "")
+
+
+@pytest.mark.asyncio
+async def test_node_test_files_request_only_their_exact_read(
+    real_analyzer: CommandAnalyzer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    target = tmp_path / "other.test.js"
+    target.touch()
+    policy = boundary(work, {"read": "work_area", "write": "work_area"})
+    grant = PermissionGrant(policy)
+    checker = CommandChecker(lambda: real_analyzer)
+
+    def unexpected_scan(directory: object) -> None:
+        pytest.fail(f"enumerated a directory before permission: {directory}")
+
+    monkeypatch.setattr(os, "scandir", unexpected_scan)
+
+    async def assess(argument: str):
+        _, decision = await checker.prepare_argv(
+            policy, ["node", "--test", argument], cwd=work, env={}, home=work
+        )
+        return decision
+
+    before = await assess("../other.test.js")
+    assert before.refused
+    for refusal, required in before.refused:
+        assert refusal.reason == "not_permitted"
+        assert required and required.access == "read" and Path(required.target) == target
+        assert not required.subtree and required.glob is None
+        grant.approve([required])
+    assert grant.check_path(target, "read") is None
+    assert (await assess("../other.test.js")).path_identities == before.path_identities
+
+    target.unlink()
+    target.mkdir()
+    for argument in ("../other.test.js", "../other.test.js/*.js"):
+        after = await assess(argument)
+        assert any(refusal.reason == "unanalyzable" for refusal in after.refusals)
+        assert before.path_identities != after.path_identities
+        assert any(
+            required and required.subtree and not grant.permits(required)
+            for _, required in after.refused
+        )
 
 
 @pytest.mark.asyncio
