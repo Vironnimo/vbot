@@ -1362,6 +1362,55 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
             None,
         ),
+        (
+            '[int]::Parse("value"); "done"',
+            'MethodInvocationException: Exception calling "Parse" with "1" argument(s): failed'
+            "\ndone",
+            ("MethodInvocationException", "code 0"),
+        ),
+        (
+            "'before'\n$null.Value()\n'after'",
+            "InvalidOperation: \nLine |\n   2 |  $null.Value()\n     |  ~~~~~~~~~~~~~\n"
+            "     | You cannot call a method on a null-valued expression.\nafter",
+            ("InvalidOperation", "code 0"),
+        ),
+        (
+            "Get-Content runtime.log",
+            'MethodInvocationException: Exception calling "Sqrt" with "1" argument(s): failed',
+            None,
+        ),
+        (
+            "$null.Value(); 'done'",
+            "InvalidOperation: You cannot call a method on a null-valued expression.\ndone",
+            ("InvalidOperation", "code 0"),
+        ),
+        (
+            "1 / 0; 'done'",
+            "RuntimeException: Attempted to divide by zero.\ndone",
+            ("RuntimeException", "code 0"),
+        ),
+        (
+            "[IO.File]::ReadAllText('runtime.log')",
+            'MethodInvocationException: Exception calling "ReadAllText" with "1" argument(s): '
+            "failed",
+            None,
+        ),
+        (
+            "$o = [pscustomobject]@{b=1}; $o.b += 1; Get-Content runtime.log",
+            'SetValueInvocationException: Exception setting "b": failed',
+            None,
+        ),
+        (
+            "if ($false) { $o.b = 1 }; Get-Content runtime.log",
+            'SetValueInvocationException: Exception setting "b": failed',
+            None,
+        ),
+        (
+            "$null.Other(); 'done'",
+            "RuntimeException: \nLine |\n  1 |  $missing.Value()\n    |  ~~~~~~~~~~~~~\n"
+            "    | No matching property.",
+            None,
+        ),
         # An error read from a log is data, even when it names the reading cmdlet.
         (
             "$answer = read-host 'Name'; 'continued'",
@@ -1404,6 +1453,50 @@ def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
     # Only PowerShell runs commands this way.
     monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "failed", "output", "expected"),
+    [
+        (
+            "rg needle src/*.js; rg other src",
+            ["rg.exe exited with code 2"],
+            "rg: src/*.js: IO error for operation on src/*.js: Invalid name (os error 123)",
+            "src/*.js",
+        ),
+        (
+            "rg needle src/*.js; rg other src",
+            ["git.exe exited with code 2"],
+            "rg: src/*.js: Invalid name (os error 123)",
+            None,
+        ),
+        (
+            "rg needle absent; Get-Content src/*.js",
+            ["rg.exe exited with code 2"],
+            "rg: src/*.js: Invalid name (os error 123)",
+            None,
+        ),
+        (
+            "rg needle src/*.js; Get-Content error.log",
+            ["rg.exe exited with code 2"],
+            "src/*.js: example text",
+            None,
+        ),
+    ],
+)
+def test_failed_child_must_report_the_wildcard_it_received_behind_a_successful_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    failed: list[str],
+    output: str,
+    expected: str | None,
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+    hint = annotate_failure(command, 0, output, failed_programs=failed)
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None and expected in hint and "Get-ChildItem" in hint
 
 
 @pytest.mark.parametrize("powershell", [True, False])

@@ -253,6 +253,27 @@ async def test_explicit_argv_executable_survives_dispatch(
                 ('"code=$LASTEXITCODE"; cmd /c exit 5', True, "status-before-failure"),
                 ('cmd /c exit 5; $LASTEXITCODE = 0; "done"', True, "status-overwrite"),
                 ('cmd /c exit 5; "$LASTEXITCODE"; cmd /c exit 5', True, "later-unhandled-failure"),
+                (
+                    'cmd /c exit 5; "$(cmd /c exit 0; $LASTEXITCODE)"',
+                    True,
+                    "interpolation-reads-nested-command-status",
+                ),
+                ("cmd /c exit 5; if ($false) { $LASTEXITCODE }", True, "conditional-read"),
+                (
+                    "cmd /c exit 5; foreach ($x in @()) { cmd /c exit 0; $LASTEXITCODE }",
+                    True,
+                    "read-belongs-to-loop-command",
+                ),
+                (
+                    "cmd /c exit 5; $a = $LASTEXITCODE; foreach ($x in 1) { cmd /c exit 5 }",
+                    True,
+                    "unchecked-nested-command",
+                ),
+                (
+                    "foreach ($x in 1) { cmd /c exit 5; $a = $LASTEXITCODE }",
+                    False,
+                    "loop-checks-its-own-command",
+                ),
             )
         ],
     ],
@@ -1179,6 +1200,14 @@ _INPUT_REDIRECTION_ERROR = "ParserError: The '<' operator is reserved for future
     [
         ("make", _MISSING_MAKE, 127, "`make`", "info"),
         ("python -c \"print('$field')\"", "\n", 0, "`$field`", "info"),
+        (
+            "$object = [pscustomobject]@{id=1}; $object.total += 2; 'done'",
+            'SetValueInvocationException: Exception setting "total": '
+            '"The property could not be set."\ndone',
+            0,
+            "SetValueInvocationException",
+            "error",
+        ),
         (
             "Select-String -Recurse -Pattern needle; 'done'",
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import bisect
 import re
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 from core.permissions import PermissionBoundary
 
@@ -87,9 +88,55 @@ _RECURSIVE_SEARCH_FAILED = (
     f"{_SELECT_STRING_RECURSE_HINT}"
 )
 _REPORTED_CMDLET = "PowerShell reported an error from "
+_REPORTED_RUNTIME = "PowerShell reported a runtime error ("
+_RUNTIME_ERROR = re.compile(
+    r"^(SetValueInvocationException|MethodInvocationException|RuntimeException|InvalidOperation):"
+    r"[ \t]*([^\r\n]*)",
+    re.M,
+)
+_ERROR_MEMBER = re.compile(r'Exception (setting|calling) "(\w+)"')
+_RUNTIME_EXPRESSION = re.compile(r"(?:[$(\[\d]|throw\b)", re.I)
+_MEMBER_OPERATION = re.compile(
+    r"(?:(?:\$[\w:]+\s*=\s*)|\[void\]\s*)?(?:\$[\w:]+(?:\.\w+)*\.|\[[\w.]+\]::)"
+    r"(\w+)\s*(\(|[-+*/%]?=(?!=))"
+)
+_CAPTURED_METHOD = re.compile(r"(?:\$[\w:]+\s*=|\[void\]|\[(?:int|long)\]::Parse\()", re.I)
+_KNOWN_RUNTIME_EXPRESSIONS = {
+    ("InvalidOperation", "You cannot call a method on a null-valued expression."): re.compile(
+        r"\$null\.\w+\s*\([^()]*\)", re.I
+    ),
+    ("RuntimeException", "Attempted to divide by zero."): re.compile(r"[+-]?\d+\s*/\s*0"),
+}
+# The compact error has no source line. Apart from the matching member access,
+# admit only literal initializers and literal output, which cannot relay a log.
+_LITERAL_INITIALIZER = re.compile(
+    r"\$\w+\s*=\s*(?:(?:\[\w+\])?@\{[^{}()$`&|]*\}|\d+|\$null|\" *\"|' *')", re.I
+)
+_LITERAL_OUTPUT = re.compile(r"(?:Write-(?:Output|Host)\s+|echo\s+)?(?:'[^']*'|\"[^\"$`]*\")", re.I)
+# In the statement immediately after a native command its status is commonly
+# saved, tested, printed, or expanded into an ordinary string or here-string.
+# A read in a later command, script block or conditional branch is not evidence.
+_DIRECT_STATUS_READ = re.compile(
+    r"[;\n]\s*(?:\$[\w:]+\s*=\s*)?(?:if\s*\(\s*(?:-not\s+|!\s*)?"
+    r'|(?:Write-(?:Host|Output)|echo)\s+)?(?:@?")?\s*',
+    re.I,
+)
 
 
-def _invocations(command: str) -> list[tuple[str, str, int]]:
+def _status_elements(flat: str) -> Iterator[tuple[int, int]]:
+    """Potential native calls, including those inside a loop or expression.
+
+    Stop before a nested expression or pipeline. Its status is uncertain, so
+    it cannot suppress a failure hint for the program before it.
+    """
+    start = 0
+    for boundary in re.finditer(r"[;\n{}()|]|&&", flat):
+        yield start, boundary.start()
+        start = boundary.end()
+    yield start, len(flat)
+
+
+def _invocations(command: str, *, nested: bool = False) -> list[tuple[str, str, int]]:
     """Read command names and unquoted arguments, excluding printed source.
 
     Resolve only an earlier, single literal assignment used with PowerShell's
@@ -100,7 +147,7 @@ def _invocations(command: str) -> list[tuple[str, str, int]]:
     writes = Counter(match[1].casefold() for match in _VARIABLE_WRITE.finditer(flat))
     variables: dict[str, str] = {}
     found: list[tuple[str, str, int]] = []
-    for left, right in _top_level_statements(flat):
+    for left, right in _status_elements(flat) if nested else _top_level_statements(flat):
         assignment = _LITERAL_ASSIGNMENT.fullmatch(command[left:right].strip())
         if assignment and flat[left:right].lstrip().startswith("$"):
             name = assignment[1].casefold()
@@ -150,12 +197,27 @@ def reads_failed_status(command: str, failed_programs: Sequence[str]) -> bool:
         # command the Agent actually invoked, without examining program output.
         selector = re.search(r"\((npm|npx)(?: |\))", entry) if name == "node" else None
         failed.add(selector[1] if selector is not None else name)
-    invocations = _invocations(command)
+    invocations = _invocations(command, nested=True)
+    flat = _powershell_code(command).flat
     for name in failed:
         ends = [end for called, _, end in invocations if called == name]
-        if not ends or max(ends) > reads[-1]:
+        if not ends:
             return False
+        for end in ends:
+            index = bisect.bisect_left(reads, end)
+            if index == len(reads):
+                return False
+            read = reads[index]
+            if not _DIRECT_STATUS_READ.fullmatch(flat, end, read) or "$(" in command[end:read]:
+                return False
     return True
+
+
+def _own_error_source(command: str, source: re.Match[str]) -> bool:
+    lines = command.splitlines()
+    line = int(source[1])
+    text = source[2].rstrip("\r").removesuffix("…").rstrip()
+    return 0 < line <= len(lines) and bool(text) and lines[line - 1].strip().startswith(text)
 
 
 def _own_cmdlet_error(command: str, output: str, error: re.Match[str]) -> bool:
@@ -166,10 +228,7 @@ def _own_cmdlet_error(command: str, output: str, error: re.Match[str]) -> bool:
     """
     source = _ERROR_SOURCE.match(output, error.end())
     if source:
-        lines = command.splitlines()
-        line = int(source[1])
-        text = source[2].rstrip("\r").removesuffix("…").rstrip()
-        return 0 < line <= len(lines) and bool(text) and lines[line - 1].strip().startswith(text)
+        return _own_error_source(command, source)
     missing = _MISSING_PATH.search(error[0])
     if missing:
         path = missing[1].replace("\\", "/").casefold()
@@ -182,11 +241,59 @@ def _own_cmdlet_error(command: str, output: str, error: re.Match[str]) -> bool:
     return False
 
 
+def _own_compact_runtime_error(command: str, kind: str, message: str) -> bool:
+    if kind in command:
+        return False
+    member = _ERROR_MEMBER.match(message)
+    expected = {"SetValueInvocationException": "setting", "MethodInvocationException": "calling"}
+    expression = _KNOWN_RUNTIME_EXPRESSIONS.get((kind, message))
+    if expression is None and (member is None or expected.get(kind) != member[1]):
+        return False
+    flat = _powershell_code(command).flat
+    matched = False
+    for left, right in _top_level_statements(flat):
+        statement = flat[left:right].strip()
+        operation = _MEMBER_OPERATION.match(statement)
+        if expression is not None and expression.fullmatch(statement):
+            matched = True
+        elif member and operation and operation[1].casefold() == member[2].casefold():
+            if (operation[2] == "(") != (member[1] == "calling") or "|" in statement:
+                return False
+            # A method can return arbitrary text such as a log. Capture or
+            # discard its return value, or recognize a numeric conversion.
+            if member[1] == "calling" and not _CAPTURED_METHOD.match(statement):
+                return False
+            matched = True
+        elif not _LITERAL_INITIALIZER.fullmatch(statement) and not _LITERAL_OUTPUT.fullmatch(
+            command[left:right].strip()
+        ):
+            return False
+    return matched
+
+
+def _runtime_error_hint(command: str, window: str) -> str | None:
+    for error in _RUNTIME_ERROR.finditer(window):
+        kind = error[1]
+        source = _ERROR_SOURCE.match(window, error.end())
+        if source is not None:
+            if not _RUNTIME_EXPRESSION.match(source[2]) or not _own_error_source(command, source):
+                continue
+        elif not _own_compact_runtime_error(command, kind, error[2]):
+            continue
+        return (
+            f"{_REPORTED_RUNTIME}{kind}), although the command exited with code 0. "
+            "Check the failed expression and what ran after it before retrying."
+        )
+    return None
+
+
 def _hint_reported_error(command: str, exit_code: int | None, output: str) -> str | None:
     """Explain a reported execution error that did not set a failing exit code."""
     if exit_code != 0:
         return None
     window = _scan_window(output)
+    if _common._POWERSHELL and (runtime := _runtime_error_hint(command, window)):
+        return runtime
     cmdlets = list(_CMDLET_ERROR.finditer(window)) if _common._POWERSHELL else []
     traceback = _PYTHON_TRACEBACK.search(window)
     if not cmdlets and traceback is None:
@@ -226,11 +333,9 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
     return None
 
 
-def reported_cmdlet_error_hint(hint: str) -> bool:
-    """Whether an issued hint records a verified cmdlet error. Never inspect shell output."""
-    # A hint can be followed by a sentence about PowerShell jobs. Recognize the
-    # two owned diagnoses for both live and persisted foreground/background results.
-    return hint.startswith((_RECURSIVE_SEARCH_FAILED, _REPORTED_CMDLET))
+def reported_powershell_error_hint(hint: str) -> bool:
+    """Whether an issued hint records a verified PowerShell error. Never inspect shell output."""
+    return hint.startswith((_RECURSIVE_SEARCH_FAILED, _REPORTED_CMDLET, _REPORTED_RUNTIME))
 
 
 def _blender_exits_zero(args: str) -> bool:
