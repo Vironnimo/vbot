@@ -50,6 +50,10 @@ class Area:
             agent_config=self.agent_json,
             readable_dirs=(self.skills,),
             install_dirs=(self.install,),
+            credential_paths=(
+                (self.data / "secrets.json").as_posix(),
+                (self.data / "agents" / "*" / "agent.json").as_posix(),
+            ),
             loopback_port=22333,
         )
         return replace(context, **changes)  # type: ignore[arg-type]
@@ -149,7 +153,12 @@ _WORK_AREA_RULES = {
         pytest.param("{workspace}/MEMORY.md", "write", None, id="workspace-writable"),
         pytest.param("{skills}/x/SKILL.md", "read", None, id="skills-readable"),
         pytest.param("{skills}/x/SKILL.md", "write", "protected_location", id="skills"),
-        pytest.param("{data}/settings.json", "read", "protected_location", id="data-dir"),
+        pytest.param("{data}/settings.json", "read", "not_permitted", id="data-dir-read"),
+        pytest.param("{data}/settings.json", "write", "protected_location", id="data-dir-write"),
+        pytest.param("{data}/secrets.json", "read", "protected_location", id="credentials"),
+        pytest.param(
+            "{data}/agents/a2/agent.json", "read", "protected_location", id="other-agent-json"
+        ),
         pytest.param("{agent_json}", "read", "protected_location", id="agent-json"),
         pytest.param("{install}/core/a.py", "write", "protected_location", id="installation"),
     ],
@@ -243,6 +252,11 @@ def test_a_restriction_elsewhere_keeps_full_reach_but_protects_vbot(area: Area) 
     assert boundary.check_path(area.path("{outside}/x"), "write") is None
     refusal = boundary.check_path(area.path("{data}/settings.json"), "write")
     assert refusal is not None and refusal.location == "data_dir"
+    refusal = boundary.check_path(area.path("{data}/settings.json"), "read")
+    assert refusal is not None and refusal.reason == "not_permitted"
+    assert refusal.location == "data_dir"
+    refusal = boundary.check_path(area.path("{data}/secrets.json"), "read")
+    assert refusal is not None and refusal.location == "vbot_secrets"
     refusal = boundary.check_path(area.path("{agent_json}"), "read")
     assert refusal is not None and refusal.location == "agent_config"
     refusal = boundary.check_path(area.path("{install}/vbot.exe"), "write")
@@ -301,10 +315,11 @@ def test_the_workspace_is_writable_wherever_the_session_works(area: Area) -> Non
     # A Workspace around the data directory opens none of it.
     around = area.boundary(rules, workspace=area.root)
     assert around.check_path(str(area.outside / "notes.md"), "write") is None
-    for target in (area.data / "settings.json", other.parent / "agent.json"):
-        for access in ("read", "write"):
-            refusal = around.check_path(str(target), access)
-            assert refusal is not None and refusal.location == "data_dir"
+    for access in ("read", "write"):
+        refusal = around.check_path(str(area.data / "settings.json"), access)
+        assert refusal is not None and refusal.location == "data_dir"
+        refusal = around.check_path(str(other.parent / "agent.json"), access)
+        assert refusal is not None and refusal.location == "vbot_secrets"
 
 
 def test_the_files_rules_come_from_stay_readable_but_unwritable(area: Area) -> None:
@@ -381,6 +396,41 @@ def test_every_layer_must_permit_and_any_layer_can_deny(area: Area, source: str)
             old_scratch = child.check_path(area.scratch / "notes.txt", access)
             assert old_scratch is not None and old_scratch.location == "data_dir"
             assert area.scratch.as_posix() not in (child.allowed_summary(access) or ())
+
+
+def test_reads_in_the_data_folder_need_a_grant_inside_it(area: Area) -> None:
+    logs = area.data / "logs"
+    logs.mkdir()
+    (area.data / "secrets.json").write_text("{}", encoding="utf-8")
+    anywhere = area.boundary({"web": "listed"})
+    named = area.boundary({"web": "listed", "allow": [f"Read({logs.as_posix()}/**)"]})
+    wide = area.boundary({"web": "listed", "allow": [f"Read({area.root.as_posix()}/**)"]})
+    everything = area.boundary({"web": "listed", "allow": [f"Read({area.data.as_posix()}/**)"]})
+
+    # The read base and a rule around the data folder open none of it.
+    for boundary in (anywhere, wide, anywhere.with_read_folder(area.root.as_posix())):
+        refusal = boundary.check_path(logs / "vbot.log", "read")
+        assert refusal is not None and refusal.reason == "not_permitted"
+        assert refusal.location == "data_dir"
+        assert "where you can read only what the user allows" in refusal.message()
+    # A rule or Session read folder inside it does; the Session folder only for reading.
+    for boundary in (named, anywhere.with_read_folder(logs.as_posix())):
+        assert boundary.check_path(logs / "vbot.log", "read") is None
+        assert boundary.check_path(logs, "read", subtree=True) is None
+        assert boundary.check_path(area.data / "settings.json", "read") is not None
+    write = anywhere.with_read_folder(logs.as_posix()).check_path(logs / "vbot.log", "write")
+    assert write is not None and write.location == "data_dir"
+    # No grant opens the credentials, not even one naming the whole data folder.
+    assert everything.check_path(area.data / "settings.json", "read") is None
+    refusal = everything.check_path(area.data / "secrets.json", "read")
+    assert refusal is not None and refusal.location == "vbot_secrets"
+    refusal = everything.check_path(area.data, "read", subtree=True)
+    assert refusal is not None and refusal.location == "vbot_secrets"
+    # A listing that reaches into the data folder from outside needs the grant too.
+    refusal = anywhere.check_path(area.root, "read", glob="*/settings.json")
+    assert refusal is not None and refusal.reason == "not_permitted"
+    assert refusal.below is not None and refusal.location == "data_dir"
+    assert "it would also read" in refusal.message()
 
 
 def test_ceilings_round_trip_as_json(area: Area) -> None:
@@ -567,6 +617,9 @@ def test_a_refusal_names_what_the_boundary_allows(area: Area) -> None:
     assert refusal.target in str(raised)
 
 
+_CREDENTIALS = ("data/secrets.json", "data/agents/*/agent.json")
+
+
 @pytest.mark.parametrize(
     ("folder", "access", "rules", "expected"),
     [
@@ -580,20 +633,20 @@ def test_a_refusal_names_what_the_boundary_allows(area: Area) -> None:
         pytest.param(
             "{work}/src", "read", {"deny": ["Read({workdir}/**/.env)"]}, {"**/.env"}, id="wildcard"
         ),
-        # Under any restriction, the data directory and the Agent's own configuration
-        # are protected below a root.
+        # Under any restriction, the data directory, vBot's credentials and the
+        # Agent's own configuration can refuse below a root.
         pytest.param(
             "{root}",
             "read",
             {"web": "listed"},
-            {"data", "data/agents/a1/agent.json"},
+            {"data", "data/agents/a1/agent.json", *_CREDENTIALS},
             id="protected-locations",
         ),
         pytest.param(
             "{root}",
             "write",
             {"web": "listed"},
-            {"data", "data/agents/a1/agent.json", "install"},
+            {"data", "data/agents/a1/agent.json", "install", *_CREDENTIALS},
             id="installs",
         ),
     ],

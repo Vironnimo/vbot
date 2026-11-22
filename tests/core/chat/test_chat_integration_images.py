@@ -898,6 +898,21 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
 
         published = Path(note["text"].rsplit("Path: ", 1)[1].removesuffix("]"))
         assert published.read_bytes() == _PNG_BYTES
+        # Another Session's attachment lies in vBot's data folder: reading it
+        # needs the user's approval, which they reject here.
+        runs = runtime.chat_runs
+        assert runs is not None
+        seen: set[str] = set()
+        asked: list[str] = []
+
+        def reject(snapshot: dict[str, Any]) -> None:
+            for request in snapshot["requests"]:
+                if request["id"] not in seen:
+                    seen.add(request["id"])
+                    asked.append(request["id"])
+                    runs.resolve_approval(request["id"], "reject")
+
+        runs.add_approvals_changed_callback(reject)
         for session_id, fresh, allowed in [
             ("session-one", False, True),
             ("another-session", False, False),
@@ -927,3 +942,5 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
             assert envelope["ok"] is allowed
             if not allowed:
                 assert envelope["error"]["code"] == "permission_denied"
+            assert len(asked) == (0 if allowed else 1)
+            asked.clear()

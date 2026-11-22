@@ -409,6 +409,12 @@ def test_folder_choice_covers_library_reads_only_in_the_requesting_session(tmp_p
     assert not permitted_folder_reads(
         allowed, [search, ApprovalRequirement.path(boundary, package.parent / "else.py", "read")]
     )
+    # In vBot's data folder only folders inside it are offered: a wider one opens none of it.
+    logs = package / "vbot-data" / "logs"
+    log_read = ApprovalRequirement.path(boundary, logs / "vbot.log", "read")
+    in_data = suggest_session_grants(boundary, [log_read], is_dir=lambda _: False)
+    assert in_data is not None
+    assert in_data.folders == (logs.as_posix(), (package / "vbot-data").as_posix())
     cron = parent.ceiling(source="cron")
     assert cron is not None
     assert (

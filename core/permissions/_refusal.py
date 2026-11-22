@@ -20,7 +20,7 @@ type RefusalReason = Literal[
 # Extension that runs this Agent.
 type LayerSource = Literal["agent", "parent", "cron", "extension"]
 type ProtectedLocation = Literal[
-    "data_dir", "installation", "agent_config", "vbot_server", "vbot_cli"
+    "data_dir", "installation", "agent_config", "vbot_secrets", "vbot_server", "vbot_cli"
 ]
 
 LAYER_SOURCES: Final[tuple[LayerSource, ...]] = ("agent", "parent", "cron", "extension")
@@ -36,6 +36,7 @@ _ACTIONS: Final[dict[str, str]] = {
 _PROTECTED: Final[dict[str, str]] = {
     "data_dir": "it is in vBot's data folder",
     "installation": "it is part of vBot's installation",
+    "vbot_secrets": "it holds vBot's credentials, access tokens or Agent settings",
     "vbot_server": "it is the vBot server itself",
     "vbot_cli": "it is vBot's own command line",
 }
@@ -53,6 +54,7 @@ class _Voice:
     inherited: dict[str, str]
     rule_file: str
     outside: dict[str, str]
+    data_dir: str
 
 
 # The Agent reads its refusal as the result of its own call.
@@ -68,6 +70,7 @@ _AGENT: Final = _Voice(
         "write": "it is outside the folders you can change",
         "start_dir": "it is outside the folders you can work in",
     },
+    data_dir="where you can read only what the user allows",
 )
 # A watch check runs no Agent: the user reads its failure in an alert, the Agent
 # in the job. Every layer of a job's ceiling comes from the Session that scheduled it.
@@ -81,6 +84,7 @@ _WATCH: Final = _Voice(
         "write": "it is outside the folders these rules allow changing",
         "start_dir": "it is outside the folders these rules allow working in",
     },
+    data_dir="where these rules allow reading only what they name",
 )
 _ALLOWED: Final[dict[str, tuple[str, str]]] = {
     "read": ("You can read in: {items}.", "You cannot read any files."),
@@ -108,7 +112,8 @@ class PermissionRefusal:
     ``target`` is the normalized path (``/`` separators), the command or the host
     or URL. ``reason`` says why: a ``deny_rule`` (``rule``, set by the layer
     ``source``), a ``protected_location`` (``location``), ``not_permitted`` by the
-    ``base`` of the layer ``source`` and no allow rule, an ``unsafe_form``
+    ``base`` of the layer ``source`` and no allow rule (``location`` ``data_dir``: a
+    read in vBot's data folder, which no grant inside it permits), an ``unsafe_form``
     (``location`` names the form, such as ``network path``) or ``unanalyzable``
     (``detail`` says what could not be analyzed; ``hint`` is a sentence saying how
     to write the access so it can be checked). ``allowed`` lists the folders, commands or hosts this
@@ -201,7 +206,15 @@ class PermissionRefusal:
             return f"it is {article} {form} that no allow rule names"
         if self.reason == "unanalyzable":
             return (self.detail or "it could not be analyzed").rstrip(".")
-        text = _LISTED.get(self.access) or voice.outside[self.access]
+        if self.location == "data_dir":
+            where = "vBot's data folder"
+            if self.below is not None:
+                where = f"{self.below}, {where}"
+                text = f"it would also read {where}, {voice.data_dir}"
+            else:
+                text = f"it is in {where}, {voice.data_dir}"
+        else:
+            text = _LISTED.get(self.access) or voice.outside[self.access]
         return f"{text} ({inherited})" if inherited else text
 
 

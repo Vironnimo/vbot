@@ -32,13 +32,18 @@ LAN_ADDRESS = "192.168.1.20"
 
 
 def restricted(workdir: Path, **rules: object) -> PermissionBoundary:
-    """A boundary whose Work Area is *workdir*, with vBot's data folder beside it."""
+    """A boundary whose Work Area is *workdir*, with vBot's data folder beside it.
+
+    Its ``secrets.json`` stands for the credentials no grant opens.
+    """
+    data_dir = workdir.parent / f"{workdir.name}-vbot-data"
     return PermissionBoundary.build(
         normalize_permission_rules({"read": "work_area", "write": "work_area", **rules}),
         BoundaryContext(
             workdir=workdir,
             home=workdir / "home",
-            data_dir=workdir.parent / f"{workdir.name}-vbot-data",
+            data_dir=data_dir,
+            credential_paths=((data_dir / "secrets.json").as_posix(),),
             loopback_port=PORT,
             own_hosts=(LAN_ADDRESS,),
         ),

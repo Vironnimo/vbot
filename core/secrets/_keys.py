@@ -299,6 +299,12 @@ class KeyFileProtection:
         explicit = self._explicit_path()
         return str(explicit if explicit is not None else self._key_directories()[0])
 
+    def key_paths(self) -> tuple[Path, ...]:
+        """Where any store's key can lie: the named key file and every key directory."""
+        explicit = self._explicit_path()
+        named = (explicit,) if explicit is not None else ()
+        return tuple(dict.fromkeys((*named, *self._key_directories())))
+
     def _explicit_path(self) -> Path | None:
         if self._path is not None:
             return self._path

@@ -24,12 +24,15 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
+from core.access.server_record import server_access_path
 from core.agents import Agent, TemporaryAgent, default_workspace_dir
 from core.agents.temporary import OwnedIdentityAgent
 from core.attachments import session_attachment_dir
 from core.chat._scratch_context import SCRATCH_RUN_KINDS
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
+from core.database import config_backup_root, snapshot_root
+from core.database.recovery import QUARANTINE_ROOT_NAME
 from core.json_documents import documents_written
 from core.permissions import (
     BoundaryContext,
@@ -46,12 +49,14 @@ from core.prompts import (
     ProjectPromptContext,
     RenderedBlock,
 )
+from core.secrets import PLAINTEXT_CREDENTIAL_PATTERNS, SECRET_STORE_FILE_NAME, KeyFileProtection
 from core.skills.policy import SkillPackageRef
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner, session_artifact_dirs, terminal_log_scope
 from core.tools import _powershell_host
 from core.utils.config import VBOT_ROOT
 from core.utils.logging import get_logger
+from core.utils.server_control import CONTROL_DIRECTORY_NAME
 
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies
@@ -87,6 +92,29 @@ def installation_dirs(home: Path) -> tuple[Path, ...]:
     if sys.platform == "win32":
         return (*directories, _powershell_host.cache_directory(home))
     return directories
+
+
+def credential_paths(data_dir: Path) -> tuple[str, ...]:
+    """What a restricted Agent may neither read nor change, also with the user's approval.
+
+    The Secret Store and every copy of it (data snapshots, configuration backups,
+    the quarantine), plaintext credential files it has not converted yet, its key
+    files outside the data folder, the Device and access records, the server's
+    local access token, and every Agent's settings. Patterns in rule syntax.
+    """
+    layout = DataDirectoryLayout(data_dir)
+    paths = (
+        data_dir / SECRET_STORE_FILE_NAME,
+        *(data_dir / pattern for pattern in PLAINTEXT_CREDENTIAL_PATTERNS),
+        snapshot_root(data_dir),
+        config_backup_root(data_dir),
+        data_dir / QUARANTINE_ROOT_NAME,
+        server_access_path(data_dir).parent,
+        data_dir / CONTROL_DIRECTORY_NAME,
+        layout.agents / "*" / "agent.json",
+        *KeyFileProtection().key_paths(),
+    )
+    return tuple(dict.fromkeys(path.as_posix() for path in paths))
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +202,7 @@ class SessionPermissions:
             rule_files=self.rule_files,
             install_dirs=installation_dirs(home),
             readable_dirs=(*artifacts, *skill_dirs),
+            credential_paths=credential_paths(data_dir),
             scoped_artifact_reads=ScopedArtifactReads(terminal_logs.root, terminal_logs.allows),
             session_read_folders=self.read_folders,
             loopback_port=loopback_port,
