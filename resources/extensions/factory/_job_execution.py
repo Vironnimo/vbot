@@ -13,7 +13,8 @@ from core.tools.availability import ToolAccess
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
-from . import _native_agent_text, agent_text
+from . import _native_agent_text
+from ._job_agent_text import JOB_PRIVATE_TOOLS
 from ._jobs_store import FINAL_JOB_RUN_STATES, FactoryJobsStore
 from .store import FactoryError
 
@@ -165,7 +166,7 @@ class FactoryJobExecution:
         local = member.get("config", {})
         boundary = factory.get("config", {})
         grants = {_JOB_STATUS_TOOL_NAME}
-        denied = (set(agent_text.PRIVATE_TOOLS) | set(_native_agent_text.PRIVATE_TOOLS)) - grants
+        denied = (set(JOB_PRIVATE_TOOLS) | set(_native_agent_text.PRIVATE_TOOLS)) - grants
         for settings in (boundary, local):
             denied.update(settings.get("denied_tools", []))
         allowed: set[str] | None = None

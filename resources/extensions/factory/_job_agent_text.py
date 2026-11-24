@@ -110,6 +110,7 @@ _LEADER_JOBS_PARAMETERS: Json = {
                     "schedule": {"type": "string"},
                     "enabled": {"type": "boolean"},
                 },
+                "additionalProperties": False,
             },
             "description": (
                 "Schedule (cron expression) or webhook triggers for this job. Omit for no triggers."

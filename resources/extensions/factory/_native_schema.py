@@ -1,6 +1,25 @@
 """Additive native Factory records; Workflow Card tables keep their meaning."""
 
-from ._budget_store import SCHEMA_SQL as BUDGET_SCHEMA_SQL
+_BUDGET_TABLES = {
+    "task": "native_tasks",
+    "topic": "native_topics",
+    "execution": "native_executions",
+    "card": "cards",
+}
+BUDGET_SCHEMA_SQL = """
+CREATE TABLE factory_budget_changes (
+ revision INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, id TEXT NOT NULL,
+ UNIQUE(kind, id)
+) STRICT;
+"""
+for _kind, _table in _BUDGET_TABLES.items():
+    for _event in ("INSERT", "UPDATE", "DELETE"):
+        _alias = "OLD" if _event == "DELETE" else "NEW"
+        BUDGET_SCHEMA_SQL += f"""
+CREATE TRIGGER factory_budget_{_kind}_{_event.lower()} AFTER {_event} ON {_table} BEGIN
+ INSERT OR REPLACE INTO factory_budget_changes (kind, id) VALUES ('{_kind}', {_alias}.id);
+END;
+"""
 
 SCHEMA_SQL = """
 CREATE TABLE native_factories (

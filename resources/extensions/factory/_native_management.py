@@ -12,10 +12,9 @@ from core.tools.arguments import optional_int
 from core.tools.contracts import ToolContractError
 from core.utils.workers import settle_before_cancelling
 
-from . import _limits
 from ._native_identities import FactoryIdentities, personal_agents
 from ._native_records import _capacity, _text
-from ._native_values import CONFIG, FACTORY, LOCAL, MEMBER, OPERATION_SCHEMAS, TASK
+from ._native_values import CONFIG, FACTORY, LOCAL, MEMBER, OPERATION_SCHEMAS
 from ._values import text
 from .store import FactoryError
 
@@ -139,33 +138,6 @@ class NativeFactoryManagement:
                 ],
                 "next_after": members[-1]["id"] if len(members) == 100 else None,
             }
-        if name == "factory.usage" and actor is None:
-            team = await self.store.get_factory(text(args, "id"))
-            index = self.service.native.limits.index
-            await index.sync(resources=True)
-            return {"usage": index.usage(f"factory:{team['id']}", resources=True)}
-        if name == "work.reply" and actor is None:
-            return await self.service.records().project_reply(
-                text(args, "project_id"), text(args, "id")
-            )
-        if (name == "work.list" and actor is None) or name == "task.history":
-            if name == "task.history":
-                team = await self.store.get_factory(text(args, "factory_id"))
-                if actor and actor["factory"]["id"] != team["id"]:
-                    raise FactoryError("outside_factory", "Read work in your own Project.")
-                project_id = team["project_id"]
-            else:
-                project_id = text(args, "project_id")
-            limit = args.get("limit", 30)
-            if type(limit) is not int or not 1 <= limit <= 100:
-                raise FactoryError("invalid_limit", "Choose a page size between 1 and 100.")
-            return await self.service.records().project_work(
-                project_id,
-                args.get("after", ""),
-                limit,
-                str(args.get("query", "")),
-                include_replies=name == "work.list" and bool(args.get("include_replies")),
-            )
         if name.startswith("conversation.") and actor is None:
             from ._conversations import conversation
 
@@ -301,22 +273,8 @@ class NativeFactoryManagement:
                         and profile["profile_available"],
                     }
                 }
-            if resource == "task":
-                return await self._task_detail(previous, args)
-            if resource == "topic":
-                posts = await self.store.list_posts(
-                    previous["id"], after=int(args.get("after", 0)), limit=args.get("limit", 100)
-                )
-                return {
-                    "topic": previous,
-                    "posts": posts,
-                    "next_after": posts[-1]["sequence"]
-                    if len(posts) == args.get("limit", 100)
-                    else 0,
-                    "sessions": await self._sessions(previous),
-                }
             return {resource: previous}
-        if previous is not None and name != "topic.post":
+        if previous is not None:
             self._revision(previous, args)
         if factory and factory.get("state") == "archived":
             raise FactoryError(
@@ -326,10 +284,10 @@ class NativeFactoryManagement:
             saved = await self._factory(action, args, identity, previous, actor)
         elif resource == "member":
             saved = await self._member(action, args, identity, previous, actor)
-        elif resource == "task":
-            saved = await self._task(action, args, identity, previous, actor)
         else:
-            saved = await self._topic(action, args, identity, previous, actor)
+            raise FactoryError(
+                "unknown_operation", "Choose an operation from the Factory operation catalog."
+            )
         await self.service.native.changed(_PLURALS[resource], saved, previous)
         return {resource: saved}
 
@@ -392,116 +350,7 @@ class NativeFactoryManagement:
                     ),
                 )
         if resource == "task":
-            if previous and any(
-                key in args and args[key] != previous.get(key)
-                for key in ("objective", "conditions", "reviewer_id", "user_approval")
-            ):
-                raise FactoryError(
-                    "agreement_boundary",
-                    (
-                        "The user sets this task's objective and completion conditions. Propose "
-                        "agreement changes in a topic."
-                    ),
-                )
-            if "limits" in args:
-                raise FactoryError(
-                    "operator_boundary",
-                    (
-                        "The user sets task resource limits; omit limits and use the inherited "
-                        "allocation."
-                    ),
-                )
-            if (
-                previous
-                and "parent_id" in args
-                and args["parent_id"] != previous.get("parent_id", "")
-            ):
-                raise FactoryError(
-                    "operator_boundary",
-                    "The user moves existing tasks between allocations; keep this task's parent.",
-                )
-            task = actor.get("task") or {}
-            if task and actor.get("epoch") != task.get("epoch"):
-                raise FactoryError(
-                    "stale_execution",
-                    (
-                        "This task execution was replaced. Read the current task; do not submit "
-                        "this execution's result."
-                    ),
-                )
-            if action == "create":
-                parent_id = args.get("parent_id", "")
-                if not leader and parent_id:
-                    parent = await self.store.get_task(parent_id)
-                    if parent["assignee_id"] != member["id"]:
-                        raise FactoryError(
-                            "outside_remit",
-                            (
-                                "Create children under a task you own, or leave unrelated work "
-                                "unassigned"
-                                " as a backlog proposal."
-                            ),
-                        )
-                direct = (actor.get("topic") or {}).get("direct_member_id") == member["id"]
-                if (
-                    not leader
-                    and not parent_id
-                    and args.get("assignee_id")
-                    and not (direct and args["assignee_id"] == member["id"])
-                ):
-                    raise FactoryError(
-                        "outside_remit",
-                        (
-                            "Leave unrelated work unassigned as a backlog proposal; the Leader can "
-                            "authorize it."
-                        ),
-                    )
-            elif action == "review":
-                if not previous or previous.get("reviewer_id") != member["id"]:
-                    raise FactoryError(
-                        "reviewer_required",
-                        "This result needs its configured reviewer or the user.",
-                    )
-            elif (
-                action == "complete"
-                and previous
-                and (
-                    previous.get("assignee_id") != member["id"] or task.get("id") != previous["id"]
-                )
-            ):
-                raise FactoryError(
-                    "owner_required",
-                    (
-                        "The responsible task owner submits the result; contribute evidence "
-                        "through its topic."
-                    ),
-                )
-            elif not leader and previous and previous.get("assignee_id") != member["id"]:
-                parent = (
-                    await self.store.get_task(previous["parent_id"])
-                    if previous.get("parent_id")
-                    else {}
-                )
-                if parent.get("assignee_id") != member["id"]:
-                    raise FactoryError(
-                        "outside_remit",
-                        (
-                            "Change your own task or its children; contribute to other tasks "
-                            "through "
-                            "topics."
-                        ),
-                    )
-            if (
-                actor
-                and action in {"update", "complete"}
-                and previous
-                and task.get("id") == previous["id"]
-                and actor.get("epoch") != previous["epoch"]
-            ):
-                raise FactoryError(
-                    "stale_execution",
-                    "This task was reassigned. Its current owner must continue it.",
-                )
+            raise FactoryError("unknown_operation", "Factory tasks have been replaced by Jobs.")
 
     async def _factory(
         self, action: str, args: Json, identity: str, previous: Json | None, actor: Json | None
@@ -545,8 +394,6 @@ class NativeFactoryManagement:
             _text(settings["name"], "name", 200)
             _text(settings.get("remit", ""), "remit")
             _capacity(settings.get("capacity", 2))
-            if "limits" in settings:
-                settings["limits"] = _limits.normalize(settings["limits"])
             if args.get("leader_agent_id"):
                 if args.get("leader_name") or args.get("leader_model"):
                     raise FactoryError(
@@ -626,8 +473,6 @@ class NativeFactoryManagement:
                 if len(members) < 100:
                     break
                 after = members[-1]["id"]
-        if "limits" in patch:
-            patch["limits"] = _limits.normalize(patch["limits"])
         return await self.store.update_factory(
             previous["id"],
             patch,
@@ -795,115 +640,6 @@ class NativeFactoryManagement:
             info, factory["project_id"], factory.get("config", {})
         )
 
-    async def _task(
-        self, action: str, args: Json, identity: str, previous: Json | None, actor: Json | None
-    ) -> Json:
-        if action in {"create", "update"} and args.get("workflow_id"):
-            workflow = await self.service.records().get_workflow(text(args, "workflow_id"))
-            factory_id = args.get("factory_id") or (previous or {})["factory_id"]
-            factory = await self.store.get_factory(factory_id)
-            if not workflow["enabled"]:
-                raise FactoryError(
-                    "workflow_not_found",
-                    "Choose an enabled Workflow or omit workflow_id for native work.",
-                )
-            if workflow["project_id"] and workflow["project_id"] != factory["project_id"]:
-                raise FactoryError(
-                    "project_mismatch",
-                    f"Workflow {workflow['name']!r} always works in Project "
-                    f"{workflow['project_id']!r}. Choose a Workflow for this Factory's "
-                    "Project or a global Workflow.",
-                )
-        if action == "create":
-            fields = {
-                key: deepcopy(args[key])
-                for key in TASK
-                if key in args and key not in {"title", "objective"}
-            }
-            if "limits" in fields:
-                fields["limits"] = _limits.normalize(fields["limits"])
-            topic = (actor or {}).get("topic") or {}
-            if (
-                actor
-                and topic.get("direct_member_id") == actor["member"]["id"]
-                and not fields.get("parent_id")
-            ):
-                fields["conversation_id"] = topic["id"]
-                fields["assignee_id"] = fields.get("assignee_id") or topic["direct_member_id"]
-            return await self.store.create_task(
-                text(args, "factory_id"),
-                text(args, "title", maximum=200),
-                text(args, "objective"),
-                actor=identity,
-                **fields,
-            )
-        assert previous is not None
-        patch: Json = {}
-        result = None
-        if action == "update":
-            patch = {key: deepcopy(args[key]) for key in TASK if key in args}
-        elif action == "assign":
-            patch = {
-                "assignee_id": str(args.get("assignee_id", "")),
-                "state": "ready" if args.get("assignee_id") else "backlog",
-                "reason": "",
-            }
-        elif action in {"pause", "cancel", "reopen", "resume"}:
-            state = {
-                "pause": "paused",
-                "cancel": "cancelled",
-                "reopen": "ready" if previous.get("assignee_id") else "backlog",
-                "resume": "ready" if previous.get("assignee_id") else "backlog",
-            }[action]
-            if action == "resume" and previous["state"] not in {"paused", "blocked"}:
-                raise FactoryError(
-                    "wrong_state",
-                    "Resume applies to paused or blocked tasks. Read the current task state.",
-                )
-            patch = {"state": state, "reason": ""}
-            if action == "resume" and isinstance(previous.get("submission"), dict):
-                patch.update(
-                    state="review",
-                    reason="review",
-                    epoch=previous["epoch"] + 1,
-                    submission={**previous["submission"], "epoch": previous["epoch"] + 1},
-                )
-        elif action == "complete":
-            return await self.store.submit_task(
-                previous["id"],
-                text(args, "outcome"),
-                text(args, "evidence", maximum=100000),
-                actor=identity,
-                expected_revision=previous["revision"],
-                expected_epoch=previous["epoch"] if actor else None,
-            )
-        elif action == "review":
-            return await self.store.review_task(
-                previous["id"],
-                args.get("approve") is True,
-                actor=identity,
-                comment=args.get("findings", ""),
-                expected_revision=previous["revision"],
-                expected_epoch=previous["epoch"] if actor else None,
-                reviewer_id=actor["member"]["id"] if actor else "",
-                user=actor is None,
-            )
-        if "limits" in patch:
-            patch["limits"] = _limits.normalize(patch["limits"])
-        if action in {"assign", "pause", "cancel", "reopen"}:
-            patch["epoch"] = previous["epoch"] + 1
-        return await self.store.change_task(
-            previous["id"],
-            patch,
-            actor=identity,
-            event=action,
-            expected_revision=previous["revision"],
-            expected_epoch=previous["epoch"]
-            if actor and actor.get("task", {}).get("id") == previous["id"]
-            else None,
-            result=result,
-        )
-
     async def _topic(
         self, action: str, args: Json, identity: str, previous: Json | None, actor: Json | None
     ) -> Json:
@@ -945,45 +681,3 @@ class NativeFactoryManagement:
             actor=identity,
             expected_revision=previous["revision"],
         )
-
-    async def _task_detail(self, task: Json, args: Json) -> Json:
-        children = await self.store.list_tasks(task["factory_id"], parent_id=task["id"])
-        topics = await self.store.list_topics(task["factory_id"], task_id=task["id"])
-        sessions = await self._sessions(task)
-        budget = await self.service.native.limits.status_for_task(task)
-        task = {
-            **task,
-            "budget": budget,
-            "consumption": budget.get(f"task:{task['id']}", {}).get("usage", {}),
-        }
-        limit = args.get("limit", 100)
-        events = await self.store.events(
-            "task", task["id"], after=args.get("events_after", 0), limit=limit
-        )
-        results = await self.store.results(
-            task["id"], after=args.get("results_after", 0), limit=limit
-        )
-        return {
-            "task": task,
-            "children": children,
-            "topics": topics,
-            "events": events,
-            "results": results,
-            "events_after": events[-1]["id"] if len(events) == limit else 0,
-            "results_after": results[-1]["id"] if len(results) == limit else 0,
-            "sessions": sessions,
-        }
-
-    async def _sessions(self, record: Json) -> list[Json]:
-        executions = await self.store.list_executions(record["factory_id"], scope_id=record["id"])
-        return [
-            {
-                "session": item.get("runtime", {}).get("address", {}),
-                "group_id": item["group_id"],
-                "participant_id": item["participant_id"],
-                "kind": item["kind"],
-                "state": item["state"],
-            }
-            for item in executions
-            if item.get("runtime", {}).get("address")
-        ]

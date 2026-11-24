@@ -15,7 +15,6 @@ from core.runs import ActiveRunError
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 
-from . import agent_text
 from .store import FactoryError
 
 type Json = dict[str, Any]
@@ -43,6 +42,18 @@ class NativeSessions:
     def groups(self) -> Any:
         return self.service.host.temporary_agents
 
+    async def _wait_run(self, group_id: str, run_id: str | None) -> None:
+        if not run_id:
+            return
+        inspected = (await self.groups.owned_runs(group_id, [run_id])).get(run_id)
+        if inspected is not None and inspected.run is not None:
+            try:
+                await inspected.run.wait()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     async def _close(
         self,
         execution: Json,
@@ -53,14 +64,9 @@ class NativeSessions:
     ) -> None:
         async with self._locks.setdefault(execution["id"], asyncio.Lock()):
             if wait:
-                await self.service.execution.sessions._wait_run(
-                    execution["group_id"], execution["runtime"].get("run_id")
-                )
+                await self._wait_run(execution["group_id"], execution["runtime"].get("run_id"))
             await self.groups.close_group(execution["group_id"])
             if archive:
-                from ._native_handoff import capture
-
-                await capture(self.native, execution)
                 await self.groups.archive_group(execution["group_id"])
             async with self.service.lock:
                 if self.service._closing:
@@ -79,6 +85,11 @@ class NativeSessions:
             self.service.spawn(self._launch(execution["id"], token))
 
     async def _launch(self, execution_id: str, token: str) -> None:
+        from ._job_agent_text import (
+            JOB_PRIVATE_TOOLS,
+            LEADER_JOBS_TOOL_NAME,
+            format_leader_jobs_context,
+        )
         from ._native_agent_text import PRIVATE_TOOLS, native_instructions
 
         try:
@@ -91,11 +102,7 @@ class NativeSessions:
                     ):
                         return
                     old_run = execution["runtime"].get("run_id")
-                from ._native_handoff import prepare
-
-                if not await prepare(self.native, execution, token):
-                    return
-                await self.service.execution.sessions._wait_run(execution["group_id"], old_run)
+                await self._wait_run(execution["group_id"], old_run)
                 async with self.service.lock:
                     execution = await self.store.get_execution(execution_id)
                     if (
@@ -108,16 +115,22 @@ class NativeSessions:
                         return
                     runtime = deepcopy(execution["runtime"])
                     pending = runtime["pending"]
-                    if await self.native.limits.check(execution, check_runs=True):
-                        return
                     if not runtime.get("address"):
                         project = await self.service.project(factory["project_id"])
                         local = member.get("config", {})
                         boundary = factory.get("config", {})
-                        grants = set(PRIVATE_TOOLS)
-                        if member["id"] != factory["leader_member_id"]:
-                            grants -= {"factory_settings", "factory_members"}
-                        denied = (set(agent_text.PRIVATE_TOOLS) | set(PRIVATE_TOOLS)) - grants
+                        is_leader = member["id"] == factory["leader_member_id"]
+                        grants = (
+                            set(PRIVATE_TOOLS) | {LEADER_JOBS_TOOL_NAME} if is_leader else set()
+                        )
+                        denied = (set(JOB_PRIVATE_TOOLS) | set(PRIVATE_TOOLS)) - grants
+                        jobs_context = (
+                            format_leader_jobs_context(
+                                await self.service.records().jobs.list_jobs(factory["id"])
+                            )
+                            if is_leader
+                            else ""
+                        )
                         for settings in (boundary, local):
                             denied.update(settings.get("denied_tools", []))
                         allowed: set[str] | None = None
@@ -150,7 +163,7 @@ class NativeSessions:
                             instructions=native_instructions(
                                 factory,
                                 member,
-                                task=scope if execution["kind"] in {"task", "review"} else None,
+                                jobs_context=jobs_context,
                                 topic=scope if execution["kind"] == "topic" else None,
                             ),
                             identity_agent=member["agent_id"],
@@ -182,26 +195,6 @@ class NativeSessions:
                         execution = await self.store.change_execution(
                             execution_id, {"runtime": runtime}, actor="factory"
                         )
-                        if execution["kind"] in {"task", "review"}:
-                            scope_runtime = deepcopy(scope["runtime"])
-                            sessions = scope_runtime.setdefault("sessions", [])
-                            if not any(
-                                item.get("execution_id") == execution_id for item in sessions
-                            ):
-                                sessions.append(
-                                    {
-                                        **runtime["address"],
-                                        "generation_id": runtime["generation_id"],
-                                        "execution_id": execution_id,
-                                        "kind": execution["kind"],
-                                    }
-                                )
-                                scope = await self.store.change_task(
-                                    scope["id"],
-                                    {"runtime": scope_runtime},
-                                    actor="factory",
-                                    event="session_bound",
-                                )
                     handle = await self.groups.open_group(execution["group_id"])
                     runtime["group_epoch"] = handle.epoch
                     execution = await self.store.change_execution(
@@ -222,10 +215,7 @@ class NativeSessions:
                         {"state": "running", "input_id": token, "runtime": runtime},
                         actor="factory",
                     )
-                    await self.native.limits.observe_run(execution, admission.run_id)
-                    await self.native._publish(
-                        "topics" if execution["kind"] == "topic" else "tasks", scope
-                    )
+                    await self.native._publish("topics", scope)
                     if admission.existing and admission.status != "running":
                         await self._finished(
                             await self.store.get_execution(execution_id),
@@ -263,13 +253,6 @@ class NativeSessions:
     ) -> PreparedSessionDelivery | None:
         async with self.service.lock:
             execution = await self._guard(context)
-            if await self.native.limits.check(
-                execution, check_runs=context.run_id not in execution["runtime"].get("runs", [])
-            ):
-                raise FactoryError(
-                    "budget_exhausted", "Factory admission paused at its configured limit."
-                )
-            await self.native.limits.observe_run(execution, context.run_id)
             execution = await self.store.get_execution(execution["id"])
             runtime = deepcopy(execution["runtime"])
             if (context.agent_id, context.session_id) != (
@@ -358,19 +341,13 @@ class NativeSessions:
                 raise FactoryError(
                     "model_unavailable", "This Model is outside the Factory configuration boundary."
                 )
-            if await self.native.limits.check(
-                execution, check_runs=context.run_id not in execution["runtime"].get("runs", [])
-            ):
-                raise FactoryError(
-                    "budget_exhausted", "Factory admission paused at its configured limit."
-                )
-            await self.native.limits.observe_run(execution, context.run_id)
 
     async def before_tool_call(
         self, context: SessionRequestContext, *, tool_name: str, tool_call_id: str
     ) -> str | None:
         async with self.service.lock:
             execution = await self._guard(context)
+            from ._job_agent_text import JOB_PRIVATE_TOOLS
             from ._native_agent_text import PRIVATE_TOOLS, tool_refusal
             from ._native_policy import tool_permitted
 
@@ -379,14 +356,9 @@ class NativeSessions:
                 self.service,
                 [factory.get("config", {}), member.get("config", {})],
                 tool_name,
-                set(PRIVATE_TOOLS),
+                set(PRIVATE_TOOLS) | set(JOB_PRIVATE_TOOLS),
             ):
                 return tool_refusal(tool_name)
-            if tool_call_id in execution["runtime"].get("tool_receipts", []):
-                return None
-            if await self.native.limits.check(execution, resources=False):
-                return "Factory admission paused at its configured limit."
-            await self.native.limits.count_tool(execution, tool_call_id)
         return None
 
     async def run_finished(self, context: SessionRequestContext, *, outcome: str) -> None:
@@ -428,31 +400,6 @@ class NativeSessions:
                 execution["id"], {"state": "admitting"}, actor="factory"
             )
             self._launch_later(execution)
-        elif execution["kind"] in {"task", "review"}:
-            task = await self.store.get_task(execution["scope_id"])
-            if (
-                execution["kind"] == "review"
-                and task["state"] == "review"
-                and not (task.get("submission") or {}).get("reviewer_approved")
-            ):
-                task = await self.store.change_task(
-                    task["id"],
-                    {"state": "blocked", "reason": "review_input"},
-                    actor="factory",
-                    event="awaiting_review",
-                )
-                await self.native._publish("tasks", task)
-            elif task["state"] == "working":
-                task = await self.store.change_task(
-                    task["id"],
-                    {
-                        "state": "ready" if task["runtime"].get("wakes") else "blocked",
-                        "reason": "" if task["runtime"].get("wakes") else "input",
-                    },
-                    actor="factory",
-                    event="awaiting_input",
-                )
-                await self.native._publish("tasks", task)
         if execution["kind"] == "topic":
             topic = await self.store.get_topic(execution["scope_id"])
             if topic.get("direct_member_id"):

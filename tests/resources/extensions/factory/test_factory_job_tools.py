@@ -29,7 +29,7 @@ async def _setup_factory_and_tools(tmp_path: Path, factory_store: FactoryStore):
     harness = await build_factory(tmp_path, factory_store)
     harness.service.job_triggers = FactoryJobTriggers(harness.service)  # type: ignore[attr-defined]
     reported: list[str] = []
-    harness.service.job_execution = SimpleNamespace(  # type: ignore[attr-defined]
+    harness.service.job_execution = SimpleNamespace(  # type: ignore[assignment]
         mark_reported=lambda run_id: reported.append(run_id)
     )
     native = factory_store.native
