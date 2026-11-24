@@ -14,6 +14,8 @@ from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
 from . import _budget_store, agent_text
+from ._jobs_schema import SCHEMA_SQL as JOBS_SCHEMA_SQL
+from ._jobs_store import FactoryJobsStore
 from ._native_schema import SCHEMA_SQL as NATIVE_SCHEMA_SQL
 from ._native_store import NativeFactoryStore
 
@@ -76,6 +78,7 @@ CREATE TABLE comments (
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
 """
+SCHEMA_SQL += JOBS_SCHEMA_SQL
 SCHEMA_SQL += NATIVE_SCHEMA_SQL
 
 _OUTPUT_FIELDS = (
@@ -417,6 +420,7 @@ class FactoryStore:
     def __init__(self, database: Database) -> None:
         self.database = database
         self.native = NativeFactoryStore(database)
+        self.jobs = FactoryJobsStore(database)
 
     async def budget_changes(
         self,
