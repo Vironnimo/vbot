@@ -1,5 +1,5 @@
-import { onMount } from 'svelte';
-import { init, t } from '@vbot/extension-sdk/lib/i18n.js';
+import { onMount, untrack } from 'svelte';
+import { init } from '@vbot/extension-sdk/lib/i18n.js';
 import { createExtensionPageClient } from '@vbot/extension-sdk/client';
 import { applyExtensionTheme } from '@vbot/extension-sdk/lib/extensionTheme.js';
 import { setApplicationTimeZone } from '@vbot/extension-sdk/lib/dateTimePrefs.svelte.js';
@@ -9,56 +9,52 @@ import {
 } from '@vbot/extension-sdk/lib/modelFavorites.svelte.js';
 import { failureText } from './presentation.js';
 
-// This owner keeps server snapshots and the bridge lifetime. Editors own their
-// drafts, so neither invalidations nor live state changes replace a draft.
 export function createFactoryPageModel(bridgeClient) {
   const client = bridgeClient ?? createExtensionPageClient();
   let route = $state('');
   let catalog = $state({});
-  let templates = $state([]);
-  let triggersAvailable = $state(true);
-  let cards = $state([]);
-  let workflows = $state([]);
-  let detail = $state(null);
-  let selectedWorkflow = $state(null);
-  let workflowEffectiveModels = $state({});
-  let newTemplate = $state('');
-  let projectFilter = $state('');
-  let showDiscarded = $state(false);
-  let wip = $state({ running: 0, limit: 0 });
+  let factories = $state([]);
+  let factory = $state(null);
+  let members = $state([]);
+  let jobs = $state([]);
+  let needsAttention = $state([]);
+  let running = $state([]);
+  let upcoming = $state([]);
+  let recentRuns = $state([]);
+  let selectedRun = $state(null);
   let loading = $state(true);
-  let detailLoading = $state(false);
   let error = $state('');
   let refreshError = $state('');
   let pending = $state('');
   let connected = false;
   let disposed = false;
-  let boardRequest = 0;
-  let detailRequest = 0;
-  let workflowRequest = 0;
+  let generation = 0;
   let refreshPromise = null;
   let refreshAgain = false;
   let fullRefresh = false;
-  let refreshWorkflows = false;
   let pickers = 0;
   let heldCatalog = null;
 
+  const parts = $derived(route.split('/').filter(Boolean).map(decodePart));
   const view = $derived(
-    route.startsWith('/card/')
-      ? 'card'
-      : route.startsWith('/workflows')
-        ? 'workflows'
-        : route === '/cards'
-          ? 'board'
-          : 'native',
+    parts[0] === 'job-run'
+      ? 'job-run'
+      : parts[0] === 'factory'
+        ? parts[2] || 'overview'
+        : 'overview',
   );
-  const cardId = $derived(
-    view === 'card' ? decodePart(route.split('/')[2]) : '',
+  const runId = $derived(parts[0] === 'job-run' ? parts[1] || '' : '');
+  const projectId = $derived(
+    parts[0] === 'project'
+      ? parts[1] || ''
+      : factory?.project_id || catalog.projects?.[0]?.id || '',
   );
-  // A saved Workflow's id, or 'new' while the user creates one.
-  const workflowId = $derived(
-    view === 'workflows' ? decodePart(route.split('/')[2]) : '',
+  const factoryId = $derived(
+    parts[0] === 'factory'
+      ? parts[1] || ''
+      : selectedRun?.factory_id || factory?.id || '',
   );
+
   const call = (operation, args = {}) => client.operation(operation, args);
 
   function decodePart(part) {
@@ -80,106 +76,91 @@ export function createFactoryPageModel(bridgeClient) {
   async function loadCatalog() {
     const result = await call('catalog');
     if (disposed) return;
-    templates = result.templates ?? [];
-    triggersAvailable = result.triggers_available !== false;
-    if (pickers) heldCatalog = result.catalog ?? {};
-    else catalog = result.catalog ?? {};
+    const nextCatalog = result.catalog ?? result ?? {};
+    if (pickers) heldCatalog = nextCatalog;
+    else catalog = nextCatalog;
   }
 
-  async function loadBoard() {
-    const request = ++boardRequest;
-    const filter = projectFilter;
-    const result = await call(
-      'board.get',
-      filter ? { project_id: filter } : {},
-    );
-    if (disposed || request !== boardRequest || filter !== projectFilter)
-      return;
-    cards = result.cards ?? [];
-    wip = result.wip ?? { running: 0, limit: 0 };
-  }
-
-  async function loadWorkflows() {
-    const result = await call('workflow.list');
-    if (!disposed) workflows = result.workflows ?? [];
-  }
-
-  async function loadDetail() {
-    const id = cardId;
-    if (!id) return;
-    const request = ++detailRequest;
-    let result;
-    try {
-      result = await call('card.get', { id });
-    } catch (cause) {
-      if (
-        cause?.code === 'card_not_found' &&
-        !disposed &&
-        request === detailRequest &&
-        id === cardId
-      ) {
-        detail = null;
-        await client.replaceRoute('');
-        return;
-      }
-      throw cause;
-    }
-    if (disposed || request !== detailRequest || id !== cardId) return;
-    if (!detail || (result.card?.revision ?? 0) >= (detail.card?.revision ?? 0))
-      detail = result;
-  }
-
-  async function loadWorkflow() {
-    const id = workflowId;
-    if (!id || id === 'new') return;
-    const request = ++workflowRequest;
-    let result;
-    try {
-      result = await call('workflow.get', { id });
-    } catch (cause) {
-      if (
-        cause?.code === 'workflow_not_found' &&
-        !disposed &&
-        request === workflowRequest &&
-        id === workflowId
-      ) {
-        selectedWorkflow = null;
-        await client.replaceRoute('/workflows');
-        return;
-      }
-      throw cause;
-    }
-    if (disposed || request !== workflowRequest || id !== workflowId) return;
-    selectedWorkflow = result.workflow ?? null;
-    workflowEffectiveModels = result.effective_models ?? {};
-  }
-
-  // Coalesce invalidations, including a change received while reads run. A
-  // mutation is never replayed by reconnect or refresh recovery.
-  function refresh({ full = false, workflowsChanged = false } = {}) {
+  function refresh({ full = false } = {}) {
     refreshAgain = true;
     fullRefresh ||= full;
-    refreshWorkflows ||= full || workflowsChanged;
     if (refreshPromise) return refreshPromise;
     refreshPromise = (async () => {
       while (refreshAgain && !disposed) {
         refreshAgain = false;
         const readCatalog = fullRefresh;
-        const readWorkflows = refreshWorkflows;
         fullRefresh = false;
-        refreshWorkflows = false;
+        const token = ++generation;
+        const currentRoute = route;
         try {
-          await Promise.all([
-            loadBoard(),
-            loadDetail(),
-            ...(readWorkflows ? [loadWorkflows(), loadWorkflow()] : []),
-            ...(readCatalog ? [loadCatalog()] : []),
-          ]);
-          if (!disposed) refreshError = '';
+          if (readCatalog || !catalog.projects) await loadCatalog();
+          const listResult = await call('factory.list', { limit: 100 });
+          const nextFactories = listResult.factories ?? [];
+
+          let nextRun = null;
+          if (parts[0] === 'job-run' && parts[1]) {
+            const runResult = await call('job_run.get', { run_id: parts[1] });
+            nextRun = runResult.run ?? null;
+          }
+
+          const targetFactoryId =
+            parts[0] === 'factory'
+              ? parts[1]
+              : nextRun?.factory_id ||
+                nextFactories.find(
+                  (item) =>
+                    item.state !== 'archived' &&
+                    (parts[0] !== 'project' || item.project_id === parts[1]),
+                )?.id ||
+                '';
+
+          let dashboard = null;
+          if (targetFactoryId) {
+            dashboard = await call('dashboard.get', {
+              factory_id: targetFactoryId,
+              recent_limit: 20,
+              upcoming_limit: 10,
+            });
+          }
+
+          if (disposed || currentRoute !== route || token !== generation) {
+            refreshAgain = !disposed;
+            continue;
+          }
+
+          factories = nextFactories;
+          selectedRun = nextRun;
+          if (dashboard) {
+            factory = dashboard.factory ?? null;
+            members = dashboard.members ?? [];
+            jobs = dashboard.jobs ?? [];
+            needsAttention = dashboard.needs_attention ?? [];
+            running = dashboard.running ?? [];
+            upcoming = dashboard.upcoming ?? [];
+            recentRuns = dashboard.recent_runs ?? [];
+          } else {
+            factory = null;
+            members = [];
+            jobs = [];
+            needsAttention = [];
+            running = [];
+            upcoming = [];
+            recentRuns = [];
+          }
+          refreshError = '';
         } catch (cause) {
-          if (!disposed) refreshError = failureText(cause);
+          if (!disposed && currentRoute === route) {
+            if (
+              cause?.code === 'not_found' ||
+              cause?.code === 'factory_not_found'
+            ) {
+              await client.replaceRoute('');
+            } else {
+              refreshError = failureText(cause);
+            }
+          }
         } finally {
-          if (!disposed) loading = false;
+          if (!disposed && currentRoute === route) loading = false;
         }
       }
     })().finally(() => {
@@ -192,39 +173,20 @@ export function createFactoryPageModel(bridgeClient) {
     const valid =
       next === '' ||
       next === '/' ||
-      next === '/cards' ||
       /^\/project\/[^/]+$/.test(next) ||
-      /^\/factory\/[^/]+(?:\/(?:team|discussions|settings))?$/.test(next) ||
-      /^\/(?:task|topic)\/[^/]+$/.test(next) ||
-      /^\/card\/[^/]+$/.test(next) ||
-      /^\/workflows(?:\/[^/]+)?$/.test(next);
+      /^\/factory\/[^/]+(?:\/(?:jobs|team|settings))?$/.test(next) ||
+      /^\/job-run\/[^/]+$/.test(next);
     if (!valid) {
       await client.replaceRoute('');
       next = '';
     }
     const normalized = next === '/' ? '' : next;
     if (route === normalized && connected) return;
-    const previousCard = cardId;
-    const previousWorkflow = workflowId;
     route = normalized;
     error = '';
-    if (cardId !== previousCard) detail = null;
-    if (workflowId !== previousWorkflow) {
-      selectedWorkflow = null;
-      workflowEffectiveModels = {};
-    }
-    // Projects and Agents change outside the page; the editor reads them fresh.
-    if (load && normalized.startsWith('/workflows'))
-      void loadCatalog().catch(() => {});
-    if (!load || (!cardId && (!workflowId || workflowId === 'new'))) return;
-    detailLoading = true;
-    try {
-      if (cardId) await loadDetail();
-      if (workflowId) await loadWorkflow();
-    } catch (cause) {
-      if (!disposed && route === normalized) error = failureText(cause);
-    } finally {
-      if (!disposed && route === normalized) detailLoading = false;
+    if (load) {
+      loading = true;
+      await refresh();
     }
   }
 
@@ -237,51 +199,18 @@ export function createFactoryPageModel(bridgeClient) {
     }
   }
 
-  async function filterProject(id) {
-    projectFilter = id;
-    try {
-      await loadBoard();
-    } catch (cause) {
-      if (!disposed) error = failureText(cause);
-    }
-  }
-
-  function acceptSavedCard(card) {
-    if (
-      detail?.card.id === card.id &&
-      (card.revision ?? 0) >= (detail.card.revision ?? 0)
-    )
-      detail = { ...detail, card: { ...detail.card, ...card } };
-    cards = cards.map((entry) => (entry.id === card.id ? card : entry));
-  }
-
-  function acceptSavedWorkflow(workflow, effectiveModels) {
-    if (workflowId === workflow.id) {
-      selectedWorkflow = workflow;
-      if (effectiveModels) workflowEffectiveModels = effectiveModels;
-    }
-    workflows = workflows.some((entry) => entry.id === workflow.id)
-      ? workflows.map((entry) => (entry.id === workflow.id ? workflow : entry))
-      : [...workflows, workflow];
-  }
-
-  async function mutate(operation, args) {
+  async function mutate(operation, args = {}) {
     if (pending) return null;
     pending = operation;
     error = '';
     try {
       const result = await call(operation, args);
       if (disposed) return null;
-      if (result.card) acceptSavedCard(result.card);
-      if (result.workflow)
-        acceptSavedWorkflow(result.workflow, result.effective_models);
-      if (operation === 'card.delete') await client.replaceRoute('/cards');
-      if (operation === 'workflow.delete') {
-        workflows = workflows.filter((entry) => entry.id !== args.id);
-        selectedWorkflow = null;
-        await client.replaceRoute('/workflows');
-      }
-      await refresh({ workflowsChanged: operation.startsWith('workflow.') });
+      await refresh({
+        full: ['factory.create', 'member.create', 'member.add'].includes(
+          operation,
+        ),
+      });
       return result;
     } catch (cause) {
       if (!disposed) error = failureText(cause);
@@ -291,84 +220,81 @@ export function createFactoryPageModel(bridgeClient) {
     }
   }
 
-  async function openAgentProfile(agentId, incarnation, factoryId) {
+  function acceptFactory(record) {
+    if (record && factory?.id === record.id) {
+      factory = { ...factory, ...record };
+    }
+  }
+
+  function acceptMember(record) {
+    if (record) {
+      members = members.map((item) =>
+        item.id === record.id ? { ...item, ...record } : item,
+      );
+    }
+  }
+
+  async function openAgentProfile(agentId, incarnation, targetFactoryId) {
     if (!agentId || !incarnation) return;
     try {
       await client.openAgent(agentId, {
         expectedIncarnation: incarnation,
-        ...(factoryId ? { relatedScope: factoryId } : {}),
+        ...(targetFactoryId ? { relatedScope: targetFactoryId } : {}),
       });
-    } catch (cause) {
-      error = failureText(cause);
-    }
-  }
-
-  async function openSession(address) {
-    try {
-      await client.openSession(address);
+      await refresh({ full: true });
     } catch (cause) {
       if (!disposed) error = failureText(cause);
     }
   }
 
-  function context(next) {
-    document.documentElement.lang = init(next.locale);
-    setApplicationTimeZone(next.timezone);
-    applyExtensionTheme(next.theme);
-    if (!connected) {
-      connected = true;
-      refreshError = '';
-      void applyRoute(next.route ?? '', { load: false })
-        .then(() => refresh({ full: true }))
-        .catch((cause) => {
-          if (!disposed) error = failureText(cause);
-        });
-      void loadModelFavorites();
-    } else if ((next.route ?? '') !== route) void applyRoute(next.route ?? '');
-  }
+  let observedRoute = null;
+  $effect(() => {
+    const current = route;
+    untrack(() => {
+      if (connected && current !== observedRoute) {
+        observedRoute = current;
+        void refresh();
+      }
+    });
+  });
 
   onMount(() => {
     configureModelFavorites({
-      load: () => client.readModelFavorites(),
-      save: (model, favorite) => client.setModelFavorite(model, favorite),
-      onError: (message) => {
-        error = message;
-      },
+      read: () => client.readModelFavorites(),
+      write: (modelName, favorite) =>
+        client.setModelFavorite(modelName, favorite),
     });
-    const timeout = setTimeout(() => {
-      if (!connected) {
-        loading = false;
-        refreshError = t('factory.hostUnavailable');
-      }
-    }, 10_000);
-    const offContext = client.onContext((next) => {
-      clearTimeout(timeout);
-      context(next);
+    const offContext = client.onContext((context) => {
+      applyExtensionTheme(context.theme);
+      setApplicationTimeZone(context.timezone ?? null);
+      void init({ locale: context.locale });
+      const initialLoad = !connected;
+      connected = true;
+      observedRoute = context.route === '/' ? '' : (context.route ?? '');
+      void applyRoute(context.route ?? '', { load: initialLoad });
+      if (initialLoad) void loadModelFavorites().catch(() => {});
     });
-    const offInvalidation = client.onInvalidation(({ reason, change } = {}) => {
-      if (reason === 'public_resource_changed') return;
+    const offInvalidation = client.onInvalidation(({ change } = {}) => {
       if (
-        change &&
-        ['factories', 'members', 'tasks', 'topics', 'page_badges'].includes(
-          change.resource,
-        )
-      )
-        return;
-      void refresh({
-        full: !change,
-        workflowsChanged: change?.resource === 'workflows',
-      });
+        !change ||
+        [
+          'factories',
+          'members',
+          'jobs',
+          'job_runs',
+          'topics',
+          'agents',
+          'permissions_approvals',
+        ].includes(change.resource)
+      ) {
+        void refresh({ full: !change || change.resource === 'agents' });
+      }
     });
-    if (client.context) {
-      clearTimeout(timeout);
-      context(client.context);
-    }
     return () => {
       disposed = true;
-      clearTimeout(timeout);
+      generation++;
       offContext();
       offInvalidation();
-      configureModelFavorites(null);
       if (!bridgeClient) client.dispose();
     };
   });
@@ -376,81 +302,63 @@ export function createFactoryPageModel(bridgeClient) {
   return {
     client,
     call,
-    navigate,
-    refresh,
     mutate,
-    filterProject,
+    refresh,
+    navigate,
     pickerOpen,
-    acceptSavedCard,
-    acceptSavedWorkflow,
     openAgentProfile,
-    openSession,
+    acceptFactory,
+    acceptMember,
     get route() {
       return route;
     },
     get view() {
       return view;
     },
-    get cardId() {
-      return cardId;
+    get runId() {
+      return runId;
     },
-    get workflowId() {
-      return workflowId;
+    get projectId() {
+      return projectId;
+    },
+    get factoryId() {
+      return factoryId;
     },
     get catalog() {
       return catalog;
     },
-    get templates() {
-      return templates;
+    get factories() {
+      return factories;
     },
-    get triggersAvailable() {
-      return triggersAvailable;
+    get factory() {
+      return factory;
     },
-    // The template a Workflow created on /workflows/new starts from.
-    get newTemplate() {
-      return newTemplate;
+    get members() {
+      return members;
     },
-    set newTemplate(value) {
-      newTemplate = value;
+    get jobs() {
+      return jobs;
     },
-    get cards() {
-      return cards;
+    get needsAttention() {
+      return needsAttention;
     },
-    get workflows() {
-      return workflows;
+    get running() {
+      return running;
     },
-    get detail() {
-      return detail;
+    get upcoming() {
+      return upcoming;
     },
-    get selectedWorkflow() {
-      return selectedWorkflow;
+    get recentRuns() {
+      return recentRuns;
     },
-    get projectFilter() {
-      return projectFilter;
-    },
-    get showDiscarded() {
-      return showDiscarded;
-    },
-    set showDiscarded(value) {
-      showDiscarded = value;
-    },
-    get workflowEffectiveModels() {
-      return workflowEffectiveModels;
-    },
-    get wip() {
-      return wip;
+    get selectedRun() {
+      return selectedRun;
     },
     get loading() {
       return loading;
     },
-    get detailLoading() {
-      return detailLoading;
-    },
     get error() {
       return error;
-    },
-    set error(value) {
-      error = value;
     },
     get refreshError() {
       return refreshError;

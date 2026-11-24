@@ -37,7 +37,7 @@ export function createRecordEditor(options) {
       baseline = options.project(record);
       revision = 0;
       exists = false;
-      notice = t('factory.recordDeleted');
+      notice = t('factory.settings.recordDeleted');
       return;
     }
     const saved = options.project(record);
@@ -46,7 +46,7 @@ export function createRecordEditor(options) {
     revision = record.revision ?? 0;
     exists = true;
     draft = merged.value;
-    if (merged.conflicts.length) notice = t('factory.saveConflict');
+    if (merged.conflicts.length) notice = t('factory.settings.saveConflict');
   }
 
   async function persist() {
@@ -83,7 +83,8 @@ export function createRecordEditor(options) {
           baseline = saved;
           revision = current.revision ?? 0;
           draft = merged.value;
-          if (merged.conflicts.length) notice = t('factory.saveConflict');
+          if (merged.conflicts.length)
+            notice = t('factory.settings.saveConflict');
           if (!hasChanges()) return true;
           continue;
         }

@@ -13,363 +13,514 @@ const { default: FactoryPage } =
   await import('../../../../resources/extensions/factory/ui/FactoryPage.svelte');
 let mounted;
 
-export const step = (id, name, extra = {}) => ({
-  id,
-  name,
-  kind: 'agent',
-  source: 'team',
-  agent: 'builder',
-  model: '',
-  effort: '',
-  task: `test-owned task for ${name}`,
-  after: [],
-  approval: false,
-  returns_to: '',
-  rounds: 2,
-  ...extra,
-});
-
-export const workflow = (id, name, steps, extra = {}) => ({
-  id,
-  revision: 1,
-  name,
-  description: `test-owned ${name} workflow`,
-  enabled: true,
-  project_id: '',
-  final_approval: false,
-  steps,
-  triggers: [],
-  ...extra,
-});
-
-export const implementWorkflow = workflow(
-  'implement',
-  'Implement',
-  [
-    step('implement', 'Implement', { model: 'demo/worker' }),
-    step('review', 'Review', {
-      agent: 'critic',
-      model: 'demo/reviewer',
-      after: ['implement'],
-      returns_to: 'implement',
-    }),
-    step('integrate', 'Integrate', { after: ['review'], approval: true }),
-  ],
-  { project_id: 'project-a' },
-);
-
-// A global Workflow without a Project of its own.
-export const triageWorkflow = workflow('triage', 'Triage', [
-  step('triage', 'Triage', { source: 'agent', agent: 'planner' }),
-]);
-
-export const templates = [
-  workflow(
-    'plan',
-    'Plan',
-    [
-      step('plan', 'Plan', {
-        source: 'agent',
-        agent: '',
-        task: 'test-owned plan task',
-      }),
-      step('review', 'Review', {
-        source: 'agent',
-        agent: '',
-        after: ['plan'],
-        returns_to: 'plan',
-      }),
-    ],
-    { revision: undefined, final_approval: true },
-  ),
-];
-
-// An Agent's own Model: Drafter has none, Critic uses the reviewer Model.
-const agentModel = (agent) =>
-  ({ drafter: '', critic: 'demo/reviewer' })[agent] ?? 'demo/worker';
-
-// The server's effective Models, keyed `<workflow>/<step>`.
-export function effectiveModels(workflows = []) {
-  return Object.fromEntries(
-    workflows.flatMap((workflow) =>
-      workflow.steps.map((entry) => [
-        `${workflow.id}/${entry.id}`,
-        entry.model || agentModel(entry.agent),
-      ]),
-    ),
-  );
-}
-
-export function card(id, state = 'queued', extra = {}) {
-  return {
-    id,
-    title: `Title ${id}`,
-    description: `Objective ${id}`,
-    project_id: 'project-a',
-    workflow_id: 'implement',
-    state,
-    origin: 'operator',
-    waiting_reason: '',
-    position: 1,
-    revision: 1,
-    group_id: id,
-    runtime: {},
-    created_at: '2026-11-07T09:00:00Z',
-    ...extra,
-  };
-}
-
-// A started Card as the Board projects it: its Workflow snapshot and each
-// step's state, by default pending.
-export function startedCard(id, state, reason, flow, steps = {}, extra = {}) {
-  const states = Object.fromEntries(
-    flow.steps.map((entry) => [
-      entry.id,
-      { status: 'pending', ...(steps[entry.id] ?? {}) },
-    ]),
-  );
-  return card(id, state, {
-    waiting_reason: reason,
-    workflow_id: flow.id,
-    workflow: {
-      id: flow.id,
-      name: flow.name,
-      final_approval: flow.final_approval,
-      steps: flow.steps,
-    },
-    steps: states,
-    runtime: { workflow: flow, steps: states },
-    ...extra,
-  });
-}
-
 const clone = (value) => JSON.parse(JSON.stringify(value));
-// A saved Workflow as the server lists it, with each trigger's status.
-const withStatus = (saved) => ({
-  ...clone(saved),
-  triggers: saved.triggers.map((trigger) => ({
-    ...clone(trigger),
-    status: {
-      status: trigger.enabled ? 'active' : 'paused',
-      next_fire_at: trigger.type === 'schedule' ? '2026-11-09T09:00:00Z' : null,
-      last_fired_at: null,
-      last_outcome: null,
-      last_error: null,
-      webhook:
-        trigger.type === 'webhook'
-          ? {
-              url: `https://vbot.test/hooks/${saved.id}/${trigger.id}`,
-              path: `/hooks/${saved.id}/${trigger.id}`,
-            }
-          : null,
-    },
-  })),
-});
-export function createBridge(initialCards = [card('fct-a')]) {
+
+export function createFactoryBridge({ established = true } = {}) {
   const state = {
-    cards: clone(initialCards),
-    workflows: [clone(implementWorkflow), clone(triageWorkflow)],
+    factories: established
+      ? [
+          {
+            id: 'fac-one',
+            project_id: 'project-a',
+            name: 'Alpha Factory',
+            leader_member_id: 'mem-leader',
+            remit: 'Maintain project A',
+            state: 'active',
+            capacity: 2,
+            leader_available: true,
+            config: {},
+            revision: 1,
+          },
+        ]
+      : [],
+    members: established
+      ? [
+          {
+            id: 'mem-leader',
+            factory_id: 'fac-one',
+            agent_id: 'planner',
+            agent_name: 'Planner',
+            role: 'Leader',
+            instructions: 'Coordinate work',
+            agent_proof: 'leader-stamp',
+            profile_available: true,
+            created_by_factory: false,
+            config: {},
+            capacity: 1,
+            state: 'active',
+            revision: 1,
+          },
+          {
+            id: 'mem-worker',
+            factory_id: 'fac-one',
+            agent_id: 'builder',
+            agent_name: 'Builder',
+            role: 'Specialist',
+            instructions: 'Implement changes',
+            agent_proof: 'builder-stamp',
+            profile_available: true,
+            created_by_factory: true,
+            config: {},
+            capacity: 1,
+            state: 'active',
+            revision: 1,
+          },
+        ]
+      : [],
+    jobs: established
+      ? [
+          {
+            id: 'fjob-auto',
+            factory_id: 'fac-one',
+            name: 'Nightly Check',
+            prompt: 'Run nightly checks',
+            description: 'Checks tests every morning',
+            agent_member_id: 'mem-worker',
+            enabled: true,
+            revision: 1,
+            triggers: [
+              {
+                id: 'trg-cron',
+                type: 'schedule',
+                title: 'Weekday morning',
+                schedule: '0 9 * * 1-5',
+                enabled: true,
+                status: 'active',
+                next_fire: '2026-11-26T09:00:00Z',
+                last_fire: null,
+                last_error: null,
+              },
+            ],
+          },
+          {
+            id: 'fjob-manual',
+            factory_id: 'fac-one',
+            name: 'Release Notes',
+            prompt: 'Draft release notes',
+            description: '',
+            agent_member_id: '',
+            enabled: true,
+            revision: 1,
+            triggers: [],
+          },
+        ]
+      : [],
+    runs: established
+      ? [
+          {
+            id: 'jrun-attn',
+            factory_id: 'fac-one',
+            job_id: 'fjob-auto',
+            job_name: 'Nightly Check',
+            member_id: 'mem-worker',
+            state: 'needs_attention',
+            origin: 'schedule',
+            group_id: 'fjob.jrun-attn',
+            participant_id: 'worker',
+            prompt: 'Run nightly checks',
+            input_note: '',
+            question: 'Should I proceed with migration?',
+            reason: 'Waiting for operator confirmation',
+            summary: '',
+            session_address: {
+              agent_id: 'builder',
+              project_id: 'project-a',
+              session_id: 'sess-attn',
+            },
+            revision: 1,
+            created_at: '2026-11-25T08:00:00Z',
+            updated_at: '2026-11-25T08:01:00Z',
+            finished_at: null,
+          },
+          {
+            id: 'jrun-active',
+            factory_id: 'fac-one',
+            job_id: 'fjob-manual',
+            job_name: 'Release Notes',
+            member_id: 'mem-leader',
+            state: 'running',
+            origin: 'manual',
+            group_id: 'fjob.jrun-active',
+            participant_id: 'worker',
+            prompt: 'Draft release notes',
+            input_note: '',
+            question: '',
+            reason: '',
+            summary: '',
+            revision: 1,
+            created_at: '2026-11-25T08:05:00Z',
+            updated_at: '2026-11-25T08:05:00Z',
+            finished_at: null,
+          },
+          {
+            id: 'jrun-done',
+            factory_id: 'fac-one',
+            job_id: 'fjob-auto',
+            job_name: 'Nightly Check',
+            member_id: 'mem-worker',
+            state: 'done',
+            origin: 'schedule',
+            group_id: 'fjob.jrun-done',
+            participant_id: 'worker',
+            prompt: 'Run nightly checks',
+            input_note: '',
+            question: '',
+            reason: '',
+            summary: 'All 42 checks passed.',
+            revision: 2,
+            created_at: '2026-11-24T09:00:00Z',
+            updated_at: '2026-11-24T09:02:00Z',
+            finished_at: '2026-11-24T09:02:00Z',
+          },
+        ]
+      : [],
     secrets: {},
-    details: {},
-    handlers: {},
+    conversation: {
+      topic: { id: 'top-1', title: 'Overview chat', state: 'open' },
+      posts: [
+        {
+          id: 'post-1',
+          author: 'member:mem-leader',
+          author_name: 'Planner',
+          text: 'Ready to coordinate.',
+        },
+      ],
+      member_name: 'Planner',
+      profile_available: true,
+      agent_id: 'planner',
+      agent_proof: 'leader-stamp',
+      factory_id: 'fac-one',
+    },
   };
+
   const contexts = new Set();
   const invalidations = new Set();
   const layers = [];
-  let autosave;
+  let autosave = null;
   let context = null;
-  const conflict = () =>
-    Object.assign(new Error('test-owned conflict'), {
-      code: 'revision_conflict',
-    });
-  const operation = vi.fn(async (name, args) => {
-    if (state.handlers[name]) return state.handlers[name](args);
-    const current = state.cards.find((entry) => entry.id === args.id);
-    if (name === 'catalog')
+
+  const findFactory = (id) => state.factories.find((item) => item.id === id);
+  const findMember = (id) => state.members.find((item) => item.id === id);
+  const findJob = (id) => state.jobs.find((item) => item.id === id);
+  const findRun = (id) => state.runs.find((item) => item.id === id);
+
+  const enrichJob = (job) => ({
+    ...clone(job),
+    triggers: (job.triggers || []).map((trg) => ({
+      ...clone(trg),
+      status: trg.enabled ? 'active' : 'paused',
+      next_fire: trg.type === 'schedule' ? '2026-11-26T09:00:00Z' : null,
+      last_fire: null,
+      last_error: null,
+      webhook_url:
+        trg.type === 'webhook'
+          ? `https://vbot.test/hooks/${job.id}/${trg.id}`
+          : null,
+    })),
+  });
+
+  const operation = vi.fn(async (name, args = {}) => {
+    if (name === 'catalog') {
       return {
         catalog: {
-          permission_profiles: ['full_access', 'restricted', 'Team limit'],
-          projects: ['a', 'b'].map((id) => ({
-            id: `project-${id}`,
-            name: `Project ${id.toUpperCase()}`,
-            cwd: `C:/project-${id}`,
-            pending_factory_agents:
-              state.pendingAgents?.[`project-${id}`] ?? [],
-            agent_profiles: [
-              { id: 'builder', name: 'Builder', source: 'agents' },
-              { id: 'critic', name: 'Critic', source: 'agents' },
-            ],
-          })),
-          agents: [
-            { id: 'planner', name: 'Planner', description: 'Plans work' },
-            { id: 'drafter', name: 'Drafter', description: 'Has no Model' },
+          permission_profiles: ['full_access', 'restricted'],
+          projects: [
+            { id: 'project-a', name: 'Project A', pending_factory_agents: [] },
+            { id: 'project-b', name: 'Project B', pending_factory_agents: [] },
           ],
-          models: ['worker', 'reviewer'].map((id) => ({
-            id: `demo/${id}`,
-            name: `Demo ${id}`,
-            context_window: 128000,
-            capabilities: {
-              tools: true,
-              reasoning: {
-                supported: true,
-                control: 'levels',
-                levels: ['low', 'high'],
-              },
+          agents: [
+            { id: 'planner', name: 'Planner' },
+            { id: 'reviewer', name: 'Reviewer' },
+          ],
+          models: [
+            {
+              id: 'demo/worker',
+              name: 'Demo Worker',
+              context_window: 128000,
+              capabilities: { tools: true },
             },
-          })),
+            {
+              id: 'demo/reviewer',
+              name: 'Demo Reviewer',
+              context_window: 128000,
+              capabilities: { tools: true },
+            },
+          ],
         },
-        templates: clone(templates),
       };
-    if (name === 'conversation.get') return { topic: null, posts: [] };
-    if (name === 'work.list') return { work: [], next_after: '' };
-    if (name === 'board.get')
-      return {
-        cards: clone(
-          state.cards.filter(
-            (entry) => !args.project_id || entry.project_id === args.project_id,
-          ),
-        ),
-        wip: {
-          running: state.cards.filter((entry) => entry.state === 'working')
-            .length,
-          limit: 2,
-        },
+    }
+
+    if (name === 'factory.list') {
+      return { factories: clone(state.factories) };
+    }
+
+    if (name === 'factory.get') {
+      const f = findFactory(args.id);
+      if (!f) throw Object.assign(new Error('missing'), { code: 'not_found' });
+      return { factory: clone(f) };
+    }
+
+    if (name === 'factory.create') {
+      const created = {
+        id: `fac-${state.factories.length + 1}`,
+        project_id: args.project_id,
+        name: args.project_id === 'project-b' ? 'Beta Factory' : 'New Factory',
+        leader_member_id: 'mem-new-leader',
+        remit: args.remit || '',
+        state: 'active',
+        capacity: 2,
+        leader_available: true,
+        config: {},
         revision: 1,
       };
-    if (name === 'workflow.list')
-      return { workflows: state.workflows.map(withStatus) };
-    if (name === 'workflow.preview')
-      return { effective_models: effectiveModels([args.workflow]) };
-    if (name === 'workflow.get') {
-      const saved = state.workflows.find((entry) => entry.id === args.id);
-      if (!saved)
-        throw Object.assign(new Error('test-owned missing Workflow'), {
-          code: 'workflow_not_found',
+      state.factories.push(created);
+      state.members.push({
+        id: 'mem-new-leader',
+        factory_id: created.id,
+        agent_id: args.leader_agent_id || 'new-leader',
+        agent_name: args.leader_name || 'Reviewer',
+        role: 'Leader',
+        instructions: '',
+        agent_proof: 'new-leader-stamp',
+        profile_available: true,
+        created_by_factory: !args.leader_agent_id,
+        config: {},
+        capacity: 1,
+        state: 'active',
+        revision: 1,
+      });
+      return { factory: clone(created) };
+    }
+
+    if (name === 'factory.update') {
+      const f = findFactory(args.id);
+      if (f.revision !== args.expected_revision) {
+        throw Object.assign(new Error('conflict'), {
+          code: 'revision_conflict',
         });
+      }
+      const rest = { ...args };
+      delete rest.id;
+      delete rest.expected_revision;
+      delete rest.clear_fields;
+      Object.assign(f, rest, { revision: f.revision + 1 });
+      return { factory: clone(f) };
+    }
+
+    if (name === 'factory.archive') {
+      const f = findFactory(args.id);
+      f.state = 'archived';
+      f.revision += 1;
+      return { factory: clone(f) };
+    }
+
+    if (name === 'member.get') {
+      return { member: clone(findMember(args.id)) };
+    }
+
+    if (name === 'member.create') {
+      const created = {
+        id: `mem-${state.members.length + 1}`,
+        factory_id: args.factory_id,
+        agent_id: args.agent_id || `custom-${state.members.length + 1}`,
+        agent_name: args.name || args.agent_id || 'Specialist',
+        role: args.role || '',
+        instructions: args.instructions || '',
+        agent_proof: 'spec-stamp',
+        profile_available: true,
+        created_by_factory: !args.agent_id,
+        config: {},
+        capacity: 1,
+        state: 'active',
+        revision: 1,
+      };
+      state.members.push(created);
+      return { member: clone(created) };
+    }
+
+    if (name === 'member.update') {
+      const m = findMember(args.id);
+      const rest = { ...args };
+      delete rest.id;
+      delete rest.expected_revision;
+      delete rest.clear_fields;
+      Object.assign(m, rest, { revision: m.revision + 1 });
+      return { member: clone(m) };
+    }
+
+    if (name === 'member.retire') {
+      const m = findMember(args.id);
+      m.state = 'retired';
+      m.revision += 1;
+      return { member: clone(m) };
+    }
+
+    if (name === 'conversation.get') {
+      return clone(state.conversation);
+    }
+
+    if (name === 'conversation.send') {
+      state.conversation.posts.push({
+        id: `post-${state.conversation.posts.length + 1}`,
+        author: 'user',
+        text: args.text,
+      });
+      return clone(state.conversation);
+    }
+
+    if (name === 'dashboard.get') {
+      const f = findFactory(args.factory_id);
+      if (!f) throw Object.assign(new Error('missing'), { code: 'not_found' });
+      const fMembers = state.members.filter((item) => item.factory_id === f.id);
+      const fJobs = state.jobs
+        .filter((item) => item.factory_id === f.id)
+        .map(enrichJob);
+      const fRuns = state.runs.filter((item) => item.factory_id === f.id);
+      const upcoming = [];
+      for (const job of fJobs) {
+        if (!job.enabled) continue;
+        for (const trg of job.triggers || []) {
+          if (trg.type === 'schedule' && trg.enabled && trg.next_fire) {
+            upcoming.push({
+              job_id: job.id,
+              job_name: job.name,
+              trigger_id: trg.id,
+              trigger_title: trg.title,
+              schedule: trg.schedule,
+              next_fire: trg.next_fire,
+              agent_member_id: job.agent_member_id,
+            });
+          }
+        }
+      }
       return {
-        workflow: withStatus(saved),
-        effective_models: effectiveModels([saved]),
+        factory: clone(f),
+        members: clone(fMembers),
+        jobs: fJobs,
+        needs_attention: clone(
+          fRuns.filter((item) =>
+            ['needs_attention', 'failed'].includes(item.state),
+          ),
+        ),
+        running: clone(
+          fRuns.filter((item) => ['running', 'queued'].includes(item.state)),
+        ),
+        upcoming,
+        recent_runs: clone(fRuns),
       };
     }
-    if (name === 'workflow.save') {
-      const previous = state.workflows.find(
-        (entry) => entry.id === args.workflow.id,
-      );
-      if ((args.expected_revision ?? 0) !== (previous?.revision ?? 0))
-        throw conflict();
-      const next = {
-        ...clone(args.workflow),
-        revision: (previous?.revision ?? 0) + 1,
+
+    if (name === 'job.create') {
+      const created = {
+        id: `fjob-${state.jobs.length + 1}`,
+        factory_id: args.factory_id,
+        name: args.name,
+        prompt: args.prompt,
+        description: args.description || '',
+        agent_member_id: args.agent_member_id || '',
+        enabled: args.enabled !== false,
+        triggers: clone(args.triggers || []),
+        revision: 1,
       };
-      state.workflows = previous
-        ? state.workflows.map((entry) => (entry === previous ? next : entry))
-        : [...state.workflows, next];
-      return {
-        workflow: withStatus(next),
-        effective_models: effectiveModels([next]),
+      state.jobs.push(created);
+      return { job: enrichJob(created) };
+    }
+
+    if (name === 'job.update') {
+      const job = findJob(args.job_id);
+      if (
+        args.expected_revision != null &&
+        job.revision !== args.expected_revision
+      ) {
+        throw Object.assign(new Error('conflict'), {
+          code: 'revision_conflict',
+        });
+      }
+      const rest = { ...args };
+      delete rest.job_id;
+      delete rest.expected_revision;
+      Object.assign(job, rest, { revision: job.revision + 1 });
+      return { job: enrichJob(job) };
+    }
+
+    if (name === 'job.delete') {
+      state.jobs = state.jobs.filter((item) => item.id !== args.job_id);
+      return { deleted: true, job_id: args.job_id };
+    }
+
+    if (name === 'job.trigger') {
+      const job = findJob(args.job_id);
+      const run = {
+        id: `jrun-${state.runs.length + 1}`,
+        factory_id: job.factory_id,
+        job_id: job.id,
+        job_name: job.name,
+        member_id: args.member_id || job.agent_member_id || 'mem-leader',
+        state: 'queued',
+        origin: 'manual',
+        group_id: `fjob.jrun-${state.runs.length + 1}`,
+        participant_id: 'worker',
+        prompt: job.prompt,
+        input_note: args.input_note || '',
+        question: '',
+        reason: '',
+        summary: '',
+        revision: 1,
+        created_at: '2026-11-25T09:00:00Z',
+        updated_at: '2026-11-25T09:00:00Z',
+        finished_at: null,
       };
+      state.runs.unshift(run);
+      return { run: clone(run) };
     }
-    if (name === 'workflow.delete') {
-      state.workflows = state.workflows.filter((entry) => entry.id !== args.id);
-      return { deleted: true, id: args.id };
-    }
-    if (name === 'workflow.secret') {
-      const key = `${args.id}/${args.trigger}`;
-      if (args.rotate || !state.secrets[key])
+
+    if (name === 'job.secret') {
+      const key = `${args.job_id}/${args.trigger_id}`;
+      if (args.rotate || !state.secrets[key]) {
         state.secrets[key] =
-          `test-owned-secret-${Object.keys(state.secrets).length + 1}`;
+          `secret-${Object.keys(state.secrets).length + (args.rotate ? 10 : 1)}`;
+      }
       return { secret: state.secrets[key] };
     }
-    if (name === 'card.get')
-      return {
-        card: clone(current),
-        events: [],
-        outputs: [],
-        comments: [],
-        participants: [],
-        runs: [],
-        approvals: [],
-        usage: {
-          activity: {
-            totals: {
-              calls: 3,
-              input_tokens: 100,
-              output_tokens: 50,
-              cost_usd: 0.125,
-            },
-            tool_calls: 2,
-          },
-        },
-        ...clone(state.details[args.id] ?? {}),
-      };
-    if (name === 'card.create') {
-      const created = card('fct-new', 'queued', {
-        ...args,
-        position: state.cards.length + 1,
-      });
-      state.cards.push(created);
-      return { card: clone(created) };
+
+    if (name === 'job_run.get') {
+      const run = findRun(args.run_id);
+      if (!run)
+        throw Object.assign(new Error('missing'), { code: 'not_found' });
+      return { run: clone(run) };
     }
-    if (name === 'card.update') {
-      if (current.revision !== args.expected_revision) throw conflict();
-      for (const field of ['title', 'description'])
-        if (field in args) current[field] = args[field];
-      current.revision += 1;
-      return { card: clone(current) };
+
+    if (name === 'job_run.reply') {
+      const run = findRun(args.run_id);
+      run.state = 'queued';
+      run.question = '';
+      run.reason = '';
+      run.revision += 1;
+      return { run: clone(run) };
     }
-    if (name === 'card.limits') {
-      if (current.revision !== args.expected_revision) throw conflict();
-      if ('card_limits' in args)
-        current.runtime.card_limits = clone(args.card_limits);
-      if ('step_limits' in args)
-        current.runtime.steps[args.step].limits = clone(args.step_limits);
-      current.revision += 1;
-      return { card: clone(current) };
+
+    if (name === 'job_run.cancel') {
+      const run = findRun(args.run_id);
+      run.state = 'cancelled';
+      run.revision += 1;
+      return { run: clone(run) };
     }
-    if (name === 'card.move') {
-      const target = state.cards.findIndex(
-        (entry) => entry.position === args.position,
-      );
-      state.cards.splice(state.cards.indexOf(current), 1);
-      state.cards.splice(target, 0, current);
-      state.cards.forEach((entry, index) => {
-        entry.position = index + 1;
-      });
-      return { card: clone(current) };
-    }
-    if (name === 'card.delete') {
-      state.cards = state.cards.filter((entry) => entry.id !== args.id);
-      return { deleted: true };
-    }
-    if (name.startsWith('card.')) {
-      current.state = {
-        'card.accept':
-          current.waiting_reason === 'finished' ? 'done' : 'working',
-        'card.approve_proposal': 'queued',
-        'card.send_back': 'working',
-        'card.answer': 'working',
-        'card.retry': 'working',
-        'card.discard': 'discarded',
-      }[name];
-      current.waiting_reason = '';
-      current.revision += 1;
-      return { card: clone(current) };
-    }
-    throw new Error(`Unexpected test operation ${name}`);
+
+    throw new Error(`Unexpected test operation: ${name}`);
   });
+
   const goTo = (route) => {
     context = { ...context, route, locale: 'en', timezone: 'UTC', theme: {} };
     for (const callback of contexts) callback(context);
     return Promise.resolve({});
   };
+
   const bridge = {
     operation,
     get context() {
       return context;
     },
     show: (route = '') => goTo(route),
-    goTo,
-    // The real route capability enters the App navigator's autosave gate.
     pushRoute: vi.fn(async (route) => {
       if (!autosave || (await autosave.flush())) await goTo(route);
       return {};
@@ -393,16 +544,12 @@ export function createBridge(initialCards = [card('fct-a')]) {
         if (index >= 0) layers.splice(index, 1);
       };
     },
-    back: () => layers.at(-1)?.close(),
     registerAutosave: vi.fn((participant) => {
       autosave = participant;
       return () => {
         if (autosave === participant) autosave = null;
       };
     }),
-    get autosave() {
-      return autosave;
-    },
     notifyAutosave: vi.fn(),
     openSession: vi.fn().mockResolvedValue({}),
     openAgent: vi.fn().mockResolvedValue({}),
@@ -412,6 +559,7 @@ export function createBridge(initialCards = [card('fct-a')]) {
     mountSession: vi.fn(() => vi.fn()),
     dispose: vi.fn(),
   };
+
   return { bridge, operation, state };
 }
 
@@ -424,7 +572,7 @@ export async function settle() {
   flushSync();
 }
 
-export async function render(bridge, route = '/cards') {
+export async function render(bridge, route = '') {
   mounted = mount(FactoryPage, {
     target: document.body,
     props: { bridgeClient: bridge },
@@ -463,21 +611,9 @@ export async function choose(id, text) {
 
 export const calls = (operation, name) =>
   operation.mock.calls.filter(([called]) => called === name);
-export const actionButtons = () =>
-  [...document.querySelectorAll('.factory-card-actions button')].map((node) =>
-    node.textContent.trim(),
-  );
-// The buttons of the steps that wait for the user, by step id.
-export const stepButtons = () =>
-  Object.fromEntries(
-    [...document.querySelectorAll('[data-waiting-step]')].map((node) => [
-      node.dataset.waitingStep,
-      [...node.querySelectorAll('button')].map((item) =>
-        item.textContent.trim(),
-      ),
-    ]),
-  );
+
 export { t, tick, flushSync };
+
 afterEach(async () => {
   if (mounted) {
     await unmount(mounted);

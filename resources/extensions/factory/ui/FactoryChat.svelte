@@ -3,46 +3,41 @@
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
+  import SessionEmbed from '@vbot/extension-sdk/ui/SessionEmbed.svelte';
   import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
-  import CardSession from './CardSession.svelte';
-  import { failureText, waitingLabel } from './presentation.js';
+  import { failureText } from './presentation.js';
 
   let {
     model,
     projectId,
     memberId = '',
     memberName = '',
-    taskId = '',
-    cardId = '',
-    topicId = '',
     inactive = false,
     onSent,
   } = $props();
-  let chat = $state(null),
-    draft = $state(''),
-    error = $state(''),
-    sending = $state(false),
-    loading = $state(true),
-    loaded = $state(false);
+
+  let chat = $state(null);
+  let draft = $state('');
+  let error = $state('');
+  let sending = $state(false);
+  let loading = $state(true);
+  let loaded = $state(false);
   let inspectedBinding = $state(null);
-  let fresh = $state(false),
-    log = $state(null);
+  let fresh = $state(false);
+  let log = $state(null);
   const inputId = $props.id();
-  let request = 0,
-    disposed = false,
-    attempt = null;
+  let request = 0;
+  let disposed = false;
+  let attempt = null;
   let historyPages = 1;
+
   const name = $derived(
-    memberName || chat?.member_name || t('factory.native.leader'),
+    memberName || chat?.member_name || t('factory.chat.leader'),
   );
   const scope = () => ({
     project_id: projectId,
     ...(memberId ? { member_id: memberId } : {}),
-    ...(taskId ? { task_id: taskId } : {}),
-    ...(cardId ? { card_id: cardId } : {}),
-    ...(topicId || chat?.topic?.id
-      ? { topic_id: topicId || chat.topic.id }
-      : {}),
+    ...(chat?.topic?.id ? { topic_id: chat.topic.id } : {}),
   });
 
   async function show(value) {
@@ -54,6 +49,7 @@
     await tick();
     if (follow && log) log.scrollTop = log.scrollHeight;
   }
+
   async function refresh() {
     if (sending) return;
     const version = ++request;
@@ -80,22 +76,23 @@
       if (!disposed && version === request) loading = false;
     }
   }
+
   onMount(() => {
     void refresh();
     const off = model.client.onInvalidation(({ change } = {}) => {
       if (
         !change ||
-        ['topics', 'tasks', 'cards', 'factories', 'members', 'agents'].includes(
-          change.resource,
-        )
-      )
+        ['topics', 'factories', 'members', 'agents'].includes(change.resource)
+      ) {
         void refresh();
+      }
     });
     return () => {
       disposed = true;
       off();
     };
   });
+
   async function send() {
     const body = draft.trim();
     if (
@@ -110,9 +107,7 @@
     const args = {
       ...scope(),
       text: body,
-      ...((fresh || !chat?.topic) && !taskId && !cardId && !topicId
-        ? { new_topic: true }
-        : {}),
+      ...(fresh || !chat?.topic ? { new_topic: true } : {}),
     };
     const signature = JSON.stringify(args);
     if (attempt?.signature !== signature)
@@ -141,6 +136,7 @@
       document.getElementById(inputId)?.focus();
     }
   }
+
   async function stopDiscussion() {
     if (!chat?.topic || sending) return;
     try {
@@ -153,6 +149,7 @@
       error = failureText(cause);
     }
   }
+
   function newTopic() {
     request++;
     chat = null;
@@ -166,6 +163,7 @@
     void refresh();
     document.getElementById(inputId)?.focus();
   }
+
   function keydown(event) {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -189,10 +187,10 @@
               chat.agent_id,
               chat.agent_proof,
               chat.factory_id,
-            )}>{t('factory.native.editAgent')}</Button
+            )}>{t('factory.chat.editAgent')}</Button
         >
       {/if}
-      {#if chat?.topic?.state === 'open' && !inactive && !chat?.topic.task_id && (chat?.replying || chat.posts?.at(-1)?.author === 'user')}
+      {#if chat?.topic?.state === 'open' && !inactive && (chat?.replying || chat.posts?.at(-1)?.author === 'user')}
         <Button variant="danger" onClick={stopDiscussion}
           >{t('factory.chat.stop')}</Button
         >
@@ -200,18 +198,12 @@
       {#if chat?.session_binding}
         <Button
           variant="tertiary"
-          onClick={() => (inspectedBinding = chat.session_binding)}
-          >{t('factory.native.openSession')}</Button
+          onClick={() =>
+            (inspectedBinding = inspectedBinding ? null : chat.session_binding)}
+          >{t('factory.chat.openSession')}</Button
         >
       {/if}
-      {#if chat?.task_session_binding}
-        <Button
-          variant="tertiary"
-          onClick={() => (inspectedBinding = chat.task_session_binding)}
-          >{t('factory.chat.openTaskSession')}</Button
-        >
-      {/if}
-      {#if !taskId && !cardId && !topicId && chat?.topic}
+      {#if chat?.topic}
         <Button
           variant="tertiary"
           disabled={sending || Boolean(draft.trim())}
@@ -220,54 +212,68 @@
       {/if}
     </div>
   </header>
+
   {#if inspectedBinding}
-    <CardSession
-      client={model.client}
-      groupId={inspectedBinding.group_id}
-      participant={{ ...inspectedBinding, display_name: name }}
-      onClose={() => (inspectedBinding = null)}
-    />
+    <div class="chat-session-panel">
+      <div class="chat-session-header">
+        <Button variant="tertiary" onClick={() => (inspectedBinding = null)}
+          >{t('common.close')}</Button
+        >
+      </div>
+      <div class="chat-session-slot">
+        <SessionEmbed
+          client={model.client}
+          groupId={inspectedBinding.group_id}
+          participantId={inspectedBinding.participant_id ?? inspectedBinding.id}
+          presentation="conversation"
+        />
+      </div>
+    </div>
   {/if}
+
   <div class="messages" role="log" bind:this={log}>
-    {#if chat?.before}<Button
+    {#if chat?.before}
+      <Button
         variant="tertiary"
         onClick={() => {
           historyPages++;
           void refresh();
         }}>{t('factory.chat.earlier')}</Button
-      >{/if}
+      >
+    {/if}
     {#each chat?.posts || [] as post (post.id)}
       <div class:user={post.author === 'user'} class="bubble">
-        {#if post.author_name && post.author !== 'member:' + chat.topic.direct_member_id}<small
-            >{post.author_name}</small
-          >{/if}
-        {#if post.evidence}<strong>{t('factory.native.outcome')}</strong>{/if}
-        {#if post.author === 'user'}<p>{post.text}</p>{:else}<MarkdownContent
-            source={post.text}
-          />{/if}
-        {#if post.evidence}<MarkdownContent
-            source={String(post.evidence)}
-          />{/if}
+        {#if post.author_name && post.author !== 'member:' + chat.topic?.direct_member_id}
+          <small>{post.author_name}</small>
+        {/if}
+        {#if post.evidence}<strong>{t('factory.chat.outcome')}</strong>{/if}
+        {#if post.author === 'user'}
+          <p>{post.text}</p>
+        {:else}
+          <MarkdownContent source={post.text} />
+        {/if}
+        {#if post.evidence}
+          <MarkdownContent source={String(post.evidence)} />
+        {/if}
       </div>
     {/each}
   </div>
-  {#if chat?.topic?.task_id && !taskId}
-    <button
-      class="task-link"
-      onclick={() =>
-        model.navigate('/task/' + encodeURIComponent(chat.topic.task_id))}
-      >{chat.task?.title || t('factory.native.task')} ↗</button
-    >
+
+  {#if chat?.topic?.state === 'closed'}
+    <p role="status">{t('factory.chat.stopped')}</p>
+  {:else if chat?.replying}
+    <p role="status">{t('factory.chat.replying', { name })}</p>
   {/if}
-  {#if chat?.topic?.state === 'closed'}<p role="status">
-      {t('factory.chat.stopped')}
-    </p>{:else if chat?.replying}<p role="status">
-      {t('factory.chat.replying', { name })}
-    </p>{/if}
-  {#if chat?.failure}<p role="status">{waitingLabel(chat.failure)}</p>{/if}
-  {#if error}<p role="alert">
-      {error} <button onclick={refresh}>{t('common.retry')}</button>
-    </p>{/if}
+  {#if chat?.profile_available === false}
+    <p role="status">{t('factory.chat.profileUnavailable')}</p>
+  {/if}
+  {#if error}
+    <p role="alert">
+      {error}
+      <Button variant="tertiary" onClick={refresh}>{t('common.retry')}</Button>
+    </p>
+  {/if}
+
   <form
     onsubmit={(event) => {
       event.preventDefault();
@@ -337,9 +343,22 @@
     font-size: 12px;
     overflow-wrap: anywhere;
   }
+  .chat-session-panel {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+  }
+  .chat-session-header {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+  .chat-session-slot {
+    height: clamp(260px, 45dvh, 520px);
+  }
   .messages {
-    max-height: clamp(12rem, 32vh, 23rem);
-    min-height: 3rem;
+    max-height: clamp(14rem, 42vh, 32rem);
+    min-height: 6rem;
     overflow: auto;
     padding: 4px 16px;
     display: flex;
@@ -372,14 +391,6 @@
     flex: 1;
     min-width: 0;
     max-height: 10rem;
-  }
-  .task-link {
-    align-self: flex-start;
-    margin: 6px 16px;
-    color: var(--accent);
-    background: none;
-    border: 0;
-    cursor: pointer;
   }
   p[role] {
     margin: 6px 16px;
