@@ -1112,6 +1112,7 @@ describe('AgentsView', () => {
     const more = agentButton('bravo').parentElement.querySelector(
       '[aria-haspopup="menu"]',
     );
+    expect(more.getAttribute('aria-expanded')).toBe('false');
     more.click();
     flushSync();
     expect(more.getAttribute('aria-expanded')).toBe('true');
@@ -1124,8 +1125,12 @@ describe('AgentsView', () => {
       'Delete…',
     ]);
     items[0].click();
+    flushSync();
+    expect(more.getAttribute('aria-expanded')).toBe('false');
     expect(onOpenChat).toHaveBeenCalledWith('bravo');
-    openRowMenu(agentButton('bravo'))[1].click();
+    items = openRowMenu(agentButton('bravo'));
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    items[1].click();
     expect(onOpenInSplit).toHaveBeenCalledWith('bravo');
 
     openRowMenu(agentButton('bravo'))[2].click();

@@ -124,6 +124,44 @@
   border-color: transparent;
 }
 
+/* RowMenuButton stays visible on devices without hover. */
+.btn-tertiary.btn-icon.row-menu-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-lo);
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    opacity 120ms ease;
+}
+
+.btn-tertiary.btn-icon.row-menu-button:hover,
+.btn-tertiary.btn-icon.row-menu-button[aria-expanded='true'] {
+  background: var(--surface-3);
+  color: var(--text-hi);
+}
+
+@media (hover: hover) {
+  .row-menu-button {
+    opacity: 0;
+  }
+
+  .row-menu-host:is(:hover, :has(:focus-visible)) .row-menu-button,
+  .row-menu-button[aria-expanded='true'] {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-tertiary.btn-icon.row-menu-button {
+    transition: none;
+  }
+}
+
 .btn-secondary.btn-icon {
   width: 32px;
   height: 32px;

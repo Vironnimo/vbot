@@ -389,7 +389,7 @@
             onDragActiveChange={projectsController.setReorderDragActive}
           >
             {#snippet item(project)}
-              <div class="management-action-row">
+              <div class="management-action-row row-menu-host">
                 <button
                   type="button"
                   class="project-item secondary-list__item"

@@ -106,6 +106,7 @@ describe('SessionListDrawer row actions', () => {
     keydown(menu, 'Escape');
     flushSync();
     expect(document.querySelector('.context-menu')).toBeNull();
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
 
     const rightClick = new MouseEvent('contextmenu', {
       bubbles: true,
@@ -118,6 +119,7 @@ describe('SessionListDrawer row actions', () => {
     // The drawer handled it, so neither the browser's nor the Desktop
     // context menu opens.
     expect(rightClick.defaultPrevented).toBe(true);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(menuItems()).toEqual(expectedItems);
   });
 

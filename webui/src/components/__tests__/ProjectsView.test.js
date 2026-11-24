@@ -432,6 +432,7 @@ describe('ProjectsView list and selection', () => {
     const betaTrigger = buttonByTestId(
       'project-toggle-beta',
     ).parentElement.querySelector('[aria-haspopup="menu"]');
+    expect(betaTrigger.getAttribute('aria-expanded')).toBe('false');
     betaTrigger.click();
     flushSync();
     expect(betaTrigger.getAttribute('aria-expanded')).toBe('true');
@@ -439,12 +440,15 @@ describe('ProjectsView list and selection', () => {
     expect(labels(items)).toEqual(['Copy path', 'Re-point…', 'Remove…']);
     items[0].click();
     await waitForCondition(() => onToast.mock.calls.length === 1);
+    expect(betaTrigger.getAttribute('aria-expanded')).toBe('false');
     expect(writeText).toHaveBeenCalledWith('C:/repos/beta');
 
     // Re-pointing and removing reload the Project list: the shown Project's
     // unsaved edit saves before each dialog opens instead of being replaced.
     setInputValue('project-edit-name', 'Alpha draft');
-    openRowMenu('beta')[1].click();
+    items = openRowMenu('beta');
+    expect(betaTrigger.getAttribute('aria-expanded')).toBe('true');
+    items[1].click();
     await waitForCondition(() => inputById('projects-repoint-cwd'));
     expect(setProjectMock.mock.calls).toEqual([
       ['alpha', { display_name: 'Alpha draft' }],

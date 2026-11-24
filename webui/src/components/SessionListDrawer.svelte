@@ -1040,7 +1040,7 @@
   <!-- Right click anywhere on the row opens its menu; the context menu key
          on the row's button is the keyboard path. -->
   <li
-    class="session-row"
+    class="session-row row-menu-host"
     class:session-row--marked={marker !== null}
     class:session-row--pinned={session.pinned_at}
     class:session-row--menu-open={rowMenuKey === sessionRowKey(session)}

@@ -514,7 +514,7 @@
 
 /* The kind marker and the "..." button share the end of the title line. */
 .session-row__marker,
-.btn-tertiary.btn-icon.session-row__menu-trigger {
+.session-row__menu-trigger {
   position: absolute;
   top: 0;
   right: 3px;
@@ -535,45 +535,12 @@
   height: 12px;
 }
 
-.btn-tertiary.btn-icon.session-row__menu-trigger {
-  width: 24px;
-  min-width: 24px;
-  min-height: 24px;
-  padding: 0;
-  border-radius: var(--r-sm);
-  color: var(--text-lo);
-  transition:
-    background 150ms ease,
-    color 150ms ease,
-    opacity 120ms ease;
-}
-
-.btn-tertiary.btn-icon.session-row__menu-trigger > svg {
-  width: 16px;
-  height: 16px;
-}
-
-.btn-tertiary.btn-icon.session-row__menu-trigger:hover,
-.session-row--menu-open .btn-tertiary.btn-icon.session-row__menu-trigger {
-  background: var(--surface-3);
-  color: var(--text-hi);
-}
-
 /* With a pointer that hovers, the "..." button replaces the marker while
    the row is hovered, keyboard-focused or has its menu open. A row merely
    clicked keeps its marker. */
 @media (hover: hover) {
-  .btn-tertiary.btn-icon.session-row__menu-trigger {
-    opacity: 0;
-  }
-
   .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open) {
     --session-row-trail: 20px;
-  }
-
-  .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open)
-    .btn-tertiary.btn-icon.session-row__menu-trigger {
-    opacity: 1;
   }
 
   .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open)
@@ -679,8 +646,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .session-row__heading,
-  .session-row__marker,
-  .btn-tertiary.btn-icon.session-row__menu-trigger {
+  .session-row__marker {
     transition: none;
   }
 }

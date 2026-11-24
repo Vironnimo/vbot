@@ -361,7 +361,7 @@
 <ContextMenu {menu} onClose={() => (menu = null)} />
 
 {#snippet agentRow(agent, privateCount = 0)}
-  <div class="management-action-row">
+  <div class="management-action-row row-menu-host">
     <button
       class:active={agent.id === selectedAgentId}
       class="agent-item secondary-list__item"
