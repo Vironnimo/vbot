@@ -1134,6 +1134,27 @@ class ExtensionHostFactory:
             "thinking_effort": agent.thinking_effort,
         }
 
+    def _inherited_agent_defaults(self) -> dict[str, Any]:
+        """Return the Tool access and Skills an Agent inherits while it sets none itself.
+
+        The effective shared defaults (``defaults.agent``), read on every call, so an
+        Extension resolving such an Agent follows later changes. Tool names no
+        registered Tool has are left out: they grant and deny nothing.
+        """
+        defaults = self.agent_resolver.agent_defaults()
+        registered = {
+            tool.name
+            for tool in self.tools.list_tools(include_internal=False)
+            if not tool.session_scoped
+        }
+        access = normalize_tool_access(defaults.tool_access)
+        access = replace(
+            access,
+            allowed=tuple(name for name in access.allowed if name in registered),
+            denied=tuple(name for name in access.denied if name in registered),
+        )
+        return {"tool_access": access.to_dict(), "allowed_skills": list(defaults.allowed_skills)}
+
     def _extension_catalog_projection(self) -> dict[str, Any]:
         self._ensure_started()
         projects = self.projects.list()
@@ -1200,6 +1221,7 @@ class ExtensionHostFactory:
             ],
             "skills": skill_choices,
             "permission_profiles": self.agent_resolver.permission_profile_names(),
+            "agent_defaults": self._inherited_agent_defaults(),
             "tool_activations": [
                 {"name": tool.name, "sources": list(activation_sources(tool))}
                 for tool in self.tools.list_tools()

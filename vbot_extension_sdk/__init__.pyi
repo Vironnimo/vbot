@@ -24,8 +24,8 @@ from typing import (
 from ._exports import HostUnavailableError as HostUnavailableError
 from .tools import ToolContext
 
-API_VERSION: Final[int] = 41
-SDK_VERSION: Final[str] = "41.0.0"
+API_VERSION: Final[int] = 42
+SDK_VERSION: Final[str] = "42.0.0"
 
 def require_api(minimum: int = API_VERSION, *, maximum: int | None = None) -> int: ...
 
