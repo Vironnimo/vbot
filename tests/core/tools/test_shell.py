@@ -1420,6 +1420,10 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     # No environment variable can hold a NUL character.
     nul = await shell.call({"command": "ls", "env": {"DATA": "a\x00b"}})
     inspect = await shell.call({"action": {"type": "inspect", "command": "ls"}})
+    if sys.platform == "win32":
+        for argv in (["pwsh", "-Command"], ["PWSH.exe", "-NoProfile", "-C"]):
+            missing_script = await shell.call({"command": argv})
+            assert missing_script["error"]["code"] == "invalid_arguments"
     gone = tmp_path / "gone"
     missing_cwd = await dispatch_as_executor(
         shell.registry,

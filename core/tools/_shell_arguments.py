@@ -224,14 +224,19 @@ def _host_shell_script(argv: list[str]) -> str | None:
     if "/" in argv[0] or "\\" in argv[0]:
         return None
     if sys.platform == "win32":
-        options = [option.casefold() for option in argv[1:-1]]
-        if argv[0].casefold() not in {"pwsh", "pwsh.exe"} or not options:
+        if argv[0].casefold() not in {"pwsh", "pwsh.exe"}:
             return None
-        if options[-1] not in _POWERSHELL_COMMAND_OPTIONS:
-            return None
-        if not all(option in _POWERSHELL_WRAPPER_OPTIONS for option in options[:-1]):
-            return None
-        return argv[-1]
+        for index, argument in enumerate(argv[1:], start=1):
+            option = argument.casefold()
+            if option in _POWERSHELL_COMMAND_OPTIONS:
+                if index + 1 == len(argv):
+                    raise ValueError(
+                        _not_run(f"{argument} needs a script. Pass the script as command.")
+                    )
+                return argv[-1] if index + 2 == len(argv) else None
+            if option not in _POWERSHELL_WRAPPER_OPTIONS:
+                break
+        return None
     if argv[0] == "bash" and argv[1:-1] in (
         ["-c"],
         ["-lc"],
