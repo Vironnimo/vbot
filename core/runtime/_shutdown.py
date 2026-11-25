@@ -141,6 +141,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (commands := runtime._command_manager) is not None:
         # Before triggers close, so a background command's stopped result is submitted.
         yield _Step("commands", None, commands.shutdown)
+    if (video := runtime._video) is not None and video.recovery is not None:
+        yield _Step("video collection", None, video.recovery.close)
     if (triggers := runtime._trigger_service) is not None:
         yield _Step("triggers", None, triggers.aclose)
     if (goals := runtime._goal_service) is not None:

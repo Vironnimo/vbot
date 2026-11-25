@@ -66,6 +66,8 @@ The vision exception is a persisted Agent preference, independent of message con
 | `No image analysis was started. The downloaded image could not be saved locally: <cause>. Tell the user to resolve the storage problem before retrying.` | F4/F5: directory creation, blob writes and metadata writes fail before analysis; the cause can be access, a bad path or disk space, rather than always a full disk. Earlier saved attachments can remain. |
 | `The data: URL holds no data ... Pass the complete data: URL or an image file's path.` / `... holds a web page ... Pass the image's data: URL or its file path.` | F5: both refusals now name a usable input. |
 
+A recorded pending Video result offers a job id and automatic delivery to the originating Session. Its Tool wording and completion notices are documented in `model_tasks/video.md`.
+
 Shared media failure wording in `core/tools/_media_failures.py` (also used by `generate_video`/`generate_music`):
 
 | Text | Reason |

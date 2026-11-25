@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -852,6 +853,36 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     assert admitted.owner == manager.get(first.run_id).execution_owner
     assert admitted.input_id == f"initial:{binding.generation_id}"
     assert admitted.terminal_status is None
+    for call_id in ["old-video", "video-call"]:
+        await (
+            sessions.get(binding.address)
+            .for_run(first.run_id)
+            .start_tool_invocation_async(
+                call_id=call_id, name="generate_video", started_at="2026-01-01T00:00:00Z"
+            )
+        )
+    sessions.video_jobs.record(
+        "vid_stale",
+        binding.generation_id,
+        first.run_id,
+        "old-video",
+        "paid-job",
+        "google/video::api-key:default",
+        "origin",
+        str(tmp_path),
+        str(tmp_path),
+    )
+    sessions.video_jobs.record(
+        "vid_grouped",
+        binding.generation_id,
+        first.run_id,
+        "video-call",
+        "provider-job",
+        "google/video::api-key:default",
+        "origin",
+        str(tmp_path),
+        str(tmp_path),
+    )
     chat.release.set()
     await manager.get(first.run_id).wait()
     duplicate = await groups.start(handle, "peer", initial)
@@ -882,6 +913,20 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
     )
     try:
         handle = await groups.open_group("group")
+        from core.model_tasks.video_recovery import VideoRecovery
+
+        (old,) = sessions.video_jobs.pending("vid_stale")
+        recovery_runtime = SimpleNamespace(
+            chat_sessions=sessions,
+            _validate_owned_completion=lambda address, owner: groups.validate(
+                address, RunAdmission(owner=owner)
+            ),
+        )
+        denied = AsyncMock()
+        recovery = VideoRecovery(recovery_runtime, denied)
+        await recovery._try_collect(old)
+        denied.assert_not_awaited()
+        assert not sessions.video_jobs.pending("vid_stale")
         reopened = await groups.start(handle, "peer", initial)
         assert reopened.existing and reopened.run_id == first.run_id
         assert not manager.active_runs()
@@ -902,12 +947,13 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
             binding.address,
             owner,
             "background result",
-            ("notice-one",),
+            ("notice-one", "video:vid_grouped"),
             lambda: acknowledgements.append(True),
         )
         await completion_run.wait()
         assert completion_run.execution_owner == owner
         assert acknowledgements == [True]
+        assert sessions.video_jobs.pending("vid_grouped")[0].state == "finished"
         assert [
             message.content
             for message in sessions.get(binding.address).load()

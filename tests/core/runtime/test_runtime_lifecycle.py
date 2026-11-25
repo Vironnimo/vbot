@@ -881,6 +881,7 @@ _ASYNC_SHUTDOWN = (
     "bootstrap.aclose",
     "archive_retention.aclose",
     "commands.shutdown",
+    "video_collection.aclose",
     "triggers.aclose",
     "reflection.aclose",
     "librarian.aclose",
@@ -1042,7 +1043,10 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_chat_sessions", "sessions"),
         ("_log_manager", "logging"),
     ):
-        fakes[attribute] = service(label)
+        service_stub = service(label)
+        if attribute == "_video":
+            service_stub.recovery = SimpleNamespace(close=service("video_collection").aclose)
+        fakes[attribute] = service_stub
     for attribute, fake in fakes.items():
         setattr(runtime, attribute, fake)
     monkeypatch.setattr(shutdown_module, "drain_debug_traces", service("debug_traces").aclose)

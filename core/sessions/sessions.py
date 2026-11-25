@@ -53,6 +53,7 @@ from core.sessions.errors import FtsHealth, SessionNotFoundError
 from core.sessions.notifications import SessionNotifications
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
+from core.sessions.video_jobs import SessionVideoJobs
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -88,6 +89,7 @@ class ChatSessionManager:
                 "completion_read", self._completion_read_callbacks, address, run_id
             ),
         )
+        self.video_jobs = SessionVideoJobs(self._store)
         self.notifications = SessionNotifications(
             self._store,
             lambda address, run_id: self._lifecycle._notify_callbacks(

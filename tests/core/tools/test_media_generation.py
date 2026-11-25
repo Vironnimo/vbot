@@ -354,6 +354,14 @@ async def test_video_failures_say_what_happened_and_what_to_do(
     )
 
     assert result["error"] == {"code": code, "message": message, "retryable": False}
+    if isinstance(error, VideoOutcomeUnknownError) and error.job_id:
+        error.collection_pending = True
+        pending = await registry.dispatch(
+            make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME), {"prompt": "A river", "duration": 7}
+        )
+        assert pending["ok"] and pending["data"]["status"] == "pending"
+        assert pending["data"]["job_id"] == error.job_id
+        assert "No further call is needed" in pending["data"]["message"]
 
 
 class _VideoService:

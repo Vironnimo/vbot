@@ -21,6 +21,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.video import VideoProfile
+from core.model_tasks.video_recovery import VideoDelivery
 from core.permissions import PermissionDenied
 from core.tools._image_inputs import (
     UnusableImageError,
@@ -203,6 +204,17 @@ def _media_failure(
     message = str(error)
     if isinstance(error, (VideoRefusedError, MusicRefusedError)):
         message = refusal_message(error.reason, task=task)
+    elif isinstance(error, VideoOutcomeUnknownError) and error.collection_pending:
+        return tool_success(
+            {
+                "status": "pending",
+                "job_id": error.job_id,
+                "message": (
+                    "The video request was accepted. vBot will collect it and send the result "
+                    "to this Session. No further call is needed."
+                ),
+            }
+        )
     elif isinstance(error, VideoOutcomeUnknownError) and error.job_id is not None:
         message = unfinished_job_message(
             task=task, product=product, job_id=error.job_id, reason=str(error)
@@ -326,6 +338,18 @@ def make_generate_video_handler(video_service: Any):
                 before_output_write=before_output_write,
                 call_options=call_options,
                 frame_paths=frame_paths,
+                **(
+                    {
+                        "delivery": VideoDelivery(
+                            context.session_generation_id,
+                            context.run_id,
+                            context.tool_call_id,
+                            context.path_target(root, access="write"),
+                        )
+                    }
+                    if context.session_generation_id
+                    else {}
+                ),
                 usage_context=TaskUsageContext(
                     agent_id=context.agent_id,
                     project_id=context.project_id,
@@ -530,9 +554,12 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
                     },
                     "required": ["path", "media_type", "size_bytes"],
                     "additionalProperties": False,
-                }
+                },
+                "status": {"const": "pending"},
+                "job_id": {"type": "string", "minLength": 1},
+                "message": {"type": "string", "minLength": 1},
             },
-            "required": ["video"],
+            "oneOf": [{"required": ["video"]}, {"required": ["status", "job_id", "message"]}],
             "additionalProperties": False,
         },
         display=ToolDisplay(

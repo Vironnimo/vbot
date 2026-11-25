@@ -56,7 +56,8 @@ async def test_video_client_submits_polls_and_downloads_same_origin_content() ->
     )
     start = ImageInput("start.png", "image/png", b"start")
 
-    result = await _openrouter_video_client().generate(
+    client = _openrouter_video_client()
+    result = await client.generate(
         "A river at dawn",
         options={
             "duration": "8",
@@ -86,6 +87,10 @@ async def test_video_client_submits_polls_and_downloads_same_origin_content() ->
     # The advertised polling URL is ignored in favor of the same-origin job path.
     assert create.call_count == poll.call_count == content.call_count == 1
     assert (result.data, result.media_type, result.job_id) == (b"video-bytes", "video/mp4", "job-1")
+    # Reconnecting to the same accepted job performs GETs only.
+    recovered = await client.collect_existing("job-1", "https://openrouter.ai/api/v1")
+    assert recovered is not None and recovered.data == result.data
+    assert create.call_count == 1
 
 
 @pytest.mark.parametrize("medium", ["video", "music"])
@@ -677,8 +682,15 @@ async def test_google_video_outcomes_never_resubmit_the_interaction(
     )
     respx.get(f"{GOOGLE_INTERACTIONS_URL}/int-1").respond(200, json=finished)
 
+    terminal = AsyncMock()
     with pytest.raises(ProviderError) as caught:
-        await _google_video_client().generate("A river", options={}, poll_interval=0)
+        await _google_video_client().generate(
+            "A river", options={}, poll_interval=0, ended_without_video=terminal
+        )
+    if isinstance(caught.value, VideoJobUnfinishedError):
+        terminal.assert_not_awaited()
+    else:
+        terminal.assert_awaited_once()
 
     if isinstance(outcome, type):
         assert isinstance(caught.value, outcome)

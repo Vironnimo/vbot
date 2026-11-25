@@ -1090,6 +1090,7 @@ class ChatLoop:
         input_id: str,
         input_persisted_hook: Callable[[], None] | None = None,
         *,
+        completion_receipts: tuple[str, ...] = (),
         expected_session_generation_id: str | None = None,
     ) -> Run:
         """Continue a normal Session under an Extension-owned descendant Run."""
@@ -1139,6 +1140,9 @@ class ChatLoop:
                 content=content,
                 internal=True,
                 input_persisted_hook=input_persisted_hook,
+                context_note=replace(ChatMessage.note(""), completion_receipts=completion_receipts)
+                if completion_receipts
+                else None,
                 temporary_parent_binding=parent,
             )
             return await self._dependencies.run_manager.start(

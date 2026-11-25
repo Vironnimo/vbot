@@ -87,6 +87,7 @@ from core.runtime._bootstrap_services import (
     _build_terminal_manager,
     _goal_work_pending,
     _librarian_service,
+    authorize_recovered_video,
 )
 from core.runtime._configuration import (
     _SKILLS_DIRNAME,
@@ -370,8 +371,14 @@ def bootstrap(runtime: Runtime) -> None:
             max_input_bytes=runtime._attachment_store.max_size_bytes,
             usage_recorder=runtime._usage_recorder,
         )
+        from core.model_tasks.video_recovery import VideoRecovery
+
+        video_recovery = VideoRecovery(runtime, partial(authorize_recovered_video, runtime))
         runtime._video = VideoService(
-            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+            runtime._model_tasks,
+            runtime,
+            usage_recorder=runtime._usage_recorder,
+            recovery=video_recovery,
         )
         runtime._music = MusicService(
             runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
