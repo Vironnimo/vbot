@@ -201,6 +201,13 @@ class CronScheduler:
                     f"Cron job {current.id} is missing cron_expression while active"
                 )
 
+            if current.watch is not None and current.watch_retry_at is not None:
+                retry_at = _parse_iso_datetime(
+                    current.watch_retry_at, field_name="watch_retry_at", allow_naive=False
+                )
+                if retry_at > _timing._utc_now():
+                    await _timing._sleep_until_utc(retry_at)
+                    continue
             owed = _schedule.owed_fire(self._owner._timezone, _timing._utc_now(), current)
             if owed is None:
                 next_fire_at = self._owner.next_fire_at(current)

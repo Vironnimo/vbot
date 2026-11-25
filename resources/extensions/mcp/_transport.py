@@ -258,7 +258,7 @@ class ConnectionTransport:
         self._http_marks_delivery = False
 
     async def open(self, stack: AsyncExitStack) -> Any:
-        if self._runner.config["transport"] == "stdio":
+        if self._runner.active_transport == "stdio":
             environment = dict(self._runner.config.get("environment", {}))
             for key, source in self._runner.config.get("credential_environment", {}).items():
                 environment[key] = self._credential(source)
@@ -295,7 +295,7 @@ class ConnectionTransport:
         url = self._runner.config["url"]
         self._http_marks_delivery = True
         observed = functools.partial(_ObservedHTTPClient, self)
-        if self._runner.config["transport"] == "sse":
+        if self._runner.active_transport == "sse":
 
             def sse_http_client(
                 headers: dict[str, str] | None = None,
@@ -347,7 +347,7 @@ class ConnectionTransport:
         status = response.status_code
         if request.method == "DELETE":
             return
-        if request.method == "POST" or self._runner.config["transport"] == "sse":
+        if request.method == "POST" or self._runner.active_transport == "sse":
             # A failure diagnosis names this status; a server may refuse the
             # optional GET stream of Streamable HTTP without harm.
             self._runner._events.observe_status(status)
@@ -371,6 +371,6 @@ class ConnectionTransport:
                 call = _CURRENT_CALL.get()
                 if call is not None and call.runner is self._runner:
                     call.http_status = status
-        if self._runner.config["transport"] == "sse" and not 200 <= status < 300:
+        if self._runner.active_transport == "sse" and not 200 <= status < 300:
             # The legacy SSE transport stops sending after a refused message.
             self._runner._lose(f"the MCP server refused a message with HTTP {status}")

@@ -129,6 +129,11 @@ class RunKind(StrEnum):
     SYSTEM = "system"
 
 
+# Conversational Runs can switch recipient while running, including user Runs
+# whose message_parent call restores Parent-directed final answers.
+FORWARDED_RUN_KINDS = frozenset({"subagent", "system", "user", "channel", "session_message"})
+
+
 # Run kinds that act for the Agent while no person is attending the Session:
 # background learning Runs (Reflection reviews and Librarian passes). Tool guards
 # and Statistics share this one definition, so a new background kind is added

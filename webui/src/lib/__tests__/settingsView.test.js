@@ -605,6 +605,7 @@ describe('web search and fetch', () => {
       }),
     ).toEqual({
       provider: 'searxng',
+      fallback_provider: 'none',
       available_providers: ['brave', 'searxng'],
       default_count: 15,
       searxng: { base_url: 'http://localhost:9999' },
@@ -623,6 +624,7 @@ describe('web search and fetch', () => {
     ).toEqual({
       web_search: {
         provider: 'searxng',
+        fallback_provider: 'none',
         default_count: 15,
         searxng: { base_url: 'http://localhost:9999' },
       },

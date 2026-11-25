@@ -1164,6 +1164,47 @@ describe('HTTP media transfers', () => {
     ).resolves.toEqual(metadata);
   });
 
+  it.each(['attachment', 'transcription'])(
+    'recovers the lost %s result without uploading a second time',
+    async (kind) => {
+      const { createMediaTransfer } = await import('../api/mediaTransfers.js');
+      const transfer = createMediaTransfer(kind);
+      const result =
+        kind === 'attachment'
+          ? {
+              attachment_id: 'att_1',
+              filename: 'a.txt',
+              media_type: 'text/plain',
+              size_bytes: 1,
+            }
+          : { text: 'only once' };
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ ticket: 'ticket' }))
+        .mockRejectedValueOnce(new TypeError('answer lost'))
+        .mockResolvedValueOnce(jsonResponse(result))
+        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      const send = () =>
+        kind === 'attachment'
+          ? api.uploadAttachment(new File(['a'], 'a.txt'), { fetch, transfer })
+          : api.transcribeSpeech(new Blob(['a']), { fetch, transfer });
+      await expect(send()).rejects.toHaveProperty('code', 'network_error');
+      await expect(send()).resolves.toEqual(result);
+      expect(fetch.mock.calls.map(([, request]) => request.method)).toEqual([
+        'POST',
+        'POST',
+        'GET',
+        'DELETE',
+      ]);
+      expect(fetch.mock.calls[1][1].headers['X-Vbot-Media-Transfer']).toBe(
+        'ticket',
+      );
+      expect(fetch.mock.calls[2][1].headers['X-Vbot-Media-Transfer']).toBe(
+        'ticket',
+      );
+    },
+  );
+
   it('uploads recorded audio and returns the transcription', async () => {
     const fetchFunction = vi
       .fn()

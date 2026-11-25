@@ -431,12 +431,7 @@ async def _direct_fetch(
     hosts: HostSlots,
     permissions: PermissionBoundary,
 ) -> tuple[JsonObject, bool]:
-    """Return the result and whether an optional service may recover it.
-
-    A firewall block is recoverable by a service, which fetches from its own
-    address, but not by the local browser, which shares this machine's. A
-    redirect the permission rules refuse is recovered by neither.
-    """
+    """Return the direct result and whether another fetcher may recover it."""
     try:
         result = await fetch_public(
             url, accept=_accept(output_mode), hosts=hosts, permissions=permissions
@@ -446,9 +441,10 @@ async def _direct_fetch(
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
-    return shaped, not shaped["ok"] and (
-        shaped["error"]["code"] in _BROWSER_CODES or shaped["error"]["code"] == "rate_limited"
-    )
+    if not shaped["ok"] and shaped["error"]["code"] == "rate_limited":
+        # Full HTML extraction can recognize a firewall title beyond the transport's prefix.
+        hosts.firewall_blocked(urlparse(result.url).hostname or result.url)
+    return shaped, not shaped["ok"] and shaped["error"]["code"] in _BROWSER_CODES
 
 
 _PAGE_NOT_FETCHED = "The page was not fetched"
@@ -822,7 +818,7 @@ def make_web_fetch_handler(
         try:
             # Preflight also protects prefer-service mode; providers never receive
             # a target rejected by the public-URL policy.
-            await check_public_url(url)
+            host = await check_public_url(url)
         except PublicFetchError as error:
             return error.failure()
 
@@ -832,7 +828,10 @@ def make_web_fetch_handler(
         # Keep image/document attachment semantics when the URL identifies them.
         extension = _filename_from_url(url).lower().rsplit(".", 1)[-1]
         prefer = (
-            enabled and settings.get("mode") == "prefer" and extension not in _DOCUMENT_EXTENSIONS
+            enabled
+            and settings.get("mode") == "prefer"
+            and extension not in _DOCUMENT_EXTENSIONS
+            and not hosts.is_paused(host)
         )
         service_failure = None
         if prefer:
@@ -842,7 +841,7 @@ def make_web_fetch_handler(
                 result, _ = await direct(url, output, settings, permissions)
         else:
             result, recoverable = await direct(url, output, settings, permissions)
-            if enabled and recoverable:
+            if enabled and recoverable and not hosts.is_paused(host):
                 recovered = await service(url, output, provider, permissions)
                 if recovered["ok"]:
                     result = recovered

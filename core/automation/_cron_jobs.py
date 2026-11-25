@@ -174,6 +174,7 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_attempt_at",
     "last_changed_at",
     "last_check_error",
+    "watch_retry_at",
     "last_checked_at",
     "last_completed_at",
     "last_error",
@@ -467,6 +468,7 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         "covered_until",
         "last_checked_at",
         "last_changed_at",
+        "watch_retry_at",
         "last_check_error",
     ):
         validate_optional_string(
@@ -717,6 +719,7 @@ class CronJob:
     last_changed_at: str | None = None
     # Why the latest check failed; the next successful check clears it.
     last_check_error: str | None = None
+    watch_retry_at: str | None = None
     # Which mails of which email Channel start the Runs of an ``email`` job.
     email: CronEmailTrigger | None = None
     notifications: tuple[CronNotification, ...] = ()
@@ -849,7 +852,12 @@ class CronJob:
             data["watch"] = self.watch.to_dict()
         if self.email is not None:
             data["email"] = self.email.to_dict()
-        for field_name in ("last_checked_at", "last_changed_at", "last_check_error"):
+        for field_name in (
+            "last_checked_at",
+            "last_changed_at",
+            "last_check_error",
+            "watch_retry_at",
+        ):
             value = getattr(self, field_name)
             if value is not None:
                 data[field_name] = value
@@ -956,6 +964,7 @@ class CronJob:
             last_checked_at=payload.get("last_checked_at"),
             last_changed_at=payload.get("last_changed_at"),
             last_check_error=payload.get("last_check_error"),
+            watch_retry_at=payload.get("watch_retry_at"),
             email=(
                 None
                 if payload.get("email") is None
@@ -1472,6 +1481,7 @@ def normalize_job_fields(job: CronJob) -> None:
         "last_completed_at",
         "last_checked_at",
         "last_changed_at",
+        "watch_retry_at",
     ):
         value = getattr(job, field_name)
         if value is not None:

@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import random
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast, override
 
@@ -275,6 +276,53 @@ async def test_account_scoped_failure_advances_only_to_another_connection(
     assert assistant.content == "Recovered"
     assert [request["model_id"] for request in primary.requests] == ["gpt-5.2"]
     assert await _fallback_events(runtime, last_run(runtime)) == [(PRIMARY, FALLBACK)]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_account_reset_reorders_later_runs_until_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [1000.0]
+    monkeypatch.setattr("core.chat.recovery._wall_clock", lambda: now[0])
+    reset = datetime.fromtimestamp(1300, UTC)
+    answer = {"content": "Answered", "tool_calls": None}
+    primary = StubAdapter([ProviderUsageLimitError("quota", resets_at=reset), answer])
+    fallback = StubAdapter([answer, answer])
+    runtime = _fallback_runtime(
+        tmp_path, primary, fallback, fallback_models=["openai/gpt-5.2-mini::api-key", FALLBACK]
+    )
+    loop = build_chat_loop(runtime)
+    for instant in (1000, 1200, 1300):
+        now[0] = instant
+        await loop.send("coder", "Hi", session_id="session-one")
+        if instant < 1300:
+            event = next(
+                event
+                for event in await runtime.timelines.events(last_run(runtime))
+                if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+            )
+            assert datetime.fromisoformat(event.payload["retry_at"]) == reset
+    assert len(primary.requests) == len(fallback.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_only_account_waits_for_reset_until_credentials_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("core.chat.recovery._wall_clock", lambda: 1000)
+    reset = datetime.fromtimestamp(2000, UTC)
+    primary = StubAdapter(
+        [ProviderUsageLimitError("quota", resets_at=reset), {"content": "ok", "tool_calls": None}]
+    )
+    loop = build_chat_loop(_fallback_runtime(tmp_path, primary, fallback_models=[]))
+    for _ in range(2):
+        with pytest.raises(ProviderUsageLimitError) as problem:
+            await loop.send("coder", "hi", session_id="session-one")
+        assert problem.value.resets_at == reset
+        assert len(primary.requests) == 1
+    loop.account_credentials_changed("openai", "api-key", "default")
+    await loop.send("coder", "hi", session_id="session-one")
+    assert len(primary.requests) == 2
 
 
 @pytest.mark.asyncio

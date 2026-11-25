@@ -10,6 +10,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from core.chat.messages import InterruptionCause
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
@@ -190,6 +191,31 @@ class RouteHealth:
     def __init__(self, clock: Callable[[], float] | None = None) -> None:
         self._clock = clock if clock is not None else lambda: _wall_clock()
         self._routes: dict[str, _RouteFailures] = {}
+        self._account_resets: dict[str, float] = {}
+        self._credential_revisions: dict[str, int] = {}
+
+    def account_exhausted(self, scope: str, resets_at: datetime) -> None:
+        now = self._clock()
+        self._account_resets = {
+            key: reset for key, reset in self._account_resets.items() if reset > now
+        }
+        reset = resets_at.timestamp()
+        if reset > now:
+            self._account_resets[scope] = max(reset, self._account_resets.get(scope, reset))
+
+    def account_reset(self, scope: str) -> float | None:
+        reset = self._account_resets.get(scope)
+        if reset is not None and reset <= self._clock():
+            self._account_resets.pop(scope)
+            return None
+        return reset
+
+    def credential_revisions(self) -> dict[str, int]:
+        return self._credential_revisions.copy()
+
+    def credentials_changed(self, scope: str) -> None:
+        self._credential_revisions[scope] = self._credential_revisions.get(scope, 0) + 1
+        self._account_resets.pop(scope, None)
 
     def failed(self, route: str) -> float:
         """Record that ``route`` gave up; return when new Runs try it again."""

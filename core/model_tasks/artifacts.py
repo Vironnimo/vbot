@@ -54,6 +54,13 @@ async def persist_artifacts[Result](
 type BeforeOutputWrite = Callable[[Path], Awaitable[None]]
 
 
+async def persist_guarded_artifact[Result](
+    path: Path, before_write: BeforeOutputWrite, operation: Callable[..., Result], *args: Any
+) -> Result:
+    """Run the final authorization after worker admission and immediately before publication."""
+    return await _PERSISTENCE_WORKERS.run_guarded(lambda: before_write(path), operation, *args)
+
+
 async def guarded_artifact_path[Result](
     directory: Path,
     prefix: str,

@@ -881,12 +881,13 @@ _ASYNC_SHUTDOWN = (
     "bootstrap.aclose",
     "archive_retention.aclose",
     "commands.shutdown",
+    "video_collection.aclose",
     "triggers.aclose",
     "reflection.aclose",
     "librarian.aclose",
     "session_titles.aclose",
     "chat_runs.aclose",
-    "subagent_activity.drain_activity",
+    "subagent_activity.close_forwarding",
     "video.aclose",
     "speech.aclose",
     "provider_usage.aclose",
@@ -960,7 +961,7 @@ def _recording_service(
         aclose=partial(acall, "aclose"),
         astop=partial(acall, "astop"),
         fire_shutdown=partial(acall, "fire_shutdown"),
-        drain_activity=partial(acall, "drain_activity"),
+        close_forwarding=partial(acall, "close_forwarding"),
         shutdown=partial(acall, "shutdown"),
         cancel_catalog_refreshes=partial(call, "cancel_catalog_refreshes"),
         shutdown_catalog_refreshes=partial(acall, "shutdown_catalog_refreshes"),
@@ -1042,7 +1043,10 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_chat_sessions", "sessions"),
         ("_log_manager", "logging"),
     ):
-        fakes[attribute] = service(label)
+        service_stub = service(label)
+        if attribute == "_video":
+            service_stub.recovery = SimpleNamespace(close=service("video_collection").aclose)
+        fakes[attribute] = service_stub
     for attribute, fake in fakes.items():
         setattr(runtime, attribute, fake)
     monkeypatch.setattr(shutdown_module, "drain_debug_traces", service("debug_traces").aclose)

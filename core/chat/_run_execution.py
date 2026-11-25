@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -72,6 +73,7 @@ from core.chat.usage import (
 from core.chat.wire_shaping import _strip_assistant_reasoning_fields, extend_request_with_notes
 from core.extensions import HookContext, SessionRequestContext
 from core.performance import measure, session_track
+from core.providers.errors import ProviderUsageLimitError
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
@@ -319,13 +321,24 @@ class RunExecution:
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
-                        _add_context_note(session, request.context_note)
+                        note = request.context_note
+                        receipts = note.completion_receipts if isinstance(note, ChatMessage) else ()
+                        if receipts and isinstance(note, ChatMessage):
+                            note = replace(note, completion_receipts=())
+                            if not note.content and not note.subagent_messages:
+                                note = None
+                        _add_context_note(session, note)
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
-                        session.add_note(request.content)
+                        session.add_note_message(
+                            replace(
+                                ChatMessage.note(request.content),
+                                completion_receipts=receipts,
+                            )
+                        )
                         persisted_messages = session.take_deferred_notes()
                     elif request.input_already_persisted:
                         persisted_messages = session.take_deferred_notes()
@@ -825,6 +838,7 @@ class RunExecution:
             model_id=primary.model_id,
             reference=primary.model_reference,
         )
+        credential_revisions = health.credential_revisions()
         chain = context.fallback_routes
         served: set[str] = set()
         excluded_scopes: set[str] = set()
@@ -836,8 +850,9 @@ class RunExecution:
                 for route in (primary_route, *chain)
                 if route.reference not in served and route.connection_scope not in excluded_scopes
             ]
-            ready = [route for route in candidates if health.retry_at(route.reference) is None]
-            return ready + [route for route in candidates if route not in ready]
+            return sorted(
+                candidates, key=lambda route: health.retry_at(route.reference) is not None
+            )
 
         async def close_candidate(reference: str) -> None:
             # Cancellation callbacks and normal cleanup share ownership, so a
@@ -846,10 +861,16 @@ class RunExecution:
             if candidate is not None:
                 await settle_before_cancelling(_close_adapter(candidate.adapter))
 
+        known_reset: float | None = None
+
         async def next_target() -> tuple[_ChainRoute, _ModelTarget] | None:
+            nonlocal known_reset
             # Look ahead only as far as the next constructable route. An unusable
             # escape route must not shorten the route that can actually serve.
             for candidate in remaining():
+                if (reset := health.account_reset(candidate.connection_scope)) is not None:
+                    known_reset = min(known_reset, reset) if known_reset is not None else reset
+                    continue
                 if candidate is primary_route:
                     return candidate, primary
                 if candidate.reference in acquired:
@@ -895,6 +916,9 @@ class RunExecution:
                             target=target,
                             failure=last_failure,
                         )
+                    if (reset := health.account_reset(route.connection_scope)) is not None:
+                        known_reset = min(known_reset, reset) if known_reset is not None else reset
+                        continue
                     try:
                         completed = await self._progression._send_until_final(context, target)
                     except (ProviderError, RunInterruptedError) as failure:
@@ -907,6 +931,13 @@ class RunExecution:
                             break
                         if scope == "connection":
                             excluded_scopes.add(route.connection_scope)
+                            if (
+                                isinstance(failure, ProviderUsageLimitError)
+                                and failure.resets_at is not None
+                                and credential_revisions.get(route.connection_scope)
+                                == health.credential_revisions().get(route.connection_scope)
+                            ):
+                                health.account_exhausted(route.connection_scope, failure.resets_at)
                         elif fallback_follows and (
                             isinstance(failure, RunInterruptedError) or failure.retryable
                         ):
@@ -921,7 +952,14 @@ class RunExecution:
                 finally:
                     if target is not primary:
                         await close_candidate(route.reference)
-        # A route always runs first, so a failure ended the loop.
+        if last_failure is None and known_reset is not None:
+            reset_time = datetime.fromtimestamp(known_reset, UTC)
+            cached_limit = ProviderUsageLimitError(
+                f"Subscription usage limit reached; it resets at {reset_time:%Y-%m-%d %H:%M %Z}.",
+                resets_at=reset_time,
+            )
+            await _persist_run_error(run, session, cached_limit)
+            raise cached_limit
         assert first_failure is not None and last_failure is not None
         if not isinstance(last_failure, RunInterruptedError):
             await _persist_run_error(run, session, last_failure)
@@ -942,7 +980,11 @@ class RunExecution:
     ) -> None:
         """Record the switch to ``to_route`` and rebuild the request for ``target``."""
         from_model = from_route.binding if from_route else context.agent.model
-        retry_at = self._route_health.retry_at(from_route.reference) if from_route else None
+        retry_at = None
+        if from_route is not None:
+            retry_at = self._route_health.account_reset(
+                from_route.connection_scope
+            ) or self._route_health.retry_at(from_route.reference)
         retry_at_text = (
             format_canonical_timestamp(datetime.fromtimestamp(retry_at, UTC))
             if retry_at is not None

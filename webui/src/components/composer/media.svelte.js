@@ -1,6 +1,9 @@
 import { t, tOr } from '$lib/i18n.js';
 import {
   getPendingAttachments,
+  currentMediaGeneration,
+  parkDraftMedia,
+  takeDraftMedia,
   setPendingAttachments,
   subscribePendingAttachments,
 } from '$lib/composerMemory.js';
@@ -12,11 +15,17 @@ import {
 } from '$lib/api.js';
 import { createAudioRecorder } from '$lib/audioRecorder.js';
 import {
+  createMediaTransfer,
+  interruptedTransfer,
+} from '$lib/api/mediaTransfers.js';
+import { onServerReady } from '$lib/connectionState.js';
+import {
   dateTimePartsInZone,
   dateTimePrefs,
 } from '$lib/dateTimePrefs.svelte.js';
 
 export function createComposerMedia(context) {
+  const ownerGeneration = currentMediaGeneration();
   const ATTACHMENT_ACCEPT =
     'image/*,audio/*,video/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
@@ -63,6 +72,11 @@ export function createComposerMedia(context) {
   let activeRecorder = null;
 
   let transcriptionAbort = null;
+  let pendingRecording = null;
+  let retryRecording = $state(false);
+  let recordingOutcomeUnknown = $state(false);
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- contains native File and transport handles, UI state lives in the cards.
+  const uploads = new Map();
 
   let recorderRequestGeneration = 0;
 
@@ -71,7 +85,7 @@ export function createComposerMedia(context) {
   let attachmentToastTimeoutId = null;
 
   let hasUploadingAttachments = $derived(
-    pendingAttachments.some((attachment) => attachment.uploading),
+    pendingAttachments.some((attachment) => !attachment.attachment_id),
   );
 
   let voiceBusy = $derived(
@@ -117,7 +131,7 @@ export function createComposerMedia(context) {
       ]),
     );
     const restored = current.filter((attachment) => {
-      if (attachment.uploading) return true;
+      if (!attachment.attachment_id) return true;
       if (!Object.hasOwn(stored, attachment.attachment_id)) {
         safeRevokeObjectUrl(attachment.preview_url);
         return false;
@@ -173,6 +187,11 @@ export function createComposerMedia(context) {
   };
 
   const unsubscribeAttachments = subscribePendingAttachments((change) => {
+    if (change?.mediaKey) {
+      if (!destroyed && change.mediaKey === context.draftKey)
+        restoreMedia(change.mediaKey);
+      return;
+    }
     if (change?.fromAgent) {
       const prefix = `${change.fromAgent}::`;
       pendingAttachmentsByScope = Object.fromEntries(
@@ -224,10 +243,6 @@ export function createComposerMedia(context) {
     }, 3500);
   };
 
-  const showAttachmentUploadErrorToast = () => {
-    showComposerErrorToast(t('chat.attachment.uploadFailed'));
-  };
-
   const showTranscriptionError = (message) => {
     const normalizedMessage =
       typeof message === 'string' && message.length > 0
@@ -238,6 +253,13 @@ export function createComposerMedia(context) {
   };
 
   const removePendingAttachmentByLocalId = (key, localId) => {
+    const upload = uploads.get(localId);
+    if (upload) {
+      uploads.delete(localId);
+      upload.abort.abort();
+      upload.transfer.cancel();
+      clearTimeout(upload.timer);
+    }
     const scope = attachmentScopeForDraftKey(key);
     const existingAttachment = attachmentsForScope(scope).find(
       (attachment) => attachment.local_id === localId,
@@ -311,39 +333,143 @@ export function createComposerMedia(context) {
       ...newAttachments,
     ]);
 
-    const uploadTasks = selectedFiles.map(async (file, index) => {
+    const uploadTasks = selectedFiles.map((file, index) => {
       const localId = newAttachments[index].local_id;
-      try {
-        const result = await uploadAttachment(file);
-        const holdingKey = draftKeyHoldingAttachment(
-          localId,
-          attachmentDraftKey,
-        );
-        updateAttachmentsForDraftKey(holdingKey, (attachments) =>
-          attachments.map((attachment) => {
-            if (attachment.local_id !== localId) {
-              return attachment;
-            }
-            return {
-              ...attachment,
-              attachment_id: result.attachment_id,
-              filename: result.filename,
-              media_type: result.media_type,
-              uploading: false,
-            };
-          }),
-        );
-      } catch {
-        removePendingAttachmentByLocalId(
-          draftKeyHoldingAttachment(localId, attachmentDraftKey),
-          localId,
-        );
-        showAttachmentUploadErrorToast();
-      }
+      uploads.set(localId, {
+        file,
+        key: attachmentDraftKey,
+        transfer: createMediaTransfer('attachment'),
+        abort: new AbortController(),
+        retryAvailable: false,
+        retried: false,
+      });
+      return uploadFile(localId);
     });
-
     await Promise.all(uploadTasks);
   };
+
+  async function uploadFile(localId, manual = false) {
+    const upload = uploads.get(localId);
+    if (!upload || upload.busy) return;
+    if (manual && upload.renew) {
+      upload.transfer.cancel();
+      upload.transfer = createMediaTransfer('attachment');
+      upload.renew = false;
+    }
+    clearTimeout(upload.timer);
+    upload.busy = true;
+    upload.retryAvailable = false;
+    const update = (changes) => {
+      const key = draftKeyHoldingAttachment(localId, upload.key);
+      updateAttachmentsForDraftKey(key, (attachments) =>
+        attachments.map((attachment) =>
+          attachment.local_id === localId
+            ? { ...attachment, ...changes }
+            : attachment,
+        ),
+      );
+    };
+    update({ uploading: true, retryAvailable: false });
+    try {
+      const result = await uploadAttachment(upload.file, {
+        transfer: upload.transfer,
+        signal: upload.abort.signal,
+      });
+      if (
+        !uploads.delete(localId) ||
+        ownerGeneration !== currentMediaGeneration()
+      )
+        return;
+      update({
+        attachment_id: result.attachment_id,
+        filename: result.filename,
+        media_type: result.media_type,
+        uploading: false,
+      });
+    } catch (error) {
+      if (!uploads.has(localId)) return;
+      upload.retryAvailable = interruptedTransfer(error);
+      upload.renew = !upload.retryAvailable;
+      upload.error = error.message || t('chat.attachment.uploadFailed');
+      if (!destroyed) {
+        update({ uploading: false, retryAvailable: true, error: upload.error });
+        if (upload.retryAvailable && !upload.retried) {
+          upload.retried = true;
+          upload.timer = setTimeout(() => void uploadFile(localId), 1000);
+        }
+        return;
+      }
+      parkUpload(localId, upload);
+    } finally {
+      upload.busy = false;
+    }
+  }
+
+  function parkUpload(id, upload) {
+    clearTimeout(upload.timer);
+    uploads.delete(id);
+    const key = draftKeyHoldingAttachment(id, upload.key);
+    const index = cachedAttachmentsForScope(
+      attachmentScopeForDraftKey(key),
+    ).findIndex((card) => card.local_id === id);
+    parkDraftMedia(
+      key,
+      { kind: 'file', upload, index, transfer: upload.transfer },
+      ownerGeneration,
+    );
+  }
+
+  function restoreMedia(key) {
+    if (!key || destroyed) return;
+    for (const entry of takeDraftMedia(
+      key,
+      !pendingRecording && recordingState === 'idle',
+    )) {
+      if (entry.kind === 'recording') {
+        pendingRecording = entry.recording;
+        retryRecording = true;
+        recordingOutcomeUnknown = !!pendingRecording.unknown;
+        if (!pendingRecording.renew)
+          queueMicrotask(() => void transcribeRecording());
+        continue;
+      }
+      const upload = entry.upload;
+      const id = nextAttachmentLocalId();
+      upload.key = key;
+      uploads.set(id, upload);
+      const file = upload.file;
+      const card = {
+        local_id: id,
+        attachment_id: '',
+        filename: file.name || 'upload.bin',
+        media_type: file.type || 'application/octet-stream',
+        preview_url: globalThis.URL?.createObjectURL?.(file) ?? '',
+        uploading: false,
+        retryAvailable: true,
+        error: upload.error,
+      };
+      updateAttachmentsForDraftKey(key, (cards) => {
+        const next = [...cards];
+        next.splice(entry.index < 0 ? next.length : entry.index, 0, card);
+        return next;
+      });
+      if (upload.retryAvailable) queueMicrotask(() => void uploadFile(id));
+    }
+  }
+
+  function leaveDraft(key) {
+    if (pendingRecording && key) {
+      const recording = pendingRecording;
+      clearTimeout(recording.timer);
+      pendingRecording = null;
+      parkDraftMedia(
+        key,
+        { kind: 'recording', recording, transfer: recording.transfer },
+        ownerGeneration,
+      );
+    }
+    cancelActiveRecording();
+  }
 
   const handleFilePickerClick = () => {
     if (context.disabled) {
@@ -405,43 +531,87 @@ export function createComposerMedia(context) {
     recordingState = 'transcribing';
     transcriptionProgress = { phase: 'uploading', elapsed_seconds: 0 };
     const requestGeneration = ++recorderRequestGeneration;
-    const abort = new AbortController();
-    transcriptionAbort = abort;
     try {
       const audioBlob = await recorder.stop();
       if (destroyed || requestGeneration !== recorderRequestGeneration) return;
       activeRecorder = null;
-      const result = await transcribeSpeech(audioBlob, {
-        signal: abort.signal,
+      pendingRecording = {
+        blob: audioBlob,
         filename: recorder.filename(),
+        transfer: createMediaTransfer('transcription'),
+        retried: false,
+      };
+      await transcribeRecording();
+    } catch (error) {
+      if (destroyed || requestGeneration !== recorderRequestGeneration) return;
+      cancelActiveRecording();
+      showTranscriptionError(
+        `${t('chat.voice.transcriptionFailed')} ${error.message ?? ''}`.trim(),
+      );
+    }
+  };
+
+  async function transcribeRecording(manual = false) {
+    const recording = pendingRecording;
+    if (!recording || transcriptionAbort) return;
+    if (manual && recording.renew) {
+      recording.transfer.cancel();
+      recording.transfer = createMediaTransfer('transcription');
+      recording.renew = false;
+    }
+    clearTimeout(recording.timer);
+    retryRecording = false;
+    recordingState = 'transcribing';
+    transcriptionProgress = { phase: 'uploading', elapsed_seconds: 0 };
+    const requestGeneration = recorderRequestGeneration;
+    const abort = new AbortController();
+    transcriptionAbort = abort;
+    try {
+      const result = await transcribeSpeech(recording.blob, {
+        transfer: recording.transfer,
+        signal: abort.signal,
+        filename: recording.filename,
         onProgress: (progress) => {
           if (!destroyed && requestGeneration === recorderRequestGeneration)
             transcriptionProgress = progress;
         },
       });
       if (destroyed || requestGeneration !== recorderRequestGeneration) return;
+      pendingRecording = null;
       await context.insertTranscript(result.text);
     } catch (error) {
       if (destroyed || requestGeneration !== recorderRequestGeneration) return;
-      try {
-        recorder.cancel?.();
-      } catch {
-        // Preserve the transcription error; cleanup was already requested.
+      if (pendingRecording) {
+        retryRecording = true;
+        recordingOutcomeUnknown = error?.status === 410;
+        recording.unknown = recordingOutcomeUnknown;
+        recording.renew = !interruptedTransfer(error);
+        if (!recording.renew && !recording.retried) {
+          recording.retried = true;
+          recording.timer = setTimeout(() => void transcribeRecording(), 1000);
+        }
+      } else {
+        recording.transfer.cancel();
+        pendingRecording = null;
       }
       showTranscriptionError(
         `${t('chat.voice.transcriptionFailed')} ${error.message ?? ''}`.trim(),
       );
     } finally {
       if (requestGeneration === recorderRequestGeneration) {
-        activeRecorder = null;
         transcriptionAbort = null;
         recordingState = 'idle';
+        if (!pendingRecording) restoreMedia(context.draftKey);
       }
     }
-  };
+  }
 
   const cancelActiveRecording = () => {
     recorderRequestGeneration += 1;
+    clearTimeout(pendingRecording?.timer);
+    pendingRecording?.transfer.cancel();
+    pendingRecording = null;
+    retryRecording = false;
     transcriptionAbort?.abort();
     transcriptionAbort = null;
     recordingState = 'idle';
@@ -457,6 +627,12 @@ export function createComposerMedia(context) {
       recordingState = 'idle';
     }
   };
+
+  const unsubscribeReady = onServerReady(() => {
+    for (const [localId, upload] of uploads)
+      if (upload.retryAvailable) void uploadFile(localId);
+    if (retryRecording && !pendingRecording?.renew) void transcribeRecording();
+  });
 
   const handleFilePickerChange = async (event) => {
     const input = event.currentTarget;
@@ -520,17 +696,38 @@ export function createComposerMedia(context) {
   };
   function destroy() {
     destroyed = true;
+    unsubscribeReady();
+    for (const [id, upload] of uploads) {
+      clearTimeout(upload.timer);
+      // A still-sending upload can publish its id into its keyed draft after
+      // a component remount. An abandoned retry has no mounted owner.
+      if (!upload.busy) parkUpload(id, upload);
+      else if (!upload.key) removePendingAttachmentByLocalId('', id);
+    }
     unsubscribeAttachments();
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
       attachmentToastTimeoutId = null;
     }
-    cancelActiveRecording();
+    leaveDraft(context.draftKey);
     releasePendingAttachmentPreviews();
   }
   return {
     destroy,
-    cancelActiveRecording,
+    leaveDraft,
+    restoreMedia,
+    uploadFile,
+    transcribeRecording,
+    get retryRecording() {
+      return retryRecording;
+    },
+    get recordingOutcomeUnknown() {
+      return recordingOutcomeUnknown;
+    },
+    discardRecording() {
+      cancelActiveRecording();
+      restoreMedia(context.draftKey);
+    },
     get ATTACHMENT_ACCEPT() {
       return ATTACHMENT_ACCEPT;
     },

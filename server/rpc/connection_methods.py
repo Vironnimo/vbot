@@ -599,6 +599,10 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 "enabled": True,
             },
         )
+        if result["external_auth"].get("status") == "connected":
+            state.runtime.chat_loop.account_credentials_changed(
+                provider_id, connection.id, DEFAULT_ACCOUNT_ID
+            )
         return {
             **result,
             **result["external_auth"],
@@ -631,6 +635,9 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
             # also newly enables this provider's models, so signal the generic
             # reload alongside it (only on success — connect-start does not).
             if success:
+                state.runtime.chat_loop.account_credentials_changed(
+                    provider_id, connection.id, account_id
+                )
                 publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
 
         session = await engine.connect(

@@ -112,8 +112,15 @@ class ConnectionRunner:
         masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
         on_change: Callable[[], None] | None = None,
         recovery: Any = None,
+        preferred_transport: str | None = None,
     ) -> None:
         self.config = config
+        self._preferred_transport = (
+            (preferred_transport if preferred_transport in {"http", "sse"} else "http")
+            if config["transport"] == "auto"
+            else config["transport"]
+        )
+        self.active_transport = self._preferred_transport
         self.host = host
         self.inputs = inputs
         self.publish = publish
@@ -140,7 +147,7 @@ class ConnectionRunner:
         self._tracks_delivery = False
         self._events = ConnectionEvents(
             host,
-            lambda: self.config,
+            lambda: {**self.config, "transport": self.active_transport},
             masker=masker,
             invocation=self._event_context,
             on_stderr=self._stderr_changed,
@@ -500,44 +507,71 @@ class ConnectionRunner:
             return f"{waited}: its sign-in is waiting for the user"
         return f"{waited}; last error: {self.error}" if self.error else waited
 
+    async def _open_negotiated(self, stack: AsyncExitStack) -> None:
+        """Negotiate only during initialization, before any call can enter the connection."""
+        modes: tuple[str, ...] = (self.config["transport"],)
+        if modes == ("auto",):
+            first = self._preferred_transport
+            modes = (first, "sse" if first == "http" else "http")
+        for index, mode in enumerate(modes):
+            self.active_transport = mode
+            self._events.observe_status(200)
+            try:
+                async with AsyncExitStack() as attempt:
+                    await self._open_client(attempt)
+                    stack.push_async_callback(attempt.pop_all().aclose)
+            except Exception, BaseExceptionGroup:
+                current = asyncio.current_task()
+                if (
+                    (current and current.cancelling())
+                    or index + 1 == len(modes)
+                    or not self._events.transport_refused
+                ):
+                    raise
+                continue
+            self._preferred_transport = mode
+            return
+
+    async def _open_client(self, stack: AsyncExitStack) -> None:
+        self._transport._http_marks_delivery = False
+        transport = await self._transport.open(stack)
+        # A transport the SDK enters itself; an in-process server has no streams.
+        self._tracks_delivery = isinstance(transport, AbstractAsyncContextManager)
+        if self._tracks_delivery:
+            transport = _ObservedTransport(
+                transport, self, marks_delivery=not self._transport._http_marks_delivery
+            )
+        # A capability the connection's policy turns off is not offered at all.
+        sampling = self.config.get("sampling", "off") != "off"
+        client = Client(
+            transport,
+            read_timeout_seconds=self.config["timeout"],
+            mode="legacy" if self.active_transport == "sse" else "auto",
+            sampling_callback=self._requests.sample if sampling else None,
+            sampling_capabilities=(
+                types.SamplingCapability(tools=types.SamplingToolsCapability())
+                if sampling
+                else None
+            ),
+            elicitation_callback=self._requests.elicit,
+            list_roots_callback=self._requests.roots if self._protocol._offers_roots() else None,
+            logging_callback=self._requests.log,
+            message_handler=self._protocol._message,
+            client_info=types.Implementation(name="vbot", version="1"),
+            # No response cache: every listing and read reaches the server (see the
+            # MCP domain map, Compatibility boundary).
+            cache=None,
+            # Offered on 2026-07-28 connections only: legacy tasks need no declaration.
+            extensions=[TasksExtension(self._protocol._resolve_task)],
+        )
+        self.client = await stack.enter_async_context(client)
+
     async def _run(self) -> None:
         established = False
         try:
             async with AsyncExitStack() as stack:
-                self._transport._http_marks_delivery = False
-                transport = await self._transport.open(stack)
-                # A transport the SDK enters itself; an in-process server has no streams.
-                self._tracks_delivery = isinstance(transport, AbstractAsyncContextManager)
-                if self._tracks_delivery:
-                    transport = _ObservedTransport(
-                        transport, self, marks_delivery=not self._transport._http_marks_delivery
-                    )
-                # A capability the connection's policy turns off is not offered at all.
-                sampling = self.config.get("sampling", "off") != "off"
-                client = Client(
-                    transport,
-                    read_timeout_seconds=self.config["timeout"],
-                    mode="legacy" if self.config["transport"] == "sse" else "auto",
-                    sampling_callback=self._requests.sample if sampling else None,
-                    sampling_capabilities=(
-                        types.SamplingCapability(tools=types.SamplingToolsCapability())
-                        if sampling
-                        else None
-                    ),
-                    elicitation_callback=self._requests.elicit,
-                    list_roots_callback=self._requests.roots
-                    if self._protocol._offers_roots()
-                    else None,
-                    logging_callback=self._requests.log,
-                    message_handler=self._protocol._message,
-                    client_info=types.Implementation(name="vbot", version="1"),
-                    # No response cache: every listing and read reaches the server (see the
-                    # MCP domain map, Compatibility boundary).
-                    cache=None,
-                    # Offered on 2026-07-28 connections only: legacy tasks need no declaration.
-                    extensions=[TasksExtension(self._protocol._resolve_task)],
-                )
-                self.client = await stack.enter_async_context(client)
+                await self._open_negotiated(stack)
+                assert self.client is not None
                 self._protocol._check_results(self.client)
                 self._protocol._transport_warned = False
                 await self._protocol._refresh()

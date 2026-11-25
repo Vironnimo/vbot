@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, override
 from urllib.parse import quote
@@ -36,7 +36,7 @@ from core.providers.task_client import (
     is_omittable_option,
     merge_extra_options,
 )
-from core.utils.errors import VBotError
+from core.utils.errors import ConfigError, VBotError
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -69,6 +69,10 @@ _LOGGER = get_logger("video.providers")
 type CancelledJobHandler = Callable[[str, asyncio.Task[JsonObject]], None]
 
 
+class VideoJobEndedError(ProviderError):
+    """The Provider confirms a submitted job ended without a video."""
+
+
 class VideoJobUnfinishedError(ProviderOutcomeUnknownError):
     """A submitted Video job whose result vBot could not collect.
 
@@ -80,6 +84,10 @@ class VideoJobUnfinishedError(ProviderOutcomeUnknownError):
         self.job_id = job_id
         self.reason = reason
         super().__init__(f"video job {job_id}: {reason}", operation_key=job_id)
+
+
+class VideoJobUncollectableError(VideoJobUnfinishedError):
+    """A completed interaction contains video data vBot cannot read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +112,9 @@ class ProviderVideoClient(ProviderTaskClient):
         poll_timeout: float = VIDEO_POLL_TIMEOUT_SECONDS,
         poll_interval: float | None = None,
         on_cancelled_job: CancelledJobHandler | None = None,
+        accepted: Callable[[str, str], Awaitable[None]] | None = None,
+        cancel_at_provider: Callable[[], bool] | None = None,
+        ended_without_video: Callable[[], Awaitable[None]] | None = None,
     ) -> VideoGenerationResult:
         """Submit one job, wait for it, and collect its video.
 
@@ -139,11 +150,19 @@ class ProviderVideoClient(ProviderTaskClient):
                 parse=_parse_created_video_response,
                 retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
             )
+        if accepted is not None:
+            try:
+                await accepted(job_id, self._base_url)
+            except Exception as error:
+                raise VideoJobUnfinishedError(
+                    job_id, "the accepted job could not be recorded"
+                ) from error
         polling = asyncio.create_task(
             self._await_completion(
                 job_id,
                 created,
                 job=job,
+                ended_without_video=ended_without_video,
                 poll_timeout=poll_timeout,
                 poll_interval=VIDEO_POLL_INTERVAL_SECONDS
                 if poll_interval is None
@@ -163,13 +182,47 @@ class ProviderVideoClient(ProviderTaskClient):
                     asyncio.create_task(
                         self._cancel_and_follow(job_id, polling), name="video-job-cancel"
                     )
-                    if google
+                    if google and (cancel_at_provider is None or cancel_at_provider())
                     else polling,
                 )
             else:
                 polling.cancel()
             raise
-        if google:
+        try:
+            return await self._collect_video(job_id, status_payload)
+        except VideoJobEndedError, ProviderContentRefusedError:
+            if ended_without_video is not None:
+                await ended_without_video()
+            raise
+
+    async def collect_existing(self, job_id: str, origin: str) -> VideoGenerationResult | None:
+        """Check one accepted job once, keeping credentials and the id on its original endpoint."""
+        if origin != self._base_url:
+            raise ConfigError("Video endpoint changed after submission")
+        job = _GOOGLE_JOB if self._provider.adapter == "google" else _OPENROUTER_JOB
+        status = await self.get_and_parse(
+            job.status_path.format(job_id=quote(job_id, safe="")),
+            timeout=VIDEO_REQUEST_TIMEOUT_SECONDS,
+            parse=job.parse,
+        )
+        if failure := job.failure(status):
+            raise VideoJobEndedError(str(failure), retryable=False)
+        if status.get("status") not in job.done:
+            return None
+        try:
+            return await self._collect_video(job_id, status)
+        except VideoJobUnfinishedError as error:
+            cause = error.__cause__
+            if isinstance(cause, ProviderError) and cause.status_code in {404, 410}:
+                raise VideoJobEndedError(
+                    "The video is no longer available", retryable=False
+                ) from cause
+            raise
+
+    async def _collect_video(
+        self, job_id: str, status_payload: JsonObject
+    ) -> VideoGenerationResult:
+        if self._provider.adapter == "google":
             content, media_type = _google_video_content(job_id, status_payload)
             return VideoGenerationResult(
                 data=content,
@@ -218,6 +271,7 @@ class ProviderVideoClient(ProviderTaskClient):
         job: _JobWire,
         poll_timeout: float,
         poll_interval: float,
+        ended_without_video: Callable[[], Awaitable[None]] | None = None,
     ) -> JsonObject:
         """Poll the job until it is done; a failed job raises its reason.
 
@@ -232,6 +286,8 @@ class ProviderVideoClient(ProviderTaskClient):
                 while status_payload.get("status") not in job.done:
                     failure = job.failure(status_payload)
                     if failure is not None:
+                        if ended_without_video is not None:
+                            await ended_without_video()
                         raise failure
                     await asyncio.sleep(poll_interval)
                     try:
@@ -539,20 +595,20 @@ def _google_video_content(job_id: str, payload: Mapping[str, Any]) -> tuple[byte
     if not videos:
         if texts:
             raise ProviderContentRefusedError("\n".join(texts)[:_MAX_REASON_CHARS])
-        raise ProviderError(
+        raise VideoJobEndedError(
             f"Google ended the video job ({payload.get('status')}) without a video.",
             retryable=False,
         )
     video = videos[0]
     data = video.get("data")
     if not isinstance(data, str) or not data:
-        raise VideoJobUnfinishedError(job_id, "Google returned the video without inline data")
+        raise VideoJobUncollectableError(job_id, "Google returned the video without inline data")
     try:
         content_bytes = base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise VideoJobUnfinishedError(job_id, "Google returned undecodable video data") from exc
+        raise VideoJobUncollectableError(job_id, "Google returned undecodable video data") from exc
     if not content_bytes:
-        raise VideoJobUnfinishedError(job_id, "Google returned empty video data")
+        raise VideoJobUncollectableError(job_id, "Google returned empty video data")
     media_type = sniff_media_type(content_bytes, "video")
     if not media_type.startswith("video/"):
         declared = video.get("mime_type")

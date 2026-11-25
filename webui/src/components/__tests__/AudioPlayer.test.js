@@ -693,12 +693,14 @@ it.each([false, true])(
 it.each([
   { outcome: 'ended', seekTo: null, artifact: 'ready' },
   { outcome: 'failed', seekTo: null, artifact: 'ready' },
+  { outcome: 'failed', seekTo: null, artifact: 'pending-source' },
+  { outcome: 'failed-paused', seekTo: null, artifact: 'pending-source' },
   { outcome: 'cancelled', seekTo: null, artifact: 'ready' },
   { outcome: 'ended', seekTo: 30, artifact: 'ready' },
   { outcome: 'ended', seekTo: 30, artifact: 'pending-metadata' },
   { outcome: 'ended', seekTo: 30, artifact: 'pending-source' },
 ])(
-  'manually replays early speech after $outcome with seek=$seekTo and artifact=$artifact',
+  'continues or replays early speech after $outcome with seek=$seekTo and artifact=$artifact',
   async ({ outcome, seekTo, artifact }) => {
     let report;
     const stream = {
@@ -754,20 +756,36 @@ it.each([
     control('audio.play').click();
     await flush();
     expect(stream.play).toHaveBeenCalledTimes(2);
+    if (outcome === 'failed-paused') {
+      control('audio.pause').click();
+      await flush();
+    }
     if (outcome === 'cancelled') props.cancelled = true;
     else
       report({
         paused: true,
         loading: false,
-        currentTime: 60,
+        currentTime: outcome.startsWith('failed') ? 3.5 : 60,
         duration: 60,
         ended: outcome === 'ended',
-        error:
-          outcome === 'failed'
-            ? new Error('test-owned stream failure')
-            : undefined,
+        error: outcome.startsWith('failed')
+          ? new Error('test-owned stream failure')
+          : undefined,
       });
     await flush();
+    if (outcome === 'failed') {
+      if (artifact === 'pending-source') {
+        expect(play).not.toHaveBeenCalled();
+        props.src = '/api/speech/artifacts/final';
+        props.playback = '';
+        await flush();
+        ready(audio, 60);
+        await flush();
+      }
+      expect(play).toHaveBeenCalledOnce();
+      expect(audio.currentTime).toBe(3.5);
+      return;
+    }
     expect(play).not.toHaveBeenCalled();
     if (seekTo !== null) {
       const seek = control('audio.seek');
@@ -787,12 +805,13 @@ it.each([
     await flush();
     expect(audio.getAttribute('src')).toBe(props.src);
     expect(play).toHaveBeenCalledOnce();
-    expect(audio.currentTime).toBe(seekTo ?? 0);
+    const position = seekTo ?? (outcome === 'failed-paused' ? 3.5 : 0);
+    expect(audio.currentTime).toBe(position);
     if (artifact !== 'ready') {
       ready(audio, 60);
       await flush();
-      expect(audio.currentTime).toBe(seekTo);
-      expect(control('audio.seek').value).toBe(String(seekTo));
+      expect(audio.currentTime).toBe(position);
+      expect(control('audio.seek').value).toBe(String(position));
       expect(play).toHaveBeenCalledOnce();
     }
   },

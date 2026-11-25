@@ -30,6 +30,9 @@ Connection-level base URL and models endpoint override Provider-level values. `m
 
 ## Identity and Accounts
 
+Chat remembers a Provider-reported subscription reset on its resolved Account. API key changes through the credential store and a successful new OAuth login invalidate that Account's observation (see `chat/run-execution.md` -> Model and Connection resolution).
+
+
 Public Connection ids use `provider:connection[:account]`. Account ids match `^[a-z0-9][a-z0-9_]{0,31}$`; `default` is the unnamed slot. Account selection is deterministic: default first, then remaining ids sorted.
 
 API-key Accounts map to environment keys through `derive_credential_key()`: default uses the base key; a named Account uses `BASE__<ACCOUNT>`. `BASE__DEFAULT` is rejected as a second spelling. Discovery and credential lookup share one Account selection: suffix casing is normalized, process environment wins over the data-directory credential even for an empty value, and within one source the canonical uppercase suffix wins over case aliases (remaining aliases are ordered lexically). Account projections keep the canonical derived key. `ProviderRegistry.credential_keys()` lists every Connection's base key; with the Account variants they are credentials a confined shell withholds (`tools/shell.md` -> Environment layers).

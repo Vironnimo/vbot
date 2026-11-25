@@ -12,7 +12,12 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { isSettingsConflict, rebaseDraft } from '$lib/settingsSave.js';
+  import {
+    isSettingsConflict,
+    rebaseDraft,
+    interruptedWrite,
+    InterruptedSettingsSave,
+  } from '$lib/settingsSave.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -378,6 +383,15 @@
     return normalizeRouting(item?.routing);
   }
 
+  async function adoptSavedRouting(submitted) {
+    const saved = savedRouting(await getSettings());
+    const rebased = rebaseDraft(routing, routingOrigin, saved, { submitted });
+    routingOrigin = saved;
+    routing = rebased.value;
+    dirty = JSON.stringify(routing) !== JSON.stringify(saved);
+    return rebased.conflicts.length > 0;
+  }
+
   // Writes the draft; on a conflict, rebases it onto the saved routing (a
   // policy changed on both sides takes the saved one) and retries the rest.
   // Returns whether any of the draft's changes gave way to the saved routing.
@@ -393,19 +407,22 @@
         routingOrigin = submitted;
         return conflicted;
       } catch (error) {
+        if (interruptedWrite(error))
+          throw new InterruptedSettingsSave(error, async () => {
+            const conflict = await adoptSavedRouting(submitted);
+            if (conflict)
+              onToast({ title: t('settings.saveConflict'), variant: 'error' });
+            return dirty;
+          });
         if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
           throw error;
         }
       }
-      const saved = savedRouting(await getSettings());
-      const rebased = rebaseDraft(routing, routingOrigin, saved);
-      conflicted ||= rebased.conflicts.length > 0;
-      routingOrigin = saved;
-      routing = rebased.value;
-      if (JSON.stringify(rebased.value) === JSON.stringify(saved)) {
+      conflicted = (await adoptSavedRouting()) || conflicted;
+      if (!dirty) {
         return conflicted;
       }
-      const invalid = validateRouting(rebased.value);
+      const invalid = validateRouting(routing);
       if (invalid) throw new Error(invalid);
     }
   }
@@ -429,6 +446,7 @@
         title: error?.message || t('settings.providers.openrouter.saveError'),
         variant: 'error',
       });
+      if (error instanceof InterruptedSettingsSave) throw error;
       return false;
     } finally {
       saving = false;

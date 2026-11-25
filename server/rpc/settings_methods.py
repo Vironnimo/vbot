@@ -722,6 +722,7 @@ def _settings_response_payload(state: Any) -> JsonObject:
         },
         "web_search": {
             "provider": web_search["provider"],
+            "fallback_provider": web_search["fallback_provider"],
             "available_providers": sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS),
             "default_count": web_search["default_count"],
             "searxng": dict(web_search["searxng"]),

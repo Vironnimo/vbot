@@ -15,6 +15,18 @@ const WS_HEARTBEAT_TIMEOUT_MS = 60000;
 // The public state carries only what callers read; the socket, timers and
 // backoff bookkeeping stay private to this module, keyed by that state object.
 const transports = new WeakMap();
+const readyListeners = new Set();
+
+// Recovery waits for a confirmed server hello. A browser 'online' event can
+// fire while this particular server is still unreachable.
+export function onServerReady(listener) {
+  readyListeners.add(listener);
+  return () => readyListeners.delete(listener);
+}
+
+export function notifyServerReady() {
+  for (const listener of readyListeners) listener();
+}
 
 function transportOf(state) {
   let transport = transports.get(state);
@@ -84,6 +96,7 @@ export function connect(state, handlers = {}) {
                 : 0;
             }
             handlers.onEvent?.(event);
+            notifyServerReady();
             return;
           }
           if (event.sequence > state.lastSequence) {

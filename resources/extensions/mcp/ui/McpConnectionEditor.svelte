@@ -34,6 +34,7 @@
   let errorBanner = $state();
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
+    { value: 'auto', label: t('mcp.auto') },
     { value: 'http', label: t('mcp.http') },
     {
       value: 'sse',

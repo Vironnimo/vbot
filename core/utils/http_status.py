@@ -42,6 +42,10 @@ from email.utils import parsedate_to_datetime
 # Retryable under the shared default; stricter callers may suppress ambiguous replays.
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504})
 
+# A single response may delay later independent requests, but cannot disable an
+# endpoint for the lifetime of the process with a malformed or distant reset.
+MAX_HTTP_COOLDOWN_SECONDS = 3600.0
+
 # Additionally retryable only for idempotent requests (safe to repeat).
 IDEMPOTENT_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({500})
 
@@ -99,7 +103,7 @@ def parse_retry_after(headers: Mapping[str, str]) -> float | None:
             from_ms = float(milliseconds) / 1000.0
         except ValueError:
             from_ms = None
-        if from_ms is not None and from_ms >= 0:
+        if from_ms is not None and math.isfinite(from_ms) and from_ms >= 0:
             return from_ms
 
     raw = headers.get("retry-after")
@@ -115,7 +119,7 @@ def parse_retry_after(headers: Mapping[str, str]) -> float | None:
     except ValueError:
         seconds = None
     if seconds is not None:
-        return seconds if seconds >= 0 else None
+        return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
     # HTTP-date form: seconds from now, never negative (a past date means "now").
     try:
@@ -265,3 +269,4 @@ class HttpRequestFailure:
     message: str
     retryable: bool = False
     attempts_made: int | None = None
+    retry_after: float | None = None

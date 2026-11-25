@@ -63,6 +63,7 @@ from core.chat.messages import GroupRole
 from core.config_validation import JsonObject
 from core.database import Database, canonical_database_path, open_database
 from core.tools.availability import ToolAccess
+from core.utils.logging import get_logger
 from core.utils.timestamps import (
     format_canonical_timestamp,
     parse_canonical_timestamp,
@@ -79,6 +80,8 @@ PENDING_REPLY_RETENTION_SECONDS = 7 * 24 * 3600
 
 RUN_BUTTON_RETENTION = timedelta(days=30)
 RUN_BUTTON_PRUNE_BATCH_SIZE = 256
+
+_LOGGER = get_logger("channels.state")
 
 _CONVERSATION_KINDS = frozenset({"direct", "group"})
 
@@ -829,25 +832,40 @@ class ChannelStateStore:
         normalized_id = _normalize_channel_id(channel_id)
         sending_at = utc_now_timestamp()
 
-        def claim(connection: sqlite3.Connection) -> bool:
+        cutoff = format_canonical_timestamp(
+            datetime.now(UTC) - timedelta(seconds=PENDING_REPLY_RETENTION_SECONDS)
+        )
+
+        def claim(connection: sqlite3.Connection) -> tuple[bool, bool]:
             claimed = connection.execute(
                 "UPDATE channel_pending_replies SET sending_at = ? "
-                "WHERE channel_id = ? AND reply_id = ? AND sending_at IS NULL",
-                (sending_at, normalized_id, reply_id),
+                "WHERE channel_id = ? AND reply_id = ? AND sending_at IS NULL "
+                "AND (retry_at IS NULL OR created_at >= ?)",
+                (sending_at, normalized_id, reply_id, cutoff),
             ).rowcount
-            return claimed == 1
+            if claimed:
+                return True, False
+            expired = connection.execute(
+                "DELETE FROM channel_pending_replies WHERE channel_id = ? AND reply_id = ? "
+                "AND sending_at IS NULL AND retry_at IS NOT NULL AND created_at < ?",
+                (normalized_id, reply_id, cutoff),
+            ).rowcount
+            return False, bool(expired)
 
-        return self._database.write(claim)
+        claimed, expired = self._database.write(claim)
+        if expired:
+            _LOGGER.error("Channel Run reply expired before delivery (channel=%s)", normalized_id)
+        return claimed
 
-    def release_reply(self, channel_id: str, reply_id: str) -> None:
+    def release_reply(self, channel_id: str, reply_id: str, retry_at: str | None = None) -> None:
         """Make a claimed reply sendable again after a send that provably did not reach the chat."""
         normalized_id = _normalize_channel_id(channel_id)
 
         def release(connection: sqlite3.Connection) -> None:
             connection.execute(
-                "UPDATE channel_pending_replies SET sending_at = NULL "
+                "UPDATE channel_pending_replies SET sending_at = NULL, retry_at = ? "
                 "WHERE channel_id = ? AND reply_id = ?",
-                (normalized_id, reply_id),
+                (retry_at, normalized_id, reply_id),
             )
 
         self._database.write(release)
@@ -884,7 +902,7 @@ class ChannelStateStore:
             ).rowcount
             rows = connection.execute(
                 "SELECT reply_id, platform_target, thread_id, reply_to_message_id, agent_id, "
-                "session_id, run_id, binding_id, owner, created_at, retry_keyboard_json "
+                "session_id, run_id, binding_id, owner, created_at, retry_keyboard_json, retry_at "
                 "FROM channel_pending_replies "
                 "WHERE channel_id = ? AND owner != ? ORDER BY created_at, reply_id",
                 (normalized_id, owner),
@@ -947,6 +965,7 @@ def _pending_reply(channel_id: str, row: tuple[Any, ...]) -> PendingReply:
         owner,
         created_at,
         retry_keyboard_json,
+        retry_at,
     ) = row
     return PendingReply(
         id=str(reply_id),
@@ -965,6 +984,7 @@ def _pending_reply(channel_id: str, row: tuple[Any, ...]) -> PendingReply:
         ),
         run_id=run_id,
         binding_id=binding_id,
+        retry_at=retry_at,
         retry_keyboard=json.loads(retry_keyboard_json) if retry_keyboard_json is not None else None,
     )
 

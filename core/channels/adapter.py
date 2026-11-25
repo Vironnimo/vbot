@@ -192,6 +192,7 @@ class PendingReply:
     # Accepted tap's wire keyboard, reissued if no Run took over. Keep unknown
     # payload fields when this durable record is read and written again.
     retry_keyboard: dict[str, Any] | None = None
+    retry_at: str | None = None
 
 
 class PendingReplyStore(Protocol):
@@ -207,7 +208,9 @@ class PendingReplyStore(Protocol):
 
     def claim_reply(self, channel_id: str, reply_id: str) -> bool: ...
 
-    def release_reply(self, channel_id: str, reply_id: str) -> None: ...
+    def release_reply(
+        self, channel_id: str, reply_id: str, retry_at: str | None = None
+    ) -> None: ...
 
     def settle_reply(self, channel_id: str, reply_id: str) -> None: ...
 

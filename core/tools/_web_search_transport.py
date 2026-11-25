@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Collection, Mapping
+from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
@@ -19,6 +20,9 @@ from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("tools.web_search")
 
+
+# A compatible operator-selected fallback can serve this call before a long backoff.
+FALLBACK_AVAILABLE = ContextVar("web_search_fallback_available", default=False)
 
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 
@@ -185,7 +189,7 @@ async def _request_bounded(
                     headers=headers,
                 )
             except httpx.RequestError as error:
-                if attempt >= MAX_RETRIES:
+                if attempt >= MAX_RETRIES or FALLBACK_AVAILABLE.get():
                     _LOGGER.warning("%s web search request failed: %s", provider_label, error)
                     reason = str(error) or type(error).__name__
                     guidance = unreachable_hint or (
@@ -194,7 +198,7 @@ async def _request_bounded(
                     return None, HttpRequestFailure(
                         f"Could not reach {provider_label} ({reason}). {guidance}",
                         retryable=True,
-                        attempts_made=MAX_RETRIES + 1,
+                        attempts_made=attempt + 1,
                     )
                 await sleep_for_retry(attempt)
                 continue
@@ -205,7 +209,7 @@ async def _request_bounded(
                     idempotent=method == "GET",
                     extra=extra_retryable_statuses,
                 )
-                if retryable and attempt < MAX_RETRIES:
+                if retryable and attempt < MAX_RETRIES and not FALLBACK_AVAILABLE.get():
                     await sleep_for_retry(attempt, parse_retry_after(response.headers))
                     continue
                 detail = await run_tool_worker(_extract_error_detail, response)
@@ -226,7 +230,8 @@ async def _request_bounded(
                 return None, HttpRequestFailure(
                     message,
                     retryable=retryable,
-                    attempts_made=(MAX_RETRIES + 1) if retryable else None,
+                    attempts_made=attempt + 1 if retryable else None,
+                    retry_after=parse_retry_after(response.headers),
                 )
 
             return response, None

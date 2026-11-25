@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -17,6 +18,7 @@ from core.permissions import run_permission_decision
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
 from core.sessions.errors import SessionNotFoundError
+from core.sessions.video_jobs import VideoJob
 from core.statistics import StatisticsService
 from core.storage.errors import StorageError
 from core.storage.storage import StorageManager
@@ -286,6 +288,79 @@ def _build_performance_service(
     )
 
 
+def _session_output_permissions(runtime: Runtime, address: SessionAddress) -> SessionPermissions:
+    sessions = runtime.chat_sessions
+    resolver = runtime.agent_resolver
+    projects = runtime.projects
+    data_dir = Path(runtime.storage.data_dir)
+    binding = sessions.temporary_binding(address)
+    if binding is None:
+        binding = sessions.temporary_agent_binding(address.project_id, address.agent_id)
+    if binding is not None:
+        agent = resolver.resolve_temporary_agent(
+            binding.address, generation_id=binding.generation_id, session=address
+        )
+    else:
+        agent = resolver.resolve_agent(
+            address.project_id,
+            address.agent_id,
+            session_id=address.session_id,
+            require_model=False,
+        )
+    work_project = resolver.resolve_working_project(
+        address.project_id, agent, session_id=address.session_id
+    )
+    root = Path(projects.get(work_project).cwd) if work_project is not None else None
+    overrides = resolver.session_overrides(address)
+    folders: tuple[str, ...] = ()
+    if overrides.read_folders:
+        execution = normalize_execution(sessions.metadata_value(address, "execution"))
+        folders = overrides.read_folders.get(execution["computer_id"], ())
+    return session_permissions(
+        agent,
+        data_dir=data_dir,
+        project_root=root,
+        ceiling=overrides.ceiling(),
+        read_folders=folders,
+    )
+
+
+async def authorize_recovered_video(runtime: Runtime, job: VideoJob, path: Path) -> None:
+    from core.model_tasks.video_recovery import VideoDestinationChangedError
+    from core.tools.scratch_areas import ScratchUnavailableError
+
+    permissions = await runtime.chat_sessions.run_async(
+        _session_output_permissions, runtime, job.address
+    )
+    scratch_root = None
+    if permissions.restricted and (scratch := runtime._scratch_areas) is not None:
+        with suppress(ScratchUnavailableError):
+            scratch_root = (await scratch.folder_for(job.address)).area
+
+    def check() -> None:
+        directory = Path(job.directory)
+        if (
+            Path(job.original_root).resolve(strict=True) != directory
+            or path.parent != directory
+            or path.resolve() != path
+        ):
+            raise VideoDestinationChangedError("The original video destination changed")
+        boundary = permissions.boundary(
+            Path(runtime.storage.data_dir),
+            owner=job.address,
+            generation_id=job.generation,
+            scratch_root=scratch_root,
+        )
+        for target in (Path(job.original_root) / path.name, path):
+            refusal = boundary.check_path(target, "write")
+            if refusal is not None:
+                raise VideoDestinationChangedError(
+                    "The Session no longer has write access to the video destination"
+                )
+
+    await run_permission_decision(check)
+
+
 async def _terminal_output_allowed(
     runtime: Runtime, address: SessionAddress, info: TerminalInfo
 ) -> bool:
@@ -298,40 +373,8 @@ async def _terminal_output_allowed(
         return False
     data_dir = Path(storage.data_dir)
 
-    def resolve() -> SessionPermissions:
-        binding = sessions.temporary_binding(address)
-        if binding is None:
-            binding = sessions.temporary_agent_binding(address.project_id, address.agent_id)
-        if binding is not None:
-            agent = resolver.resolve_temporary_agent(
-                binding.address, generation_id=binding.generation_id, session=address
-            )
-        else:
-            agent = resolver.resolve_agent(
-                address.project_id,
-                address.agent_id,
-                session_id=address.session_id,
-                require_model=False,
-            )
-        work_project = resolver.resolve_working_project(
-            address.project_id, agent, session_id=address.session_id
-        )
-        root = Path(projects.get(work_project).cwd) if work_project is not None else None
-        overrides = resolver.session_overrides(address)
-        folders: tuple[str, ...] = ()
-        if overrides.read_folders:
-            execution = normalize_execution(sessions.metadata_value(address, "execution"))
-            folders = overrides.read_folders.get(execution["computer_id"], ())
-        return session_permissions(
-            agent,
-            data_dir=data_dir,
-            project_root=root,
-            ceiling=overrides.ceiling(),
-            read_folders=folders,
-        )
-
     try:
-        permissions = await sessions.run_async(resolve)
+        permissions = await sessions.run_async(_session_output_permissions, runtime, address)
         if not permissions.restricted:
             return True
         if info.permission_scope is None or info.computer_id != "server":

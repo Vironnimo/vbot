@@ -103,7 +103,10 @@ class PieceCutter:
             pieces.append(self._take(len(self._blocks)))
         budget = self._budget_bytes() - WAV_HEADER_BYTES
         if self._blocks and self._bytes + len(pcm) > budget:
-            pieces.append(self._take(self._quietest_cut(len(self._blocks))))
+            # Search the latter half. With steady sound, equally quiet cuts near
+            # the start would otherwise produce a stream of tiny uploads.
+            window = max(1, len(self._blocks) // 2)
+            pieces.append(self._take(self._quietest_cut(window)))
             while self._blocks and self._bytes + len(pcm) > budget:
                 pieces.append(self._take(len(self._blocks)))
         self._rate = rate

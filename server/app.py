@@ -75,6 +75,7 @@ from server._http_dependencies import (
     WebSocket,
     WebSocketDisconnect,
 )
+from server._media_transfers import register_transfer_routes
 from server._oauth_callback import callback_url as oauth_callback_url
 from server._oauth_callback import oauth_callback_response
 from server._origins import _BrowserOriginGuardMiddleware, _configured_browser_origins
@@ -333,6 +334,8 @@ def create_app(
                     server_logger.debug("Server application stopping")
                     if state_initialized:
                         with cleanup_step():
+                            await app.state.media_transfers.aclose()
+                        with cleanup_step():
                             await close_services(app.state)
                         with cleanup_step():
                             await _shutdown_live_calls(app.state, server_logger)
@@ -476,6 +479,7 @@ def create_app(
             )
         return _rpc_response(answer)
 
+    register_transfer_routes(app)
     register_upload_routes(app)
     register_speech_routes(app)
     register_widget_routes(app)

@@ -387,6 +387,13 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         allowed_values=tuple(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS)),
     ),
     _static(
+        "web_search.fallback_provider",
+        "string",
+        "Optional second search provider for outages and rate limits.",
+        default="none",
+        allowed_values=("none", *sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS)),
+    ),
+    _static(
         "web_search.default_count",
         "integer",
         "Default number of results returned by web_search.",

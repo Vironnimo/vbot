@@ -1090,6 +1090,7 @@ class ChatLoop:
         input_id: str,
         input_persisted_hook: Callable[[], None] | None = None,
         *,
+        completion_receipts: tuple[str, ...] = (),
         expected_session_generation_id: str | None = None,
     ) -> Run:
         """Continue a normal Session under an Extension-owned descendant Run."""
@@ -1139,6 +1140,9 @@ class ChatLoop:
                 content=content,
                 internal=True,
                 input_persisted_hook=input_persisted_hook,
+                context_note=replace(ChatMessage.note(""), completion_receipts=completion_receipts)
+                if completion_receipts
+                else None,
                 temporary_parent_binding=parent,
             )
             return await self._dependencies.run_manager.start(
@@ -1217,6 +1221,17 @@ class ChatLoop:
         return await self._requests.tool_catalog.preview_tool_definitions(
             agent, session_tool_grants=session_tool_grants
         )
+
+    def account_credentials_changed(
+        self, provider_id: str, local_connection_id: str, account_id: str
+    ) -> None:
+        """Forget the previous credential's quota when its Account slot is replaced."""
+        from core.providers.accounts import DEFAULT_ACCOUNT_ID
+
+        scope = f"{provider_id}::{local_connection_id}"
+        if account_id != DEFAULT_ACCOUNT_ID:
+            scope = f"{scope}:{account_id}"
+        self._execution._route_health.credentials_changed(scope)
 
     async def context_capacity(self, agent: Any) -> int | None:
         """Return the Context capacity *agent*'s Runs budget against on its Model's route."""

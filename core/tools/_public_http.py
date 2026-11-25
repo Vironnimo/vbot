@@ -24,10 +24,11 @@ import importlib
 import ipaddress
 import re
 import socket
-from collections import Counter
+import time
+from collections import Counter, OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
 
@@ -102,33 +103,107 @@ class PublicResponse:
     text: str
     url: str
     content: bytes = b""
+    attempts: int = 1
+
+
+_cooldown_clock = time.monotonic
+_cooldown_sleep = asyncio.sleep
+_MAX_INLINE_COOLDOWN = 15.0
+_FIREWALL_COOLDOWN = 300.0
+
+
+@dataclass
+class _HostPause:
+    until: float
+    concurrency: int = 1
+    active: int = 0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def wake(self) -> None:
+        self.changed.set()
+        self.changed = asyncio.Event()
 
 
 class HostSlots:
-    """Bound how many requests run at once against each host.
-
-    The owner shares one instance across all its fetches; web_fetch's handler,
-    registered once per Runtime, owns the one that bounds its Agents together.
-    ``fetch_public`` holds a slot for each request hop, retries and their backoff
-    included. A host's entry lives only while a request holds or awaits it, so the
-    map stays small and no semaphore outlives the event loop that used it.
-    """
+    """Limit concurrent direct requests and coordinate recovery across calls to one host."""
 
     def __init__(self, per_host: int = HOST_CONCURRENCY) -> None:
         self._per_host = per_host
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._users: Counter[str] = Counter()
+        self._paused: OrderedDict[str, _HostPause] = OrderedDict()
+
+    def is_paused(self, host: str) -> bool:
+        """Whether the host's deadline still rules out an external fetch."""
+        pause = self._paused.get(host)
+        return pause is not None and _cooldown_clock() < pause.until
+
+    def firewall_blocked(self, host: str) -> None:
+        self.pause(host, _FIREWALL_COOLDOWN)
+
+    def pause(self, host: str, seconds: float) -> None:
+        until = _cooldown_clock() + seconds
+        previous = self._paused.get(host)
+        if previous is not None and previous.until > until:
+            until = previous.until
+        if previous is not None:
+            previous.wake()
+        self._paused[host] = _HostPause(until)
+        self._paused.move_to_end(host)
+        if len(self._paused) > 1024:
+            _, forgotten = self._paused.popitem(last=False)
+            forgotten.wake()
+
+    def answered(self, host: str, probe: _HostPause | None, status: int) -> None:
+        if probe is None or self._paused.get(host) is not probe:
+            return
+        if 200 <= status < 400:
+            # Each confirmed response admits one more concurrent probe.
+            probe.concurrency += 1
+            if probe.concurrency >= self._per_host:
+                del self._paused[host]
+        else:
+            # This page did not establish that normal traffic can resume.
+            probe.concurrency = 1
+        probe.wake()
 
     @asynccontextmanager
-    async def hold(self, host: str) -> AsyncIterator[None]:
-        """Wait for a free slot of ``host`` and keep it for the block."""
+    async def hold(self, host: str) -> AsyncIterator[_HostPause | None]:
         semaphore = self._semaphores.get(host)
         if semaphore is None:
             semaphore = self._semaphores[host] = asyncio.Semaphore(self._per_host)
         self._users[host] += 1
         try:
             async with semaphore:
-                yield
+                while (pause := self._paused.get(host)) is not None:
+                    remaining = pause.until - _cooldown_clock()
+                    if remaining > _MAX_INLINE_COOLDOWN:
+                        raise PublicFetchError(
+                            "rate_limited",
+                            f"{host} is limiting requests. Try another source or wait before "
+                            "fetching from this host again.",
+                            retryable=True,
+                            retry_after=remaining,
+                        )
+                    if pause.active >= pause.concurrency:
+                        await pause.changed.wait()
+                        continue
+                    pause.active += 1
+                    try:
+                        if remaining > 0:
+                            await _cooldown_sleep(remaining)
+                        # An overlapping response may have extended the pause.
+                        if self._paused.get(host) is not pause:
+                            continue
+                        yield pause
+                        return
+                    except Exception:
+                        pause.concurrency = 1
+                        raise
+                    finally:
+                        pause.active -= 1
+                        pause.wake()
+                yield None
         finally:
             self._users[host] -= 1
             if not self._users[host]:
@@ -151,12 +226,14 @@ class PublicFetchError(Exception):
         retryable: bool = False,
         attempts_made: int | None = None,
         recoverable: bool = False,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.attempts_made = attempts_made
         self.recoverable = recoverable
+        self.retry_after = retry_after
 
     def failure(self) -> JsonObject:
         """Return the Tool failure envelope for this error."""
@@ -631,15 +708,61 @@ def _retries_allowed(error: RequestException) -> int:
     return MAX_RETRIES
 
 
+def _global_rate_limit(response: PublicResponse) -> bool:
+    return (
+        response.status_code == 429
+        and response.headers.get("x-ratelimit-global", "").strip().lower() == "true"
+    )
+
+
+def _is_firewall_page(response: PublicResponse) -> bool:
+    from core.tools._web_fetch_html import extract_views
+    from core.tools._web_fetch_walls import firewall_block
+
+    # Only the known block-page title warrants an HTML parse in this transport path.
+    main, _page, metadata, _warnings = extract_views(
+        response.text, response.url, include_links=False
+    )
+    return firewall_block(response.url, metadata, main) is not None
+
+
 async def _request_with_retry(
-    session: AsyncSession, url: str, max_bytes: int, *, truncate: bool = False
+    session: AsyncSession,
+    url: str,
+    max_bytes: int,
+    *,
+    truncate: bool = False,
+    hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """Fetch a URL and retry transient transport/status failures with backoff."""
     from curl_cffi.requests.exceptions import RequestException
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            result = await _http_get(session, url, max_bytes, truncate=truncate)
+            host = urlparse(url).hostname or url
+            slot: AbstractAsyncContextManager[_HostPause | None] = (
+                hosts.hold(host) if hosts is not None else nullcontext()
+            )
+            async with slot as probe:
+                result = await _http_get(session, url, max_bytes, truncate=truncate)
+                if hosts is not None and _global_rate_limit(result):
+                    hint = parse_retry_after(result.headers)
+                    delay = (
+                        hint if hint is not None else (2**attempt if attempt < MAX_RETRIES else 30)
+                    )
+                    hosts.pause(host, delay)
+                    if delay > _MAX_INLINE_COOLDOWN or attempt == MAX_RETRIES:
+                        return replace(result, attempts=attempt + 1)
+                    continue
+                if (
+                    hosts is not None
+                    and result.status_code == 200
+                    and "request rejected" in result.text[:8192].lower()
+                    and await run_tool_worker(_is_firewall_page, result)
+                ):
+                    hosts.firewall_blocked(host)
+                elif hosts is not None:
+                    hosts.answered(host, probe, result.status_code)
         except RequestException as error:
             if attempt >= _retries_allowed(error):
                 raise _TransportFailedError(error, attempt + 1, url) from error
@@ -654,7 +777,7 @@ async def _request_with_retry(
             await sleep_for_retry(attempt, parse_retry_after(result.headers))
             continue
 
-        return result
+        return replace(result, attempts=attempt + 1)
 
     raise RuntimeError("unreachable retry loop state")
 
@@ -734,12 +857,9 @@ async def _fetch_with_retry(
             for (host, host_port), ip in resolve_map.items()
         ]
 
-        # One slot per hop: a redirect to the same host never waits for itself.
-        slot: AbstractAsyncContextManager[None] = (
-            nullcontext() if hosts is None else hosts.hold(normalized_host)
+        result = await _request_with_retry(
+            session, current_url, max_bytes, truncate=truncate, hosts=hosts
         )
-        async with slot:
-            result = await _request_with_retry(session, current_url, max_bytes, truncate=truncate)
         if result.status_code not in _REDIRECT_STATUS_CODES:
             return result
 
@@ -821,7 +941,7 @@ def _status_error(url: str, result: PublicResponse, what: str) -> PublicFetchErr
     host = urlparse(url).hostname or url
     status = result.status_code
     retryable = is_retryable_status(status, idempotent=True)
-    attempts = MAX_RETRIES + 1 if retryable else None
+    attempts = result.attempts if retryable else None
     if status in {404, 410}:
         return PublicFetchError(
             f"{what}_not_found",
@@ -870,7 +990,12 @@ def _status_error(url: str, result: PublicResponse, what: str) -> PublicFetchErr
         code = "unexpected_response"
         message = f"HTTP {status}: {host} answered without {what} content for {url}."
     return PublicFetchError(
-        code, message, retryable=retryable, attempts_made=attempts, recoverable=True
+        code,
+        message,
+        retryable=retryable,
+        attempts_made=attempts,
+        recoverable=not _global_rate_limit(result),
+        retry_after=parse_retry_after(result.headers) if retryable else None,
     )
 
 
@@ -951,10 +1076,11 @@ def _transport_error(
     )
 
 
-async def check_public_url(url: str) -> None:
-    """Raise ``PublicFetchError`` unless ``url`` is a fetchable public http(s) address."""
+async def check_public_url(url: str) -> str:
+    """Return the canonical host of a public HTTP(S) address, or raise ``PublicFetchError``."""
     try:
-        await _validate_public_target(*_url_parts(url))
+        host, _ip = await _validate_public_target(*_url_parts(url))
+        return host
     except ValueError as error:
         raise _url_error(error) from error
 

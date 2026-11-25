@@ -24,6 +24,16 @@ FIRST_PARTY_WEB_SEARCH_PROVIDERS = frozenset(
     }
 )
 DEFAULT_SEARXNG_BASE_URL = "http://localhost:8888"
+
+
+def fallback_provider_error(value: object) -> str | None:
+    if value == "none":
+        return None
+    if not isinstance(value, str) or value not in FIRST_PARTY_WEB_SEARCH_PROVIDERS:
+        return "must be none or a supported search provider"
+    return None
+
+
 # Environment variable holding each keyed provider's API key (process
 # environment or the data directory's Secret Store). Providers absent here need no key.
 WEB_SEARCH_CREDENTIALS = {

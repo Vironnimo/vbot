@@ -1,4 +1,16 @@
 import { t } from './i18n.js';
+import { RPC_ERROR_NETWORK, RPC_ERROR_RESPONSE } from './apiErrors.js';
+
+export class InterruptedSettingsSave extends Error {
+  constructor(cause, reconcile) {
+    super(cause.message, { cause });
+    this.reconcile = reconcile;
+  }
+}
+
+export function interruptedWrite(error) {
+  return [RPC_ERROR_NETWORK, RPC_ERROR_RESPONSE].includes(error?.code);
+}
 
 // `settings.update` refuses a write based on values that changed meanwhile.
 export const SETTINGS_CONFLICT_CODE = 'settings_conflict';
@@ -34,6 +46,25 @@ function sameValue(left, right) {
 }
 
 function mergeLeaves(draft, origin, saved, path, options) {
+  // If a lost response belonged to a committed write, later local edits
+  // derive from that submitted value, including an edit back to the old value.
+  if (options.submitted !== undefined) {
+    let submitted = options.submitted;
+    for (const key of path) submitted = submitted?.[key];
+    if (
+      sameValue(saved, submitted) ||
+      options.equivalentSubmission?.(path, saved)
+    )
+      return plain(draft);
+    if (
+      path.length < options.leafDepth &&
+      isPlainObject(draft) &&
+      isPlainObject(saved) &&
+      isPlainObject(origin)
+    ) {
+      return mergeObjects(draft, origin, saved, path, options);
+    }
+  }
   if (sameValue(draft, origin)) return plain(saved);
   if (sameValue(saved, origin) || sameValue(saved, draft)) return plain(draft);
   if (
@@ -42,22 +73,26 @@ function mergeLeaves(draft, origin, saved, path, options) {
     isPlainObject(origin) &&
     isPlainObject(saved)
   ) {
-    const merged = {};
-    for (const key of new Set([...Object.keys(draft), ...Object.keys(saved)])) {
-      const value = mergeLeaves(
-        draft[key],
-        origin[key],
-        saved[key],
-        [...path, key],
-        options,
-      );
-      if (value !== undefined) merged[key] = value;
-    }
-    return merged;
+    return mergeObjects(draft, origin, saved, path, options);
   }
   if (options.draftWins) return plain(draft);
   options.conflicts.push(path.join('.'));
   return plain(saved);
+}
+
+function mergeObjects(draft, origin, saved, path, options) {
+  const merged = {};
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(saved)])) {
+    const value = mergeLeaves(
+      draft[key],
+      origin[key],
+      saved[key],
+      [...path, key],
+      options,
+    );
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 /**
@@ -75,9 +110,20 @@ export function rebaseDraft(
   draft,
   origin,
   saved,
-  { draftWins = false, leafDepth = Infinity } = {},
+  {
+    draftWins = false,
+    leafDepth = Infinity,
+    submitted,
+    equivalentSubmission,
+  } = {},
 ) {
-  const options = { draftWins, leafDepth, conflicts: [] };
+  const options = {
+    draftWins,
+    leafDepth,
+    submitted,
+    equivalentSubmission,
+    conflicts: [],
+  };
   const value = mergeLeaves(draft, origin, saved, [], options);
   return { value, conflicts: options.conflicts };
 }
@@ -118,10 +164,12 @@ export function createSettingsDraft({
   submit,
   reload,
   leafDepth = Infinity,
+  recoverOnReconnect = false,
 }) {
   if (typeof submit !== 'function' || typeof reload !== 'function')
     throw new TypeError('Settings submit and reload callbacks are required');
   let origin = plain(fromSettings(settings));
+  let unconfirmed;
 
   function replaceDraft(value) {
     if (!sameValue(value, read())) write(value);
@@ -129,8 +177,25 @@ export function createSettingsDraft({
 
   function adopt(nextSettings) {
     const saved = plain(fromSettings(nextSettings));
+    const submittedPayload = unconfirmed && toPayload(unconfirmed);
+    // Editors can submit the string "6" as the number 6 (or an empty field
+    // as its default). Compare through the editor's wire projection, also
+    // when another window changed a different leaf.
+    function equivalentSubmission(path, value) {
+      if (!path.length) return sameValue(toPayload(value), submittedPayload);
+      const candidate = plain(unconfirmed);
+      let parent = candidate;
+      for (const key of path.slice(0, -1)) {
+        if (!isPlainObject(parent?.[key])) return false;
+        parent = parent[key];
+      }
+      parent[path.at(-1)] = value;
+      return sameValue(toPayload(candidate), submittedPayload);
+    }
     const { value, conflicts } = rebaseDraft(read(), origin, saved, {
       leafDepth,
+      submitted: unconfirmed,
+      equivalentSubmission,
     });
     origin = saved;
     replaceDraft(value);
@@ -172,6 +237,8 @@ export function createSettingsDraft({
             base: toPayload(origin),
           });
         } catch (error) {
+          if (recoverOnReconnect && interruptedWrite(error))
+            unconfirmed = submitted;
           if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
             throw error;
           }
@@ -182,6 +249,7 @@ export function createSettingsDraft({
           continue;
         }
         settle(submitted, nextSettings);
+        unconfirmed = undefined;
         onCommit(nextSettings);
         break;
       }
@@ -189,6 +257,17 @@ export function createSettingsDraft({
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
+      if (recoverOnReconnect && interruptedWrite(error)) {
+        const reconcile = async () => {
+          const saved = await reload();
+          const conflict = adopt(saved);
+          unconfirmed = undefined;
+          onCommit(saved);
+          onError(conflict ? t('settings.saveConflict') : '');
+          return !sameValue(read(), origin);
+        };
+        throw new InterruptedSettingsSave(error, reconcile);
+      }
       return false;
     } finally {
       setSaving(false);

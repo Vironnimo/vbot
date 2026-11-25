@@ -173,6 +173,12 @@ def retry_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float | None]:
         del attempt
         hints.append(retry_after)
 
+    monkeypatch.setattr(public_http, "_cooldown_clock", lambda: 0.0)
+
+    async def record_pause(seconds: float) -> None:
+        hints.append(seconds)
+
+    monkeypatch.setattr(public_http, "_cooldown_sleep", record_pause)
     monkeypatch.setattr(public_http, "sleep_for_retry", record)
     return hints
 

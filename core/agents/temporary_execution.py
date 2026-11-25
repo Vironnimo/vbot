@@ -7,7 +7,7 @@ import builtins
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
@@ -326,6 +326,8 @@ class TemporaryExecutionGroups:
         handle: TemporaryGroupHandle,
         participant_id: str,
         input: TemporaryRunInput,
+        *,
+        completion_receipts: tuple[str, ...] = (),
     ) -> TemporaryRunAdmission:
         binding = self._checked_binding(handle, participant_id)
         if (
@@ -409,7 +411,7 @@ class TemporaryExecutionGroups:
                     binding.address,
                     generation_id=binding.generation_id,
                     owner_name=handle.owner_name,
-                    messages=[message],
+                    messages=[replace(message, completion_receipts=completion_receipts)],
                     receipts=[(0, input_id, digest, input.kind, message.role)],
                     deduplicate_carrier=True,
                 )
@@ -560,6 +562,7 @@ class TemporaryExecutionGroups:
         state = self._groups[owner.group_id]
         binding = state.bindings[owner.participant_id]
         request_id = hashlib.sha256("\0".join(sorted(notice_ids)).encode()).hexdigest()
+        receipts = tuple(identifier for identifier in notice_ids if identifier.startswith("video:"))
         if address == binding.address:
             if expected_session_generation_id not in (None, binding.generation_id):
                 raise SessionNotFoundError("The completion's Session was replaced")
@@ -570,6 +573,7 @@ class TemporaryExecutionGroups:
                 handle,
                 owner.participant_id,
                 TemporaryRunInput("continuation", content, request_id),
+                completion_receipts=receipts,
             )
             on_persisted()
             return self._manager.get(result.run_id)
@@ -580,6 +584,7 @@ class TemporaryExecutionGroups:
                 owner,
                 content,
                 input_id=f"completion:{request_id}",
+                completion_receipts=receipts,
                 input_persisted_hook=on_persisted,
                 expected_session_generation_id=expected_session_generation_id,
             ),

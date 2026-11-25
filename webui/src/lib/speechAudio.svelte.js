@@ -27,6 +27,8 @@ export function createSpeechAudio({
   let active = $state.raw(null);
   let pending = $state(0);
   let epoch = '';
+  let streamRecoveries = 0;
+  let preferFileUntil = 0;
   let destroyed = false;
 
   function prune() {
@@ -67,6 +69,16 @@ export function createSpeechAudio({
     });
     entry.resource = createPlayback({
       readAudio,
+      preferArtifact: () => Date.now() < preferFileUntil,
+      onRecoveredStream() {
+        if (++streamRecoveries >= 2) {
+          preferFileUntil = Date.now() + 5 * 60_000;
+          streamRecoveries = 0;
+        }
+      },
+      onHealthyStream() {
+        streamRecoveries = 0;
+      },
       onPlay() {
         if (destroyed) return;
         // Manual replay can take over from another paused/playing source.
@@ -120,6 +132,8 @@ export function createSpeechAudio({
   }
 
   function reset() {
+    streamRecoveries = 0;
+    preferFileUntil = 0;
     stop();
     // Existing Chat controls may still reference a resource until their
     // server-generation owner unmounts. Cancel all before releasing them.

@@ -1,4 +1,5 @@
 import { getContext, setContext } from 'svelte';
+import { InterruptedSettingsSave, interruptedWrite } from './settingsSave.js';
 
 const AUTOSAVE_CONTEXT = Symbol('vbot-autosave');
 const MAX_STABLE_SAVE_PASSES = 10;
@@ -76,6 +77,7 @@ export function createAutosaveParticipant({
   let activeSave = null;
   let activeSnapshot = null;
   let failedSnapshot = null;
+  let interrupted = null;
   // The running write a navigation left behind (`release`). It finishes in
   // the background; transitions no longer wait for it unless the draft
   // changed after it started.
@@ -86,7 +88,10 @@ export function createAutosaveParticipant({
     activeSave === releasedSave &&
     (!hasChanges() || snapshotKey(getSnapshot()) === activeSnapshot);
 
-  function runSave(reason = 'auto', { force = false } = {}) {
+  function runSave(
+    reason = 'auto',
+    { force = false, registered = () => true } = {},
+  ) {
     if (reason !== 'auto') cancelPending();
     if (activeSave) {
       return activeSave.then((succeeded) => {
@@ -98,12 +103,12 @@ export function createAutosaveParticipant({
           return false;
         }
         if (hasChanges()) {
-          return runSave(reason, { force });
+          return runSave(reason, { force, registered });
         }
         return true;
       });
     }
-    if (!force && !hasChanges()) {
+    if (!interrupted && !force && !hasChanges()) {
       return Promise.resolve(true);
     }
 
@@ -117,6 +122,8 @@ export function createAutosaveParticipant({
     });
     activeSave = operation;
     activeSnapshot = savedSnapshot;
+    const recovery = interrupted;
+    interrupted = null;
 
     const complete = (succeeded) => {
       if (succeeded) {
@@ -135,9 +142,22 @@ export function createAutosaveParticipant({
     };
 
     try {
-      Promise.resolve(save(reason)).then(
+      const saving = recovery
+        ? recovery
+            .reconcile()
+            .then((changed) => (changed && registered() ? save(reason) : true))
+        : save(reason);
+      Promise.resolve(saving).then(
         (result) => complete(result === true),
-        () => complete(false),
+        (error) => {
+          interrupted =
+            error instanceof InterruptedSettingsSave
+              ? error
+              : interruptedWrite(error)
+                ? recovery
+                : null;
+          complete(false);
+        },
       );
     } catch {
       complete(false);
@@ -157,7 +177,7 @@ export function createAutosaveParticipant({
         return false;
       }
 
-      if (!hasChanges()) {
+      if (!interrupted && !hasChanges()) {
         return true;
       }
       if (!(await runSave('transition'))) {
@@ -170,11 +190,17 @@ export function createAutosaveParticipant({
 
   return {
     flush,
+    async recover(registered) {
+      if (activeSave) await activeSave;
+      if (registered() && interrupted)
+        return runSave('reconnect', { registered });
+    },
     // Reactive when the caller's `hasChanges` reads reactive draft state;
     // in-flight writes are not tracked here (see hasPending).
     hasChanges,
     hasPending: () =>
-      (activeSave !== null || hasChanges()) && !coveredByReleasedSave(),
+      (activeSave !== null || interrupted !== null || hasChanges()) &&
+      !coveredByReleasedSave(),
     // Stop holding transitions for the write running now; edits made after
     // it started still wait for it, because writes stay serialized.
     release: () => {
@@ -235,12 +261,16 @@ export function createDebouncedAutosave({
   return { cancelPendingTimer, participant, scheduleRun };
 }
 
-export function createAutosaveCoordinator() {
+export function createAutosaveCoordinator(onServerReady) {
   const participants = new Set();
 
   function register(participant) {
     participants.add(participant);
+    const unsubscribe = onServerReady?.(() => {
+      void participant.recover?.(() => participants.has(participant));
+    });
     return () => {
+      unsubscribe?.();
       participants.delete(participant);
     };
   }

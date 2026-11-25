@@ -84,6 +84,13 @@ export async function installSkillArchive(file, params = {}, options = {}) {
 }
 
 export async function uploadAttachment(file, options = {}) {
+  if (options.transfer) {
+    const { transfer, ...rest } = options;
+    return transfer.run(
+      (ticket) => uploadAttachment(file, { ...rest, ticket }),
+      rest,
+    );
+  }
   if (!file || typeof file !== 'object') {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
@@ -116,6 +123,9 @@ export async function uploadAttachment(file, options = {}) {
         method: 'POST',
         body: formData,
         signal: options.signal,
+        headers: options.ticket
+          ? { 'X-Vbot-Media-Transfer': options.ticket }
+          : undefined,
       },
     );
   } catch (error) {
@@ -348,6 +358,13 @@ export function getTaskModelOptions(taskType, target, options = {}) {
 }
 
 export async function transcribeSpeech(audioBlob, options = {}) {
+  if (options.transfer) {
+    const { transfer, ...rest } = options;
+    return transfer.run(
+      (ticket) => transcribeSpeech(audioBlob, { ...rest, ticket }),
+      rest,
+    );
+  }
   if (!audioBlob || typeof audioBlob !== 'object') {
     throw new ApiClientError(
       RPC_ERROR_INVALID_CLIENT_REQUEST,
@@ -382,9 +399,12 @@ export async function transcribeSpeech(audioBlob, options = {}) {
         method: 'POST',
         body: formData,
         signal: options.signal,
-        headers: options.onProgress
-          ? { Accept: 'application/x-ndjson' }
-          : undefined,
+        headers: {
+          ...(options.onProgress ? { Accept: 'application/x-ndjson' } : {}),
+          ...(options.ticket
+            ? { 'X-Vbot-Media-Transfer': options.ticket }
+            : {}),
+        },
       },
     );
   } catch (error) {
@@ -488,6 +508,12 @@ async function readSpeechProgress(
           { method },
         );
     }
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'Speech response interrupted', {
+      method,
+      cause: error,
+    });
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

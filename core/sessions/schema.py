@@ -267,6 +267,14 @@ CREATE TABLE runs (
   CHECK ((status = 'running') = (completed_at IS NULL))
 ) STRICT;
 
+-- Unacknowledged completed answers, tied to both original Session incarnations.
+CREATE TABLE subagent_answer_handoffs (
+  run_key INTEGER PRIMARY KEY REFERENCES runs (run_key) ON DELETE CASCADE,
+  parent_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  child_run_id TEXT NOT NULL,
+  UNIQUE (parent_key, child_run_id)
+) STRICT;
+
 -- Runs of one Session in start order (Run boundaries, reflection Runs, recovery).
 CREATE INDEX runs_by_session ON runs (session_key, start_seq);
 
@@ -798,6 +806,22 @@ CREATE TABLE session_background_commands (
 -- Session deletion and checkpoint ownership lookup.
 CREATE INDEX session_background_commands_by_session
   ON session_background_commands (session_key);
+
+-- Accepted, non-replayable Provider video jobs. The Run pins the Session generation.
+CREATE TABLE session_video_jobs (
+  id TEXT PRIMARY KEY,
+  run_key INTEGER NOT NULL REFERENCES runs(run_key) ON DELETE CASCADE,
+  invocation_key INTEGER NOT NULL UNIQUE REFERENCES tool_invocations (invocation_key)
+    ON DELETE CASCADE,
+  job_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  original_root TEXT NOT NULL,
+  delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0,1)),
+  media_type TEXT,
+  digest TEXT
+) STRICT;
 
 CREATE TABLE extension_tool_receipts (
   receipt_id TEXT PRIMARY KEY,

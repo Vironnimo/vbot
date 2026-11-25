@@ -333,6 +333,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "web_search": {
             "provider": "brave",
+            "fallback_provider": "none",
             "available_providers": [
                 "brave",
                 "duckduckgo",

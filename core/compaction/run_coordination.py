@@ -417,6 +417,7 @@ class CompactionRunCoordinator:
         request_estimate: RequestContextEstimate | None = None,
         allow_continuation: bool = False,
         continue_same_run: bool = True,
+        provider_overflow: bool = False,
     ) -> RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
         if context.request_state is None:
@@ -445,12 +446,14 @@ class CompactionRunCoordinator:
             context_window = await self._host.run_transform(
                 self._host.resolve_context_window, agent, target
             )
-            if context_window is None:
+            if context_window is None and not provider_overflow:
                 if forced:
                     run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
                 return current_state
             input_limit = target.adapter.input_token_limit(target.model_id)
-            capacity = context_capacity(context_window, input_limit)
+            capacity = (
+                context_capacity(context_window, input_limit) if context_window else input_limit
+            )
 
             current_request_messages = continuation_request_messages or messages
             accounting = getattr(context, "context_usage", None) or RequestContextUsage()
@@ -472,9 +475,9 @@ class CompactionRunCoordinator:
             input_tokens = int(effective_context_usage["tokens"])
             run.terminal_payload_extras["context_usage"] = effective_context_usage
 
-            should_compact = self._host.compaction_service.should_auto_compact(
+            should_compact = provider_overflow or self._host.compaction_service.should_auto_compact(
                 input_tokens,
-                capacity,
+                capacity or 0,
                 settings.threshold,
                 settings=settings,
             )
@@ -487,9 +490,15 @@ class CompactionRunCoordinator:
                 target.model_id, effort.current if effort is not None else agent.thinking_effort
             )
             limit_reason: str | None = None
-            if input_limit is not None and request_input.upper_bound > input_limit:
+            if provider_overflow:
+                limit_reason = "provider_context_overflow"
+            elif input_limit is not None and request_input.upper_bound > input_limit:
                 limit_reason = "input_limit"
-            elif reservation > 0 and request_input.upper_bound > context_window - reservation:
+            elif (
+                context_window is not None
+                and reservation > 0
+                and request_input.upper_bound > context_window - reservation
+            ):
                 limit_reason = "output_reservation"
             if limit_reason is not None:
                 should_compact = True
@@ -511,6 +520,7 @@ class CompactionRunCoordinator:
                 and has_unconsumed_skill_activation(session_messages, run_id=run.id)
             ):
                 return current_state
+            minimum_reclaim = 1 if provider_overflow else MIN_AUTO_COMPACTION_RECLAIM_TOKENS
             has_new_context = await self._host.run_transform(
                 self._host.compaction_service.has_new_compactable_context,
                 session_messages,
@@ -518,7 +528,7 @@ class CompactionRunCoordinator:
                 request_messages=continuation_request_messages or messages,
                 active_adapter=target.adapter,
                 active_model_id=target.model_id,
-                minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                minimum_reclaim_tokens=minimum_reclaim,
                 estimate_factor=accounting.factor(target),
             )
             if not has_new_context:
@@ -536,7 +546,7 @@ class CompactionRunCoordinator:
         )
         _LOGGER.debug(
             "Compaction triggered (run=%s agent=%s session=%s trigger=%s reason=%s "
-            "input_tokens=%d context_capacity=%d context_window=%d ratio_threshold=%s "
+            "input_tokens=%d context_capacity=%s context_window=%s ratio_threshold=%s "
             "token_limit=%s)",
             run.id,
             run.agent_id,
@@ -614,7 +624,7 @@ class CompactionRunCoordinator:
                     active_tools=tools,
                     active_thinking_effort=agent.thinking_effort,
                     active_effort=current_state.effort,
-                    minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                    minimum_reclaim_tokens=minimum_reclaim,
                     estimate_factor=accounting.factor(target),
                     active_context=request_input,
                 )
@@ -759,7 +769,7 @@ class CompactionRunCoordinator:
                     run.session_id,
                     trigger,
                 )
-                if continue_same_run:
+                if continue_same_run and not provider_overflow:
                     try:
                         return await self._host.rebuild_after_stale_compaction(
                             context,

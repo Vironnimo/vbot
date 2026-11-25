@@ -302,7 +302,9 @@ def failure_alert(
         and job.consecutive_failures == _FAILING_ALERT_AT
         and failures_before < _FAILING_ALERT_AT
     ):
-        if job.schedule_type == "once":
+        if check and job.watch_retry_at is not None:
+            follow_up = f"vBot will check again on schedule after {job.watch_retry_at}."
+        elif job.schedule_type == "once":
             follow_up = "vBot tries it again."
         elif job.schedule_type == "webhook":
             follow_up = (

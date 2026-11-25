@@ -169,6 +169,7 @@ export default Object.freeze({
   'chat.attachment.addFile': 'Add file',
   'chat.attachment.uploading': 'Uploading…',
   'chat.attachment.uploadFailed': 'Attachment upload failed.',
+  'chat.attachment.retryUpload': 'Retry upload',
   'chat.attachment.remove': 'Remove attachment',
   'chat.attachment.removeNamed': 'Remove attachment {name}',
   'chat.attachment.preview': 'Preview attachment',
@@ -183,6 +184,10 @@ export default Object.freeze({
   'chat.voice.stopRecording': 'Stop recording',
   'chat.voice.startFailed': 'Microphone recording could not start.',
   'chat.voice.transcriptionFailed': 'Speech transcription failed.',
+  'chat.voice.recordingRetained':
+    'Transcription was interrupted. Your recording is available in this draft.',
+  'chat.voice.recordingUnknown':
+    'The server can no longer confirm the previous transcription. Retry starts a new transcription of this recording.',
   'chat.cancelRun': 'Cancel run',
   'chat.cancelRunHint':
     'Stops only this Run. Background commands and Sub-Agents keep running.',

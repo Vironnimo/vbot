@@ -137,6 +137,7 @@ CREATE TABLE channel_pending_replies (
   created_at TEXT NOT NULL,
   sending_at TEXT,
   retry_keyboard_json TEXT,
+  retry_at TEXT,
   PRIMARY KEY (channel_id, reply_id),
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;

@@ -9,6 +9,9 @@ export function createAudioPlayback({
   readAudio,
   onPlay = () => {},
   onFinished = () => {},
+  preferArtifact = () => false,
+  onRecoveredStream = () => {},
+  onHealthyStream = () => {},
 } = {}) {
   const audio = document.createElement('audio');
   const state = $state({
@@ -28,6 +31,9 @@ export function createAudioPlayback({
   let stream;
   let streamAttached = false;
   let streamSeek = null;
+  let continueOnArtifact = false;
+  let failedStream = false;
+  let wantsPlayback = false;
   let autoplayRequested = false;
   let autoplayAttempted = false;
   let generation = 0;
@@ -52,6 +58,8 @@ export function createAudioPlayback({
   }
 
   function pause() {
+    wantsPlayback = false;
+    continueOnArtifact = false;
     generation += 1;
     playPending = false;
     if (stream) stream.pause();
@@ -72,12 +80,20 @@ export function createAudioPlayback({
 
   async function play(automatic = false) {
     if (destroyed) return;
+    wantsPlayback = true;
     state.error = '';
     if (stream) {
       void stream.play();
       return;
     }
-    if (!state.src || playPending) return;
+    if (!state.src || playPending) {
+      if (streamAttached && !state.src) {
+        continueOnArtifact = true;
+        state.loading = true;
+        state.paused = false;
+      }
+      return;
+    }
     const request = ++generation;
     playPending = true;
     try {
@@ -106,6 +122,11 @@ export function createAudioPlayback({
   }
 
   function ready() {
+    if (continueOnArtifact && state.src && wantsPlayback) {
+      continueOnArtifact = false;
+      void play(true);
+      return;
+    }
     if (streamAttached) return;
     syncTime();
     state.loading = false;
@@ -136,6 +157,10 @@ export function createAudioPlayback({
     },
     playing: () => {
       if (streamAttached) return;
+      if (failedStream) {
+        failedStream = false;
+        onRecoveredStream();
+      }
       state.paused = false;
       state.loading = false;
     },
@@ -222,6 +247,9 @@ export function createAudioPlayback({
     const transient = playback && !src;
     streamAttached = Boolean(transient);
     streamSeek = null;
+    continueOnArtifact = false;
+    failedStream = false;
+    wantsPlayback = autoplay;
     state.streaming = Boolean(transient);
     audio.pause();
     state.paused = true;
@@ -243,6 +271,11 @@ export function createAudioPlayback({
     state.rate = 1;
     audio.playbackRate = 1;
     autoplayAttempted = true;
+    if (preferArtifact()) {
+      continueOnArtifact = autoplay;
+      state.streaming = false;
+      return;
+    }
     const owner = createSpeechPlayback({
       url: playback,
       readAudio,
@@ -256,6 +289,16 @@ export function createAudioPlayback({
         if (next.error || next.ended) {
           stream = null;
           state.streaming = false;
+          if (next.error) streamSeek = next.currentTime;
+          if (next.error && wantsPlayback) {
+            failedStream = true;
+            continueOnArtifact = true;
+            state.paused = false;
+            state.loading = true;
+            if (state.src && Number.isFinite(audio.duration)) ready();
+            return;
+          }
+          if (next.ended) onHealthyStream();
           if (next.error) state.error = t('audio.playFailed');
           onFinished();
         } else if (wasPaused && !state.paused) announcePlay();

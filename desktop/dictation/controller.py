@@ -81,10 +81,12 @@ from desktop.speech.server_client import (
     ERROR_SERVER_UNREACHABLE,
     ERROR_SPEECH_TO_TEXT_UNAVAILABLE,
     ERROR_SPEECH_TO_TEXT_UNCONFIGURED,
+    WAV_HEADER_BYTES,
     ServerAuthorization,
     SpeechRequestCancelled,
     SpeechServerClient,
     SpeechServerError,
+    SpeechServerRejected,
 )
 
 logger = logging.getLogger("vbot.desktop.dictation")
@@ -130,6 +132,7 @@ START_SKIP_SECONDS = LISTEN_LOUD_SECONDS + 0.05
 
 _HOTKEY_FIELDS = ("enabled", "ctrl", "alt", "shift", "win", "key")
 _MODE_KEY = "mode"
+_UPLOAD_LIMIT_LIFETIME_SECONDS = 30 * 60
 _SUBSCRIPTION_SECONDS = 30.0
 _READ_TIMEOUT_SECONDS = 0.05
 _CAPTURE_JOIN_SECONDS = 2.0
@@ -244,6 +247,7 @@ class DictationController:
         self._lock = threading.Lock()
         self._mutation_lock = threading.Lock()
         self._server_url = server_url.strip()
+        self._recent_upload_limit: tuple[int, float] | None = None
         self._switching = False
         self._running = False
         self._stopped = False
@@ -292,6 +296,7 @@ class DictationController:
             finally:
                 with self._lock:
                     self._server_url = server_url.strip()
+                    self._recent_upload_limit = None
                     self._switching = False
 
     def is_busy(self) -> bool:
@@ -393,6 +398,10 @@ class DictationController:
             return
         mode = self._mode(section)
         take = _Take(mode, self._inserter().foreground_window(), self._server_url)
+        if self._recent_upload_limit is not None:
+            limit, expires_at = self._recent_upload_limit
+            if self._clock() < expires_at:
+                take.budget_bytes = limit
         take.thread = threading.Thread(
             target=self._run_take, args=(take,), name="vbot-dictation", daemon=True
         )
@@ -456,6 +465,13 @@ class DictationController:
                         self._state = STATE_TRANSCRIBING
                     self._announce_recording(False)
                 text = transcriber.finish()
+                if transcriber.reduced_upload_limit is not None:
+                    with self._lock:
+                        if not take.cancelled.is_set() and self._server_url == take.server_url:
+                            self._recent_upload_limit = (
+                                transcriber.reduced_upload_limit,
+                                self._clock() + _UPLOAD_LIMIT_LIFETIME_SECONDS,
+                            )
             finally:
                 transcriber.stop()
         finally:
@@ -625,6 +641,7 @@ class _Transcriber:
         self._preparation = preparation
         self._pieces: queue.SimpleQueue[tuple[bytes, int, float] | None] = queue.SimpleQueue()
         self._texts: list[str] = []
+        self.reduced_upload_limit: int | None = None
         self._stopped = threading.Event()
         self.failure: str | None = None
         self._thread = threading.Thread(
@@ -654,11 +671,8 @@ class _Transcriber:
         self._pieces.put(None)
 
     def _run(self) -> None:
-        from desktop.speech.capture import encode_wav
-
         # Its verdict is more precise than a failed upload's.
         self._preparation.join()
-        number = 0
         while True:
             item = self._pieces.get()
             if item is None or self._stopped.is_set() or self._take.cancelled.is_set():
@@ -667,28 +681,45 @@ class _Transcriber:
                 self.failure = self._take.server_problem
                 return
             pcm, rate, _seconds = item
-            budget = self._take.budget_bytes or DEFAULT_WAV_UPLOAD_BUDGET_BYTES
+            try:
+                self._transcribe(pcm, rate)
+            except SpeechRequestCancelled:
+                return
+            except SpeechServerError as exc:
+                self.failure = exc.error_code
+                return
+            except Exception:
+                logger.exception("Dictation could not transcribe a piece")
+                self.failure = ERROR_DICTATION_FAILED
+                return
+
+    def _transcribe(self, pcm: bytes, rate: int) -> None:
+        """Retry only rejected audio, keeping the accepted pieces in spoken order."""
+        from desktop.speech.capture import encode_wav
+
+        if self._stopped.is_set() or self._take.cancelled.is_set():
+            raise SpeechRequestCancelled
+        budget = self._take.budget_bytes or DEFAULT_WAV_UPLOAD_BUDGET_BYTES
+        if len(pcm) + WAV_HEADER_BYTES > budget:
             for piece in upload_pieces(pcm, rate, budget):
-                if self._stopped.is_set() or self._take.cancelled.is_set():
-                    return
-                number += 1
-                try:
-                    text = self._client.transcribe(
-                        encode_wav(piece.pcm, piece.rate), filename="dictation.wav"
-                    )
-                except SpeechRequestCancelled:
-                    return
-                except SpeechServerError as exc:
-                    self.failure = exc.error_code
-                    return
-                except Exception:
-                    logger.exception("Dictation could not transcribe piece %d", number)
-                    self.failure = ERROR_DICTATION_FAILED
-                    return
-                if self._stopped.is_set() or self._take.cancelled.is_set():
-                    return
-                logger.info("Dictation piece %d transcribed (%.1f s)", number, piece.seconds)
-                self._texts.append(text.strip())
+                self._transcribe(piece.pcm, rate)
+            return
+        try:
+            text = self._client.transcribe(encode_wav(pcm, rate), filename="dictation.wav")
+        except SpeechServerRejected as exc:
+            # Two whole PCM16 halves, each long enough to transcribe. A proxy
+            # rejecting every upload must not turn speech into individual samples.
+            half = len(pcm) // 4 * 2
+            if exc.status_code != 413 or half < 2 * rate * MIN_RECORDING_SECONDS:
+                raise
+            self.reduced_upload_limit = WAV_HEADER_BYTES + half
+            self._take.budget_bytes = self.reduced_upload_limit
+            self._transcribe(pcm, rate)
+            return
+        self._texts.append(text.strip())
+        logger.info(
+            "Dictation piece %d transcribed (%.1f s)", len(self._texts), len(pcm) / (2 * rate)
+        )
 
 
 def _prepare_server(take: _Take, client: SpeechServerClient) -> None:
@@ -699,7 +730,8 @@ def _prepare_server(take: _Take, client: SpeechServerClient) -> None:
             take.server_problem = problem
             return
         client.prepare_transcription()
-        take.budget_bytes = client.wav_upload_budget_bytes()
+        reported = client.wav_upload_budget_bytes()
+        take.budget_bytes = min(reported, take.budget_bytes or reported)
     except SpeechRequestCancelled:
         return
     except SpeechServerError as exc:

@@ -684,6 +684,113 @@ async def test_calls_share_a_bounded_number_of_requests_per_host(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("refusal", ["retry-after", "firewall"])
+async def test_a_paused_host_admits_one_probe_then_releases_other_calls(
+    tmp_path, monkeypatch, refusal
+):
+    now = [0.0]
+    monkeypatch.setattr(public_http, "_cooldown_clock", lambda: now[0])
+    pending: asyncio.Queue[asyncio.Future[int]] = asyncio.Queue()
+    recovering = False
+    paths = []
+
+    async def get(session, url, max_bytes, **options):
+        paths.append(url)
+        if url.endswith("/throttled"):
+            if refusal == "retry-after":
+                return make_result(
+                    status_code=429,
+                    headers={"retry-after": "7200", "x-ratelimit-global": "true"},
+                    url=url,
+                )
+            return make_result(
+                headers={"Content-Type": "text/html"},
+                url=url,
+                text=(
+                    "<html><head><title>Request Rejected</title></head><body>"
+                    "The requested URL was rejected. Your support ID is 1.</body></html>"
+                ),
+            )
+        status = 200
+        if recovering:
+            reply = asyncio.get_running_loop().create_future()
+            pending.put_nowait(reply)
+            status = await reply
+        return make_result(
+            status_code=status, text="readable", headers={"Content-Type": "text/plain"}, url=url
+        )
+
+    monkeypatch.setattr(public_http, "_http_get", get)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+
+    async def read(host, path):
+        return await tool.dispatch(context, {"url": f"https://{host}/{path}"})
+
+    assert_failure_envelope(await read("example.com", "throttled"), "rate_limited")
+    assert_failure_envelope(await read("example.com", "other-path"), "rate_limited")
+    assert_success_envelope(await read("different.example", "page"))
+    assert len(paths) == 2
+    if refusal == "retry-after":
+        now[0] += 3601
+        assert_failure_envelope(await read("example.com", "still-paused"), "rate_limited")
+        now[0] += 3600
+    else:
+        now[0] += 301
+    recovering = True
+    monkeypatch.setattr(public_http, "sleep_for_retry", AsyncMock())
+    calls = asyncio.gather(*(read("example.com", f"probe-{i}") for i in range(5)))
+    try:
+        async with asyncio.timeout(3):
+            # A failed probe never releases all waiting Agents. Each success
+            # opens one more slot. The 503 request is retried only once.
+            for batch in ([503], [200], [200, 200], [200, 200]):
+                replies = [await pending.get() for _ in batch]
+                for _ in range(10):
+                    await asyncio.sleep(0)
+                assert pending.empty()
+                for reply, status in zip(replies, batch, strict=True):
+                    reply.set_result(status)
+            assert all(outcome["ok"] for outcome in await calls)
+    finally:
+        if not calls.done():
+            calls.cancel()
+            await asyncio.gather(calls, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_page_rate_limit_leaves_other_paths_readable(tmp_path, monkeypatch):
+    waiting = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def sleep(attempt, retry_after):
+        assert retry_after == 90
+        waiting.set()
+        await resume.wait()
+
+    monkeypatch.setattr(public_http, "sleep_for_retry", sleep)
+    attempts = []
+
+    def get(url):
+        attempts.append(url)
+        if len(attempts) == 1:
+            return make_result(status_code=429, headers={"retry-after": "90"}, url=url)
+        return make_result(text="readable", headers={"Content-Type": "text/plain"}, url=url)
+
+    install_http_get(monkeypatch, get)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    first = asyncio.create_task(tool.dispatch(context, {"url": "https://example.com/limited"}))
+    try:
+        async with asyncio.timeout(3):
+            await waiting.wait()
+            assert_success_envelope(
+                await tool.dispatch(context, {"url": "https://example.com/healthy"})
+            )
+    finally:
+        resume.set()
+        await first
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("delivery", ["declared", "streamed"])
 async def test_responses_over_the_download_limit_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delivery: str

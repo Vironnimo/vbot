@@ -66,6 +66,7 @@ _SERVER_FIELDS = frozenset(
     }
 )
 _TRANSPORTS = {
+    "auto": "auto",
     "stdio": "stdio",
     "local": "stdio",
     "http": "http",
@@ -334,12 +335,11 @@ def _transport(server: dict[str, Any]) -> str:
     if kind is not None:
         transport = _TRANSPORTS.get(kind)
         if transport is None:
-            raise ValueError(f"Transport {kind} is not supported; use stdio, http or sse")
+            raise ValueError(f"Transport {kind} is not supported; use stdio, auto, http or sse")
     elif server["command"]:
         transport = "stdio"
     elif server["url"]:
-        path = urlsplit(server["url"]).path.rstrip("/")
-        transport = "sse" if path.endswith("/sse") else "http"
+        transport = "auto"
     else:
         raise ValueError("The server names neither a command nor a URL")
     if transport == "stdio" and not server["command"]:

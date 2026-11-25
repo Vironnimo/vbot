@@ -31,6 +31,7 @@ COMPACTION_DEFAULTS = {
 }
 WEB_SEARCH_DEFAULTS = {
     "provider": "brave",
+    "fallback_provider": "none",
     "default_count": 12,
     "searxng": {"base_url": "http://localhost:8888"},
 }
@@ -327,6 +328,7 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         StorageManager.load_web_search_settings,
         {
             "provider": "searxng",
+            "fallback_provider": "none",
             "default_count": 15,
             "searxng": {"base_url": "http://localhost:9999/"},
         },
@@ -343,6 +345,7 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         StorageManager.load_web_search_settings,
         {
             "provider": "brave",
+            "fallback_provider": "none",
             "default_count": 15,
             "searxng": {"base_url": "http://localhost:9999"},
         },

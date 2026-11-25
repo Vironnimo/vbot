@@ -599,6 +599,10 @@ export default Object.freeze({
   'settings.webFetch.title': 'Web page reading',
   'settings.webSearch.title': 'Web search',
   'settings.webSearch.provider': 'Search provider',
+  'settings.webSearch.fallbackProvider': 'Fallback provider',
+  'settings.webSearch.noFallback': 'None',
+  'settings.webSearch.fallbackHelp':
+    'During an outage or rate limit, send searches to this service if it supports the requested filters. Its usual charges apply.',
   'settings.webSearch.providerHelp':
     'The service Agents use when they search the web (web_search Tool). The choice applies to every Agent.\n\nDuckDuckGo needs no API key but may block frequent searches. SearXNG needs an instance you run or can reach. The other services need an API key and may charge per search.',
   'settings.webSearch.providers.brave': 'Brave Search',

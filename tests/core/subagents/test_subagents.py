@@ -625,7 +625,7 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     async def load_with_failure(session: ChatSession, run_id: str) -> list[ChatMessage]:
         nonlocal answer_reads
         answer_reads += 1
-        if failed_read == "answer" and answer_reads == 1:
+        if failed_read == "answer" and answer_reads <= 5:
             raise DatabaseUnavailableError("temporary answer history failure")
         return await load_run_messages(session, run_id)
 

@@ -12,7 +12,11 @@ export function createSettingsEditorDraft({
   ...options
 }) {
   let observed = untrack(getSettings);
-  const draft = createSettingsDraft({ ...options, settings: observed });
+  const draft = createSettingsDraft({
+    ...options,
+    settings: observed,
+    recoverOnReconnect: true,
+  });
   let saving = $state(false);
 
   $effect.pre(() => {

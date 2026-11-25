@@ -218,6 +218,9 @@ class ChatMessage:
     # Internal Tool activity retained for History, never part of Model Context.
     programmatic: bool = False
     parent_tool_call_id: str | None = None
+    # Trusted writer-only acknowledgements, committed with the actual Parent input.
+    # Never exported to clients or accepted from deserialized messages.
+    completion_receipts: tuple[str, ...] = ()
     # Internal write-side evidence on the initial Cron input. Never accepted from JSON.
     cron_approval_scope: str | None = None
     # Provenance and original record of an imported conversation entry. These

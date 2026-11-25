@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import sqlite3
@@ -43,7 +44,9 @@ CREATE TABLE connection_catalogs(
     connection_id TEXT PRIMARY KEY,
     server_title TEXT NOT NULL,
     tool_names TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    endpoint_key TEXT,
+    negotiated_transport TEXT
 ) STRICT;
 """
 
@@ -54,9 +57,20 @@ class CatalogSummary:
 
     title: str
     tools: tuple[str, ...]
+    endpoint_key: str | None = None
+    transport: str | None = None
 
 
-def catalog_summary(catalog: dict[str, Any]) -> CatalogSummary:
+def endpoint_key(config: dict[str, Any]) -> str | None:
+    """Bind a negotiated route to the exact endpoint without storing its URL again."""
+    if config.get("transport") != "auto":
+        return None
+    return hashlib.sha256(config["url"].encode()).hexdigest()
+
+
+def catalog_summary(
+    catalog: dict[str, Any], endpoint: str | None, transport: str | None
+) -> CatalogSummary:
     """Summarize a catalog the connection reported."""
     info = catalog.get("server_info")
     title = ""
@@ -66,7 +80,12 @@ def catalog_summary(catalog: dict[str, Any]) -> CatalogSummary:
             if isinstance(value, str) and value.strip():
                 title = _capped(value, DESCRIPTION_TITLE_CHARACTERS)
                 break
-    return CatalogSummary(title, tuple(str(tool["name"]) for tool in catalog.get("tools", [])))
+    return CatalogSummary(
+        title,
+        tuple(str(tool["name"]) for tool in catalog.get("tools", [])),
+        endpoint,
+        transport if endpoint else None,
+    )
 
 
 def connection_description(connection: str, about: str) -> str:
@@ -135,7 +154,7 @@ class CatalogSummaries:
             self._logger.warning("MCP catalog summaries are unavailable: %s", error)
             return
         self._database = database
-        for connection, title, names in rows:
+        for connection, title, names, endpoint, transport in rows:
             try:
                 tools = json.loads(names)
             except ValueError:
@@ -145,7 +164,7 @@ class CatalogSummaries:
                     "MCP catalog summary ignored: invalid Tool names (connection=%s)", connection
                 )
                 continue
-            self._summaries[connection] = CatalogSummary(title, tuple(tools))
+            self._summaries[connection] = CatalogSummary(title, tuple(tools), endpoint, transport)
 
     async def close(self) -> None:
         """Finish the pending writes; later changes stay in memory."""
@@ -210,14 +229,18 @@ class CatalogSummaries:
                     return
                 connection_db.execute(
                     "INSERT INTO connection_catalogs(connection_id,server_title,tool_names,"
-                    "updated_at) VALUES(?,?,?,?) ON CONFLICT(connection_id) DO UPDATE SET "
+                    "updated_at,endpoint_key,negotiated_transport) VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(connection_id) DO UPDATE SET "
                     "server_title=excluded.server_title,tool_names=excluded.tool_names,"
-                    "updated_at=excluded.updated_at",
+                    "updated_at=excluded.updated_at,endpoint_key=excluded.endpoint_key,"
+                    "negotiated_transport=excluded.negotiated_transport",
                     (
                         connection,
                         summary.title,
                         json.dumps(list(summary.tools), ensure_ascii=False),
                         utc_now_timestamp(),
+                        summary.endpoint_key,
+                        summary.transport,
                     ),
                 )
 
@@ -229,11 +252,14 @@ class CatalogSummaries:
                 )
 
 
-def _read_rows(connection: sqlite3.Connection) -> list[tuple[str, str, str]]:
+def _read_rows(
+    connection: sqlite3.Connection,
+) -> list[tuple[str, str, str, str | None, str | None]]:
     rows = connection.execute(
-        "SELECT connection_id,server_title,tool_names FROM connection_catalogs"
+        "SELECT connection_id,server_title,tool_names,endpoint_key,negotiated_transport "
+        "FROM connection_catalogs"
     ).fetchall()
-    return [(str(row[0]), str(row[1]), str(row[2])) for row in rows]
+    return [(str(row[0]), str(row[1]), str(row[2]), row[3], row[4]) for row in rows]
 
 
 def _capped(text: str, limit: int) -> str:

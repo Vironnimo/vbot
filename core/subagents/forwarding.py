@@ -13,14 +13,17 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from core.database import DatabaseUnavailableError
 from core.runs import (
     Run,
     RunAdmissionBlockedError,
     RunCancelledError,
     RunInterruptedError,
+    RunKind,
     RunStatus,
     is_silent_answer,
 )
+from core.runs.run import FORWARDED_RUN_KINDS
 from core.sessions import SessionAddress
 from core.sessions.errors import SessionNotFoundError
 from core.storage.temp_files import artifact_owner
@@ -32,7 +35,6 @@ from core.subagents._constants import (
     FORWARDED_ANSWER_TEMPLATE,
     FORWARDED_FAILURE_TEXT_TEMPLATE,
     FORWARDED_NO_ANSWER_TEXT,
-    FORWARDED_RUN_KINDS,
     FORWARDED_SECTION_TEMPLATE,
     REPLY_TO_USER_NOTICE_TEMPLATE,
     USER_CANCEL_REASON,
@@ -131,6 +133,10 @@ class SubAgentForwarding:
         self._followed: dict[str, tuple[Run, asyncio.Task[None]]] = {}
         # Runs whose Parent stopped them itself; their outcome is in its Tool result.
         self._silenced: set[str] = set()
+        self._recovery: asyncio.Task[None] | None = None
+        self._scanning_live: set[str] | None = None
+        self._awaiting_receipt: set[str] = set()
+        self._notifications: set[asyncio.Task[None]] = set()
         self._forwarded_callbacks: list[Callable[[SessionAddress], None]] = []
 
     def install(self, run_manager: ChatRunManager) -> None:
@@ -202,12 +208,66 @@ class SubAgentForwarding:
     ) -> None:
         """Tell the Parent when a user input redirects the Sub-Agent's answers."""
         task = asyncio.create_task(self._notify_user_reply(address, message_id, generation_id))
+        self._notifications.add(task)
+        task.add_done_callback(self._notifications.discard)
         task.add_done_callback(_log_task_failure)
 
     def _on_run_started(self, run: Run) -> None:
         if run.run_kind.value not in FORWARDED_RUN_KINDS:
             return
-        task = asyncio.create_task(self._follow(run), name=f"subagent-forwarding:{run.id}")
+        if self._scanning_live is not None:
+            self._scanning_live.add(run.id)
+        self._watch(run)
+
+    def start_recovery(self) -> None:
+        if self._recovery is None:
+            self._recovery = asyncio.create_task(self._recover(), name="subagent-answer-recovery")
+            self._recovery.add_done_callback(_log_task_failure)
+
+    async def _recover(self) -> None:
+        sessions = self._runtime.chat_sessions
+        # Runs already handed to the coordinator and any that start during the
+        # worker read belong to this process, even if acknowledged before it returns.
+        live = self._scanning_live = set(self._followed) | self._awaiting_receipt
+        attempt = 0
+        while True:
+            try:
+                pending = await sessions.run_async(sessions.pending_subagent_answers)
+                break
+            except DatabaseUnavailableError, OSError:
+                await sleep_for_retry(min(attempt, 6))
+                attempt += 1
+        self._scanning_live = None
+        for handoff in pending:
+            if handoff.run_id in live:
+                continue
+            # Reuse the same recipient and history projection as a live completion.
+            # This detached already-terminal Run is never admitted or executed.
+            run = Run(
+                run_id=handoff.run_id,
+                agent_id=handoff.child.agent_id,
+                session_id=handoff.child.session_id,
+                project_id=handoff.child.project_id,
+                run_kind=RunKind(handoff.run_kind),
+                expected_session_generation_id=handoff.generation_id,
+            )
+            run.mark_completed(None)
+            self._watch(run, recovered_parent=handoff.parent_generation_id)
+
+    async def close(self) -> None:
+        tasks = [task for _, task in self._followed.values()]
+        tasks.extend(self._notifications)
+        if self._recovery is not None:
+            tasks.append(self._recovery)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _watch(self, run: Run, *, recovered_parent: str | None = None) -> None:
+        task = asyncio.create_task(
+            self._follow(run, recovered_parent=recovered_parent),
+            name=f"subagent-forwarding:{run.id}",
+        )
         self._followed[run.id] = (run, task)
         task.add_done_callback(lambda done: self._finish_following(run.id, done))
 
@@ -226,14 +286,20 @@ class SubAgentForwarding:
             except Exception:
                 _LOGGER.warning("A Sub-Agent forwarding callback failed", exc_info=True)
 
-    async def _follow(self, run: Run) -> None:
+    async def _follow(self, run: Run, *, recovered_parent: str | None = None) -> None:
         sessions = self._runtime.chat_sessions
         address = _run_address(run)
         link = await self._read_link(address)
         if link is None or run.expected_session_generation_id not in (None, link.generation_id):
             return
         generation_id = link.generation_id
-        activity = await self._activities.ensure(address, generation_id, parent=link.parent)
+        if recovered_parent is not None and recovered_parent != link.parent_generation_id:
+            return
+        activity = (
+            await self._activities.ensure(address, generation_id, parent=link.parent)
+            if recovered_parent is None
+            else None
+        )
         if activity is not None:
             activity.follow(run)
         try:
@@ -245,6 +311,15 @@ class SubAgentForwarding:
         except SessionNotFoundError:
             return
         if result is None:
+            # A silent answer or a switch of recipient can settle without a Parent note.
+            if generation_id and run.execution_owner is None and run.status == RunStatus.COMPLETED:
+                await _read_for_forwarding(
+                    address,
+                    "retire silent answer",
+                    lambda: sessions.run_async(
+                        sessions.discard_subagent_answer, generation_id, run.id
+                    ),
+                )
             return
         outcome, answer, answer_ids = result
         current = await self._read_link(address)
@@ -256,7 +331,9 @@ class SubAgentForwarding:
         ):
             return
         link = current
-        if not await sessions.run_async(sessions.exists, link.parent):
+        if not await _read_for_forwarding(
+            address, "Parent", lambda: sessions.run_async(sessions.exists, link.parent)
+        ):
             _LOGGER.info(
                 "Sub-Agent answer dropped: its Parent Session no longer exists "
                 "(subagent=%s run=%s)",
@@ -264,8 +341,14 @@ class SubAgentForwarding:
                 run.id,
             )
             return
-        facts = facts_text(await running_entries(self._runtime, address))
-        siblings = await self._siblings_text(link, run.id)
+        facts = facts_text(
+            await _read_for_forwarding(
+                address, "activity", lambda: running_entries(self._runtime, address)
+            )
+        )
+        siblings = await _read_for_forwarding(
+            address, "siblings", lambda: self._siblings_text(link, run.id)
+        )
         if siblings is not None:
             facts = f"{facts}\n{siblings}"
         body = FORWARDED_SECTION_TEMPLATE.format(
@@ -289,8 +372,17 @@ class SubAgentForwarding:
             expected_session_generation_id=link.parent_generation_id,
             body=body,
             execution_owner=run.execution_owner,
+            # A process restart ends temporary continuation settings. Record recovered
+            # answers in the Parent without starting an unsolicited fresh Run.
+            wake=recovered_parent is None,
         )
-        delivery.add_done_callback(lambda done: _log_delivery(done, link, run.id))
+        self._awaiting_receipt.add(run.id)
+
+        def settled(done: asyncio.Future[None]) -> None:
+            self._awaiting_receipt.discard(run.id)
+            _log_delivery(done, link, run.id)
+
+        delivery.add_done_callback(settled)
         if activity is not None:
             activity.track_delivery(
                 delivery,
@@ -381,14 +473,15 @@ async def _read_for_forwarding[T](
     read: Callable[[], Awaitable[T]],
 ) -> T:
     """Retry a failed read without treating unavailable history as an absent answer."""
-    for attempt in range(3):
+    attempt = 0
+    while True:
         try:
             result = await read()
         except SessionNotFoundError:
             raise
-        except Exception:
-            if attempt == 2:
-                # The watcher callback logs the final error.
+        except Exception as error:
+            if attempt >= 2 and not isinstance(error, (DatabaseUnavailableError, OSError)):
+                # Programming errors are not transient storage outages.
                 raise
             _LOGGER.log(
                 logging.WARNING if attempt == 0 else logging.DEBUG,
@@ -399,7 +492,8 @@ async def _read_for_forwarding[T](
                 attempt + 1,
                 exc_info=True,
             )
-            await sleep_for_retry(attempt)
+            await sleep_for_retry(min(attempt, 6))
+            attempt += 1
         else:
             if attempt:
                 _LOGGER.info(
@@ -409,7 +503,6 @@ async def _read_for_forwarding[T](
                     source,
                 )
             return result
-    raise AssertionError("forwarding read retry did not settle")
 
 
 async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> list[RunningEntry]:

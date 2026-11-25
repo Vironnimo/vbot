@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -134,42 +135,73 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
     ]
 
 
-def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
-    """Find the best native format that can be normalized to mono int16.
+# Guarded by AUDIO_BACKEND_LOCK and discarded on a PortAudio refresh.
+_last_opened: tuple[Any, int, CaptureFormat] | None = None
 
-    The device's own rate comes first: audio is resampled once, by the capture, and
-    the command recording keeps the bandwidth the device delivers.
-    """
-    try:
-        info = sd.query_devices(device)
-    except Exception:
-        return None
-    if int(info.get("max_input_channels", 0)) <= 0:
-        return None
 
+def _capture_formats(sd: Any, device: int, info: Any) -> Iterator[CaptureFormat]:
+    """Check the last working format first, then the device's native and standard rates."""
+    name = str(info.get("name", f"Device {device}"))
+    host_api = _host_api_name(sd, info)
     default_rate = int(info.get("default_samplerate", 0) or 0)
-    sample_rates = list(dict.fromkeys([default_rate, *_COMMON_CAPTURE_SAMPLE_RATES]))
-    for sample_rate in sample_rates:
-        if sample_rate < MIN_CAPTURE_SAMPLE_RATE:
-            continue
-        for dtype in _CAPTURE_DTYPES:
-            try:
-                sd.check_input_settings(
-                    device=device,
-                    samplerate=sample_rate,
-                    channels=CAPTURE_CHANNELS,
-                    dtype=dtype,
-                )
-            except Exception:
-                continue
-            return CaptureFormat(
-                device=device,
-                name=str(info.get("name", f"Device {device}")),
-                sample_rate=sample_rate,
-                dtype=dtype,
-                host_api=_host_api_name(sd, info),
+    rates = dict.fromkeys((default_rate, *_COMMON_CAPTURE_SAMPLE_RATES))
+    candidates = [
+        (rate, dtype)
+        for rate in rates
+        if rate >= MIN_CAPTURE_SAMPLE_RATE
+        for dtype in _CAPTURE_DTYPES
+    ]
+    if _last_opened is not None:
+        backend, previous_default, fmt = _last_opened
+        if (
+            backend is sd
+            and previous_default == default_rate
+            and (fmt.device, fmt.name, fmt.host_api) == (device, name, host_api)
+        ):
+            candidates.insert(0, (fmt.sample_rate, fmt.dtype))
+    for sample_rate, dtype in dict.fromkeys(candidates):
+        try:
+            sd.check_input_settings(
+                device=device, samplerate=sample_rate, channels=CAPTURE_CHANNELS, dtype=dtype
             )
-    return None
+        except Exception:
+            continue
+        yield CaptureFormat(device, name, sample_rate, dtype, host_api)
+
+
+def _format_rejected(sd: Any, error: Exception, host_api: str) -> bool:
+    """PortAudio invalid rate/format, or WASAPI's AUDCLNT_E_UNSUPPORTED_FORMAT."""
+    if not isinstance(error, getattr(sd, "PortAudioError", ())) or len(error.args) < 2:
+        return False
+    if error.args[1] in (-9997, -9994):
+        return True
+    if host_api != "Windows WASAPI" or error.args[1] != -9999 or len(error.args) < 3:
+        return False
+    detail = error.args[2]
+    return (
+        isinstance(detail, tuple)
+        and len(detail) == 3
+        and isinstance(detail[1], int)
+        and detail[1] & 0xFFFFFFFF == 0x88890008
+    )
+
+
+def _start_stream(sd: Any, fmt: CaptureFormat) -> Any:
+    stream = sd.InputStream(
+        samplerate=fmt.sample_rate,
+        channels=CAPTURE_CHANNELS,
+        dtype=fmt.dtype,
+        # The shared WASAPI stream needs the backend's robust buffer size and latency.
+        blocksize=0,
+        latency="high",
+        device=fmt.device,
+    )
+    try:
+        stream.start()
+    except BaseException:
+        _close_quietly(stream)
+        raise
+    return stream
 
 
 def open_input_stream(
@@ -186,41 +218,37 @@ def open_input_stream(
     backend error when opening fails. The stream counts as open until
     :func:`close_input_stream`.
     """
-    global _open_stream_count
+    global _open_stream_count, _last_opened
     with AUDIO_BACKEND_LOCK:
         last_error: Exception | None = None
         for device in _candidate_device_indices(sd, requested_device):
-            capture_format = _capture_format_for_device(sd, device)
-            if capture_format is None:
-                continue
-            stream = None
             try:
-                stream = sd.InputStream(
-                    samplerate=capture_format.sample_rate,
-                    channels=CAPTURE_CHANNELS,
-                    dtype=capture_format.dtype,
-                    blocksize=0,
-                    # WASAPI blocking reads poll. PortAudio warns that too-low
-                    # shared-mode latency can distort audio; use the backend's
-                    # robust default, not the global sounddevice preference.
-                    latency="high",
-                    device=capture_format.device,
-                )
-                stream.start()
-            except BaseException as error:
-                if stream is not None:
-                    _close_quietly(stream)
-                if not isinstance(error, Exception):
-                    raise
-                last_error = error
-                logger.debug(
-                    "Microphone candidate could not open (host_api=%s error_type=%s)",
-                    capture_format.host_api,
-                    type(error).__name__,
-                )
+                info = sd.query_devices(device)
+            except Exception:
                 continue
-            _open_stream_count += 1
-            return stream, capture_format
+            if not _is_shared_input(sd, info):
+                continue
+            if requested_device is not None and (
+                info.get("name", f"Device {device}") != requested_device["name"]
+                or _host_api_name(sd, info) != requested_device["host_api"]
+            ):
+                continue
+            for fmt in _capture_formats(sd, device, info):
+                try:
+                    stream = _start_stream(sd, fmt)
+                except Exception as error:
+                    last_error = error
+                    logger.debug(
+                        "Microphone candidate could not open (host_api=%s error_type=%s)",
+                        fmt.host_api,
+                        type(error).__name__,
+                    )
+                    if _format_rejected(sd, error, fmt.host_api):
+                        continue
+                    break
+                _last_opened = (sd, int(info.get("default_samplerate", 0) or 0), fmt)
+                _open_stream_count += 1
+                return stream, fmt
     if last_error is not None:
         raise last_error
     raise MicrophoneUnavailableError("No input device supports speech capture")
@@ -269,7 +297,7 @@ def list_microphones(sd: Any = None) -> list[dict[str, Any]]:
         with AUDIO_BACKEND_LOCK:
             for i, info in enumerate(sd.query_devices()):
                 if _is_shared_input(sd, info):
-                    capture_format = _capture_format_for_device(sd, i)
+                    capture_format = next(_capture_formats(sd, i, info), None)
                     devices.append(
                         {
                             "index": i,
@@ -301,6 +329,7 @@ def refresh_microphone_devices(sd: Any = None) -> bool:
         if sd is None:
             return False
 
+    global _last_opened
     terminate = getattr(sd, "_terminate", None)
     initialize = getattr(sd, "_initialize", None)
     if not callable(terminate) or not callable(initialize):
@@ -312,6 +341,7 @@ def refresh_microphone_devices(sd: Any = None) -> bool:
             if _open_stream_count > 0:
                 logger.debug("Skipping the microphone refresh while a stream is open")
                 return False
+            _last_opened = None
             terminate()
             initialize()
     except Exception:

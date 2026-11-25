@@ -418,6 +418,8 @@ class Runtime(RuntimeServiceGraph):
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""
         if self.safe_startup_mode is None and self._operational_producers == "enabled":
             self.bootstrap_service.activate()
+            if self._video is not None and self._video.recovery is not None:
+                self._video.recovery.start()
 
     def stop(self) -> None:
         """Shut the Runtime down synchronously; safe before ``start()``.

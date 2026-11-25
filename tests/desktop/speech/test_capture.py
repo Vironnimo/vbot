@@ -1091,6 +1091,25 @@ def test_failed_streams_are_closed_before_automatic_fallback(failure: str, expli
     assert refresh_microphone_devices(sd) is True
 
 
+def test_microphone_learns_a_format_that_actually_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    sd = _windows_defaults()
+
+    class PortAudioError(Exception):
+        pass
+
+    monkeypatch.setattr(sd, "PortAudioError", PortAudioError, raising=False)
+    selected = {"index": 1, "name": "Windows default mic", "host_api": "Windows WASAPI"}
+    sd.start_errors.append(PortAudioError("sample format not supported", -9994))
+
+    assert _opened_format(sd, selected).dtype == "float32"
+    assert [stream.dtype for stream in sd.streams] == ["int16", "float32"]
+    assert _opened_format(sd, selected).dtype == "float32"
+    assert sd.open_attempts == [1, 1, 1]
+    assert all(stream.closed for stream in sd.streams)
+    assert refresh_microphone_devices(sd)
+    assert _opened_format(sd, selected).dtype == "int16"
+
+
 def test_interrupted_stream_start_cleans_up_without_trying_another_microphone() -> None:
     sd = _windows_defaults()
     sd.start_errors.append(KeyboardInterrupt())

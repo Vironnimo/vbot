@@ -647,6 +647,38 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     assert rig.cues.played == ["listen", "done"]
 
 
+def test_dictation_learns_a_proxy_limit_and_only_transcribes_each_sample_once(
+    make_rig: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = make_rig()
+    rig.server.numbered = True
+    refused: list[int] = []
+    original = _FakeClient.transcribe
+
+    def limited(client: _FakeClient, audio: bytes, *, filename: str) -> str:
+        if len(audio) > 44 + 2 * RATE:
+            refused.append(len(audio))
+            raise SpeechServerRejected("transcription_failed", "too large", status_code=413)
+        return original(client, audio, filename=filename)
+
+    monkeypatch.setattr(_FakeClient, "transcribe", limited)
+    for attempt in range(2):
+        rig.server.uploads.clear()
+        rig.cues.played.clear()
+        rig.inserter.inserted.clear()
+        script = tone(2.0, RATE)
+        rig.sd.feed(LEAD_IN, script)
+        rig.press()
+        wait_until(lambda: "listen" in rig.cues.played and rig.sd.drained)
+        rig.press()
+        rig.wait_idle()
+        heard = [upload for upload in rig.server.uploads if _energy(upload)]
+        assert sum(_energy(upload) for upload in heard) == _energy(script)
+        assert rig.inserted_text() == " ".join(f"Teil {n}" for n in range(1, len(heard) + 1))
+        assert bool(refused) is (attempt == 0)
+        refused.clear()
+
+
 def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any) -> None:
     rig = make_rig(piece_target_seconds=0.5, piece_search_seconds=0.4)
     rig.server.transcript = SpeechServerRejected(

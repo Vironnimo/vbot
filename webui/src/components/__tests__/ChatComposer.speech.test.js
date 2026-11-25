@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { t } from '../../lib/i18n.js';
+import { notifyServerReady } from '../../lib/connectionState.js';
 
 import {
   buttonLabelled,
@@ -98,6 +99,7 @@ describe('ChatComposer speech input', () => {
 
     expect(transcribeSpeech).toHaveBeenCalledWith(expect.any(Blob), {
       filename: 'recording.webm',
+      transfer: expect.any(Object),
       signal: expect.any(AbortSignal),
       onProgress: expect.any(Function),
     });
@@ -149,7 +151,7 @@ describe('ChatComposer speech input', () => {
     ['completion', false],
     ['failure', true],
   ])(
-    'shows the transcription phases and unlocks the microphone after %s',
+    'shows the transcription phases and retains the recording only after failure (%s)',
     async (_case, fails) => {
       const recorder = recorderFixture();
       createAudioRecorder.mockResolvedValue(recorder);
@@ -179,13 +181,65 @@ describe('ChatComposer speech input', () => {
       if (fails) transcription.fail(new Error('test-owned failure'));
       else transcription.complete({ text: 'test-owned transcript' });
       await vi.waitFor(() => expect(startButton()).not.toBeNull());
-      expect(startButton().disabled).toBe(false);
+      expect(startButton().disabled).toBe(fails);
       expect(composerInput().placeholder).toBe(t('chat.composerPlaceholder'));
       expect(
         document.querySelector('.composer-voice-status').textContent.trim(),
       ).toBe('');
       expect(composerInput().value).toBe(fails ? '' : 'test-owned transcript');
-      expect(recorder.cancel).toHaveBeenCalledTimes(fails ? 1 : 0);
+      expect(recorder.stop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['resume', 'discard', 'return to draft'])(
+    'retains the recorded take after a disconnect until %s',
+    async (action) => {
+      const recorder = recorderFixture();
+      createAudioRecorder.mockResolvedValue(recorder);
+      transcribeSpeech
+        .mockRejectedValueOnce(
+          Object.assign(new Error('offline'), { code: 'network_error' }),
+        )
+        .mockResolvedValue({ text: 'recovered transcript' });
+      composer.mount({ draftKey: 'a::s' });
+      await record();
+      await settle(4);
+      const card = [...document.querySelectorAll('[role=status]')].find(
+        (element) =>
+          element.textContent.includes(t('chat.voice.recordingRetained')),
+      );
+      expect(card).toBeTruthy();
+      if (action === 'discard')
+        [...card.querySelectorAll('button')]
+          .find((button) => button.textContent.trim() === t('common.discard'))
+          .click();
+      if (action === 'return to draft') {
+        await composer.unmount();
+        composer.mount({ draftKey: 'a::other' });
+        notifyServerReady();
+        await settle();
+        expect(transcribeSpeech).toHaveBeenCalledOnce();
+        expect(composerInput().value).toBe('');
+        await composer.unmount();
+        composer.mount({ draftKey: 'a::s' });
+      }
+      notifyServerReady();
+      await settle(4);
+      expect(createAudioRecorder).toHaveBeenCalledOnce();
+      expect(transcribeSpeech).toHaveBeenCalledTimes(
+        action === 'discard' ? 1 : 2,
+      );
+      if (action !== 'discard') {
+        expect(transcribeSpeech.mock.calls[0][0]).toBe(
+          transcribeSpeech.mock.calls[1][0],
+        );
+        expect(transcribeSpeech.mock.calls[0][1].transfer).toBe(
+          transcribeSpeech.mock.calls[1][1].transfer,
+        );
+      }
+      expect(composerInput().value).toBe(
+        action === 'discard' ? '' : 'recovered transcript',
+      );
     },
   );
 

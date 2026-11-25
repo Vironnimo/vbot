@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
+import { notifyServerReady } from '../../lib/connectionState.js';
 import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import {
   flushComposerMemory,
@@ -680,6 +681,42 @@ describe('ChatComposer', () => {
         setApplicationTimeZone('UTC');
         vi.useRealTimers();
       }
+    });
+
+    it('retries only an interrupted file with its existing transfer when the server returns', async () => {
+      const failed = new File(['a'], 'a.txt', { type: 'text/plain' });
+      const successful = new File(['b'], 'b.txt', { type: 'text/plain' });
+      uploadAttachment
+        .mockRejectedValueOnce(
+          Object.assign(new Error('offline'), { code: 'network_error' }),
+        )
+        .mockResolvedValueOnce(uploaded('second', 'b.txt', 'text/plain'))
+        .mockResolvedValueOnce(uploaded('first', 'a.txt', 'text/plain'));
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      composer.mount({ draftKey: 'a::s', onSendMessage });
+      await selectFilesFromPicker(failed, successful);
+      expect(attachments()).toHaveLength(2);
+      submitComposer();
+      expect(onSendMessage).not.toHaveBeenCalled();
+      await composer.unmount();
+      composer.mount({ draftKey: 'a::other' });
+      expect(attachments()).toHaveLength(0);
+      await composer.unmount();
+      composer.mount({ draftKey: 'a::s', onSendMessage });
+      notifyServerReady();
+      await settle();
+      expect(uploadAttachment.mock.calls.map(([file]) => file)).toEqual([
+        failed,
+        successful,
+        failed,
+      ]);
+      expect(uploadAttachment.mock.calls[0][1].transfer).toBe(
+        uploadAttachment.mock.calls[2][1].transfer,
+      );
+      submitComposer();
+      expect(
+        onSendMessage.mock.calls[0][0].map((file) => file.attachment_id),
+      ).toEqual(['first', 'second']);
     });
 
     it('offers changed widget states as chips and sends the ones not removed', async () => {

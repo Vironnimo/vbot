@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import math
+import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.database import DatabaseUnavailableError
 from core.model_tasks.artifacts import (
     BeforeOutputWrite,
     GeneratedMediaArtifact,
+    OutputWriteError,
     ensure_output_dir,
     guarded_artifact_path,
     persist_artifacts,
@@ -35,11 +38,18 @@ from core.model_tasks.task_execution import (
     task_debug_context,
 )
 from core.model_tasks.video_providers import ProviderVideoClient, VideoJobUnfinishedError
+from core.model_tasks.video_recovery import (
+    VideoDelivery,
+    VideoDestinationChangedError,
+    VideoRecovery,
+    video_extension,
+)
 from core.model_tasks.video_types import VideoGenerationResult
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
@@ -101,9 +111,17 @@ class VideoOutcomeUnknownError(VideoExecutionError):
 
     code = ProviderOutcomeUnknownError.code
 
-    def __init__(self, message: str, *, operation_key: str, job_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation_key: str,
+        job_id: str | None = None,
+        collection_pending: bool = False,
+    ) -> None:
         self.operation_key = operation_key
         self.job_id = job_id
+        self.collection_pending = collection_pending
         super().__init__(message)
 
 
@@ -182,10 +200,12 @@ class VideoService:
         runtime: TaskClientRuntime,
         *,
         usage_recorder: UsageRecorder | None = None,
+        recovery: VideoRecovery | None = None,
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
         self._usage_recorder = usage_recorder
+        self.recovery = recovery
         self._resolver = TaskBindingResolver(
             model_tasks,
             configuration_error=VideoConfigurationError,
@@ -196,6 +216,8 @@ class VideoService:
         """Stop following cancelled jobs; each one still running logs its job id."""
 
         jobs = dict(self._cancelled_jobs)
+        if self.recovery is not None:
+            await self.recovery.close()
         for polling in jobs.values():
             polling.cancel()
         # A watcher may not have started yet. Cancel its owned poll directly,
@@ -220,6 +242,7 @@ class VideoService:
         call_options: Mapping[str, Any] | None = None,
         frame_paths: Mapping[str, str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
+        delivery: tuple[str, VideoDelivery, Path] | None = None,
     ) -> VideoGenerationResult:
         """Generate one video; per-call options override the binding's Settings.
 
@@ -245,6 +268,8 @@ class VideoService:
                 raise TaskCandidateMismatchError(exc) from exc
 
             try:
+                if self.recovery is not None and delivery is not None:
+                    target_ref = await self.recovery.pin(target_ref)
                 client = await ProviderVideoClient.from_runtime_async(
                     self._runtime,
                     target_ref,
@@ -267,18 +292,54 @@ class VideoService:
                 self._cancelled_jobs[job] = polling
                 job.add_done_callback(lambda finished: self._cancelled_jobs.pop(finished, None))
 
+            recorded = False
+
+            async def accepted(job_id: str, origin: str) -> None:
+                nonlocal recorded
+                assert self.recovery is not None and delivery is not None
+                attempt.seal()
+                try:
+                    await self.recovery.accepted(*delivery, target_ref.target, job_id, origin)
+                except DatabaseUnavailableError, sqlite3.Error, OSError:
+                    _LOGGER.exception(
+                        "Video receipt unavailable, continuing foreground collection (job=%s)",
+                        job_id,
+                    )
+                else:
+                    recorded = True
+
+            def cancel_at_provider() -> bool:
+                return (
+                    delivery is None
+                    or self.recovery is None
+                    or self.recovery.cancel_at_provider(delivery[1].run_id)
+                )
+
+            async def ended_without_video() -> None:
+                if recorded and self.recovery is not None and delivery is not None:
+                    await self.recovery.forget(delivery[0])
+                attempt.sealed = False
+
             try:
                 return await client.generate(
                     normalized_prompt,
                     options=merged_options,
                     frame_images=frames,
                     on_cancelled_job=follow_cancelled_job,
+                    accepted=accepted
+                    if self.recovery is not None and delivery is not None
+                    else None,
+                    cancel_at_provider=cancel_at_provider,
+                    ended_without_video=ended_without_video,
                 )
             except ProviderContentRefusedError as exc:
                 raise VideoRefusedError(exc.reason) from exc
             except VideoJobUnfinishedError as exc:
                 raise VideoOutcomeUnknownError(
-                    exc.reason, operation_key=exc.operation_key, job_id=exc.job_id
+                    exc.reason,
+                    operation_key=exc.operation_key,
+                    job_id=exc.job_id,
+                    collection_pending=recorded,
                 ) from exc
             except ProviderOutcomeUnknownError as exc:
                 raise VideoOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
@@ -296,6 +357,7 @@ class VideoService:
         frame_paths: Mapping[str, str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
         before_output_write: BeforeOutputWrite | None = None,
+        delivery: VideoDelivery | None = None,
     ) -> GeneratedMediaArtifact:
         """Generate one Video and persist it in the caller-owned directory.
 
@@ -308,14 +370,30 @@ class VideoService:
             if before_output_write is not None
             else await persist_artifacts(ensure_output_dir, output_dir)
         )
+        receipt: tuple[str, VideoDelivery, Path] | None = None
+        if delivery is not None and self.recovery is not None and before_output_write is not None:
+            directory = await persist_artifacts(directory.resolve)
+            receipt = (new_id("vid"), delivery, directory)
         result = await self.generate(
             prompt,
             call_options=call_options,
             frame_paths=frame_paths,
             usage_context=usage_context,
+            delivery=receipt,
         )
+        if receipt is not None:
+            assert self.recovery is not None and before_output_write is not None
+            try:
+                return await self.recovery.save(receipt[0], directory, result, before_output_write)
+            except (OutputWriteError, VideoDestinationChangedError) as error:
+                raise VideoOutcomeUnknownError(
+                    str(error),
+                    operation_key=receipt[0],
+                    job_id=result.job_id,
+                    collection_pending=await self.recovery.is_recorded(receipt[0]),
+                ) from error
         if before_output_write is not None:
-            extension = _video_extension(result.media_type)
+            extension = video_extension(result.media_type)
             return await guarded_artifact_path(
                 directory,
                 "vid",
@@ -333,7 +411,7 @@ class VideoService:
             write_generated_media_artifact,
             result.data,
             output_dir=directory,
-            extension=_video_extension(result.media_type),
+            extension=video_extension(result.media_type),
             media_type=result.media_type,
         )
 
@@ -442,7 +520,3 @@ def _video_task_options(model: Any) -> Mapping[str, Any]:
     task_options = getattr(getattr(model, "capabilities", None), "task_options", {})
     options = task_options.get(TASK_VIDEO_GENERATION) if isinstance(task_options, Mapping) else None
     return options if isinstance(options, Mapping) else {}
-
-
-def _video_extension(media_type: str) -> str:
-    return "webm" if media_type.split(";", 1)[0].strip().lower() == "video/webm" else "mp4"

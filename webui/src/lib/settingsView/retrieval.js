@@ -60,6 +60,11 @@ function normalizeWebSearchSettings(rawSettings) {
 
   return {
     provider,
+    fallback_provider:
+      availableProviders.includes(webSearch.fallback_provider) &&
+      webSearch.fallback_provider !== provider
+        ? webSearch.fallback_provider
+        : 'none',
     available_providers: availableProviders,
     default_count: defaultCount,
     searxng: {
@@ -91,6 +96,7 @@ export function buildWebSearchSettingsPayload(formValues) {
   return {
     web_search: {
       provider: normalized.provider,
+      fallback_provider: normalized.fallback_provider,
       default_count: normalized.default_count,
       searxng: {
         base_url: normalized.searxng.base_url,

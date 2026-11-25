@@ -108,7 +108,7 @@ RECALL_FIELDS = frozenset({"backend"})
 SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
 SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
-WEB_SEARCH_FIELDS = frozenset({"provider", "default_count", "searxng"})
+WEB_SEARCH_FIELDS = frozenset({"provider", "fallback_provider", "default_count", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 
 

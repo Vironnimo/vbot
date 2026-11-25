@@ -63,7 +63,7 @@ CONNECTION_SCHEMA: dict[str, Any] = {
     "properties": {
         "id": {"type": "string", "pattern": CONNECTION_ID_PATTERN},
         "description": {"type": "string", "maxLength": MAX_DESCRIPTION_CHARACTERS},
-        "transport": {"enum": ["stdio", "http", "sse"]},
+        "transport": {"enum": ["stdio", "auto", "http", "sse"]},
         "command": {"type": "string", "minLength": 1},
         "args": {"type": "array", "items": {"type": "string"}},
         "cwd": {"type": "string", "minLength": 1},

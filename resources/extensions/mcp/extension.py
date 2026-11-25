@@ -41,7 +41,7 @@ from core.utils.workers import settle_before_cancelling
 
 from ._arguments import browse_normalizer, connection_display
 from ._background import BackgroundCalls
-from ._catalog import CatalogSummaries, catalog_summary
+from ._catalog import CatalogSummaries, catalog_summary, endpoint_key
 from ._connectors import ConnectorCatalog, load_connectors
 from ._definitions import (
     GUIDANCE_PREVIEW_CHARACTERS,
@@ -273,6 +273,7 @@ class MCPService:
 
         identifier = config["id"]
         if identifier not in self.runners:
+            known = self.catalogs.get(identifier)
             self.runners[identifier] = ConnectionRunner(
                 config,
                 self._host(),
@@ -285,6 +286,9 @@ class MCPService:
                     else EMPTY_MASKER
                 ),
                 recovery=self.recovery,
+                preferred_transport=known.transport
+                if known and known.endpoint_key == endpoint_key(config)
+                else None,
                 on_change=lambda: self._connection_changed(identifier),
             )
             self._publish(self.runners[identifier], None)
@@ -296,7 +300,9 @@ class MCPService:
             raise ValueError(f"Unknown MCP connection: {identifier}")
         return config
 
-    def _publish(self, runner: ConnectionRunner, catalog: dict[str, Any] | None) -> None:
+    def _publish(
+        self, runner: ConnectionRunner, catalog: dict[str, Any] | None, *, remembered: bool = False
+    ) -> None:
         """Publish the connection Tool and the remote Tools of *catalog*.
 
         ``None`` means no catalog has arrived yet on this runner: ``target`` keeps
@@ -305,8 +311,11 @@ class MCPService:
         if self._closing or self._closed or self.runners.get(runner.id) is not runner:
             return
         removed = runner.id not in self.connections
-        if catalog is not None and not removed:
-            self.catalogs.record(runner.id, catalog_summary(catalog))
+        if catalog is not None and not removed and not remembered:
+            self.catalogs.record(
+                runner.id,
+                catalog_summary(catalog, endpoint_key(runner.config), runner.active_transport),
+            )
             self._connection_changed(runner.id)
         parent = f"mcp_{runner.id}"
         about = self.connections.get(runner.id, runner.config).get("description")
@@ -929,7 +938,7 @@ class MCPService:
         ):
             # Only the description changed: republish it and keep the connection.
             runner.config = config
-            self._publish(runner, runner.catalog or None)
+            self._publish(runner, runner.catalog or None, remembered=True)
         else:
             await self._stop(identifier)
             if previous is not None and _signs_in_elsewhere(previous, config):
@@ -1010,7 +1019,7 @@ class MCPService:
             # Publish the actual refusal before any concurrent call sees them.
             runner = self.runners.get(identifier)
             if runner is not None:
-                self._publish(runner, runner.catalog or None)
+                self._publish(runner, runner.catalog or None, remembered=True)
             self.catalogs.forget(identifier)
             await self._stop(identifier)
             self.management._forget_sign_in(identifier)
@@ -1021,7 +1030,7 @@ class MCPService:
         else:
             runner = self._runner(config)
             # Republished, its Tools no longer say the connection is disabled.
-            self._publish(runner, runner.catalog or None)
+            self._publish(runner, runner.catalog or None, remembered=True)
             runner.start()
         if self.recovery is not None:
             await self.recovery.resume(self.runners)
@@ -1061,7 +1070,7 @@ class MCPService:
         runner = self._runner(config)
         if previous is not None and previous.catalog:
             runner.catalog = previous.catalog
-            self._publish(runner, runner.catalog)
+            self._publish(runner, runner.catalog, remembered=True)
         return runner
 
     async def _stop(self, identifier: str) -> None:

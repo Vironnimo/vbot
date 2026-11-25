@@ -653,7 +653,9 @@ def test_owed_replies_open_additively_from_a_database_without_retry_keyboards(
         legacy.setattr(
             schema_module,
             "SCHEMA_SQL",
-            schema_module.SCHEMA_SQL.replace("  retry_keyboard_json TEXT,\n", ""),
+            schema_module.SCHEMA_SQL.replace("  retry_keyboard_json TEXT,\n", "").replace(
+                "  retry_at TEXT,\n", ""
+            ),
         )
         state = _open(tmp_path)
         try:
