@@ -327,7 +327,8 @@ def test_partial_fields_drop_an_in_flight_tool_call_without_raising() -> None:
     assert fields.reasoning_timing is not None
 
 
-def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them() -> None:
+@pytest.mark.parametrize("explicit_done", [False, True], ids=["finish", "item-done"])
+def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them(explicit_done: bool) -> None:
     rejection = {"code": "denied", "message": "Denied by the Provider.", "fingerprint": "r"}
     read = {
         "id": "tool_call_0",
@@ -347,6 +348,7 @@ def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them() -> None
     accumulator.add_delta(_tool_delta('{"path":', name="write", slot=1))
     assert accumulator.take_completed_tool_calls() == [read]
     # Moving on does not complete a call whose arguments are still open.
+    accumulator.add_delta({"type": "tool_call_done", "slot": 1})
     accumulator.add_delta({"type": "content_delta", "text": "and"})
     assert accumulator.take_completed_tool_calls() == []
     accumulator.add_delta(_tool_delta('"b.md"}', slot=1))
@@ -356,8 +358,13 @@ def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them() -> None
     accumulator.add_delta(_tool_delta('{"path":"other.md"}', slot=0))
     assert accumulator.finalize_partial_fields().tool_calls == [read, write]
 
+    assert accumulator.take_completed_tool_calls() == []
+    if explicit_done:
+        accumulator.add_delta({"type": "tool_call_done", "slot": 2})
+        assert accumulator.take_completed_tool_calls() == [search]
+        accumulator.add_delta({"type": "tool_call_done", "slot": 2})
     accumulator.add_delta({"type": "finish", "reason": "tool_calls"})
-    assert accumulator.take_completed_tool_calls() == [search]
+    assert accumulator.take_completed_tool_calls() == ([] if explicit_done else [search])
     assert accumulator.take_completed_tool_calls() == []
     assert accumulator.finalize_assistant_fields().tool_calls == [read, write, search]
 

@@ -331,6 +331,15 @@ class GeminiStreamDecoder:
             if not isinstance(raw_part, Mapping):
                 continue
             part = copy.deepcopy(dict(raw_part))
+            function_call = part.get("functionCall")
+            if isinstance(function_call, Mapping) and (
+                function_call.get("willContinue") is True or "partialArgs" in function_call
+            ):
+                # This wire requests complete calls. Replaying or dispatching an
+                # unexpected JSONPath fragment as an empty call would change its meaning.
+                raise ProviderError(
+                    "Gemini returned partial function call arguments", retryable=False
+                )
             self.replay_parts.append(part)
             replay_state = replay_state or not part.keys() <= _PLAIN_TEXT_PART_KEYS
             text = part.get("text")
@@ -343,7 +352,6 @@ class GeminiStreamDecoder:
                         "text": text,
                     }
                 )
-            function_call = part.get("functionCall")
             if isinstance(function_call, Mapping):
                 self.has_tool_calls = True
                 name = function_call.get("name")

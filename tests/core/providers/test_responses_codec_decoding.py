@@ -653,6 +653,30 @@ def _arguments(delta: str, **fields: Any) -> str:
             id="first-delta-continues-a-partial-item-snapshot",
         ),
         pytest.param(
+            [
+                _added(_function_call("call_1", "search", '{"q"', id="fc_1")),
+                sse_event("response.function_call_arguments.done", {"item_id": "fc_1"}),
+                sse_event(
+                    "response.output_item.done", {"item": {**_DOCS_SEARCH, "status": "completed"}}
+                ),
+            ],
+            [
+                _tool_delta("call_1", name="search", arguments='{"q"'),
+                _tool_delta("call_1", arguments=':"docs"}'),
+                {"type": "tool_call_done", "id": "call_1"},
+            ],
+            id="completed-item-releases-call-after-argument-backfill",
+        ),
+        pytest.param(
+            [
+                sse_event(
+                    "response.output_item.done", {"item": {**_DOCS_SEARCH, "status": "incomplete"}}
+                )
+            ],
+            [_tool_delta("call_1", name="search", arguments='{"q":"docs"}')],
+            id="incomplete-item-with-valid-arguments-waits-for-terminal-outcome",
+        ),
+        pytest.param(
             [_arguments('{"value":"ab', call_id="call_1"), _arguments('ab"}', call_id="call_1")],
             [
                 _tool_delta("call_1", arguments='{"value":"ab'),

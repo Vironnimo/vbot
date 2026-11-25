@@ -263,7 +263,10 @@ class ProviderAdapter(ABC):
       ``id`` may be omitted until a later fragment for index-based wires.
       A Provider can reject the entire attempt with ``rejection`` from
       ``build_tool_call_rejection()``. Emit it before advancing to another
-      call, text, reasoning or finish, since Chat may dispatch the call then.
+      call, text, reasoning, per-call completion or finish, since Chat may dispatch the call then.
+    - ``{"type": "tool_call_done", "id": "..."}`` or the same ``slot`` as the
+      fragments. Emit after the final fragments when the wire confirms that
+      this call completed successfully, independently of the response outcome.
     - ``{"type": "heartbeat"}`` (transport liveness only; not Model progress)
     - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
     - ``{"type": "usage", "input_tokens": 1, "output_tokens": 1}``

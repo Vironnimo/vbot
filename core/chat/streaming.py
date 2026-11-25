@@ -524,12 +524,10 @@ class _ToolCallFragments:
 class StreamingAccumulator:
     """Accumulate normalized provider deltas into final assistant fields.
 
-    A Tool Call is complete once the stream has moved past it (a later Tool
-    Call, answer text or Reasoning began) and its arguments form one complete
-    JSON value, or once the stream finished. Providers stream one Tool Call
-    after another, so this needs no Provider-specific end marker; a call whose
-    arguments are still open when the stream moves on (interleaved fragments)
-    waits for the finish. :meth:`take_completed_tool_calls` hands complete
+    A Tool Call with complete JSON arguments can start once its Adapter marks
+    it done or the stream moves past it to a later Tool Call, answer text or
+    Reasoning. A call with incomplete arguments still waits.
+    :meth:`take_completed_tool_calls` hands complete
     calls to a caller that runs them while the Model is still writing; a taken
     call is final, and the finished Assistant fields carry exactly the calls
     that were taken.
@@ -651,6 +649,11 @@ class StreamingAccumulator:
                 visible_delta = self._add_reasoning_delta(delta)
             case "tool_call_delta":
                 visible_delta = self._add_tool_call_delta(delta)
+            case "tool_call_done":
+                slot, _ = _tool_call_stream_slot(delta)
+                if slot == self._open_tool_slot:
+                    self._open_tool_slot = None
+                return []
             case "reasoning_meta":
                 self._add_reasoning_meta(delta)
                 return []

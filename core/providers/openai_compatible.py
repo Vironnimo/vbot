@@ -832,6 +832,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     ) -> dict[str, Any]:
         """Build the streaming variant of the Chat Completions payload."""
 
+        if (
+            kwargs.get("tools")
+            and self.wire_profile(model_id).request.options.get("tool_stream") is True
+        ):
+            kwargs = {"tool_stream": True, **kwargs}
         payload = self._build_payload(messages, model_id, **kwargs)
         self._prepare_stream_payload(payload)
         return payload

@@ -231,7 +231,7 @@ def normalize_responses_stream_event(
     if event_type == "response.function_call_arguments.delta":
         return _function_arguments_delta(event_data, state)
     if event_type in {"response.output_item.added", "response.output_item.done"}:
-        return _output_item_event_deltas(event_data, state)
+        return _output_item_event_deltas(event_data, state, item_done=event_type.endswith(".done"))
     if event_type in {"response.completed", "response.done"}:
         return _completed_event_deltas(event_data, state, implied_status="completed")
     return []
@@ -438,6 +438,8 @@ def _function_arguments_delta(
 def _output_item_event_deltas(
     event_data: Mapping[str, Any],
     state: ResponsesStreamState,
+    *,
+    item_done: bool = False,
 ) -> list[dict[str, Any]]:
     item = event_data.get("item")
     if not isinstance(item, Mapping):
@@ -486,6 +488,8 @@ def _output_item_event_deltas(
                 "arguments_delta": arguments_delta or "",
             }
         )
+    if item_done and item.get("status") == "completed":
+        deltas.append({"type": "tool_call_done", "id": tool_call_id})
     return deltas
 
 

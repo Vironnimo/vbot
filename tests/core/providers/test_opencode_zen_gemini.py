@@ -796,6 +796,13 @@ async def test_gemini_stream_idless_calls_survive_chat_accumulation(
 
 
 @pytest.mark.asyncio
+async def test_gemini_unsolicited_partial_arguments_never_become_an_empty_call() -> None:
+    partial = {"functionCall": {"name": "read", "willContinue": True}}
+    with pytest.raises(ProviderError, match="partial function call arguments"):
+        await gemini_stream(zen_adapter(), {"candidates": [{"content": {"parts": [partial]}}]})
+
+
+@pytest.mark.asyncio
 async def test_gemini_stream_prompt_block_matches_completed_response() -> None:
     adapter = zen_adapter()
     chunk = {"promptFeedback": {"blockReason": "SAFETY"}, "usageMetadata": {"promptTokenCount": 12}}

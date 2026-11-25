@@ -794,6 +794,15 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
+        rules = self.wire_profile(model_id).request
+        if payload.get("tools") and rules.options.get("eager_input_streaming") is True:
+            tool_options = {"eager_input_streaming": True}
+            rules.shape_parameters(
+                tool_options, reasoning_active=False, provider_label=self._config.name
+            )
+            for tool in payload.get("tools", []):
+                if isinstance(tool, dict) and "input_schema" in tool:
+                    tool.update(tool_options)
         return payload
 
     async def _stream_response_deltas(

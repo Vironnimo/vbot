@@ -8,10 +8,14 @@
   },
   "protocols": {
     "chat_completions": {
+      "request": {"options": {"tool_stream": true}},
       "replay": {"fidelity": "readable_only", "echo_empty_on_tool_calls": true}
     },
     "messages": {
-      "request": {"prompt_cache": "anthropic_breakpoints"}
+      "request": {
+        "prompt_cache": "anthropic_breakpoints",
+        "options": {"eager_input_streaming": true}
+      }
     },
     "gemini": {
       "reasoning": {

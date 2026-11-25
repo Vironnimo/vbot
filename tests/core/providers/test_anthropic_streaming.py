@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any, override
 
 import httpx
@@ -26,6 +27,7 @@ from .anthropic_test_support import (
     CUSTOM_URL,
     MODEL_ID,
     SAMPLE_MESSAGES,
+    SAMPLE_TOOLS,
     make_adapter,
     sse,
     sse_response,
@@ -62,15 +64,27 @@ async def stream_chunks(body: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("eager_tools", [False, True])
 @pytest.mark.asyncio
-async def test_stream_request_carries_stream_flag_defaults_and_native_headers() -> None:
+async def test_stream_request_carries_stream_flag_defaults_and_native_headers(
+    eager_tools: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = make_adapter(CUSTOM_CONFIG)
+    if eager_tools:
+        profile = adapter.wire_profile(MODEL_ID)
+        curated = replace(
+            profile, request=replace(profile.request, options={"eager_input_streaming": True})
+        )
+        monkeypatch.setattr(adapter, "wire_profile", lambda _model_id: curated)
     with respx.mock:
         route = respx.post(CUSTOM_URL).mock(return_value=sse_response(sse()))
-        await _collect(make_adapter(CUSTOM_CONFIG), temperature=None)
+        await _collect(adapter, temperature=None, tools=SAMPLE_TOOLS)
 
     request = route.calls.last.request
     payload = json.loads(request.content)
     assert payload["stream"] is True
+    for tool in payload["tools"]:
+        assert tool.get("eager_input_streaming") is (True if eager_tools else None)
     assert payload["temperature"] == 0.7
     assert request.headers["anthropic-version"] == "2023-06-01"
     assert request.headers["x-custom-header"] == "custom-value"
@@ -180,6 +194,9 @@ async def test_tool_use_streams_name_then_argument_fragments_and_finishes_as_too
             "index": 2,
             "delta": {"type": "input_json_delta", "partial_json": ':"Berlin"}'},
         },
+        # The block boundary also occurs before truncation/refusal. Only the
+        # following message delta confirms that the last call can be run.
+        {"type": "content_block_stop", "index": 2},
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
     )
 

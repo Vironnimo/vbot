@@ -39,12 +39,13 @@ from . import wire_paths_test_support as paths
 ABSENT = object()
 
 
-def _sent(request: httpx.Request, field: tuple[str, ...]) -> Any:
+def _sent(request: httpx.Request, field: tuple[str | int, ...]) -> Any:
     value: Any = json.loads(request.content)
-    for segment in field:
-        if not isinstance(value, dict) or segment not in value:
-            return ABSENT
-        value = value[segment]
+    try:
+        for segment in field:
+            value = value[segment]
+    except KeyError, IndexError, TypeError:
+        return ABSENT
     return value
 
 
@@ -332,6 +333,24 @@ async def test_image_limit_learning_requires_an_exceeded_count_before_output(
             id="chat-send-parameter",
         ),
         pytest.param(
+            paths.RequestPath(
+                go.go_adapter, go.CHAT_URL, "future-go-model", paths.chat_sse, stream=True
+            ),
+            {"tools": [go.CLOSED_TOOL]},
+            _error("Unrecognized request argument supplied: tool_stream."),
+            ("tool_stream",),
+            [True, ABSENT, ABSENT],
+            id="go-chat-stream-unsupported-tool-stream",
+        ),
+        pytest.param(
+            paths.GO_MESSAGES.streaming(lambda: go.success_response("messages", streaming=True)),
+            {"tools": [go.CLOSED_TOOL]},
+            _error("tools.0.eager_input_streaming: Extra inputs are not permitted"),
+            ("tools", 0, "eager_input_streaming"),
+            [True, ABSENT, ABSENT],
+            id="go-messages-stream-unsupported-eager-input",
+        ),
+        pytest.param(
             paths.CHAT.streaming(paths.chat_sse),
             {},
             "Unsupported parameter: 'temperature'",
@@ -603,7 +622,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
     path: paths.RequestPath,
     kwargs: dict[str, Any],
     rejection: str | dict[str, Any],
-    field: tuple[str, ...],
+    field: tuple[str | int, ...],
     expected: list[Any],
 ) -> None:
     adapter = path.adapter()

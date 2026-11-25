@@ -125,7 +125,7 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
 
     with respx.mock:
         routes = _mock_all_wires(streaming=streaming)
-        await go_request(adapter, model_id, streaming=streaming, **context)
+        await go_request(adapter, model_id, streaming=streaming, tools=[CLOSED_TOOL], **context)
 
     assert [name for name, route in routes.items() if route.called] == [wire]
     request = routes[wire].calls.last.request
@@ -133,7 +133,9 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
     assert request.headers[OPENCODE_SESSION_HEADER] == "vbot-cache-affinity"
     assert request.headers["user-agent"] == "vBot"
     assert OPENCODE_SESSION_ID_KWARG not in body
+    assert body.get("tool_stream") is (True if wire == "chat" and streaming else None)
     if wire == "messages":
+        assert body["tools"][0].get("eager_input_streaming") is (True if streaming else None)
         assert request.headers["x-api-key"] == API_KEY
         assert request.headers["anthropic-version"] == ANTHROPIC_VERSION
         assert "authorization" not in request.headers

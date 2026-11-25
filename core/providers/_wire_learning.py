@@ -43,7 +43,7 @@ decides whether a rebuild changed anything.
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -122,10 +122,16 @@ _MAX_LESSONS = 2
 """At most two lessons (rejected parameter, parameter combination, effort, off
 switch, effort update or stated limit) per request."""
 
-_SAMPLING_PARAMETERS: tuple[str, ...] = ("temperature", "top_p", "top_k")
-"""Sampling parameters a backend may reject for one Model and accept for another."""
+_LEARNABLE_PARAMETERS: tuple[str, ...] = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "tool_stream",
+    "eager_input_streaming",
+)
+"""Optional request parameters a backend may reject for one Model and accept for another."""
 
-_SAMPLING_CARRIERS: Mapping[str, tuple[tuple[str, ...], Mapping[str, str]]] = {
+_PARAMETER_CARRIERS: Mapping[str, tuple[tuple[str, ...], Mapping[str, str]]] = {
     "gemini": (
         ("generationConfig",),
         {"temperature": "temperature", "top_p": "topP", "top_k": "topK"},
@@ -141,6 +147,8 @@ _PARAMETER_REJECTION_MARKERS: tuple[str, ...] = (
     "not supported",
     "does not support",
     "unknown parameter",
+    "unknown field",
+    "extra inputs are not permitted",
     "unrecognized request argument",
     "unrecognized parameter",
     "invalid parameter",
@@ -279,7 +287,7 @@ async def execute_learning_from_rejections[T](
     rejection to what the sent payload carries, the fact is recorded, the plan
     is rebuilt and the request runs again:
 
-    - a sampling parameter the payload carries, named next to a rejection
+    - an optional parameter the payload carries, named next to a rejection
       marker, is dropped;
     - two or more sampling parameters the payload carries, named next to a
       marker that they cannot be combined, become a group of which only the
@@ -502,15 +510,15 @@ class _LessonRevision:
 
     def __call__(self, rebuilt: dict[str, Any]) -> bool:
         for parameter in self.rejected_parameters:
-            _remove_sampling_parameter(rebuilt, self.protocol, parameter)
+            _remove_parameter(rebuilt, self.protocol, parameter)
         for group in self.exclusive_groups:
             carried = [
                 parameter
                 for parameter in group
-                if _carries_sampling_parameter(rebuilt, self.protocol, parameter)
+                if _carries_parameter(rebuilt, self.protocol, parameter)
             ]
             for parameter in carried[1:]:
-                _remove_sampling_parameter(rebuilt, self.protocol, parameter)
+                _remove_parameter(rebuilt, self.protocol, parameter)
         if self.shrink_output:
             _lower_output_allowance(rebuilt, self.sent, self.output_room)
         return rebuilt != self.sent
@@ -525,9 +533,9 @@ def _learn(
         return limit
     named = tuple(
         parameter
-        for parameter in _SAMPLING_PARAMETERS
+        for parameter in _LEARNABLE_PARAMETERS
         if _names_field(lowered, parameter)
-        and _carries_sampling_parameter(payload, profile.protocol, parameter)
+        and _carries_parameter(payload, profile.protocol, parameter)
     )
     if len(named) >= 2 and any(marker in lowered for marker in _EXCLUSIVE_REJECTION_MARKERS):
         listed = " with ".join(repr(parameter) for parameter in named)
@@ -820,22 +828,30 @@ def _value_at(payload: Mapping[str, Any], path: tuple[str, ...]) -> Any:
     return value
 
 
-def _sampling_carrier(protocol: str, parameter: str) -> tuple[tuple[str, ...], str]:
-    location, fields = _SAMPLING_CARRIERS.get(protocol, ((), {}))
-    return location, fields.get(parameter, parameter)
-
-
-def _carries_sampling_parameter(payload: Mapping[str, Any], protocol: str, parameter: str) -> bool:
-    location, field = _sampling_carrier(protocol, parameter)
+def _parameter_carriers(
+    payload: Mapping[str, Any], protocol: str, parameter: str
+) -> Iterator[tuple[Mapping[str, Any], str]]:
+    if protocol == "messages" and parameter == "eager_input_streaming":
+        for tool in payload.get("tools") or []:
+            if isinstance(tool, Mapping):
+                yield tool, parameter
+        return
+    location, fields = _PARAMETER_CARRIERS.get(protocol, ((), {}))
     container = _value_at(payload, location) if location else payload
-    return isinstance(container, Mapping) and field in container
+    if isinstance(container, Mapping):
+        yield container, fields.get(parameter, parameter)
 
 
-def _remove_sampling_parameter(payload: dict[str, Any], protocol: str, parameter: str) -> None:
-    location, field = _sampling_carrier(protocol, parameter)
-    container = _value_at(payload, location) if location else payload
-    if isinstance(container, dict):
-        container.pop(field, None)
+def _carries_parameter(payload: Mapping[str, Any], protocol: str, parameter: str) -> bool:
+    return any(
+        field in container for container, field in _parameter_carriers(payload, protocol, parameter)
+    )
+
+
+def _remove_parameter(payload: dict[str, Any], protocol: str, parameter: str) -> None:
+    for container, field in _parameter_carriers(payload, protocol, parameter):
+        if isinstance(container, dict):
+            container.pop(field, None)
 
 
 def _delta_returns_reasoning(delta: Mapping[str, Any]) -> bool:
