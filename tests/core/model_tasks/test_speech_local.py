@@ -18,7 +18,7 @@ from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -163,6 +163,77 @@ async def test_third_engine_reuses_and_switches_with_its_own_options(tmp_path: P
         await executor.release_memory("local/third")
         assert events[-1] == ("third", "close")
         assert [model["loaded"] for model in executor.memory_status()["models"]] == [True, False]
+    finally:
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", ["precision", "kernel", "oom", "explicit-device", "explicit-dtype", "unrelated"]
+)
+async def test_automatic_engine_recovery_is_scoped_to_load_options_and_gpu_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import core.model_tasks.speech_local as local
+
+    attempted = []
+    now = [100.0]
+    monkeypatch.setattr(local, "monotonic", lambda: now[0])
+    entry = builtin_speech_engines()[0]
+
+    class Model(Engine):
+        def __init__(self, options):
+            super().__init__("working", [])
+            device = options["device"]
+            self.device_options = {
+                "device": "cuda" if device == "auto" else device,
+                "dtype": "bfloat16" if options["dtype"] == "auto" else options["dtype"],
+            }
+            attempted.append((device, options["dtype"]))
+
+        @override
+        def transcribe(self, samples, options):
+            if self.device_options["device"] == "cuda" and now[0] == 100.0:
+                if failure == "precision":
+                    if self.device_options["dtype"] == "bfloat16":
+                        raise RuntimeError("operation not implemented for BFloat16")
+                elif failure == "kernel":
+                    raise RuntimeError(
+                        "CUDA error: no kernel image is available for execution on the device"
+                    )
+                elif failure == "unrelated":
+                    raise RuntimeError("invalid transcript")
+                else:
+                    raise RuntimeError("CUDA out of memory")
+            return super().transcribe(samples, options)
+
+    entry = replace(
+        entry, descriptor=replace(entry.descriptor, availability=lambda: True), create=Model
+    )
+    executor = LocalSpeechExecutor(engines=[entry], engines_dir=tmp_path)
+    options = (
+        {"device": "cuda"}
+        if failure == "explicit-device"
+        else {"dtype": "bfloat16"}
+        if failure == "explicit-dtype"
+        else {}
+    )
+    try:
+        if failure in {"unrelated", "explicit-device", "explicit-dtype"}:
+            with pytest.raises(LocalSpeechExecutionError):
+                await transcribe(executor, entry.descriptor.id, **options)
+            assert len(attempted) == 1
+        else:
+            assert (await transcribe(executor, entry.descriptor.id)).text == "working"
+            expected = ("cuda", "float16") if failure == "precision" else ("cpu", "float32")
+            assert attempted == [("auto", "auto"), expected]
+            assert executor.prepare(entry.descriptor.id, {}) == "loaded"
+            await transcribe(executor, entry.descriptor.id)
+            now[0] += 301
+            await transcribe(executor, entry.descriptor.id)
+            assert attempted == [("auto", "auto"), expected] + (
+                [("auto", "auto")] if failure == "oom" else []
+            )
     finally:
         await executor.aclose()
     with pytest.raises(LocalSpeechError, match="closed"):
@@ -882,11 +953,14 @@ class _Result:
 class _Model:
     def __init__(self, options):
         _PROGRESS.get().update("loading")
+        self.device_options = {"device": "cuda", "dtype": "bfloat16"}
         if options.get("marker"):
             Path(options["marker"]).touch()
             time.sleep(60)
 
     def transcribe(self, samples, options):
+        if options.get("oom"):
+            raise RuntimeError("CUDA out of memory")
         if options.get("hang"):
             Path(options["hang"]).touch()
             time.sleep(60)
@@ -929,6 +1003,15 @@ def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
         engine = _ManagedSttEngine(setup, app, "fake", _WaitingWorkers(), {"language": "en"})
         assert progress.snapshot()["phase"] == "loading"
         result = engine.transcribe(np.asarray([0.25, -0.5], dtype=np.float32), {"language": "en"})
+        from core.model_tasks.speech_worker import SpeechDeviceError
+
+        with pytest.raises(SpeechDeviceError) as failure:
+            engine.transcribe(np.asarray([0.25], dtype=np.float32), {"oom": True})
+        assert (failure.value.code, failure.value.device, failure.value.precision) == (
+            "gpu_oom",
+            "cuda",
+            "bfloat16",
+        )
     finally:
         _PROGRESS.reset(token)
         if engine is not None:

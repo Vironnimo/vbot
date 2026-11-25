@@ -20,7 +20,7 @@ from functools import partial
 from pathlib import Path
 from threading import Lock
 from time import monotonic
-from typing import Any, cast
+from typing import Any
 
 from core.model_tasks import _speech_context
 from core.model_tasks._speech_catalog import PRELOAD_OPTION as PRELOAD_OPTION
@@ -66,6 +66,7 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
+from core.model_tasks.speech_worker import device_failure
 from core.utils.logging import get_logger
 from core.utils.model_files import PinnedModel
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
@@ -84,12 +85,24 @@ class _EngineState:
     lifecycle_lock: Lock = field(default_factory=Lock)
     engine: LocalTranscriptionEngine | LocalSynthesisEngine | None = None
     key: tuple[Any, ...] | None = None
+    # Profiles are private load overrides. Each failed profile has one bounded
+    # next step, scoped to the original model path and configured load options.
+    variant: tuple[str, str] = ("", "")
+    repairs: dict[tuple[tuple[Any, ...], tuple[str, str]], tuple[tuple[str, str], float]] = field(
+        default_factory=dict
+    )
     pending: int = 0
     preparing: asyncio.Task[None] | None = None
     preparing_key: tuple[Any, ...] | None = None
     preparation_generation: int = 0
     retired: bool = False
     releasing: asyncio.Task[None] | None = None
+
+    def preferred(self, key: tuple[Any, ...]) -> tuple[str, str]:
+        variant = ("", "")
+        while (repair := self.repairs.get((key, variant))) and monotonic() < repair[1]:
+            variant = repair[0]
+        return variant
 
     def unload(self, *, only_if_retired: bool = False) -> None:
         with self.lifecycle_lock:
@@ -335,7 +348,11 @@ class LocalSpeechExecutor:
         except LocalSpeechError:
             return "unavailable"
         with state.lifecycle_lock:
-            if state.engine is not None and state.key == key:
+            if (
+                state.engine is not None
+                and state.key == key
+                and state.variant == state.preferred(key)
+            ):
                 return "loaded"
             if (
                 state.preparing is not None
@@ -376,7 +393,7 @@ class LocalSpeechExecutor:
         if key != state.key:
             state.unload()
         try:
-            self._loaded_engine(state, definition, options, key)
+            self._using_engine(state, definition, options, key, lambda _engine, _options: None)
         except Exception as error:
             failure = self._failed(state, definition, error)
             if failure is error:
@@ -426,12 +443,77 @@ class LocalSpeechExecutor:
         )
         return definition, options, (local_id, json.dumps(load_options, sort_keys=True))
 
+    def _using_engine[Result](
+        self,
+        state: _EngineState,
+        definition: SpeechEngineDefinition,
+        options: dict[str, Any],
+        key: tuple[Any, ...],
+        run: Callable[[Any, dict[str, Any]], Result],
+        *,
+        can_replay: Callable[[], bool] = lambda: True,
+    ) -> Result:
+        while True:
+            if (cancel := _CANCELLATION.get()) is not None:
+                cancel.check()
+            if self._closed:
+                raise LocalSpeechError("Local speech is closed.")
+            variant = state.preferred(key)
+            effective = options
+            if variant[0]:
+                effective = {**options, "device": variant[0]}
+                if variant[1]:
+                    effective["dtype"] = variant[1]
+            if key != state.key or state.variant != variant:
+                state.unload()
+            try:
+                engine = self._loaded_engine(state, definition, effective, key, variant)
+                return run(engine, effective)
+            except Exception as error:
+                actual = getattr(state.engine, "device_options", {})
+                failure = device_failure(error, actual.get("device", ""), actual.get("dtype", ""))
+                if not failure or options.get("device") != "auto" or variant[0] == "cpu":
+                    raise
+                # Respect an explicitly selected precision as well as the device.
+                precision = options.get("dtype", "auto")
+                if precision not in {"auto", "float32"}:
+                    raise
+                if cancel is not None:
+                    cancel.check()
+                has_precision = "dtype" in options or definition.environment == "qwen3-tts"
+                next_variant = ("cpu", "float32" if has_precision else "")
+                if (
+                    has_precision
+                    and failure.code == "gpu_precision"
+                    and failure.precision == "bfloat16"
+                    and precision == "auto"
+                    and variant[1] != "float16"
+                ):
+                    next_variant = (failure.device, "float16")
+                expiry = monotonic() + 300 if failure.code == "gpu_oom" else float("inf")
+                with state.lifecycle_lock:
+                    repair_key = (key, variant)
+                    if repair_key not in state.repairs and len(state.repairs) >= 32:
+                        del state.repairs[next(iter(state.repairs))]
+                    state.repairs[repair_key] = (next_variant, expiry)
+                if not can_replay():
+                    raise
+                _LOGGER.info(
+                    "Retrying local speech on %s (engine=%s cause=%s)",
+                    next_variant[0],
+                    definition.descriptor.id,
+                    failure.code,
+                )
+            # Drop the exception's traceback before loading another model.
+            state.unload()
+
     def _loaded_engine(
         self,
         state: _EngineState,
         definition: SpeechEngineDefinition,
         options: dict[str, Any],
         key: tuple[Any, ...],
+        variant: tuple[str, str],
     ) -> LocalTranscriptionEngine | LocalSynthesisEngine:
         if state.engine is None:
             local_id = definition.descriptor.id
@@ -444,6 +526,7 @@ class LocalSpeechExecutor:
             with state.lifecycle_lock:
                 state.engine = engine
                 state.key = key
+                state.variant = variant
             _LOGGER.info(
                 "Loaded local %s model (engine=%s seconds=%.1f)",
                 task,
@@ -495,6 +578,15 @@ class LocalSpeechExecutor:
             segments: list[dict[str, Any]] = []
             languages: set[str] = set()
             saw_samples = False
+
+            def recognize(
+                samples: Any, engine: LocalTranscriptionEngine, effective: dict[str, Any]
+            ) -> SpeechTranscriptionResult:
+                if (progress := _PROGRESS.get()) is not None:
+                    progress.update("transcribing")
+                with cancellation.running(engine):
+                    return engine.transcribe(samples, effective)
+
             with closing(_audio_chunks(audio, check_cancel=cancellation.check)) as chunks:
                 for start, samples in chunks:
                     saw_samples = True
@@ -502,14 +594,10 @@ class LocalSpeechExecutor:
                     # Exact digital silence needs no model and must not invent text.
                     if not samples.any():
                         continue
-                    engine = cast(
-                        LocalTranscriptionEngine,
-                        self._loaded_engine(state, definition, options, key),
+
+                    result = self._using_engine(
+                        state, definition, options, key, partial(recognize, samples)
                     )
-                    if (progress := _PROGRESS.get()) is not None:
-                        progress.update("transcribing")
-                    with cancellation.running(engine):
-                        result = engine.transcribe(samples, options)
                     if not isinstance(result.text, str):
                         raise ValueError("Local engine returned a non-text transcription")
                     if result.text.strip():
@@ -732,21 +820,35 @@ class LocalSpeechExecutor:
                 "Split the text into shorter requests."
             )
         state = self._states[local_id]
-        with _PROGRESS.set(progress), _CANCELLATION.set(cancellation), _AUDIO.set(on_audio):
+        delivered = False
+
+        def publish(chunk: SpeechAudioChunk) -> None:
+            nonlocal delivered
+            if chunk.audio:
+                delivered = True
+            assert on_audio is not None
+            on_audio(chunk)
+
+        def generate(
+            engine: LocalSynthesisEngine, effective: dict[str, Any]
+        ) -> SpeechSynthesisResult:
+            if progress is not None:
+                progress.update("synthesizing")
+            with cancellation.running(engine):
+                result = engine.synthesize(text, effective)
+            if not result.audio:
+                raise ValueError("Empty synthesis")
+            return result
+
+        with (
+            _PROGRESS.set(progress),
+            _CANCELLATION.set(cancellation),
+            _AUDIO.set(publish if on_audio is not None else None),
+        ):
             try:
-                cancellation.check()
-                if key != state.key:
-                    state.unload()
-                engine = cast(
-                    LocalSynthesisEngine, self._loaded_engine(state, definition, options, key)
+                return self._using_engine(
+                    state, definition, options, key, generate, can_replay=lambda: not delivered
                 )
-                if progress is not None:
-                    progress.update("synthesizing")
-                with cancellation.running(engine):
-                    result = engine.synthesize(text, options)
-                if not result.audio:
-                    raise ValueError("Empty synthesis")
-                return result
             except _RequestCancelledError:
                 return None  # Not a failure: nobody waits for an error.
             except Exception as error:
