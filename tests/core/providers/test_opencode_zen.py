@@ -313,10 +313,15 @@ async def test_each_model_uses_its_resolved_wire_and_auth_header(
 
     with respx.mock:
         route = respx.post(url).mock(return_value=httpx.Response(200, json=body))
-        response = await adapter.send(messages, model_id=model_id)
+        context = adapter.request_context_kwargs(
+            agent_id="agent", session_id="fork", prompt_cache_affinity_id="shared-lineage"
+        )
+        response = await adapter.send(messages, model_id=model_id, **context)
 
     request = route.calls.last.request
+    assert request.headers["x-opencode-session"] == "vbot-shared-lineage"
     payload = json.loads(request.content)
+    assert {"_opencode_session_id", "prompt_cache_key", "session_id"}.isdisjoint(payload)
     assert payload["model"] == model_id
     assert request.headers[auth_header] == auth_value
     assert absent_header not in request.headers
@@ -538,6 +543,15 @@ class _RecordingRefresher:
         pytest.param(RESPONSES_MODEL, 403, {"type": "FreeTierError"}, id="responses-free-tier"),
         pytest.param(MESSAGES_MODEL, 403, {"name": "FreeTierError"}, id="messages-free-tier"),
         pytest.param(CHAT_MODEL, 403, {"type": "FreeTierError"}, id="chat-free-tier"),
+        pytest.param(
+            CHAT_MODEL,
+            429,
+            {
+                "type": "FreeUsageLimitError",
+                "message": "Free usage limit reached. Free models work in OpenCode (https://opencode.ai).",
+            },
+            id="chat-free-client",
+        ),
         pytest.param(GEMINI_MODEL, 403, {"name": "FreeTierError"}, id="gemini-free-tier"),
     ],
 )
@@ -561,9 +575,9 @@ async def test_every_wire_reports_zen_entitlement_errors_without_refreshing_cred
     assert caught.value.retryable is False
     assert route.call_count == 1
     assert getter.refreshes == []
-    if status == 403:
+    if status in {403, 429}:
         # FreeTierError keeps its status and explains that another key cannot help.
-        assert caught.value.status_code == 403
+        assert caught.value.status_code == status
         assert str(caught.value) == _FREE_TIER_ACCESS_MESSAGE
 
 

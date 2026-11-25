@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
 from typing import Any, override
@@ -303,26 +304,31 @@ async def test_subscription_exhaustion_429_is_never_retried(
 
 
 @pytest.mark.asyncio
-async def test_transient_rate_limit_retries_with_the_session_header() -> None:
+async def test_isolated_jobs_keep_session_affinity_through_rate_and_effort_retries() -> None:
     adapter = go_adapter()
-
+    next_job = go_adapter()
     with respx.mock:
         route = respx.post(CHAT_URL).mock(
             side_effect=[
                 httpx.Response(
                     429, json={"error": {"type": "rate_limit_error", "message": "Slow down."}}
                 ),
-                success_response("chat", streaming=False),
+                *(success_response("chat", streaming=False) for _ in range(3)),
             ]
         )
-        response = await adapter.send(HELLO, model_id=CHAT_MODEL, **_affinity(adapter))
+        response = await adapter.send(HELLO, model_id=CHAT_MODEL, thinking_effort="none")
+        await adapter.send(HELLO, model_id=CHAT_MODEL, thinking_effort="")
+        await next_job.send(HELLO, model_id=CHAT_MODEL)
 
     assert response["choices"][0]["message"]["content"] == "ok"
-    assert route.call_count == 2
-    assert all(
-        call.request.headers[OPENCODE_SESSION_HEADER] == "vbot-retry-affinity"
-        for call in route.calls
-    )
+    rate_limited, http_retry, effort_retry, separate = [
+        call.request.headers[OPENCODE_SESSION_HEADER] for call in route.calls
+    ]
+    assert re.fullmatch(r"vbot-[0-9a-f]{32}", rate_limited)
+    assert rate_limited == http_retry == effort_retry
+    assert separate != rate_limited
+    await adapter.aclose()
+    await next_job.aclose()
 
 
 @pytest.mark.asyncio

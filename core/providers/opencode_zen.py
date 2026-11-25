@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
 from core.models.models import Model
 from core.providers._opencode_catalog import catalog_model, opencode_api_base
+from core.providers._opencode_session import OpenCodeSessionRouting
 from core.providers.adapter import (
     ModelLookup,
 )
@@ -71,7 +72,11 @@ def _classify_zen_status(
     extra_retryable: set[int] | None = None,
 ) -> None:
     normalized = detail.casefold()
-    if status_code == 403 and "freetiererror" in normalized:
+    if (status_code == 403 and "freetiererror" in normalized) or (
+        status_code == 429
+        and "freeusagelimiterror" in normalized
+        and "free models work in opencode" in normalized
+    ):
         error = ProviderError(_FREE_TIER_ACCESS_MESSAGE, retryable=False)
         error.status_code = status_code
         raise error
@@ -95,7 +100,7 @@ def _classify_zen_status(
     )
 
 
-class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
+class _OpenCodeZenMessagesAdapter(OpenCodeSessionRouting, AnthropicCompatibleAdapter):
     """Zen's Anthropic Messages route with Zen error semantics."""
 
     @staticmethod
@@ -121,7 +126,7 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
         )
 
 
-class _OpenCodeZenGeminiAdapter(GeminiCompatibleAdapter):
+class _OpenCodeZenGeminiAdapter(OpenCodeSessionRouting, GeminiCompatibleAdapter):
     """Zen's Gemini route with Zen error semantics."""
 
     @override
@@ -131,7 +136,7 @@ class _OpenCodeZenGeminiAdapter(GeminiCompatibleAdapter):
         _classify_zen_status(status_code, detail=detail, response_headers=response_headers)
 
 
-class OpenCodeZenAdapter(OpenAIAdapter):
+class OpenCodeZenAdapter(OpenCodeSessionRouting, OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols.
 
     The wire profile (``resources/wire/opencode-zen.json``) routes each Model
@@ -253,21 +258,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 retryable=False,
             )
         return self.wire_profile(model_id).protocol
-
-    @override
-    def request_context_kwargs(
-        self,
-        *,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        prompt_cache_affinity_id: str | None = None,
-        session_generation_id: str | None = None,
-        request_kind: Literal["chat", "compaction", "utility"] = "chat",
-    ) -> dict[str, Any]:
-        del agent_id, session_id, project_id, prompt_cache_affinity_id
-        del session_generation_id, request_kind
-        return {}
 
     @override
     def estimate_request_input_tokens(

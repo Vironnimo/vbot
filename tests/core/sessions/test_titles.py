@@ -335,8 +335,17 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert adapter.debug_context.run_id == "title-run-one"
 
 
+@pytest.mark.parametrize(
+    ("status", "detail"),
+    [
+        (None, "Reasoning is mandatory for this endpoint."),
+        (400, "Unsupported value 'none' for reasoning_effort."),
+    ],
+)
 @pytest.mark.asyncio
-async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager) -> None:
+async def test_reasoning_mandatory_endpoint_retries_with_default_effort(
+    manager, status: int | None, detail: str
+) -> None:
     """A rejected explicit disable retries once at the provider-default effort."""
 
     class RejectingAdapter(StubAdapter):
@@ -358,7 +367,9 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
             if kwargs.get("thinking_effort") == "none":
                 self.requests.append({"messages": messages, **kwargs})
                 yield {"type": "usage", "input_tokens": 12, "output_tokens": 0}
-                raise ProviderError("Reasoning is mandatory for this endpoint.")
+                error = ProviderError(detail)
+                error.status_code = status
+                raise error
             async for delta in super().stream(messages, **kwargs):
                 yield delta
 
@@ -588,7 +599,7 @@ async def test_empty_title_model_selection_uses_resolved_agent_model(manager) ->
 async def test_failed_configured_model_keeps_local_title_without_agent_retry(
     manager, caplog: pytest.LogCaptureFixture
 ) -> None:
-    adapter = StubAdapter(error=RuntimeError("provider down"))
+    adapter = StubAdapter(error=ProviderError("OpenCode Zen allowance exhausted", retryable=False))
     runtime = StubRuntime(
         manager,
         enabled=True,
@@ -600,6 +611,7 @@ async def test_failed_configured_model_keeps_local_title_without_agent_retry(
 
     await _title_first_message(service)
 
+    assert len(adapter.requests) == 1
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
     assert _metadata(runtime)["auto_title"] == "Investigate login failure"
     records = [record for record in caplog.records if record.name == "vbot.sessions.titles"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any, override
@@ -80,6 +81,9 @@ async def test_gemini_native_media_passes_wire_estimation_and_request_rendering(
             assert _accumulate(deltas).content == "done"
         else:
             await adapter.send(messages, model_id=GEMINI_MODEL)
+    assert re.fullmatch(
+        r"vbot-[0-9a-f]{32}", route.calls.last.request.headers["x-opencode-session"]
+    )
     payload = json.loads(route.calls.last.request.content)
     assert payload["contents"] == [
         {
