@@ -449,6 +449,7 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         )
         receipt = await asyncio.wait_for(submitted.get(), 5)
         assert not receipt.done()
+        assert [record.run_id for record in sessions.pending_subagent_answers()] == [run.id]
         # A Run ending with Parent replies is read before, and without, delivery;
         # one ending with user replies stays unread for the user.
         summary = sessions.summary(child.address)
@@ -462,6 +463,7 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         assert "Pending:" in before and "Delivered:" not in before
         assert await service.deliver_background_completions(parent_run, parent)
         await asyncio.wait_for(receipt, 5)
+        assert not sessions.pending_subagent_answers()
         assert not await service.deliver_background_completions(parent_run, parent)
         assert not await coordinator.parent_answer_pending(child.address)
         assert (await activity.pending_wakes(parent.address)).subagents == 0
@@ -504,6 +506,69 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         await manager.aclose()
         await service.aclose()
         await coordinator.drain_activity()
+        sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_delivers_a_committed_answer_once_without_restarting_its_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = StubAdapter([{"content": "Recovered answer"}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.terminal_manager = runtime.command_manager = None
+    sessions, manager = runtime.chat_sessions, runtime.chat_run_manager
+    parent = sessions.create("coder", session_id="parent")
+    child = sessions.create("coder", session_id="child")
+    link_session(
+        sessions,
+        child.address,
+        subagent_id="sub-review",
+        parent=parent.address,
+        run_id="origin",
+        tool_call_id=None,
+        tool_call_index=None,
+    )
+    loop = runtime.chat_loop = build_chat_loop(runtime)
+    service = TriggerService(loop, manager, runtime, sessions=sessions)
+    try:
+        # No live forwarding consumer survives this handoff.
+        run = await manager.start(
+            child.address,
+            loop.run_executor("Review", parent_agent_input=True),
+            admission=RunAdmission(run_kind=RunKind.SUBAGENT),
+        )
+        await run.wait()
+        assert [item.run_id for item in sessions.pending_subagent_answers()] == [run.id]
+        submitted = asyncio.Queue[asyncio.Future[None]]()
+        submit = service.submit_completion
+
+        def observe(*args: Any, **kwargs: Any) -> asyncio.Future[None]:
+            receipt = submit(*args, **kwargs)
+            submitted.put_nowait(receipt)
+            return receipt
+
+        monkeypatch.setattr(service, "submit_completion", observe)
+        for restart in range(2):
+            coordinator = SubAgentCoordinator(runtime, service)
+            coordinator.start_answer_recovery()
+            recovery = coordinator._forwarding._recovery
+            assert recovery is not None
+            await recovery
+            if restart == 0:
+                receipt = await asyncio.wait_for(submitted.get(), 3)
+                await asyncio.wait_for(receipt, 3)
+            else:
+                assert not coordinator._forwarding.followed_runs() and submitted.empty()
+            await coordinator.close_forwarding()
+        notes = [entry for entry in parent.load() if entry.role == "note"]
+        assert len(notes) == 1 and "Recovered answer" in str(notes[0].content)
+        assert sessions.pending_subagent_answers() == []
+        assert len(adapter.requests) == 1
+    finally:
+        await manager.aclose()
+        await service.aclose()
         sessions.close()
 
 

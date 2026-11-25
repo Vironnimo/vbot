@@ -157,7 +157,7 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("chat_runs", None, runs.aclose)
     if (subagents := runtime._subagent_coordinator) is not None:
         # Every Run has ended; each Sub-Agent activity file records its outcome.
-        yield _Step("subagent_activity", None, subagents.drain_activity)
+        yield _Step("subagent_activity", None, subagents.close_forwarding)
     if (video := runtime._video) is not None:
         # Every Run has ended; a video job its cancel left running logs its id.
         yield _Step("video", None, video.aclose)

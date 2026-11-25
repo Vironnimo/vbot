@@ -42,6 +42,7 @@ from core.sessions._types import (
     SessionSearchOrder,
     SessionSearchResult,
     SessionWorkingProject,
+    SubagentAnswerHandoff,
     SubagentLinkSnapshot,
     TemporarySessionBinding,
     ToolResultFacts,
@@ -666,6 +667,13 @@ class ChatSessionManager:
     def generation_scope(self, generation_id: str) -> tuple[SessionAddress, bool] | None:
         """Return the address and Sub-Agent status for this live generation."""
         return self._store.generation_scope(generation_id)
+
+    def pending_subagent_answers(self) -> builtins.list[SubagentAnswerHandoff]:
+        """Completed Parent-directed work awaiting acknowledgement; addresses follow moves."""
+        return self._store.execution.pending_subagent_answers()
+
+    def discard_subagent_answer(self, generation_id: str, run_id: str) -> None:
+        self._store.execution.discard_subagent_answer(generation_id, run_id)
 
     def append_notes_once(
         self,

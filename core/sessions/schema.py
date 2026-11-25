@@ -267,6 +267,14 @@ CREATE TABLE runs (
   CHECK ((status = 'running') = (completed_at IS NULL))
 ) STRICT;
 
+-- Unacknowledged completed answers, tied to both original Session incarnations.
+CREATE TABLE subagent_answer_handoffs (
+  run_key INTEGER PRIMARY KEY REFERENCES runs (run_key) ON DELETE CASCADE,
+  parent_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  child_run_id TEXT NOT NULL,
+  UNIQUE (parent_key, child_run_id)
+) STRICT;
+
 -- Runs of one Session in start order (Run boundaries, reflection Runs, recovery).
 CREATE INDEX runs_by_session ON runs (session_key, start_seq);
 

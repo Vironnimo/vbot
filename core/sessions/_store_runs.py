@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from core.chat.errors import ChatSessionError
+from core.runs.run import FORWARDED_RUN_KINDS
 from core.sessions import (
     _store_accessor_inputs,
     _store_codec,
@@ -212,7 +213,8 @@ def finish_run(
     state = _store_values._require_live(connection, address)
     session_key = int(state["session_key"])
     run = connection.execute(
-        "SELECT run_key, status, inherited FROM runs WHERE session_key = ? AND run_id = ?",
+        "SELECT run_key, run_kind, status, inherited FROM runs "
+        "WHERE session_key = ? AND run_id = ?",
         (session_key, completion.run_id),
     ).fetchone()
     if run is None or run["status"] != "running" or run["inherited"]:
@@ -264,6 +266,28 @@ def finish_run(
             run_key,
         ),
     )
+    if (
+        completion.status == "completed"
+        and state["subagent_parent_generation_id"]
+        and run["run_kind"] in FORWARDED_RUN_KINDS
+    ):
+        # A temporary Extension owner ends with its process. Only ordinary
+        # completed answers may cross that lifetime, never inherited history.
+        connection.execute(
+            "INSERT INTO subagent_answer_handoffs (run_key, parent_key, child_run_id) "
+            "SELECT ?, p.session_key, ? FROM sessions p WHERE p.generation_id = ? "
+            "AND p.state = 'live' AND NOT EXISTS "
+            "(SELECT 1 FROM run_execution_owners WHERE run_key = ?) AND EXISTS "
+            "(SELECT 1 FROM entries WHERE run_key = ? AND role = 'assistant' "
+            "AND subagent_reply_target = 'parent')",
+            (
+                run_key,
+                completion.run_id,
+                state["subagent_parent_generation_id"],
+                run_key,
+                run_key,
+            ),
+        )
     # Without final statistics (a Run a restart interrupted) the Run keeps the
     # statistics it recorded while running.
     if summary.change_stats is not None:

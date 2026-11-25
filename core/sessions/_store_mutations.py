@@ -328,6 +328,18 @@ def append_messages(
     keys: list[int] = []
     reply_target = _store_values.subagent_reply_target(state)
     for message in messages:
+        for receipt in message.completion_receipts:
+            if receipt.startswith("subagent:"):
+                connection.execute(
+                    "DELETE FROM subagent_answer_handoffs WHERE parent_key = ? AND child_run_id = ?",
+                    (session_key, receipt.removeprefix("subagent:")),
+                )
+            elif receipt.startswith("video:"):
+                connection.execute(
+                    "UPDATE session_video_jobs SET delivered = 1 WHERE id = ? AND run_key IN "
+                    "(SELECT run_key FROM runs WHERE session_key = ?) AND delivered = 0",
+                    (receipt.removeprefix("video:"), session_key),
+                )
         message = _store_codec.storable(replace(message, subagent_reply_target=reply_target))
         entry_key = _store_codec.insert_entry(
             connection, session_key, seq, message, run_key=run_key

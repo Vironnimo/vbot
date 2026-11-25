@@ -461,8 +461,11 @@ class _CompletionDeliveryCoordinator:
             pending = remaining
             if not pending:
                 return None
-            message = ChatMessage.note(
-                _completion_message(pending), subagent_messages=_subagent_messages(pending)
+            message = replace(
+                ChatMessage.note(
+                    _completion_message(pending), subagent_messages=_subagent_messages(pending)
+                ),
+                completion_receipts=_completion_receipts(pending),
             )
             # Request-boundary Notes are otherwise deferred. This append must
             # commit before a producer may retire its completion evidence.
@@ -616,6 +619,7 @@ class _CompletionDeliveryCoordinator:
                         )
                     else:
                         subagent_messages = _subagent_messages(pending)
+                        receipts = _completion_receipts(pending)
                         schedule_options = pending[0].schedule_options
                         if any(
                             notice.schedule_options.get("schedule_id")
@@ -639,8 +643,11 @@ class _CompletionDeliveryCoordinator:
                             # An empty note never reaches the Model; it carries
                             # the display record ahead of the input note.
                             context_note=(
-                                ChatMessage.note("", subagent_messages=subagent_messages)
-                                if subagent_messages
+                                replace(
+                                    ChatMessage.note("", subagent_messages=subagent_messages),
+                                    completion_receipts=receipts,
+                                )
+                                if subagent_messages or receipts
                                 else None
                             ),
                         )
@@ -984,9 +991,12 @@ class _CompletionDeliveryCoordinator:
             append = asyncio.ensure_future(
                 session.append_many_async(
                     [
-                        ChatMessage.note(
-                            _completion_message(pending),
-                            subagent_messages=_subagent_messages(pending),
+                        replace(
+                            ChatMessage.note(
+                                _completion_message(pending),
+                                subagent_messages=_subagent_messages(pending),
+                            ),
+                            completion_receipts=_completion_receipts(pending),
                         )
                     ],
                     expected_generation_id=session.generation_id,
@@ -1248,6 +1258,18 @@ def _join_run(notices: list[_CompletionNotice], run: Run) -> None:
         notice.boundary_run = run
         if notice.read_after is not None:
             notice.read_after = 0
+
+
+def _completion_receipts(notices: Sequence[_CompletionNotice]) -> tuple[str, ...]:
+    return tuple(
+        notice.id
+        for notice in notices
+        if notice.read_after is None
+        and (
+            notice.id.startswith("video:")
+            or (notice.execution_owner is None and notice.id == f"subagent:{notice.origin_run_id}")
+        )
+    )
 
 
 def _subagent_messages(notices: list[_CompletionNotice]) -> tuple[SubAgentMessage, ...]:

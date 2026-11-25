@@ -1128,6 +1128,7 @@ def bootstrap(runtime: Runtime) -> None:
                 runtime._chat_loop.prepare_accessor_inputs(
                     runtime._chat_sessions.queued_accessor_inputs()
                 )
+                runtime._subagent_coordinator.start_answer_recovery()
     except Exception as error:
         _log_startup_failure(runtime)
         startup_error = error

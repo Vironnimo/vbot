@@ -384,6 +384,7 @@ class SubAgentTreeControl:
         commands = self._runtime.command_manager
         stopped = 0
         runs: list[Run] = []
+        silenced_runs: list[Run] = []
         # A child start already in flight must finish before the tree is read.
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
@@ -398,6 +399,7 @@ class SubAgentTreeControl:
                     followed.project_id, followed.agent_id, followed.session_id
                 )
                 if followed_address in silenced_addresses and self._forwarding.silence(followed.id):
+                    silenced_runs.append(followed)
                     stopped += followed.status != RunStatus.RUNNING
             stopped += await manager.clear_queued_many(
                 [address for address in addresses if address != root or clear_root_queue]
@@ -409,8 +411,8 @@ class SubAgentTreeControl:
                     project_id=address.project_id,
                 )
                 if run is not None:
-                    if address != root or silence_root:
-                        self._forwarding.silence(run.id)
+                    if (address != root or silence_root) and self._forwarding.silence(run.id):
+                        silenced_runs.append(run)
                     run.request_cancel(reason=reason, initiator=initiator)
                     runs.append(run)
                     stopped += 1
@@ -445,6 +447,13 @@ class SubAgentTreeControl:
                         failures.append(error)
             if runs:
                 await asyncio.gather(*(_run_end(run) for run in runs))
+            for silenced in silenced_runs:
+                if silenced.expected_session_generation_id and silenced.execution_owner is None:
+                    await sessions.run_async(
+                        sessions.discard_subagent_answer,
+                        silenced.expected_session_generation_id,
+                        silenced.id,
+                    )
             if failures:
                 raise failures[0]
             return closed

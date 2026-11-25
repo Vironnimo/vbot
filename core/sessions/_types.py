@@ -486,6 +486,15 @@ class SessionWorkingProject:
 
 
 @dataclass(frozen=True)
+class SubagentAnswerHandoff:
+    child: SessionAddress
+    generation_id: str
+    run_id: str
+    run_kind: str
+    parent_generation_id: str
+
+
+@dataclass(frozen=True)
 class SubagentLinkSnapshot:
     """Parent-link metadata and both Session generations from one read snapshot."""
 

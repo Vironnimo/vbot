@@ -432,6 +432,13 @@ class SubAgentCoordinator:
     ) -> SubAgentStopOutcome:
         return await self._tree.stop_subagent(context, subagent)
 
+    def start_answer_recovery(self) -> None:
+        self._forwarding.start_recovery()
+
+    async def close_forwarding(self) -> None:
+        await self._forwarding.close()
+        await self.drain_activity()
+
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
         await self._activities.drain()

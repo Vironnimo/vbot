@@ -29,6 +29,7 @@ from core.sessions._types import (
     OwnedRunRecord,
     RecoveredRun,
     SessionToolInvocationBatch,
+    SubagentAnswerHandoff,
 )
 
 if TYPE_CHECKING:
@@ -416,6 +417,42 @@ class SessionExecutionStore:
     def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
         return self._store._read(
             lambda connection: _store_owned.owned_run_by_input(connection, address, input_id)
+        )
+
+    def pending_subagent_answers(self) -> list[SubagentAnswerHandoff]:
+        from core.sessions._types import SessionAddress
+
+        def read(connection: sqlite3.Connection) -> list[SubagentAnswerHandoff]:
+            rows = connection.execute(
+                "SELECT c.project_id, c.agent_id, c.session_id, c.generation_id, "
+                "r.run_id, r.run_kind, p.generation_id AS parent_generation FROM "
+                "subagent_answer_handoffs h JOIN runs r ON r.run_key = h.run_key "
+                "JOIN sessions c ON c.session_key = r.session_key "
+                "JOIN sessions p ON p.session_key = h.parent_key "
+                "WHERE c.state = 'live' AND p.state = 'live' "
+                "AND c.subagent_parent_generation_id = p.generation_id ORDER BY h.run_key"
+            )
+            return [
+                SubagentAnswerHandoff(
+                    SessionAddress(row["project_id"] or None, row["agent_id"], row["session_id"]),
+                    row["generation_id"],
+                    row["run_id"],
+                    row["run_kind"],
+                    row["parent_generation"],
+                )
+                for row in rows
+            ]
+
+        return self._store._read(read)
+
+    def discard_subagent_answer(self, generation_id: str, run_id: str) -> None:
+        self._store._execute_write(
+            lambda connection: connection.execute(
+                "DELETE FROM subagent_answer_handoffs WHERE run_key IN "
+                "(SELECT r.run_key FROM runs r JOIN sessions c ON c.session_key = r.session_key "
+                "WHERE c.generation_id = ? AND r.run_id = ?)",
+                (generation_id, run_id),
+            )
         )
 
     def append_notes_once(

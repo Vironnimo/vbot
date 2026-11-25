@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -319,13 +320,24 @@ class RunExecution:
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
-                        _add_context_note(session, request.context_note)
+                        note = request.context_note
+                        receipts = note.completion_receipts if isinstance(note, ChatMessage) else ()
+                        if receipts and isinstance(note, ChatMessage):
+                            note = replace(note, completion_receipts=())
+                            if not note.content and not note.subagent_messages:
+                                note = None
+                        _add_context_note(session, note)
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
-                        session.add_note(request.content)
+                        session.add_note_message(
+                            replace(
+                                ChatMessage.note(request.content),
+                                completion_receipts=receipts,
+                            )
+                        )
                         persisted_messages = session.take_deferred_notes()
                     elif request.input_already_persisted:
                         persisted_messages = session.take_deferred_notes()

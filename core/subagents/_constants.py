@@ -8,9 +8,6 @@ SUBAGENT_STATUS_CHANGED_EVENT = "subagent_status_changed"
 USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
 SUBAGENT_SESSION_TITLE_MAX_CHARACTERS = 48
-# Conversational Runs can switch recipient while running, including user Runs
-# whose message_parent call restores Parent-directed final answers.
-FORWARDED_RUN_KINDS = frozenset({"subagent", "system", "user", "channel", "session_message"})
 
 # Results of the ``subagent`` Tool.
 SUBAGENT_STARTED_NOTE = (
