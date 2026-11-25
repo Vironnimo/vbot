@@ -65,10 +65,12 @@ class EmbeddingProfile:
     recommended_rank: int | None = None
     max_input_tokens: int | None = None
     note: str = ""
+    default_purpose: EmbeddingPurpose | None = None
 
     def request(self, texts: Sequence[str], purpose: EmbeddingPurpose | None) -> EmbeddingRequest:
-        """Shape *texts* for *purpose*; ``None`` sends the texts unchanged."""
+        """Apply the requested purpose or the family's required default."""
 
+        purpose = purpose or self.default_purpose
         if purpose is None or self.handling == "symmetric":
             return EmbeddingRequest(list(texts))
         value = self.query if purpose == "query" else self.document
@@ -247,6 +249,18 @@ _PROFILES: tuple[tuple[re.Pattern[str], EmbeddingProfile], ...] = (
             document=_SEARCH_DOCUMENT,
             max_input_tokens=32000,
             note="Voyage AI retrieval model with separate query and document modes.",
+        ),
+    ),
+    (
+        # OpenRouter rejects this family without an input_type. Unqualified
+        # inputs are documents; Recall always supplies its actual purpose.
+        _family(r"pplx-embed-v2-context"),
+        EmbeddingProfile(
+            family="pplx-embed-v2-context",
+            handling="input_type",
+            query="query",
+            document="document",
+            default_purpose="document",
         ),
     ),
     (

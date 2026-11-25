@@ -285,6 +285,23 @@ _QWEN_QUERY_PREFIX = (
         pytest.param(
             "openai/text-embedding-3-small", "query", ["alpha"], None, id="symmetric-family"
         ),
+        pytest.param(
+            "perplexity/pplx-embed-v2-context-9b", "query", ["alpha"], "query", id="pplx-query"
+        ),
+        pytest.param(
+            "perplexity/pplx-embed-v2-context-0.6b",
+            "document",
+            ["alpha"],
+            "document",
+            id="pplx-document",
+        ),
+        pytest.param(
+            "perplexity/pplx-embed-v2-context-9b",
+            None,
+            ["alpha"],
+            "document",
+            id="pplx-required-default",
+        ),
         pytest.param("example/unknown-embed", "query", ["alpha"], None, id="unknown-model"),
         pytest.param("intfloat/multilingual-e5-large", None, ["alpha"], None, id="no-purpose"),
     ],
