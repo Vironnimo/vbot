@@ -109,23 +109,34 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
         if callback_fails:
             raise RuntimeError("callback failed after its durable acknowledgement")
 
-    runtime = _runtime(tmp_path, _tools(after_persisted=after_persisted))
+    tools = _tools(after_persisted=after_persisted)
+    tools.register(
+        "bash",
+        "Run.",
+        {"type": "object", "additionalProperties": True},
+        lambda *_: tool_success({}),
+        open_input_schema=True,
+    )
+    runtime = _runtime(tmp_path, tools)
     runtime.change_tracker = ChangeTracker()
     loop = build_chat_loop(runtime)
 
     external = await loop.start_external_run(
-        "coder", model="voice-model", title="Live call", extra_tools=["relay"]
+        "coder", model="voice-model", title="Live call", extra_tools=["relay", "bash"]
     )
-    assert [definition["name"] for definition in external.tool_definitions] == [
+    assert {definition["name"] for definition in external.tool_definitions} == {
         "lookup",
         "relay",
-    ]
+        "bash",
+    }
     edits = (session_address("coder", external.session_id), external.run.id)
     runtime.change_tracker.record_write(edits, tmp_path / "notes.txt", "", "updated")
     await external.record_user("What is the weather?")
     looked_up = await external.run_tool("call_1", "lookup", {"q": "weather"})
     # A namespace prefix some Models write still names the offered Tool.
     relayed = await external.run_tool("call_2", "functions.relay", {"request": "check"})
+    invalid = await external.run_tool("bad", "functions.bash", r'{"env":{"VAR":"\ud800"}}')
+    assert invalid["error"]["code"] == "invalid_arguments"
     await external.record_note("vBot update: a Run finished.")
     await external.record_assistant("It is sunny.")
     await external.finish()
@@ -140,6 +151,8 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(
     stored = _stored(runtime, external.session_id)
     assert [role for role, _ in stored] == [
         "user",
+        "assistant",
+        "tool",
         "assistant",
         "tool",
         "assistant",

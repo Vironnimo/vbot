@@ -438,7 +438,7 @@ async def test_agent_secrets_reach_only_the_command_environment(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["permissions", "workdir", "shell", "launch"])
+@pytest.mark.parametrize("failure", ["permissions", "workdir", "shell", "launch", "unicode"])
 async def test_one_time_secrets_are_spent_only_after_shell_preparation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -467,6 +467,9 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
         resolved = True
         if failure == "workdir":
             directory.rmdir()
+        if failure == "unicode":
+            assert result is not None
+            result[0]["ONE_TIME"] = "bad\ud800value"
         return result
 
     monkeypatch.setattr(secrets, "environment", resolve)
@@ -494,7 +497,9 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
         assert resolved
         assert not shell.launcher.processes
         assert result["error"]["code"] == (
-            "invalid_arguments" if failure in ("permissions", "workdir") else "command_not_started"
+            "invalid_arguments"
+            if failure in ("permissions", "workdir", "unicode")
+            else "command_not_started"
         )
         if failure == "launch":
             assert secrets.get(secret.id) is None
@@ -1472,6 +1477,12 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     secret = await shell.call({"command": "ls", "env_keys": ["UNKNOWN_SECRET_FOR_TEST"]})
     # No environment variable can hold a NUL character.
     nul = await shell.call({"command": "ls", "env": {"DATA": "a\x00b"}})
+    for malformed in (
+        {"command": "echo '\ud800'"},
+        {"command": "ls", "env": {"DATA": "\udfff", "EMPTY": ""}},
+        {"command": "ls", "env": {"\ud800": "value"}},
+    ):
+        assert (await shell.call(malformed))["error"]["code"] == "invalid_arguments"
     inspect = await shell.call({"action": {"type": "inspect", "command": "ls"}})
     wrappers = (
         (["pwsh", "-Command"], ["PWSH.exe", "-NoProfile", "-C"])

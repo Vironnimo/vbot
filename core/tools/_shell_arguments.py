@@ -43,7 +43,7 @@ from core.tools._workdir import (
     project_workdir,
     validate_project_workdir,
 )
-from core.tools.arguments import optional_number, optional_string
+from core.tools.arguments import invalid_unicode_arguments, optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
@@ -58,6 +58,7 @@ from core.tools.tools import (
 )
 from core.utils.file_status import is_dir_strict
 from core.utils.paths import model_path
+from core.utils.surrogates import without_lone_surrogates
 
 from ._shell_definition import (
     SHELL_DEFAULT_WAIT_SECONDS,
@@ -735,6 +736,8 @@ def _parse_call(
 ) -> _ShellCall:
     """*secret_targets* maps each accepted Agent Secret name to its environment slots;
     *withheld* are the credentials a confined command does not inherit."""
+    if without_lone_surrogates(arguments) is not arguments:
+        raise ToolContractError(invalid_unicode_arguments(SHELL_MODEL_NAME))
     notes: list[str] = []
     command = arguments.get("command")
     if not isinstance(command, str) or not command.strip():

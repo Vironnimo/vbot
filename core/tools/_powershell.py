@@ -598,7 +598,7 @@ try {
     if ($__vbotRequest[-1] -cmatch '^@Local\\vBot-shell-[0-9a-f]{32}$') {
         $__vbotReceipt = $__vbotRequest[-1].Substring(1)
     } elseif ($__vbotRequest[-1] -ne '.') { throw 'ended early' }
-    $__vbotUtf8 = [System.Text.Encoding]::UTF8
+    $__vbotUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
     $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
     $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
     [VBotGuard]::Protect($__vbotUtf8.GetString(
@@ -740,7 +740,7 @@ def powershell_request(
 
 
 def _base64(text: str) -> str:
-    return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 @dataclass(frozen=True, slots=True)

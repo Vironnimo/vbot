@@ -15,16 +15,16 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents.app_chats import app_chat_tool_grants
+from core.chat._response_ingestion import ingest_tool_call
 from core.chat._run_permissions import RunPermissions, live_run_permission_boundary
 from core.chat._run_state import _resolve_working_project
 from core.chat._secret_history import project_secret_result
-from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
+from core.chat._step_outcomes import _offered_tool_calls, _RegisteredNames, tool_result_facts
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import masked_content
 from core.chat.errors import ChatError
@@ -54,7 +54,7 @@ from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
+from core.utils.surrogates import replace_lone_surrogates
 from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
@@ -226,17 +226,15 @@ class ExternalRun:
             return tool_failure("tool_stopped", _STOPPED)
         permissions = await self._current_permissions(run)
         # The Tool runs with exactly the arguments that are stored.
-        call = ToolCall.from_dict(
-            without_lone_surrogates(
-                normalize_tool_call_candidate(
-                    tool_call_id=call_id,
-                    name=name,
-                    arguments=arguments,
-                    fallback_id=new_id("call"),
-                )
+        candidate = ingest_tool_call(
+            normalize_tool_call_candidate(
+                tool_call_id=call_id,
+                name=name,
+                arguments=arguments,
+                fallback_id=new_id("call"),
             )
         )
-        call = replace(call, name=self.tool_name(call.name, arguments=call.arguments))
+        [call] = _offered_tool_calls([candidate], self._allowed_tools, self._dependencies.tools)
         self._iteration += 1
         assistant_id = _new_message_id()
         execution = normalize_execution(

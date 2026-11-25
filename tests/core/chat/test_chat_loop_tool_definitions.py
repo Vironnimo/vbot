@@ -104,6 +104,60 @@ async def test_provider_requests_use_model_tool_names_while_the_session_keeps_re
 
 
 @pytest.mark.asyncio
+async def test_damaged_unicode_is_refused_before_running_or_forwarding_code(
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    executed: list[str] = []
+
+    def shell(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        executed.append(arguments["command"])
+        return tool_success({})
+
+    tools.register(
+        "bash",
+        "Run.",
+        {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        shell,
+    )
+    for name in ("execute_code", "call_tool"):
+        tools.register(name, "Run.", {"type": "object"}, _recording_handler(executed))
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            tool_turn(
+                ("bad", "functions.bash", {"command": "echo \ud800"}),
+                ("bad-code", "execute_code", {"code": "print('\udfff')"}),
+                (
+                    "forwarded",
+                    "call_tool",
+                    {"name": "bash", "arguments": {"command": "echo \ud800"}},
+                ),
+                ("valid", "bash", {"command": "echo \ufffd 🎉"}),
+            ),
+            final("done"),
+        ],
+    )
+    await build_chat_loop(runtime).send("coder", "Run the commands", session_id="session-one")
+    assert executed == ["echo \ufffd 🎉"]
+    messages = history(runtime)
+    assert [
+        call.id
+        for message in messages
+        for call in message.tool_calls or []
+        if call.rejection and call.rejection.code == "invalid_arguments"
+    ] == ["bad", "bad-code", "forwarded"]
+    *refused, accepted = tool_results(messages)
+    assert [result["error"]["code"] for result in refused] == ["invalid_arguments"] * 3
+    assert accepted["ok"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool_loading",
     [None, {"on_demand": True, "always_loaded": []}],

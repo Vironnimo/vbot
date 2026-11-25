@@ -170,14 +170,15 @@ def _parse_response_tool_calls(value: Any) -> list[ToolCall] | None:
             argument_sequence_index=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD),
             argument_sequence_length=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD),
         )
-        for candidate in candidates:
-            # Some Models emit lone surrogates, also as JSON escapes inside the
-            # arguments. A call that starts while the response still streams
-            # runs with exactly the arguments its Assistant turn persists.
-            candidate = without_lone_surrogates(candidate)
-            name = candidate.get("name")
-            if isinstance(name, str):
-                # The Model may know a Tool under its host-specific name.
-                candidate = {**candidate, "name": registry_tool_name(name)}
-            tool_calls.append(ToolCall.from_dict(candidate))
+        tool_calls.extend(ingest_tool_call(candidate) for candidate in candidates)
     return tool_calls or None
+
+
+def ingest_tool_call(candidate: JsonObject) -> ToolCall:
+    """Keep the call storable and remember damaged arguments until name resolution."""
+    safe = without_lone_surrogates(candidate)
+    return replace(
+        ToolCall.from_dict(safe),
+        name=registry_tool_name(safe["name"]),
+        arguments_had_lone_surrogates=safe["arguments"] is not candidate["arguments"],
+    )

@@ -877,10 +877,22 @@ def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
         (_cut_in_command(6), None, "request_unreadable"),
         # Base64 that decodes, cut where a quantum ends.
         (_cut_in_command(8), None, "request_unreadable"),
+        # Complete base64 with an invalid UTF-8 environment value.
+        (
+            lambda request: request.replace(b"\n.\n", b"\nREFUQQ== 7aCA\n.\n"),
+            None,
+            "request_unreadable",
+        ),
         # A shell that waited elsewhere enters a workdir removed since the call was checked.
         (None, "gone", "workdir_unavailable"),
     ],
-    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "workdir-gone"],
+    ids=[
+        "no-terminator",
+        "cut-in-command",
+        "cut-at-base64-boundary",
+        "invalid-utf8",
+        "workdir-gone",
+    ],
 )
 async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_says_so(
     tmp_path: Path,
