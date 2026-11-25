@@ -352,6 +352,19 @@ async def test_agent_secrets_reach_only_the_command_environment(
         tmp_path, secrets=secrets, analyzer=analyzer, permissions=permissions
     ) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        conflicts = [("API_TOKEN", "API_TOKEN"), ("GITHUB_USERNAME", "GITHUB")]
+        if sys.platform == "win32":
+            conflicts.append(("api_token", "API_TOKEN"))
+        for name, source in conflicts:
+            conflict = await shell.call(
+                {
+                    "command": "login",
+                    "env_keys": [source],
+                    "env": {name: "{{secret:GITHUB.password}}"},
+                }
+            )
+            assert conflict["error"]["code"] == "invalid_arguments"
+        assert secrets.recent_uses(secret.id) == [] and shell.launcher.processes == []
         if confined:
             startup = secrets.create(
                 name="BASH_ENV",
@@ -379,7 +392,11 @@ async def test_agent_secrets_reach_only_the_command_environment(
                 # An escaped reference runs as the reference text itself.
                 "command": "login {{!secret:GITHUB}}",
                 "env_keys": ["GITHUB", "API_TOKEN"],
-                "env": {"PGPASSWORD": "{{secret:GITHUB.password}}", "DOC": "{{!secret:A}} b"},
+                "env": {
+                    "PGPASSWORD": "{{secret:GITHUB.password}}",
+                    "GITHUB_PASSWORD": "{{secret:GITHUB}}",
+                    "DOC": "{{!secret:A}} b",
+                },
             }
         )
         process = await shell.started()
@@ -607,7 +624,7 @@ async def test_leniently_read_arguments_run_with_a_note(shell: Shell, terminal: 
     (await shell.started()).exit(0)
 
     notes = data(await shell.returned(call))["notes"]
-    assert notes[0] == "timeout 60000 was read as milliseconds (60 s); timeout takes seconds."
+    assert "60 s" in notes[0] and "600" in notes[0]
     # A terminal or input cannot be had; the note names terminal only when it can be called.
     assert notes[1].startswith("pty has no effect: commands run without a terminal")
     assert notes[1].endswith(" with terminal.") is terminal
@@ -811,6 +828,8 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
         (30, 30, False, "prints"),
         (0, SHELL_DEFAULT_WAIT_SECONDS, True, "prints"),
         (900, SHELL_MAX_WAIT_SECONDS, True, "prints"),
+        ({"timeout_seconds": 20000}, SHELL_MAX_WAIT_SECONDS, True, "prints"),
+        (20000, 20, True, "prints"),
         # A program that reads the console directly waits silently on Windows.
         (None, SHELL_DEFAULT_WAIT_SECONDS, False, "silent-idle"),
         (30, 30, False, "silent-busy"),
@@ -821,6 +840,8 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
         "timeout",
         "zero-is-omitted",
         "capped",
+        "explicit-seconds",
+        "milliseconds-dialect",
         "silent-and-idle",
         "silent-and-busy",
         "silent-and-idle-on-posix",
@@ -830,14 +851,16 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
 async def test_a_command_still_running_when_the_wait_passes_continues_and_delivers(
     shell: Shell,
     monkeypatch: pytest.MonkeyPatch,
-    timeout: int | None,
+    timeout: int | dict[str, int] | None,
     wait: float,
     noted: bool,
     run: str,
 ) -> None:
     monkeypatch.setattr(shell_module, "_CONSOLE_READS_WAIT", not run.endswith("posix"))
     arguments: JsonObject = {"command": "slow build"}
-    if timeout is not None:
+    if isinstance(timeout, dict):
+        arguments.update(timeout)
+    elif timeout is not None:
         arguments["timeout"] = timeout
     call = shell.call(arguments)
     process = await shell.started()
@@ -986,6 +1009,9 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
     ("command", "stage", "powershell"),
     [
         ("python -m unittest 2>&1 | Select-Object -Last 25", "Select-Object -Last 25", True),
+        ("build | Select-Object -Last 2 -Wait", "Select-Object -Last 2 -Wait", True),
+        ("build | Select-Object -Last 2 -First 1 -Wait", None, True),
+        ("build | select -First 0 -Last 2", "select -First 0 -Last 2", True),
         # Select-Object -First passes each line on as it arrives.
         ("python -m unittest 2>&1 | Select-Object -First 25", None, True),
         ("git log | Select-Object -Last 3; npm run dev", None, True),
@@ -1447,10 +1473,17 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     # No environment variable can hold a NUL character.
     nul = await shell.call({"command": "ls", "env": {"DATA": "a\x00b"}})
     inspect = await shell.call({"action": {"type": "inspect", "command": "ls"}})
-    if sys.platform == "win32":
-        for argv in (["pwsh", "-Command"], ["PWSH.exe", "-NoProfile", "-C"]):
-            missing_script = await shell.call({"command": argv})
-            assert missing_script["error"]["code"] == "invalid_arguments"
+    wrappers = (
+        (["pwsh", "-Command"], ["PWSH.exe", "-NoProfile", "-C"])
+        if sys.platform == "win32"
+        else (["bash", "-c"], ["bash", "-lc"], ["bash", "--login", "-c"])
+    )
+    for argv in wrappers:
+        missing_script = await shell.call({"command": argv})
+        assert missing_script["error"]["code"] == "invalid_arguments"
+    for env in ({"UNKNOWN_FOR_SHELL_TEST": "$UNKNOWN_FOR_SHELL_TEST"}, {"PATH": "$PATH:extra"}):
+        invalid_env = await shell.call({"command": "ls", "env": env})
+        assert invalid_env["error"]["code"] == "invalid_arguments"
     gone = tmp_path / "gone"
     missing_cwd = await dispatch_as_executor(
         shell.registry,
@@ -1479,6 +1512,8 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert nul["error"]["code"] == "invalid_arguments"
     assert inspect["error"]["code"] == "invalid_arguments"
     conflict = await shell.call({"command": "ls", "timeout": 5, "timeout_ms": 5})
+    assert conflict["error"]["code"] == "invalid_arguments"
+    conflict = await shell.call({"command": "ls", "timeout": 20, "timeout_seconds": 20000})
     assert conflict["error"]["code"] == "invalid_arguments"
     for malformed_notes in (True, [["stdin", "input"]]):
         invalid_notes = await shell.call(
@@ -1639,19 +1674,20 @@ async def test_a_background_command_that_ran_nothing_delivers_why(shell: Shell) 
 
 
 @pytest.mark.asyncio
-async def test_a_command_owns_every_exit_code_but_its_requests_own(shell: Shell) -> None:
-    # A command that ran, printed nothing and exited with the bootstrap's fixed code,
-    # or with another request's code, ran: only the code drawn for its request says
-    # that PowerShell ran nothing.
+async def test_a_command_owns_every_exit_code_after_acknowledging_its_request(shell: Shell) -> None:
     first = shell.call({"command": "tool"})
     (await shell.started()).exit(REQUEST_UNREADABLE_EXIT_CODE)
     assert data(await shell.returned(first))["exit_code"] == REQUEST_UNREADABLE_EXIT_CODE
     if sys.platform != "win32":
         return
     second = shell.call({"command": "tool"})
-    other = not_run_code(shell.launcher, "request_unreadable", index=0)
-    (await shell.started(2)).exit(other)
-    assert data(await shell.returned(second))["exit_code"] == other
+    process = await shell.started(2)
+    own_code = not_run_code(shell.launcher, "request_unreadable", index=1)
+    process.request_received = True
+    process.write("command output\n")
+    process.exit(own_code)
+    result = data(await shell.returned(second))
+    assert (result["exit_code"], result["output"]) == (own_code, "command output")
 
 
 @pytest.mark.parametrize("companion", [True, False])

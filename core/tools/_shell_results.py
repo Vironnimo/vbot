@@ -81,7 +81,10 @@ RUN_AGAIN = "Run the command again; if it fails the same way, tell the user."
 # appears only once the command before the pipe has finished.
 _HOLDING_STAGE = re.compile(
     r"(?<!\|)\|(?!\|)[ \t]*(?P<stage>"
-    r"(?:Select-Object|select)(?=[ \t])[^|;\n]*?[ \t]-l(?:a(?:st?)?)?(?=[ \t]|$)[^|;\n]*"
+    r"(?:Select-Object|select)(?=[ \t])"
+    # -Wait keeps the input running. Only -First can pass leading rows.
+    r"(?![^|;\n]*[ \t]-f(?:i(?:r(?:st?)?)?)?(?=[ \t:]|$)(?![ \t:]+0+(?=[ \t]|$)))"
+    r"[^|;\n]*?[ \t]-l(?:a(?:st?)?)?(?=[ \t:]|$)[^|;\n]*"
     r"|(?:tail|sort|tac|wc|Sort-Object|Group-Object|group|Measure-Object|measure)"
     r"(?=[ \t);}]|$)[^|;\n]*"
     r"|Out-String(?=[ \t);}]|$)(?![^|;\n]*-Stream)[^|;\n]*)",

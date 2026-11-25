@@ -25,7 +25,13 @@ from typing import Any
 
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
-from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference, unescape_references
+from core.secrets.agent_secrets import (
+    REFERENCE_PATTERN,
+    SecretEnvironmentTargets,
+    find_references,
+    has_reference,
+    unescape_references,
+)
 from core.tools._argument_repair import load_json_value
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
@@ -68,6 +74,7 @@ _NO_EFFECT_KINDS = ("terminal", "input", "wait")
 # Accepted and validated, never advertised: other harnesses' spellings.
 SHELL_UNADVERTISED_PARAMETERS: JsonObject = {
     "timeout_ms": TIMEOUT_MS_PARAMETER,
+    "timeout_seconds": {"type": "number", "minimum": 0},
     "env": ENV_PARAMETER,
     "mode": {"type": "string"},
     NO_EFFECT_FIELDS: {
@@ -83,7 +90,7 @@ _FIELD_ALIASES = SpellingAliases(
     {
         "command": ("cmd", "cmdline", "command_line", "script", "shell_command", "argv"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
-        "timeout": ("timeout_seconds", "timeout_secs", "timeout_sec", "timeout_s"),
+        "timeout_seconds": ("timeout_secs", "timeout_sec", "timeout_s"),
         "timeout_ms": ("timeout_millis", "timeout_milliseconds"),
     }
 )
@@ -218,7 +225,7 @@ def _command_text(value: Any) -> Any:
 
 
 def _host_shell_script(argv: list[str]) -> str | None:
-    """The script of an argv that only starts the host shell on it, such as bash -lc."""
+    """Unwrap a shell invocation only when its options match the host shell."""
     # Only an unqualified host-shell wrapper is representation. An explicit
     # path names a particular executable, even when its basename is pwsh/bash.
     if "/" in argv[0] or "\\" in argv[0]:
@@ -237,13 +244,11 @@ def _host_shell_script(argv: list[str]) -> str | None:
             if option not in _POWERSHELL_WRAPPER_OPTIONS:
                 break
         return None
-    if argv[0] == "bash" and argv[1:-1] in (
-        ["-c"],
-        ["-lc"],
-        ["-cl"],
-        ["-l", "-c"],
-        ["--login", "-c"],
-    ):
+    if argv[0] != "bash":
+        return None
+    if argv[1:] in (["-c"], ["-lc"], ["-cl"], ["-l", "-c"], ["--login", "-c"]):
+        raise ValueError(_not_run(f"{argv[-1]} needs a script. Pass the script as command."))
+    if argv[1:-1] == ["-c"]:
         return argv[-1]
     return None
 
@@ -427,12 +432,22 @@ def no_effect_notes(fields: Mapping[str, str], *, terminal: bool) -> list[str]:
 
 
 def resolve_timeout(
-    timeout: float | None, timeout_ms: float | None, *, tool_name: str = SHELL_MODEL_NAME
+    timeout: float | None,
+    timeout_ms: float | None,
+    *,
+    timeout_seconds: float | None = None,
+    tool_name: str = SHELL_MODEL_NAME,
 ) -> tuple[float | None, str | None]:
     """Return the timeout in seconds and a note when a value was read as milliseconds.
 
     Raises ``ToolContractError`` when the two values disagree.
     """
+    if timeout_seconds is not None:
+        if timeout is not None and timeout != timeout_seconds:
+            raise ToolContractError(
+                f"{tool_name} was not run: timeout and timeout_seconds disagree. Send one duration."
+            )
+        timeout = timeout_seconds
     if timeout_ms is not None:
         seconds = timeout_ms / 1000
         if timeout is not None and timeout != seconds:
@@ -441,7 +456,12 @@ def resolve_timeout(
                 f"({timeout_ms:g} ms) disagree; send one of them."
             )
         return seconds, None
-    if timeout is not None and timeout >= MILLISECOND_TIMEOUT_THRESHOLD and timeout % 1000 == 0:
+    if (
+        timeout_seconds is None
+        and timeout is not None
+        and timeout >= MILLISECOND_TIMEOUT_THRESHOLD
+        and timeout % 1000 == 0
+    ):
         seconds = timeout / 1000
         return seconds, (
             f"timeout {timeout:g} was read as milliseconds ({seconds:g} s); timeout takes seconds."
@@ -452,7 +472,7 @@ def resolve_timeout(
 def split_env_object(
     env: Mapping[str, Any] | None, granted: frozenset[str]
 ) -> tuple[dict[str, str], list[str], dict[str, str]]:
-    """Split an env object into plain variables, credential names and Secret references.
+    """Split env into literals, names requested from the environment and Secret references.
 
     A granted credential named with an empty value or a reference to itself
     becomes a credential request; a value that is exactly a Secret reference
@@ -461,7 +481,7 @@ def split_env_object(
     Tool arguments into a process.
     """
     variables: dict[str, str] = {}
-    credentials: list[str] = []
+    requested_names: list[str] = []
     secret_references: dict[str, str] = {}
     for name, raw in (env or {}).items():
         if not isinstance(name, str) or not name or "=" in name or "\x00" in name:
@@ -488,17 +508,19 @@ def split_env_object(
             continue
         if has_reference(value):
             raise ValueError(_secret_in_text_message(f"env value for {name}"))
-        if _references(value, name):
-            if name in granted:
-                credentials.append(name)
-            continue
-        if value == "" and name in granted:
-            credentials.append(name)
+        if _references(value, name) or (value == "" and name in granted):
+            requested_names.append(name)
             continue
         if name in granted or _credential_name(name):
             raise ValueError(_literal_credential_message(name, granted))
+        if environment_name(name) == "PATH" and _PATH_REFERENCE.search(environment_name(value)):
+            raise ValueError(
+                _not_run(
+                    "env takes a literal PATH. To extend the existing PATH, set it inside command."
+                )
+            )
         variables[name] = unescape_references(value)
-    return variables, credentials, secret_references
+    return variables, requested_names, secret_references
 
 
 def _secret_in_text_message(place: str) -> str:
@@ -510,9 +532,19 @@ def _secret_in_text_message(place: str) -> str:
     )
 
 
+def environment_name(name: str) -> str:
+    """Names identify the same environment slot regardless of case only on Windows."""
+    return name.upper() if sys.platform == "win32" else name
+
+
+_PATH_REFERENCE = re.compile(
+    r"(?:^|[:;])(?:\$PATH|\$\{PATH\}|\$(?i:env):PATH|\$\{(?i:env):PATH\}|%PATH%)(?=$|[:;/\\])"
+)
+
+
 def _references(value: str, name: str) -> bool:
     forms = {f"${name}", f"${{{name}}}", f"$env:{name}", f"${{env:{name}}}", f"%{name}%"}
-    return value.strip().casefold() in {form.casefold() for form in forms}
+    return environment_name(value.strip()) in {environment_name(form) for form in forms}
 
 
 def _credential_name(name: str) -> bool:
@@ -650,10 +682,46 @@ class _ShellCall:
     # Agent Secrets: names from env_keys, and env variables set to a reference.
     secret_keys: tuple[str, ...] = ()
     secret_variables: tuple[tuple[str, str], ...] = ()
+    inherited_variables: tuple[str, ...] = ()
 
 
 def _call_error(problem: str) -> ToolContractError:
     return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
+
+
+def _check_env_sources(
+    variables: Mapping[str, str],
+    environment_keys: list[str],
+    references: Mapping[str, str],
+    secret_keys: list[str],
+    targets: SecretEnvironmentTargets,
+) -> None:
+    """Overlapping assignments must identify the same source without reading Secret values."""
+    seen: dict[str, tuple[str, str]] = {}
+
+    def claim(name: str, kind: str, label: str) -> None:
+        key = environment_name(name)
+        source = (kind, label)
+        if seen.setdefault(key, source) != source:
+            raise _call_error(
+                f"more than one source sets {name}. Choose one source for this variable "
+                "in env and env_keys."
+            )
+
+    for name, literal in variables.items():
+        claim(name, "literal", literal)
+    for name in environment_keys:
+        claim(name, "environment", name)
+    for name, reference in references.items():
+        ref = find_references(reference)[0]
+        fields = targets.get(ref.name, {})
+        label = next(
+            (labels[0] for labels in fields.values() if ref.text_name in labels), ref.text_name
+        )
+        claim(name, "secret", label)
+    for key in secret_keys:
+        for name, labels in targets[key.upper()].items():
+            claim(name, "secret", labels[0])
 
 
 def _parse_call(
@@ -662,10 +730,10 @@ def _parse_call(
     projects: ProjectStore | None,
     *,
     terminal_available: bool,
-    secret_names: frozenset[str] = frozenset(),
+    secret_targets: SecretEnvironmentTargets,
     withheld: Container[str] = frozenset(),
 ) -> _ShellCall:
-    """*secret_names* are the names ``env_keys`` accepts for the caller's Agent Secrets;
+    """*secret_targets* maps each accepted Agent Secret name to its environment slots;
     *withheld* are the credentials a confined command does not inherit."""
     notes: list[str] = []
     command = arguments.get("command")
@@ -681,9 +749,12 @@ def _parse_call(
     timeout, note = resolve_timeout(
         optional_number(arguments.get("timeout"), field_name="timeout"),
         optional_number(arguments.get("timeout_ms"), field_name="timeout_ms"),
+        timeout_seconds=optional_number(
+            arguments.get("timeout_seconds"), field_name="timeout_seconds"
+        ),
     )
     if note is not None:
-        notes.append(note)
+        notes.append(f"{note} Set timeout to {SHELL_MAX_WAIT_SECONDS:g} for the maximum wait.")
     if timeout is not None and timeout < 0:
         raise _call_error("timeout must be 0 or more seconds.")
     wait_seconds, timeout_given = SHELL_DEFAULT_WAIT_SECONDS, False
@@ -716,7 +787,7 @@ def _parse_call(
     if env is not None and not isinstance(env, dict):
         raise _call_error("env must be an object of variable names and values.")
     try:
-        variables, env_credentials, secret_references = split_env_object(env, granted)
+        variables, env_names, secret_references = split_env_object(env, granted)
     except ValueError as error:
         raise ToolContractError(str(error)) from error
     raw_keys = arguments.get("env_keys")
@@ -726,17 +797,25 @@ def _parse_call(
         raise _call_error(f"env_keys is invalid: {error}") from error
     # A granted credential keeps its name; Secret names never collide with one.
     secret_keys = [
-        name for name in requested if name not in granted and name.upper() in secret_names
+        name for name in requested if name not in granted and name.upper() in secret_targets
     ]
-    credential_names = [
-        name for name in dict.fromkeys([*requested, *env_credentials]) if name not in secret_keys
-    ]
+    credential_names = [name for name in requested if name not in secret_keys]
+    _check_env_sources(
+        variables,
+        [*credential_names, *env_names],
+        secret_references,
+        secret_keys,
+        secret_targets,
+    )
     ungranted = [name for name in credential_names if name not in granted]
     if ungranted:
         unknown = [name for name in ungranted if name in withheld or inherited_value(name) is None]
         if unknown:
             raise ToolContractError(unknown_env_keys_message(unknown, granted))
         notes.append(inherited_env_keys_note(ungranted))
+    inherited_variables = tuple(name for name in env_names if name not in granted)
+    for name in inherited_variables:
+        notes.append(f"env uses the command's inherited value for {name}.")
     return _ShellCall(
         command=command,
         description=description.strip() if description and description.strip() else None,
@@ -745,10 +824,13 @@ def _parse_call(
         timeout_given=timeout_given,
         background=background,
         variables=variables,
-        credential_names=tuple(name for name in credential_names if name in granted),
+        credential_names=tuple(
+            dict.fromkeys(name for name in [*credential_names, *env_names] if name in granted)
+        ),
         notes=tuple(notes),
         secret_keys=tuple(secret_keys),
         secret_variables=tuple(secret_references.items()),
+        inherited_variables=inherited_variables,
     )
 
 

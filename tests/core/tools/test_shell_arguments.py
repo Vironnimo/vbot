@@ -30,7 +30,7 @@ NOT_RUN = f"{SHELL_MODEL_NAME} was not run: "
         ({"commands": ["cd src", "", "ls"]}, {"command": "cd src\nls"}),
         ({"command": ["ls"]}, {"command": "ls"}),
         ({"command": "ls", "timeout_ms": 5000}, {"command": "ls", "timeout_ms": 5000}),
-        ({"command": "ls", "timeout_seconds": 5}, {"command": "ls", "timeout": 5}),
+        ({"command": "ls", "timeout_secs": 5}, {"command": "ls", "timeout_seconds": 5}),
         ({"command": "ls", "mode": "auto"}, {"command": "ls", "run_in_background": False}),
         ({"command": "ls", "mode": "bg"}, {"command": "ls", "run_in_background": True}),
         ({"command": "ls", "mode": ""}, {"command": "ls"}),
@@ -157,8 +157,9 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
 @pytest.mark.parametrize(
     ("platform", "argv", "command"),
     [
-        # Codex runs every command through a login shell; the script is the command.
-        ("linux", ["bash", "-lc", "ls -la | head -5"], "ls -la | head -5"),
+        ("linux", ["bash", "-c", "echo 'a b'"], "echo 'a b'"),
+        ("linux", ["bash", "-lc", "ls -la | head -5"], "bash -lc 'ls -la | head -5'"),
+        ("linux", ["bash", "--login", "-c", "echo ok"], "bash --login -c 'echo ok'"),
         ("linux", ["BASH", "-c", "pwd"], "BASH -c pwd"),
         ("linux", ["bash", "-C", "script.sh"], "bash -C script.sh"),
         ("linux", ["bash", "-c", "-c", "arg"], "bash -c -c arg"),
@@ -259,7 +260,8 @@ def test_disagreeing_timeouts_fail_before_running(timeout: int, timeout_ms: int)
         ({"API_TOKEN": "${env:API_TOKEN}"}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
         ({"API_TOKEN": ""}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
         # A reference to an ungranted variable keeps the value the command inherits.
-        ({"HOME": "$HOME"}, (), {}, [], {}),
+        ({"HOME": "$HOME"}, (), {}, ["HOME"], {}),
+        ({"PATH": "/tools/$PATH_SUFFIX"}, (), {"PATH": "/tools/$PATH_SUFFIX"}, [], {}),
         ({"KEYBOARD_LAYOUT": "de"}, (), {"KEYBOARD_LAYOUT": "de"}, [], {}),
         # A Secret reference alone becomes that Secret's value under any name.
         (

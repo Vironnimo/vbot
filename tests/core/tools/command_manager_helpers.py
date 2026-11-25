@@ -91,6 +91,7 @@ class FakeProcess:
 
     def __init__(self, pid: int) -> None:
         self.pid = pid
+        self.request_received: bool | None = None
         self.tree = FakeTree(self)
         self._output: asyncio.Queue[bytes] = asyncio.Queue()
         self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
