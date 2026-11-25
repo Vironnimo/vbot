@@ -132,11 +132,31 @@ class HostSlots:
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._users: Counter[str] = Counter()
         self._paused: OrderedDict[str, _HostPause] = OrderedDict()
+        self._addresses: OrderedDict[tuple[str, int], tuple[str, float]] = OrderedDict()
+
+    def address_order(self, target: tuple[str, int], current: tuple[str, ...]) -> tuple[str, ...]:
+        preferred = self._addresses.get(target)
+        if preferred is None:
+            return current
+        address, until = preferred
+        if _cooldown_clock() >= until or address not in current:
+            del self._addresses[target]
+            return current
+        return (address, *(other for other in current if other != address))
+
+    def connected(self, target: tuple[str, int], address: str) -> None:
+        self._addresses[target] = (address, _cooldown_clock() + 300)
+        self._addresses.move_to_end(target)
+        if len(self._addresses) > 1024:
+            self._addresses.popitem(last=False)
 
     def is_paused(self, host: str) -> bool:
         """Whether the host's deadline still rules out an external fetch."""
         pause = self._paused.get(host)
         return pause is not None and _cooldown_clock() < pause.until
+
+    def needs_probe(self, host: str) -> bool:
+        return host in self._paused
 
     def firewall_blocked(self, host: str) -> None:
         self.pause(host, _FIREWALL_COOLDOWN)
@@ -321,7 +341,8 @@ def _make_session(accept: str | None) -> AsyncSession:
     from curl_cffi.requests import AsyncSession
 
     headers = {} if accept is None else {"Accept": accept}
-    return AsyncSession(impersonate=_IMPERSONATE_TARGET, headers=headers)
+    # A proxy resolving the destination itself would bypass the validated DNS pins.
+    return AsyncSession(impersonate=_IMPERSONATE_TARGET, headers=headers, proxies={"all": ""})
 
 
 def _article(what: str) -> str:
@@ -599,15 +620,10 @@ def _private_address(host: str) -> str:
     )
 
 
-async def _validate_public_target(scheme: str, host: str | None, port: int) -> tuple[str, str]:
-    """Validate a target against the SSRF blocklist and return ``(host, ip)``.
-
-    Resolves the host, rejects any private/loopback/reserved address, and returns
-    the normalized host together with the single public IP the connection must be
-    pinned to. Returning the resolved address (rather than re-resolving at connect
-    time) is what closes the DNS-rebinding window — the caller pins this exact IP
-    via ``CurlOpt.RESOLVE`` (see ``_fetch_with_retry``).
-    """
+async def _validate_public_target(
+    scheme: str, host: str | None, port: int
+) -> tuple[str, tuple[str, ...]]:
+    """Validate the entire DNS answer before any address can be pinned to a request."""
     if not scheme:
         raise _InvalidUrlError(
             "This is not a web address. Pass a full URL such as https://example.com/page."
@@ -636,13 +652,13 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
         if _is_blocked_ip(literal_address):
             # Name the address as the URL wrote it; an IPv4-mapped one compares as IPv4.
             raise _BlockedUrlError(_private_address((host or "").strip().strip("[]").lower()))
-        return str(literal_address), str(literal_address)
+        return str(literal_address), (str(literal_address),)
 
     resolved_addresses = await _resolve_host_addresses(normalized_host, port)
     for resolved in resolved_addresses:
         if _is_blocked_ip(resolved):
             raise _BlockedUrlError(_private_address(normalized_host))
-    return normalized_host, str(resolved_addresses[0])
+    return normalized_host, tuple(map(str, resolved_addresses))
 
 
 _CREDENTIALS_BLOCKED = (
@@ -731,20 +747,40 @@ async def _request_with_retry(
     url: str,
     max_bytes: int,
     *,
+    addresses: tuple[str, ...],
+    target: tuple[str, int],
+    resolve_map: dict[tuple[str, int], str],
     truncate: bool = False,
     hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """Fetch a URL and retry transient transport/status failures with backoff."""
+    from curl_cffi import CurlECode, CurlOpt
     from curl_cffi.requests.exceptions import RequestException
 
+    host, _ = target
+    addresses = hosts.address_order(target, addresses) if hosts else addresses
+    index = 0
+    can_switch = True
+    literal = _parse_ip_literal(host) is not None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            host = urlparse(url).hostname or url
             slot: AbstractAsyncContextManager[_HostPause | None] = (
                 hosts.hold(host) if hosts is not None else nullcontext()
             )
             async with slot as probe:
+                if not literal:
+                    previous = resolve_map.get(target)
+                    resolve_map[target] = addresses[index]
+                    session.curl_options[CurlOpt.FRESH_CONNECT] = int(  # type: ignore[assignment]
+                        previous is not None and previous != addresses[index]
+                    )
+                # curl's slist option accepts a list despite its narrower type stub.
+                session.curl_options[CurlOpt.RESOLVE] = [  # type: ignore[assignment]
+                    f"{name}:{port}:{_curl_resolve_address(ip)}"
+                    for (name, port), ip in resolve_map.items()
+                ]
                 result = await _http_get(session, url, max_bytes, truncate=truncate)
+                can_switch = False
                 if hosts is not None and _global_rate_limit(result):
                     hint = parse_retry_after(result.headers)
                     delay = (
@@ -763,9 +799,21 @@ async def _request_with_retry(
                     hosts.firewall_blocked(host)
                 elif hosts is not None:
                     hosts.answered(host, probe, result.status_code)
+                    if index and 200 <= result.status_code < 400:
+                        hosts.connected(target, addresses[index])
         except RequestException as error:
             if attempt >= _retries_allowed(error):
                 raise _TransportFailedError(error, attempt + 1, url) from error
+            if (
+                can_switch
+                and error.code == CurlECode.COULDNT_CONNECT
+                and not getattr(error.response, "status_code", 0)
+                and index + 1 < len(addresses)
+            ):
+                index += 1
+                continue
+            # Once delivery is ambiguous, subsequent retries stay on this address.
+            can_switch = False
             await sleep_for_retry(attempt)
             continue
         # GET is idempotent — safe to repeat (includes a transient 500).
@@ -801,8 +849,6 @@ async def _fetch_with_retry(
     ``resolve_map`` accumulates ``(host, port) -> ip`` across hops so an earlier
     hop's pin survives a same-host redirect.
     """
-    from curl_cffi import CurlOpt
-
     current_url = url
     # The cookies held when each address was requested. A login or consent
     # service sets cookies and sends the request back to the address it came
@@ -822,7 +868,7 @@ async def _fetch_with_retry(
         _check_hop(permissions, url, current_url)
         try:
             scheme, host, port = _url_parts(current_url)
-            normalized_host, pinned_ip = await _validate_public_target(scheme, host, port)
+            normalized_host, addresses = await _validate_public_target(scheme, host, port)
         except _HostNotFoundError as error:
             if redirect_count > 0:
                 raise _RedirectTargetUnreachableError(
@@ -846,19 +892,15 @@ async def _fetch_with_retry(
         if parsed.port is not None:
             authority = f"{authority}:{port}"
         current_url = parsed._replace(netloc=authority).geturl()
-        # Literals already name the validated address; no DNS lookup can rebind
-        # them, and a bare IPv6 host is not a valid RESOLVE entry.
-        if _parse_ip_literal(normalized_host) is None:
-            resolve_map[(normalized_host, port)] = pinned_ip
-        # curl's RESOLVE is an slist option and accepts a list; the type stub
-        # narrows the dict value to str, so the assignment is annotated away.
-        session.curl_options[CurlOpt.RESOLVE] = [  # type: ignore[assignment]
-            f"{host}:{host_port}:{_curl_resolve_address(ip)}"
-            for (host, host_port), ip in resolve_map.items()
-        ]
-
         result = await _request_with_retry(
-            session, current_url, max_bytes, truncate=truncate, hosts=hosts
+            session,
+            current_url,
+            max_bytes,
+            addresses=addresses,
+            target=(normalized_host, port),
+            resolve_map=resolve_map,
+            truncate=truncate,
+            hosts=hosts,
         )
         if result.status_code not in _REDIRECT_STATUS_CODES:
             return result
@@ -1093,7 +1135,7 @@ async def resolve_public_address(host: str, port: int) -> str:
     cannot swap in a private one.
     """
     try:
-        return (await _validate_public_target("https", host, port))[1]
+        return (await _validate_public_target("https", host, port))[1][0]
     except ValueError as error:
         raise _url_error(error) from error
 

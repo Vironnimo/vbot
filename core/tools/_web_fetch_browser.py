@@ -1,7 +1,7 @@
 """Local headless browser for pages direct reading cannot get.
 
-web_fetch hands a page to it when the direct GET meets a bot check or a page
-that shows its content only with JavaScript. It drives the Chrome, Edge or
+web_fetch hands it a public page that shows its content only with JavaScript.
+It drives the Chrome, Edge or
 Chromium installed on the server over the DevTools protocol; no browser is
 downloaded and the user's own profile is never touched.
 
@@ -32,12 +32,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from core.permissions import normalize_host
 from core.tools._public_http import (
     SELF_SOLVING_CHECK_TITLES,
     PublicFetchError,
     PublicResponse,
     resolve_public_address,
 )
+from core.utils.http_status import parse_retry_after
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.processes import (
@@ -85,6 +87,17 @@ class BrowserFetchError(Exception):
     """The local browser could not read the page; the message says why."""
 
 
+class BrowserAccessError(BrowserFetchError):
+    """The page refused the browser or presented an access check."""
+
+    def __init__(
+        self, message: str, *, rate_limited: bool = False, pause: tuple[str, float] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.rate_limited = rate_limited
+        self.pause = pause
+
+
 @dataclass(frozen=True)
 class LocalBrowser:
     """A Chromium-family browser installed on the server."""
@@ -123,12 +136,17 @@ def _browser_candidates() -> list[tuple[str, str]]:
     return found
 
 
-def find_local_browser() -> LocalBrowser | None:
-    """Return the first installed Chrome, Edge or Chromium, or ``None``."""
+def _installed_browsers() -> list[LocalBrowser]:
+    found: dict[str, LocalBrowser] = {}
     for name, path in _browser_candidates():
         if os.path.isfile(path):
-            return LocalBrowser(name, path)
-    return None
+            found.setdefault(os.path.normcase(os.path.realpath(path)), LocalBrowser(name, path))
+    return list(found.values())
+
+
+def find_local_browser() -> LocalBrowser | None:
+    """Return the first installed Chrome, Edge or Chromium, or ``None``."""
+    return next(iter(_installed_browsers()), None)
 
 
 # Connects the proxy to a validated address; tests replace it.
@@ -143,6 +161,7 @@ class _GuardProxy:
         self._writers: set[asyncio.StreamWriter] = set()
         # Hosts the proxy refused, with when and why (a public-fetch failure code).
         self._refused: dict[str, tuple[float, str]] = {}
+        self.pause_checks: list[Callable[[str], bool]] = []
         self.port = 0
 
     async def start(self) -> None:
@@ -196,6 +215,10 @@ class _GuardProxy:
                 await _answer(
                     writer, "502 Bad Gateway" if error.code == "host_not_found" else "403 Forbidden"
                 )
+                return
+            if any(check(normalize_host(host) or host) for check in self.pause_checks):
+                self._remember_refusal(host, "rate_limited")
+                await _answer(writer, "429 Too Many Requests")
                 return
             try:
                 async with asyncio.timeout(_PROXY_CONNECT_SECONDS):
@@ -353,7 +376,6 @@ class _Running:
     devtools: _DevTools
     proxy: _GuardProxy
     profile: Path
-    user_agent: str
 
     def alive(self) -> bool:
         return self.process.returncode is None and not self.devtools.closed
@@ -371,11 +393,12 @@ class PageBrowser:
         self,
         profile_root: Path,
         *,
-        find: Callable[[], LocalBrowser | None] = find_local_browser,
+        find: Callable[[], list[LocalBrowser] | LocalBrowser | None] = _installed_browsers,
         idle_seconds: float = _IDLE_SECONDS,
     ) -> None:
         self._profile_root = profile_root
         self._find = find
+        self._last_browser: LocalBrowser | None = None
         self._idle_seconds = idle_seconds
         self._lock = asyncio.Lock()
         self._pages = asyncio.Semaphore(_MAX_PAGES)
@@ -385,9 +408,11 @@ class PageBrowser:
         self._expiry: asyncio.Task[None] | None = None
 
     def available(self) -> bool:
-        return self._find() is not None
+        return bool(self._find())
 
-    async def fetch(self, url: str) -> PublicResponse:
+    async def fetch(
+        self, url: str, *, host_paused: Callable[[str], bool] | None = None
+    ) -> PublicResponse:
         """Render ``url`` and return its HTML; raise ``BrowserFetchError`` otherwise."""
         self._active += 1
         if self._idle is not None:
@@ -396,6 +421,8 @@ class PageBrowser:
         try:
             async with self._pages:
                 running = await self._ensure_running()
+                if host_paused is not None:
+                    running.proxy.pause_checks.append(host_paused)
                 try:
                     async with asyncio.timeout(_FETCH_SECONDS + 10):
                         return await _render(running, url)
@@ -405,6 +432,9 @@ class PageBrowser:
                     ) from error
                 except _DevToolsError as error:
                     raise BrowserFetchError(f"the browser failed ({error})") from error
+                finally:
+                    if host_paused is not None:
+                        running.proxy.pause_checks.remove(host_paused)
         finally:
             self._active -= 1
             if self._active == 0 and self._running is not None:
@@ -442,31 +472,50 @@ class PageBrowser:
             return self._running
 
     async def _start(self) -> _Running:
-        browser = self._find()
-        if browser is None:
+        found = self._find()
+        browsers = [found] if isinstance(found, LocalBrowser) else list(found or ())
+        if not browsers:
             raise BrowserFetchError("no Chrome, Edge or Chromium is installed on the server")
+        if self._last_browser in browsers:
+            browsers.sort(key=lambda browser: browser != self._last_browser)
+        for index, browser in enumerate(browsers):
+            try:
+                running = await self._start_candidate(browser)
+            except BrowserFetchError:
+                if index + 1 == len(browsers):
+                    raise
+            else:
+                self._last_browser = browser
+                return running
+        raise RuntimeError("unreachable browser candidate state")
+
+    async def _start_candidate(self, browser: LocalBrowser) -> _Running:
+        from websockets.exceptions import WebSocketException
+
         profile = self._profile_root / new_id("brw")
         await asyncio.to_thread(_prepare_profile, self._profile_root, profile)
         proxy = _GuardProxy()
         await proxy.start()
         process: asyncio.subprocess.Process | None = None
+        devtools: _DevTools | None = None
         try:
             process = await _launch(browser, profile, proxy.port)
             devtools = await _connect(process, profile)
-            version = await devtools.call("Browser.getVersion")
+            await devtools.call("Browser.getVersion")
         except BaseException as error:
+            if devtools is not None:
+                await devtools.aclose()
             await proxy.aclose()
             if process is not None and process.returncode is None:
                 with contextlib.suppress(OSError, ProcessLookupError):
                     await kill_process_tree_async(process)
             await asyncio.to_thread(shutil.rmtree, profile, True)
-            if isinstance(error, (OSError, TimeoutError, _DevToolsError)):
+            if isinstance(error, (OSError, TimeoutError, _DevToolsError, WebSocketException)):
                 _LOGGER.warning("Local browser %s did not start: %s", browser.name, error)
                 raise BrowserFetchError(f"{browser.name} did not start ({error})") from error
             raise
         _LOGGER.debug("Local browser started: %s", browser.name)
-        user_agent = str(version.get("userAgent", "")).replace("HeadlessChrome", "Chrome")
-        return _Running(process, devtools, proxy, profile, user_agent)
+        return _Running(process, devtools, proxy, profile)
 
     async def _stop(self) -> None:
         running, self._running = self._running, None
@@ -507,7 +556,6 @@ async def _launch(
         "--proxy-bypass-list=<-loopback>",
         "--disable-quic",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-        "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-extensions",
@@ -527,9 +575,6 @@ async def _launch(
             stderr=subprocess.DEVNULL,
             creationflags=subprocess_creation_flags(new_process_group=True),
         )
-    if os.geteuid() == 0:
-        # Chromium refuses to run its sandbox as root (containers, root services).
-        argv.insert(-1, "--no-sandbox")
     launch = guarded_process_launch(argv, env=dict(os.environ))
     return await create_subprocess_exec(
         *launch.argv,
@@ -589,16 +634,19 @@ async def _render(running: _Running, url: str) -> PublicResponse:
         for method, params in (
             ("Page.enable", {}),
             ("Page.setLifecycleEventsEnabled", {"enabled": True}),
-            ("Emulation.setUserAgentOverride", {"userAgent": running.user_agent}),
+            ("Network.enable", {}),
         ):
             await devtools.call(method, params, session=session)
         navigation = await devtools.call(
             "Page.navigate", {"url": url}, session=session, timeout=_FETCH_SECONDS
         )
         if error := navigation.get("errorText"):
-            raise BrowserFetchError(
-                _navigation_failure(str(error), running.proxy.refused_since(started))
-            )
+            refused = running.proxy.refused_since(started)
+            if refused and refused[1] == "rate_limited":
+                raise BrowserAccessError(
+                    f"{refused[0]} is limiting requests. Try another source.", rate_limited=True
+                )
+            raise BrowserFetchError(_navigation_failure(str(error), refused))
         await _settle(devtools, session, events, navigation["frameId"], started + _FETCH_SECONDS)
         page = await _evaluate(devtools, session, _PAGE_SCRIPT)
     finally:
@@ -630,10 +678,8 @@ async def _settle(
         if now >= next_check:
             next_check = now + _POLL_SECONDS
             state = await _evaluate(devtools, session, _STATE_SCRIPT)
-            # A self-solving check page: keep waiting instead of settling on it.
             if str(state.get("title", "")).strip().lower() in SELF_SOLVING_CHECK_TITLES:
-                stable, length = 0, -1
-                continue
+                raise BrowserAccessError("the page showed an access check. Try another source.")
             current = state.get("length", 0)
             stable = stable + 1 if state.get("ready") == "complete" and current == length else 0
             length = current
@@ -649,6 +695,26 @@ async def _settle(
         if method in {"Inspector.detached", "Inspector.targetCrashed"}:
             raise BrowserFetchError("the browser tab closed or crashed while loading the page")
         params = event.get("params", {})
+        if (
+            method == "Network.responseReceived"
+            and params.get("frameId") == frame
+            and params.get("type") == "Document"
+            and (status := params.get("response", {}).get("status")) in {401, 403, 407, 429}
+        ):
+            response = params["response"]
+            headers = {
+                key.lower(): str(value) for key, value in response.get("headers", {}).items()
+            }
+            host = urlsplit(response.get("url", "")).hostname
+            pause = None
+            if status == 429 and host and headers.get("x-ratelimit-global", "").lower() == "true":
+                delay = parse_retry_after(headers)
+                pause = normalize_host(host) or host, 30.0 if delay is None else delay
+            raise BrowserAccessError(
+                f"the site answered HTTP {status} in the browser. Try another source.",
+                rate_limited=status == 429,
+                pause=pause,
+            )
         if method == "Page.lifecycleEvent" and params.get("frameId") == frame:
             if params.get("name") == "init":
                 idle, stable = False, 0
@@ -687,6 +753,11 @@ def _page_response(page: dict[str, Any]) -> PublicResponse:
     if urlsplit(final_url).scheme not in {"http", "https"}:
         raise BrowserFetchError("the browser ended on an error page instead of the site")
     status = page.get("status") or 200
+    if status in {401, 403, 407, 429}:
+        raise BrowserAccessError(
+            f"the site answered HTTP {status} in the browser. Try another source.",
+            rate_limited=status == 429,
+        )
     if not isinstance(status, int) or status >= 400:
         raise BrowserFetchError(f"the site answered HTTP {status} in the browser too")
     media_type = str(page.get("type", "")).lower()

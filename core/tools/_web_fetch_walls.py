@@ -89,6 +89,10 @@ def bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
 
     generic_wall = title in {"access denied", "verify you are human"}
     wall_text = re.sub(r"^[#>*\s]+", "", text).strip().lower()
+    if len(text) < 600 and re.match(
+        r"checking your browser|verify (?:that )?you are (?:a )?human", wall_text
+    ):
+        return f"Blocked by a bot check at {url}; no readable content. {WALL_GUIDANCE}"
     wall_evidence = wall_text == title or bool(
         re.search(
             r"verify (?:that )?you are (?:a )?human|you (?:have been|are) blocked"
@@ -166,11 +170,7 @@ def is_script_shell(main: str, *, page: str, url: str, title: str) -> bool:
         return True
     if len(main) >= 600:
         return False
-    if _SCRIPT_DEMAND.search(main) or re.match(
-        "checking your browser|verify (?:that )?you are (?:a )?human",
-        re.sub(r"^[#>*\s]+", "", main),
-        re.I,
-    ):
+    if _SCRIPT_DEMAND.search(main):
         return True
     # Some search apps return their title and logo before loading results.
     # Keep a real result, an explicit empty state, or a meaningful SVG label.

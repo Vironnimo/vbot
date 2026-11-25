@@ -4,6 +4,7 @@ failures, and the pinned browser-impersonating request."""
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 from collections import Counter
@@ -14,7 +15,7 @@ from urllib.parse import urlparse
 
 import curl_cffi.requests
 import pytest
-from curl_cffi import CurlOpt
+from curl_cffi import CurlECode, CurlOpt
 from curl_cffi.requests.exceptions import (
     CertificateVerifyError,
     ConnectTimeout,
@@ -563,12 +564,81 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
     assert assert_success_envelope(result)["content"] == "hello world"
     options = session_factory.call_args.kwargs
     assert options["impersonate"] == "chrome"
+    assert options["proxies"] == {"all": ""}
     assert "text/markdown" in options["headers"]["Accept"]
     # The connection targets exactly the address that cleared validation.
     assert session.curl_options[CurlOpt.RESOLVE] == pins
     assert session.calls == [
         ("GET", request_url, {"allow_redirects": False, "timeout": public_http._REQUEST_TIMEOUT})
     ]
+
+
+@pytest.mark.asyncio
+async def test_preconnect_failover_remembers_only_current_validated_addresses(
+    tmp_path, monkeypatch
+):
+    first, second = "1.1.1.1", "8.8.8.8"
+    dns = [first, second]
+    now = [1.0]
+    pins = []
+    monkeypatch.setattr(public_http, "_cooldown_clock", lambda: now[0])
+
+    async def resolve(_host, _port):
+        return [ipaddress.ip_address(value) for value in dns]
+
+    async def get(session, url, _limit, **_options):
+        pin = session.curl_options[CurlOpt.RESOLVE][0]
+        pins.append(pin)
+        assert url.startswith("https://example.com/")
+        if pin.endswith(first):
+            raise CurlConnectionError("could not connect", code=CurlECode.COULDNT_CONNECT)
+        return make_result(text="served", url=url)
+
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", resolve)
+    monkeypatch.setattr(public_http, "_http_get", get)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+
+    async def read():
+        return await tool.dispatch(context, {"url": "https://example.com/page"})
+
+    assert (await read())["ok"] and (await read())["ok"]
+    assert pins == [f"example.com:443:{ip}" for ip in (first, second, second)]
+    now[0] += 301
+    assert (await read())["ok"] and pins[-2:] == pins[:2]
+    dns[:] = ["9.9.9.9"]
+    assert (await read())["ok"] and pins[-1].endswith("9.9.9.9")
+    count = len(pins)
+    dns.append("127.0.0.1")
+    assert_failure_envelope(await read(), "blocked_url")
+    assert len(pins) == count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["forbidden", "retryable-status", "tls", "incomplete"])
+async def test_server_or_ambiguous_failures_never_change_the_dns_pin(
+    tmp_path, monkeypatch, retry_sleeps, failure
+):
+    monkeypatch.setattr(
+        public_http,
+        "_resolve_host_addresses",
+        AsyncMock(return_value=[ipaddress.ip_address("1.1.1.1"), ipaddress.ip_address("8.8.8.8")]),
+    )
+    pins = []
+
+    async def get(session, url, _limit, **_options):
+        pins.append(session.curl_options[CurlOpt.RESOLVE][0])
+        if len(pins) == 1:
+            if failure in {"forbidden", "retryable-status"}:
+                return make_result(status_code=403 if failure == "forbidden" else 503, url=url)
+            if failure == "tls":
+                raise CertificateVerifyError("certificate invalid")
+            raise ReadTimeout("partial response")
+        raise CurlConnectionError("could not connect", code=CurlECode.COULDNT_CONNECT)
+
+    monkeypatch.setattr(public_http, "_http_get", get)
+    result = await fetch(tmp_path, {"url": "https://example.com/page"})
+    assert not result["ok"]
+    assert set(pins) == {"example.com:443:1.1.1.1"}
 
 
 @pytest.mark.asyncio

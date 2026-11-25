@@ -105,6 +105,42 @@ async def test_preferred_service_gets_one_full_page_request(
     direct.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_preferred_service_pauses_only_the_refusing_account(tmp_path, monkeypatch):
+    now = [1.0]
+    key = ["first-key"]
+    monkeypatch.setattr("core.tools.web_fetch._route_clock", lambda: now[0])
+    install_http_get(monkeypatch, lambda url: make_result(text="Direct content", url=url))
+    tool = web_fetch_registry(
+        credential_resolver=lambda _: key[0],
+        settings_loader=lambda: {"provider": "tavily", "mode": "prefer"},
+    )
+    context = make_context(tmp_path)
+    with respx.mock as routes:
+        provider = routes.post(TAVILY).mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "7200"}),
+                httpx.Response(200, json={"results": []}),
+                httpx.Response(200, json={"results": [{"url": URL, "raw_content": "New account"}]}),
+                httpx.Response(200, json={"results": [{"url": URL, "raw_content": "Recovered"}]}),
+            ]
+        )
+
+        async def read():
+            return (await tool.dispatch(context, {"url": URL}))["data"]["content"]
+
+        assert await read() == "Direct content"
+        now[0] += 3601
+        assert await read() == "Direct content" and provider.call_count == 1
+        key[0] = "second-key"
+        assert await read() == "Direct content"
+        assert await read() == "New account"
+        key[0] = "first-key"
+        assert await read() == "Direct content" and provider.call_count == 3
+        now[0] += 3600
+        assert await read() == "Recovered" and provider.call_count == 4
+
+
 def _time_out(route: respx.Route) -> None:
     route.mock(side_effect=httpx.ReadTimeout("uncertain"))
 
