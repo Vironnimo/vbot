@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -119,6 +121,8 @@ async def test_provider_connect_completion_publishes_the_auth_outcome(
         tmp_path, replace(copilot_provider(oauth_connection()), id=provider)
     )
     state.device_flow_engine = StubDeviceFlowEngine()
+    invalidated = Mock()
+    state.runtime.chat_loop = SimpleNamespace(account_credentials_changed=invalidated)
     catalog_refreshes: list[str] = []
     state.runtime.start_account_catalog_refresh = catalog_refreshes.append
     connection_id = f"{provider}:oauth"
@@ -130,6 +134,10 @@ async def test_provider_connect_completion_publishes_the_auth_outcome(
     [on_complete] = state.device_flow_engine.completions
 
     await on_complete(success=success)
+    if success:
+        invalidated.assert_called_once_with(provider, "oauth", account or "default")
+    else:
+        invalidated.assert_not_called()
 
     auth_events = [
         event["payload"]
