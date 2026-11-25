@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
-from core.permissions import normalize_read_folders, normalize_session_grants
+from core.permissions import (
+    normalize_read_folders,
+    normalize_session_grants,
+    permission_rules_to_dict,
+)
 from core.projects._resolution_context import _RESOLUTION_WORKERS, _session_address
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -245,29 +249,47 @@ class SessionResolution:
         return cleared
 
     def set_session_permission_rules(
-        self, address: SessionAddress, rules: Mapping[str, Any] | None
+        self,
+        address: SessionAddress,
+        rules: Mapping[str, Any] | None = None,
+        *,
+        profile: str | None = None,
     ) -> tuple[AgentOverrides, bool]:
-        """Set the user's rule set for one Session (``None``: the Agent's rules again).
+        """Set the user's rule set or Permission Profile for one Session.
 
-        Returns the stored overrides and whether an inherited ceiling was
-        removed: rules that restrict nothing are the user's choice of full
-        access, which a ceiling from a parent Session or a Cron job would
-        otherwise still narrow. Raises ``ValueError`` for an invalid rule set
-        before anything is written; a Run in progress applies the change at its
-        next Tool round.
+        At most one of *rules* and *profile*; neither returns the Session to the
+        Agent's rules. The Session stores a profile by name, so later edits of
+        the profile reach it. Returns the stored overrides and whether an
+        inherited ceiling was removed: a choice that restricts nothing (the Full
+        Access profile) is the user's choice of full access, which a ceiling from
+        a parent Session or a Cron job would otherwise still narrow. Raises
+        ``ValueError`` for an invalid rule set and :class:`AgentResolutionError`
+        for an unknown profile before anything is written; a Run in progress
+        applies the change at its next Tool round.
         """
         if self._owner._sessions is None:
             raise AgentResolutionError("Session Agent overrides are unavailable")
-        requested = AgentOverrides(permission_rules=rules)
-        full_access = requested.grants_full_access
+        if rules is not None and profile is not None:
+            raise ValueError("A Session selects either its own rules or a permission profile.")
+        requested = AgentOverrides(permission_rules=rules, permission_profile=profile)
+        if profile is not None:
+            # An unknown profile is refused now, not at the Session's next Run.
+            selected = self._owner.permission_rules_for_profile(profile)
+            full_access = AgentOverrides(
+                permission_rules=permission_rules_to_dict(selected)
+            ).grants_full_access
+        else:
+            full_access = requested.grants_full_access
 
         def mutate(metadata: Any) -> None:
             stored = metadata.get(AGENT_OVERRIDES_META_KEY)
             merged = dict(stored) if isinstance(stored, dict) else {}
-            if requested.permission_rules is None:
-                merged.pop("permission_rules", None)
-            else:
+            merged.pop("permission_rules", None)
+            merged.pop("permission_profile", None)
+            if requested.permission_rules is not None:
                 merged["permission_rules"] = dict(requested.permission_rules)
+            if requested.permission_profile is not None:
+                merged["permission_profile"] = requested.permission_profile
             if full_access:
                 merged.pop("permission_ceiling", None)
             if merged:
@@ -278,9 +300,15 @@ class SessionResolution:
         previous, updated = self._owner._sessions.ensure_metadata(address, mutate)
         before = previous.get(AGENT_OVERRIDES_META_KEY)
         cleared = full_access and isinstance(before, dict) and "permission_ceiling" in before
+        if requested.permission_profile is not None:
+            change = "profile set"
+        elif requested.permission_rules is not None:
+            change = "set"
+        else:
+            change = "cleared"
         _LOGGER.info(
             "Session permission rules %s (agent=%s project=%s session=%s ceiling_cleared=%s)",
-            "cleared" if requested.permission_rules is None else "set",
+            change,
             address.agent_id,
             address.project_id,
             address.session_id,
@@ -530,7 +558,8 @@ class SessionResolution:
         changes = overrides.agent_changes()
         # Built-in Agents keep full access, whatever a Session stores.
         if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
-            changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
+            resolved = self._owner.session_profile_rules(overrides)
+            changes["permission_rules"] = resolved.rules_over(agent.permission_rules)
         if require_model and overrides.model is not None:
             self._owner._model_checker.require_configured(
                 overrides.model, defer_workspace_access=stored_model and bool(agent.fallback_models)
@@ -551,6 +580,14 @@ class SessionResolution:
 SKILL_SUBJECT_MISSING_MESSAGE = (
     "This Session works on the Skills of Agent {agent_id}, which no longer exists, "
     "so it cannot continue."
+)
+
+
+# A Session that selected a Permission Profile stops once the profile is gone,
+# instead of running under the Agent's possibly wider rules.
+SESSION_PROFILE_MISSING_MESSAGE = (
+    "This Session uses the permission profile {profile!r}, which no longer exists. "
+    "Choose another access for this Session."
 )
 
 

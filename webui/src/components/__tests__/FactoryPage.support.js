@@ -185,9 +185,19 @@ export function createFactoryBridge({ established = true } = {}) {
           text: 'Ready to coordinate.',
         },
       ],
+      session: {
+        agent_id: 'planner',
+        project_id: 'project-a',
+        session_id: 'sess-leader',
+      },
+      session_binding: {
+        group_id: 'native.top-1',
+        participant_id: 'mem-leader',
+      },
       member_name: 'Planner',
       profile_available: true,
       agent_id: 'planner',
+      agent_model: 'demo/worker',
       agent_proof: 'leader-stamp',
       factory_id: 'fac-one',
     },
@@ -438,7 +448,11 @@ export function createFactoryBridge({ established = true } = {}) {
           fRuns.filter((item) => ['running', 'queued'].includes(item.state)),
         ),
         upcoming,
-        recent_runs: clone(fRuns),
+        recent_runs: clone(
+          fRuns.filter((item) =>
+            ['done', 'failed', 'cancelled'].includes(item.state),
+          ),
+        ),
       };
     }
 
@@ -588,6 +602,12 @@ export function createFactoryBridge({ established = true } = {}) {
     openLink: vi.fn().mockResolvedValue({}),
     readModelFavorites: vi.fn().mockResolvedValue({ models: [] }),
     setModelFavorite: vi.fn().mockResolvedValue({ models: [] }),
+    readHistory: vi.fn().mockResolvedValue({
+      messages: [],
+      context_usage: { tokens: 12_800, context_window: 128_000 },
+      session_usage: { input_tokens: 12_800, output_tokens: 1_200 },
+      run_usage: null,
+    }),
     mountSession: vi.fn(() => vi.fn()),
     dispose: vi.fn(),
   };

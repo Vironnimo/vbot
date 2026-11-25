@@ -30,6 +30,13 @@ _LINE_NUMBER_GUTTER_MIN_LINES = 2
 _SUPPORTED_LINE_ENDINGS = ("\r\n", "\n", "\r")
 
 
+def invalid_unicode_arguments(tool_name: str) -> str:
+    return (
+        f"{tool_name} was not run: its arguments contain an unpaired Unicode surrogate. "
+        "Replace it with a valid Unicode character and call again."
+    )
+
+
 def optional_string(value: object, *, field_name: str) -> str | None:
     """Return a trimmed optional string, preserving a present blank as blank."""
     if value is None:

@@ -348,6 +348,7 @@ async def test_reviewed_instance_cli_only_grants_the_bare_command(
         ("node inspect target", "unanalyzable"),
         ("BASH_ENV=setup.sh bash -c 'echo ok'", "unanalyzable"),
         ("env NODE_OPTIONS=--trace-warnings node --version", "unanalyzable"),
+        ("env ComSpec=custom node --version", "unanalyzable" if sys.platform == "win32" else None),
     ],
 )
 @pytest.mark.asyncio

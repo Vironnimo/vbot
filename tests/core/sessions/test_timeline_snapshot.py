@@ -106,6 +106,7 @@ def test_fork_run_completion_excludes_an_edited_away_summary_before_and_after_de
     before = read(fork).runs
     assert before[0]["terminal_sequence"] is None
     assert before[0]["complete"] is False
+    assert "tool_call_count" not in before[0]
 
     manager.delete(source.address)
 

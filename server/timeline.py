@@ -117,6 +117,15 @@ class TimelineStreamingResponse(StreamingResponse):  # type: ignore[misc]
             await finish_despite_cancel(self._timeline_stream.aclose())
 
 
+def _with_tool_call_counts(items: list[JsonObject], counts: dict[str, int]) -> list[JsonObject]:
+    return [
+        {**item, "toolCallCount": counts[item["run_id"]]}
+        if item["type"] == "assistant_run" and item["run_id"] in counts
+        else item
+        for item in items
+    ]
+
+
 def capture_run_timeline(run: Run, projection: RunTimeline | None = None) -> JsonObject | None:
     """Freeze the live projection and lifecycle facts before any asynchronous I/O."""
     projection = projection or run.timeline
@@ -125,7 +134,7 @@ def capture_run_timeline(run: Run, projection: RunTimeline | None = None) -> Jso
     return {
         "run_id": run.id,
         "sequence": projection.sequence,
-        "items": projection.snapshot(),
+        "items": _with_tool_call_counts(projection.snapshot(), {run.id: run.tool_call_count}),
         "state": {
             **copy.deepcopy(projection.state),
             **({"model_reference": run.model_reference} if run.model_reference else {}),
@@ -175,6 +184,14 @@ def project_timeline_history(
             row["run_id"]: row["status"]
             for row in history_response.get("runs", [])
             if row.get("status")
+        },
+    )
+    items = _with_tool_call_counts(
+        items,
+        {
+            row["run_id"]: row["tool_call_count"]
+            for row in history_response.get("runs", [])
+            if "tool_call_count" in row
         },
     )
     if active_run_snapshot is not None:
@@ -264,7 +281,7 @@ async def _timeline_snapshot(state: Any, run: Run, *, child_limit: int) -> JsonO
         snapshot = {
             "run_id": run.id,
             "sequence": run.last_sequence,
-            "items": items,
+            "items": _with_tool_call_counts(items, {run.id: run.tool_call_count}),
             "state": {
                 **copy.deepcopy(run.terminal_payload_extras),
                 **output,

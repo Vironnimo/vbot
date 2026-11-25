@@ -148,7 +148,7 @@ def _project(
         if run is None:
             run = RunTimeline(str(run_id), timestamp=message.get("timestamp"))
             runs.append(run)
-            run.run["source"] = "history"
+            run.run.update(source="history", iterationCount=None)
         event: JsonObject = {
             "run_id": run.run_id,
             "sequence": 0,

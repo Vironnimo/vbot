@@ -148,6 +148,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
     participant = {
         "factory_id": factory_id,
         "agent_id": recipient_member["agent_id"],
+        "agent_model": profile.get("agent_model"),
         "agent_proof": recipient_member.get("agent_proof"),
         "profile_available": profile["profile_available"],
         "member_name": profile["agent_name"]

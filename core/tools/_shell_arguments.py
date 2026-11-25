@@ -18,7 +18,7 @@ import re
 import shlex
 import sys
 from collections.abc import Container, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -43,13 +43,15 @@ from core.tools._workdir import (
     project_workdir,
     validate_project_workdir,
 )
-from core.tools.arguments import optional_number, optional_string
+from core.tools.arguments import invalid_unicode_arguments, optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
+from core.tools.scratch_areas import ScratchFolder
 from core.tools.shell_environment import (
     inherited_value,
+    scratch_environment,
 )
 from core.tools.tools import (
     JsonObject,
@@ -58,6 +60,7 @@ from core.tools.tools import (
 )
 from core.utils.file_status import is_dir_strict
 from core.utils.paths import model_path
+from core.utils.surrogates import without_lone_surrogates
 
 from ._shell_definition import (
     SHELL_DEFAULT_WAIT_SECONDS,
@@ -684,6 +687,24 @@ class _ShellCall:
     secret_variables: tuple[tuple[str, str], ...] = ()
     inherited_variables: tuple[str, ...] = ()
 
+    def with_scratch(self, scratch: ScratchFolder, opaque_names: set[str]) -> _ShellCall:
+        reserved = scratch_environment(scratch)
+        for name in sorted(opaque_names):
+            if environment_name(name) in reserved:
+                raise _call_error(
+                    f"the Session's Scratch folder sets {name}. "
+                    "Use a different variable name for the credential or Secret."
+                )
+        overrides = {
+            name: reserved[key]
+            for name, value in self.variables.items()
+            if (key := environment_name(name)) in reserved and value != reserved[key]
+        }
+        if not overrides:
+            return self
+        note = f"The Session's Scratch folder overrides env for {', '.join(overrides)}."
+        return replace(self, variables=self.variables | overrides, notes=(*self.notes, note))
+
 
 def _call_error(problem: str) -> ToolContractError:
     return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
@@ -735,6 +756,8 @@ def _parse_call(
 ) -> _ShellCall:
     """*secret_targets* maps each accepted Agent Secret name to its environment slots;
     *withheld* are the credentials a confined command does not inherit."""
+    if without_lone_surrogates(arguments) is not arguments:
+        raise ToolContractError(invalid_unicode_arguments(SHELL_MODEL_NAME))
     notes: list[str] = []
     command = arguments.get("command")
     if not isinstance(command, str) or not command.strip():

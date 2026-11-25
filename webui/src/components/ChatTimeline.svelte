@@ -121,6 +121,11 @@
     sourceTimelineItems.findLast((item) => item.type === 'assistant_run')?.id ??
       null,
   );
+  const firstRunWithOlderHistory = $derived(
+    hasOlderHistory
+      ? sourceTimelineItems.find((item) => item.type === 'assistant_run')
+      : null,
+  );
   const footerGroups = $derived(
     runFooterGroups(sourceTimelineItems, {
       workStartedAt: sessionWorkStartedAt,
@@ -755,6 +760,7 @@
           ? sessionWorkStartedAt
           : null}
         footerRuns={footerGroups.get(item.sourceItemId ?? item.id) ?? null}
+        {firstRunWithOlderHistory}
         {nowMs}
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}

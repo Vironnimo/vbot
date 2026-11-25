@@ -228,20 +228,42 @@
 
 <style>
   .factory-overview {
+    flex: 1;
+    min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
     gap: 20px;
-    align-items: start;
+    align-items: stretch;
+  }
+  .factory-overview-chat {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+  }
+  .factory-dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
   }
   @media (max-width: 900px) {
     .factory-overview {
+      flex: none;
       grid-template-columns: minmax(0, 1fr);
+      align-items: start;
     }
-  }
-  .factory-dashboard {
-    display: grid;
-    gap: 16px;
-    min-width: 0;
+    .factory-overview-chat {
+      height: clamp(24rem, 62dvh, 42rem);
+    }
+    .factory-dashboard {
+      overflow: visible;
+      padding-right: 0;
+    }
   }
   .factory-dash-panel {
     border: 1px solid var(--border);

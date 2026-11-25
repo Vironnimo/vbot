@@ -34,6 +34,11 @@ const OWN_LAYER = {
   deny: [],
 };
 const CRON_LAYER = { ...OWN_LAYER, source: 'cron', write: [] };
+const PROFILES = [
+  { name: 'full_access', builtin: true, restricted: false },
+  { name: 'restricted', builtin: true, restricted: true },
+  { name: 'Reviewer', builtin: false, restricted: true },
+];
 
 async function settle() {
   await vi.runAllTimersAsync();
@@ -161,45 +166,58 @@ describe('SessionPermissionsBadge', () => {
     });
   });
 
-  it('gives a Session its own access, asking before full access lifts inherited limits', async () => {
+  it('gives a Session a profile, asking before full access lifts inherited limits', async () => {
     const restricted = {
       restricted: true,
       layers: [OWN_LAYER, CRON_LAYER],
       stored_ceiling: true,
+      profiles: PROFILES,
+      agent_profile: 'Reviewer',
+      session_profile: null,
       session_rules: null,
-      session_preset: null,
     };
     permissionsMock.mockResolvedValueOnce(restricted);
     permissionsMock.mockResolvedValueOnce({
       ...restricted,
-      session_rules: { read: 'work_area', write: 'work_area' },
-      session_preset: 'work_dir',
+      session_profile: 'restricted',
     });
-    permissionsMock.mockResolvedValue({
+    permissionsMock.mockResolvedValueOnce({
       restricted: false,
       layers: [],
       stored_ceiling: false,
-      session_rules: { read: 'anywhere' },
-      session_preset: 'full_access',
+      profiles: PROFILES,
+      agent_profile: 'Reviewer',
+      session_profile: 'full_access',
+      session_rules: null,
     });
     setMock.mockResolvedValue({});
     await render({ sessionId: 's1' });
 
     const choice = (value) =>
       document.querySelector(`[data-access-choice="${value}"]`);
+    const lockText = () =>
+      document.querySelector('[data-session-access-label]').textContent.trim();
+    // The default names the profile the Agent uses, and so does the lock.
     expect(choice('agent').getAttribute('aria-checked')).toBe('true');
+    expect(choice('agent').textContent).toContain(
+      t('permissions.session.agentDefault', { profile: 'Reviewer' }),
+    );
+    expect(lockText()).toBe('Reviewer');
 
-    choice('work_dir').click();
+    choice('profile:restricted').click();
     await settle();
     expect(setMock).toHaveBeenLastCalledWith({
       agentId: 'coder',
       sessionId: 's1',
-      preset: 'work_dir',
+      profile: 'restricted',
     });
-    expect(choice('work_dir').getAttribute('aria-checked')).toBe('true');
+    expect(choice('profile:restricted').getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(lockText()).toBe(t('permissions.profile.restricted'));
 
     // Full access also removes the stored inherited limits: it asks first.
-    choice('full_access').click();
+    choice('profile:full_access').click();
     flushSync();
     expect(setMock).toHaveBeenCalledTimes(1);
     [...document.querySelectorAll('button')]
@@ -212,23 +230,57 @@ describe('SessionPermissionsBadge', () => {
     expect(setMock).toHaveBeenLastCalledWith({
       agentId: 'coder',
       sessionId: 's1',
-      preset: 'full_access',
+      profile: 'full_access',
     });
     expect(
       document
         .querySelector('[data-session-permissions]')
         .getAttribute('data-session-permissions'),
     ).toBe('full');
+
+    // A profile deleted since stays shown as chosen, with why the Session stopped.
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [],
+      stored_ceiling: false,
+      profiles: PROFILES,
+      agent_profile: 'Reviewer',
+      session_profile: 'Gone',
+      session_profile_error: 'Gone no longer exists.',
+    });
+    document
+      .querySelector('[data-session-permissions]')
+      .dispatchEvent(new Event('pointerenter'));
+    await settle();
+    expect(choice('missing').getAttribute('aria-checked')).toBe('true');
+    expect(choice('missing').textContent).toContain(
+      t('permissions.profile.missing', { name: 'Gone' }),
+    );
+    expect(
+      document.querySelector('[data-session-permissions-card]').textContent,
+    ).toContain('Gone no longer exists.');
   });
 
-  it('shows a draft with full access the open lock, without access choices', async () => {
-    permissionsMock.mockResolvedValue({ restricted: false, layers: [] });
+  it('shows a draft its default access, without access choices', async () => {
+    permissionsMock.mockResolvedValue({
+      restricted: false,
+      layers: [],
+      profiles: PROFILES,
+      agent_profile: 'full_access',
+    });
     await render({ workingProjectId: null });
 
     const lock = document.querySelector('[data-session-permissions]');
     expect(lock.getAttribute('data-session-permissions')).toBe('full');
-    expect(lock.textContent.trim()).toBe('');
-    expect(document.querySelector('[data-session-access]')).toBeNull();
+    expect(lock.textContent.trim()).toBe(t('permissions.preset.full_access'));
+    expect(document.querySelector('[data-access-choice]')).toBeNull();
+    expect(
+      document.querySelector('[data-session-draft-access]').textContent,
+    ).toContain(
+      t('permissions.session.agentDefault', {
+        profile: t('permissions.preset.full_access'),
+      }),
+    );
   });
 
   it('names the scratch area and states the limits of the checks', async () => {
@@ -258,7 +310,9 @@ describe('SessionPermissionsBadge', () => {
     expect(labels).toContain(t('permissions.preview.web'));
     expect(card.textContent).toContain(t('permissions.limits'));
     expect(
-      card.querySelector('.info-hint').getAttribute('data-help-text'),
+      card
+        .querySelector('[data-session-permissions-details] .info-hint')
+        .getAttribute('data-help-text'),
     ).toBe(t('permissions.limitsHelp'));
 
     // A rule below the scratch area keeps the placeholder, explained once.
@@ -336,7 +390,7 @@ describe('SessionPermissionsBadge', () => {
     expect(lock.getAttribute('aria-label')).toContain(
       t('permissions.session.badge'),
     );
-    expect(lock.textContent.trim()).toBe('');
+    expect(lock.textContent.trim()).toBe(t('permissions.session.badge'));
     expect(clearButton()).toBeUndefined();
   });
 });

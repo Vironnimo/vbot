@@ -76,10 +76,20 @@ describe('ChatApprovalCard', () => {
     component = mount(ChatApprovalCard, {
       context: new Map([['permissionApprovals', { resolve }]]),
       target: document.body,
-      props: { request: approval() },
+      props: {
+        request: approval({
+          shell_credential_sources: {
+            API_TOKEN: 'API_TOKEN',
+            LOGIN: '{{secret:DB.username}}',
+          },
+        }),
+      },
     });
     flushSync();
     const card = document.querySelector('.approval-card');
+    const needs = card.querySelector('.approval-card__needs');
+    expect(needs.textContent).toContain('API_TOKEN');
+    expect(needs.textContent).toContain('LOGIN ← {{secret:DB.username}}');
     for (const value of [
       'git push origin main',
       '/outside/Notes/Today.md',

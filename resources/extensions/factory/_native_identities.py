@@ -159,6 +159,7 @@ class FactoryIdentities:
                 {
                     **member,
                     "agent_name": profile.get("name") if available else None,
+                    "agent_model": profile.get("model") if available else None,
                     "agent_placement": profile.get("placement") if available else None,
                     "profile_available": available,
                     "created_by_factory": created_here

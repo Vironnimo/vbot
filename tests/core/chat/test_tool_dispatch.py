@@ -558,6 +558,7 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
     tools.set_secrets(secrets)
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        object.__setattr__(context, "shell_credential_sources", (("TOKEN", "{{secret:API}}"),))
         await context.request_approval(
             f"Review {arguments['content']}",
             [ApprovalRequirement.review(f"command {arguments['content']}")],
@@ -608,6 +609,7 @@ async def test_approval_snapshot_masks_prepared_short_secret_in_every_field(tmp_
         request = manager.approvals_snapshot()["requests"][0]
         assert value not in json.dumps(request)
         assert request["arguments"]["content"] == "{{secret:API}}"
+        assert request["shell_credential_sources"] == {"TOKEN": "{{secret:API}}"}
         assert request["display_redacted"] is True
         # A review under full access has nothing a Session could remember.
         assert request["session_grant"] is None

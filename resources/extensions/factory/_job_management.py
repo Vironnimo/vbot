@@ -9,7 +9,7 @@ from core.tools.contracts import ToolContractError
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
-from ._jobs_store import _validate_name, _validate_triggers
+from ._jobs_store import FINAL_JOB_RUN_STATES, _validate_name, _validate_triggers
 from ._values import text
 from .store import FactoryError
 
@@ -328,7 +328,9 @@ class FactoryJobManagement:
             reverse=True,
         )
         upcoming = await triggers.upcoming(factory_id, limit=upcoming_limit)
-        recent_runs = await store.jobs.list_runs(factory_id, limit=recent_limit)
+        recent_runs = await store.jobs.list_runs(
+            factory_id, states=FINAL_JOB_RUN_STATES, limit=recent_limit
+        )
         return {
             "factory": factory,
             "members": members,

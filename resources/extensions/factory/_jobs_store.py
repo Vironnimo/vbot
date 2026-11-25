@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from typing import Any
 
 from core.extensions.databases import Database
@@ -580,6 +581,7 @@ class FactoryJobsStore:
         factory_id: str,
         *,
         state: str | None = None,
+        states: Collection[str] | None = None,
         job_id: str | None = None,
         limit: int = 50,
     ) -> list[Json]:
@@ -587,6 +589,14 @@ class FactoryJobsStore:
             raise _error("invalid_job", "Limit must be an integer between 1 and 1000.")
         if state is not None and state not in JOB_RUN_STATES:
             raise _error("invalid_job", f"Invalid job run state: {state!r}.")
+        clean_states: tuple[str, ...] | None = None
+        if states is not None:
+            clean_states = tuple(sorted(set(states)))
+            for candidate in clean_states:
+                if candidate not in JOB_RUN_STATES:
+                    raise _error("invalid_job", f"Invalid job run state: {candidate!r}.")
+            if not clean_states:
+                return []
 
         def read(connection: sqlite3.Connection) -> list[Json]:
             clauses = ["factory_id = ?"]
@@ -594,6 +604,10 @@ class FactoryJobsStore:
             if state is not None:
                 clauses.append("state = ?")
                 params.append(state)
+            if clean_states is not None:
+                placeholders = ", ".join("?" for _ in clean_states)
+                clauses.append(f"state IN ({placeholders})")
+                params.extend(clean_states)
             if job_id is not None:
                 clauses.append("job_id = ?")
                 params.append(job_id)

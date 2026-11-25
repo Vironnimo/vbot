@@ -21,7 +21,7 @@ from core.permissions import (
     normalize_permission_rules,
     permission_rules_to_dict,
 )
-from core.projects import AgentOverrides
+from core.projects import AgentOverrides, AgentResolutionError
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
@@ -110,6 +110,13 @@ class _NoCredentials:
 
     def is_usable(self, *_ids: object) -> bool:
         return False
+
+
+# What the access picker lists without custom profiles.
+_BUILTIN_PROFILES = [
+    {"name": "full_access", "builtin": True, "restricted": False},
+    {"name": "restricted", "builtin": True, "restricted": True},
+]
 
 
 def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
@@ -386,8 +393,10 @@ async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> No
             "restricted": False,
             "layers": [],
             "stored_ceiling": False,
+            "profiles": _BUILTIN_PROFILES,
+            "agent_profile": "full_access",
+            "session_profile": None,
             "session_rules": None,
-            "session_preset": None,
             "session_grants": [],
         }
 
@@ -480,7 +489,7 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
 
 
 @pytest.mark.asyncio
-async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
+async def test_the_user_sets_a_sessions_own_access(tmp_path: Path) -> None:
     state = _state(tmp_path, {})
     workspace = tmp_path / "workspace"
     state.runtime.agents.create(
@@ -504,12 +513,20 @@ async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
             state, "permissions.set_session_rules", **params, permission_rules={"write": "nowhere"}
         )
         assert invalid["code"] == "invalid_request"
-        invalid_presets: tuple[Any, ...] = ("root", {}, [], None)
-        for preset in invalid_presets:
+        invalid_profiles: tuple[Any, ...] = ("root", "work_dir", {}, [], None)
+        for profile in invalid_profiles:
             unknown = await rpc_error(
-                state, "permissions.set_session_rules", **params, preset=preset
+                state, "permissions.set_session_rules", **params, profile=profile
             )
             assert unknown["code"] == "invalid_request"
+        both = await rpc_error(
+            state,
+            "permissions.set_session_rules",
+            **params,
+            profile="restricted",
+            permission_rules=None,
+        )
+        assert both["code"] == "invalid_request"
 
         # Session rules replace whole parts of the Agent's rules, for this Session only.
         narrowed = await rpc_result(
@@ -545,26 +562,57 @@ async def test_the_user_sets_a_sessions_own_rules(tmp_path: Path) -> None:
 
         state.runtime.chat_sessions.mutate_metadata(address, link)
         full = await rpc_result(
-            state, "permissions.set_session_rules", **params, preset="full_access"
+            state, "permissions.set_session_rules", **params, profile="full_access"
         )
-        assert (full["session_preset"], full["ceiling_cleared"]) == ("full_access", True)
+        assert (full["session_profile"], full["session_rules"]) == ("full_access", None)
+        assert full["ceiling_cleared"] is True
         assert await rpc_result(state, "permissions.session", **params) == {
             "restricted": False,
             "layers": [],
             "stored_ceiling": False,
-            "session_rules": full["session_rules"],
-            "session_preset": "full_access",
+            "profiles": _BUILTIN_PROFILES,
+            "agent_profile": None,
+            "session_profile": "full_access",
+            "session_rules": None,
             "session_grants": [],
         }
+
+        # The Session keeps a custom profile by name: an edit reaches it, and
+        # once the profile is gone the Session stops instead of widening.
+        def save_profile(rules: JsonObject | None) -> None:
+            settings = state.runtime.storage.load_settings()
+            profiles = dict(settings.get("permission_profiles", {}))
+            if rules is None:
+                profiles.pop("Reviewer", None)
+            else:
+                profiles["Reviewer"] = rules
+            state.runtime.storage.save_settings({**settings, "permission_profiles": profiles})
+
+        save_profile({"read": "work_area", "write": "scratch"})
+        await rpc_result(state, "permissions.set_session_rules", **params, profile="Reviewer")
+        assert resolver.resolve_agent(None, "coder", session_id="s1").permission_rules.write == (
+            "scratch"
+        )
+        save_profile({"read": "work_area", "write": "work_area"})
+        assert resolver.resolve_agent(None, "coder", session_id="s1").permission_rules.write == (
+            "work_area"
+        )
+        save_profile(None)
+        with pytest.raises(AgentResolutionError, match="'Reviewer', which no longer exists"):
+            resolver.resolve_agent(None, "coder", session_id="s1")
+        gone = await rpc_result(state, "permissions.session", **params)
+        assert (gone["session_profile"], gone["restricted"]) == ("Reviewer", True)
+        assert "no longer exists" in gone["session_profile_error"]
+        assert "Reviewer" not in {profile["name"] for profile in gone["profiles"]}
 
         # null gives the Session the Agent's rules again.
         reset = await rpc_result(
             state, "permissions.set_session_rules", **params, permission_rules=None
         )
-        assert (reset["session_rules"], reset["session_preset"]) == (None, None)
+        assert (reset["session_rules"], reset["session_profile"]) == (None, None)
         assert (await rpc_result(state, "permissions.session", **params))["restricted"] is True
     # Every change tells open views of the Session to reload it.
-    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 3
+    assert [payload["kind"] for _event, payload in state.events] == ["sessions"] * 4
 
 
 @pytest.mark.asyncio

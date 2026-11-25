@@ -380,6 +380,26 @@ _PRINTED_ERROR_TEXT = "; ".join(
             (),
         ),
         ("function f { cmd /c exit 5; 'after-call' }\nf", 0, ("after-call",)),
+        ("function f { cmd /c exit 6 && 'skipped' }; f", 6, ()),
+        ("function f { cmd /c exit 6 || 'handled' }; f", 0, ("handled",)),
+        ("function inner { cmd /c exit 5 }; function f { inner && 'ran' }; f", 0, ("ran",)),
+        (
+            "function f { try { cmd /c exit 7; return } finally { 'finished' } }; f",
+            0,
+            ("finished",),
+        ),
+        ("function f { cmd /c exit 7; return; 'skipped' }; f", 7, ()),
+        (
+            "function f { foreach ($i in 1..3) { if ($i -eq 1) { cmd /c exit 7; return } }; "
+            "'skipped' }; f",
+            7,
+            (),
+        ),
+        (
+            "function f { begin { cmd /c exit 7; return } end { 'later-block' } }; f",
+            0,
+            ("later-block",),
+        ),
         # What ran decides, not the text: through conditions and try blocks, never
         # a program that did not run, and an error after a program leaves $?.
         ("function f { if ($true) { try { cmd /c exit 5 } finally {} } }\nf", 5, ()),
@@ -614,6 +634,13 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "called-native-exit",
         "called-script-alias-exit",
         "called-later-statement",
+        "failed-and-chain",
+        "recovered-or-chain",
+        "and-chain-after-function",
+        "finally-after-return",
+        "bare-return-after-native",
+        "return-from-loop-after-native",
+        "later-block-after-return",
         "native-in-blocks",
         "native-that-never-ran",
         "error-after-native",
@@ -850,10 +877,22 @@ def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:
         (_cut_in_command(6), None, "request_unreadable"),
         # Base64 that decodes, cut where a quantum ends.
         (_cut_in_command(8), None, "request_unreadable"),
+        # Complete base64 with an invalid UTF-8 environment value.
+        (
+            lambda request: request.replace(b"\n.\n", b"\nREFUQQ== 7aCA\n.\n"),
+            None,
+            "request_unreadable",
+        ),
         # A shell that waited elsewhere enters a workdir removed since the call was checked.
         (None, "gone", "workdir_unavailable"),
     ],
-    ids=["no-terminator", "cut-in-command", "cut-at-base64-boundary", "workdir-gone"],
+    ids=[
+        "no-terminator",
+        "cut-in-command",
+        "cut-at-base64-boundary",
+        "invalid-utf8",
+        "workdir-gone",
+    ],
 )
 async def test_a_request_the_shell_cannot_read_or_enter_runs_nothing_and_says_so(
     tmp_path: Path,

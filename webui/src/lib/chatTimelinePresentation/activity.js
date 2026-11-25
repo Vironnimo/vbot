@@ -148,7 +148,7 @@ export const runFooterGroups = (
   return groups;
 };
 
-// Footer line for an assistant run: status · duration · iterations · end
+// Footer line for an assistant run: status · duration · end
 // time. The duration ticks live while the work is going on (driven by the
 // shared nowMs clock); the end time appears once it reached a terminal
 // state (completion, cancellation, failure) and uses the same clock-time
@@ -165,9 +165,6 @@ export const runFooterParts = (assistantRun, nowMs = Date.now(), options) => {
   if (duration) {
     parts.push(duration);
   }
-  if (footer.iterationCount !== null) {
-    parts.push(t('chat.runIterations', { count: footer.iterationCount }));
-  }
   const endTimeLabel = formatTime(footer.endTimestamp);
   if (endTimeLabel) {
     parts.push(endTimeLabel);
@@ -175,10 +172,8 @@ export const runFooterParts = (assistantRun, nowMs = Date.now(), options) => {
   return parts;
 };
 
-// Tooltip details behind the Run footer: the state, what its "iter" count
-// stands for (as the lead line, so the moment rows keep a narrow label
-// column), when the work started and finished, how long it took, how many
-// Runs it took, and the Models that answered.
+// The counts cover the same Runs as the footer, including Tool calls
+// outside the loaded child window. Only sum a metric all of those Runs report.
 export const runFooterDetails = (assistantRun, nowMs = Date.now(), options) => {
   const footer = runFooter(assistantRun, nowMs, options);
   const rows = executionDetailRows({
@@ -194,13 +189,18 @@ export const runFooterDetails = (assistantRun, nowMs = Date.now(), options) => {
       value: String(footer.runs.length),
     });
   }
-  const iterationCount = footer.iterationCount;
-  const text =
-    iterationCount === null
-      ? ''
-      : iterationCount === 1
-        ? t('chat.details.modelResponseOne')
-        : t('chat.details.modelResponseCount', { count: iterationCount });
+  for (const [field, label] of [
+    ['iterationCount', t('chat.details.modelResponses')],
+    ['toolCallCount', t('chat.details.toolCalls')],
+  ]) {
+    const counts = footer.runs.map((run) => run[field]);
+    if (counts.every((count) => Number.isInteger(count) && count >= 0)) {
+      rows.push({
+        label,
+        value: String(counts.reduce((sum, count) => sum + count, 0)),
+      });
+    }
+  }
   // Read the settings actually recorded on responses. The Session's current
   // settings may be different, especially after an Automation's temporary
   // override or a fallback. Keep distinct Model/effort pairs in response order.
@@ -227,7 +227,14 @@ export const runFooterDetails = (assistantRun, nowMs = Date.now(), options) => {
       }
     }
   }
-  return { title: runStatusLabel(footer.status), text, rows };
+  const partialSpan =
+    footer.spanBeganEarlier &&
+    options?.firstRunWithOlderHistory === footer.runs[0];
+  return {
+    title: runStatusLabel(footer.status),
+    ...(partialSpan ? { text: t('chat.details.loadedRunsOnly') } : {}),
+    rows,
+  };
 };
 
 // SSE keepalive comments from gateways like OpenRouter arrive every few
@@ -875,7 +882,7 @@ function runStatusLabel(status) {
 // completed but the Session waits for background work it started, else the
 // last Run's own. The duration spans from the work's start to the last Run's
 // end, ticking while working or waiting; a lone Run keeps its own recorded
-// duration. Iterations add up over the Runs. Nothing recorded changes.
+// duration.
 function runFooter(
   assistantRun,
   nowMs,
@@ -916,20 +923,14 @@ function runFooter(
   } else {
     durationMs = endMs - startMs;
   }
-  const iterations = runs
-    .map((run) => run.iterationCount)
-    .filter((count) => Number.isInteger(count) && count >= 0);
   return {
     runs,
     status,
     live,
     startTimestamp,
+    spanBeganEarlier,
     endTimestamp: live ? null : last.endTimestamp,
     durationMs,
-    iterationCount:
-      iterations.length === 0
-        ? null
-        : iterations.reduce((sum, count) => sum + count, 0),
   };
 }
 

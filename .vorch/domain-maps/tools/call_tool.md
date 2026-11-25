@@ -13,6 +13,7 @@ child dispatch and persistence (`chat/request-building.md`, `tools/registry-disp
   `none` offers neither. App chat profiles with exact Tool selection list
   their eligible Tools directly on every route. The Agent's Tool loading choice and always-loaded
   selection still decide which target definitions are listed directly.
+- A Model call whose arguments contained an unpaired Unicode surrogate is refused before forwarding, so replacement characters from Session history cannot enter the target call.
 - `name` and object `arguments` identify one target call. Only `name` is
   required: `arguments` may be omitted, and `null` or `""` count as omitted.
   Shared repair accepts `tool`/`tool_name` and `args`/`parameters`/`input`. Fields

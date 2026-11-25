@@ -10,6 +10,7 @@
   } from '$lib/agentProfileBinding.js';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import PermissionProfilePicker from '../permissions/PermissionProfilePicker.svelte';
+  import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -43,6 +44,11 @@
     permissionRulesEditable = false,
     permissionRulesDefault = null,
     permissionRulesNewAgent = false,
+    // The shared defaults (`defaults.agent`) of Tool access and Skills. While
+    // they are set, the Agent can follow them (`*_inherited` in the form);
+    // built-in Agents keep their own values and get none.
+    toolAccessDefault = null,
+    allowedSkillsDefault = null,
     navigateToExtensions,
     onToast = () => {},
     // Reloads `skillCatalog` after a Skill write.
@@ -282,6 +288,12 @@
       {t('agents.form.toolAccessHelp')}
     </p>
     <div class="s-section__body">
+      {#if toolAccessDefault}
+        {@render sharedDefaultNote(formValues.tool_access_inherited, () => {
+          formValues.tool_access = structuredClone(toolAccessDefault);
+          formValues.tool_access_inherited = true;
+        })}
+      {/if}
       <ToolAccessEditor
         value={formValues.tool_access}
         tools={availableTools}
@@ -290,7 +302,10 @@
         {toolLoadingEditable}
         toolLoading={formValues.tool_loading}
         {toolLoadingDefault}
-        onChange={(next) => (formValues.tool_access = next)}
+        onChange={(next) => {
+          formValues.tool_access = next;
+          formValues.tool_access_inherited = false;
+        }}
         onToolLoadingChange={(next) => (formValues.tool_loading = next)}
         onOpenExtensions={navigateToExtensions}
       />
@@ -331,6 +346,12 @@
       {t('agents.form.skillsDescription')}
     </p>
     <div class="s-section__body">
+      {#if allowedSkillsDefault}
+        {@render sharedDefaultNote(formValues.allowed_skills_inherited, () => {
+          formValues.allowed_skills = [...allowedSkillsDefault];
+          formValues.allowed_skills_inherited = true;
+        })}
+      {/if}
       <AgentSkillsPanel
         agent={skillAgent}
         agentId={formValues.id}
@@ -342,6 +363,11 @@
         showFilter
         onQuery={(next) => (skillQuery = next)}
         onChange={(next) => {
+          if (
+            JSON.stringify(next.allowed) !==
+            JSON.stringify(formValues.allowed_skills)
+          )
+            formValues.allowed_skills_inherited = false;
           formValues.allowed_skills = next.allowed;
           formValues.excluded_skills = next.excluded;
         }}
@@ -471,6 +497,24 @@
   <SkillDialogs actions={skillActions} />
   <ContextMenu menu={skillMenu} onClose={() => (skillMenu = null)} />
 </div>
+
+<!-- Whether the Agent follows the shared default; changing the selection below
+     gives it its own value. -->
+{#snippet sharedDefaultNote(inherited, useDefault)}
+  <div class="agents-view__shared-default">
+    {#if inherited}
+      <StatusChip variant="info">{t('agents.form.sharedDefault')}</StatusChip>
+      <span class="agents-view__shared-default-text"
+        >{t('agents.form.sharedDefaultFollowed')}</span
+      >
+    {:else}
+      <StatusChip>{t('agents.form.ownSetting')}</StatusChip>
+      <Button variant="tertiary" onClick={useDefault}
+        >{t('agents.form.useSharedDefault')}</Button
+      >
+    {/if}
+  </div>
+{/snippet}
 
 {#snippet filterToolbar(value, onInput, label, placeholder)}
   <div class="s-group-toolbar agents-view__filter-toolbar">

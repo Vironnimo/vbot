@@ -100,6 +100,7 @@ from core.tools.tools import (
 )
 from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs, issue_for_tool_context
 from core.utils.logging import get_logger
+from core.utils.surrogates import replace_lone_surrogates
 
 from ._shell_definition import (
     SHELL_DEFAULT_WAIT_SECONDS,
@@ -252,6 +253,11 @@ def _shell_start(
         return host_shell_start(call.command, call.workdir, environment, protected)
     except HostShellMissingError as error:
         raise _cannot_start(f"{error}. Ask the user to install it.") from error
+    except UnicodeEncodeError:
+        raise _cannot_start(
+            "The shell request contains an unpaired Unicode surrogate. "
+            "Check the working directory and shell environment for invalid Unicode."
+        ) from None
 
 
 class ShellTool:
@@ -311,14 +317,18 @@ class ShellTool:
             withheld=withheld,
             secret_targets=secret_targets,
         )
-        secret_names = {
-            *(name for key in call.secret_keys for name in secret_targets[key.upper()]),
-            *(name for name, _ in call.secret_variables),
-        }
-        opaque_names = secret_names.union(call.credential_names)
+        credential_sources = {name: name for name in call.credential_names}
+        for key in call.secret_keys:
+            for name, labels in secret_targets[key.upper()].items():
+                credential_sources[name] = "{{secret:" + labels[0] + "}}"
+        credential_sources.update(call.secret_variables)
+        opaque_names = set(credential_sources)
         if confined:
             _check_environment_names(call.variables, opaque_names)
         scratch = await self._scratch(context)
+        if scratch is not None:
+            call = call.with_scratch(scratch, opaque_names)
+        object.__setattr__(context, "shell_credential_sources", tuple(credential_sources.items()))
         uses_cli = False
         if confined:
             # Before any Agent Secret is used and before a command grant exists.
@@ -554,6 +564,12 @@ class ShellTool:
         cli_grant: ShellCliGrant | None,
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
+        for name, value in (credentials | secret_environment).items():
+            if replace_lone_surrogates(value) is not value:
+                raise ToolContractError(
+                    f"{SHELL_MODEL_NAME} was not run: the value supplied for {name} contains "
+                    "an unpaired Unicode surrogate. Ask the user to correct its source."
+                )
         if self._secrets is not None:
             # A credential the process inherited is masked once a command got it.
             for value in credentials.values():

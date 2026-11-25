@@ -273,6 +273,20 @@
 
 /* ── Skills and Sub-Agent targets ───────────────────────────────────────── */
 
+/* Whether Tool access or Skills follow the shared default. */
+.agents-view .agents-view__shared-default {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.agents-view .agents-view__shared-default-text {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
 /* One filter per section, above its groups. */
 .agents-view .agents-view__filter-toolbar {
   justify-content: flex-end;
