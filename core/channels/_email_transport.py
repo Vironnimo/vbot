@@ -88,6 +88,10 @@ def quote_folder(folder: str) -> str:
     return f'"{escaped}"'
 
 
+class IdleRejectedError(Exception):
+    """The server explicitly refused the IDLE command on this connection."""
+
+
 class ImapMailbox:
     """``MailboxConnection`` over ``imaplib.IMAP4_SSL``."""
 
@@ -170,10 +174,22 @@ class ImapMailbox:
         return b"", False
 
     def idle(self, seconds: float) -> None:
-        with self._client.idle(duration=seconds) as idler:
-            for typ, _data in idler:
-                if typ.upper() in {"EXISTS", "RECENT"}:
-                    return
+        try:
+            with self._client.idle(duration=seconds) as idler:
+                for typ, _data in idler:
+                    if typ.upper() in {"EXISTS", "RECENT"}:
+                        return
+                    if typ.upper() == "BYE":
+                        raise imaplib.IMAP4.abort("Server disconnected during IDLE")
+        except imaplib.IMAP4.error as error:
+            # imaplib reports a tagged NO as an error and a tagged BAD during
+            # the handshake as an abort, alongside unrelated socket aborts.
+            reason = str(error)
+            if reason.startswith("idle denied:") or re.match(
+                r"unexpected status response: b['\"][A-Z0-9]+ BAD\b", reason, re.IGNORECASE
+            ):
+                raise IdleRejectedError from None
+            raise
 
     def interrupt(self) -> None:
         with contextlib.suppress(OSError):

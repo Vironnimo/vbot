@@ -15,9 +15,11 @@ import contextlib
 import hashlib
 import imaplib
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from email.utils import parseaddr
+from time import monotonic
 from typing import Any, override
+from weakref import WeakKeyDictionary
 
 from core.attachments import AttachmentStore
 from core.channels._email_messages import (
@@ -31,6 +33,7 @@ from core.channels._email_messages import (
 )
 from core.channels._email_state import EmailMailState, MailboxWatermark, MailThread
 from core.channels._email_transport import (
+    IdleRejectedError,
     ImapMailbox,
     MailboxConnection,
     MailSender,
@@ -73,6 +76,19 @@ _HEADER_ONLY_TEXT = "(This mail is larger than 50 MB; vBot read only its headers
 
 # Tests patch this seam instead of the process-wide ``asyncio.sleep``.
 _sleep = asyncio.sleep
+_IDLE_PROBE_SECONDS = 3600
+_IDLE_EARLY_ABORT_SECONDS = 5
+
+
+@dataclass
+class _IdleHealth:
+    last_early_abort: float | None = None
+    probe_at: float = 0
+
+
+# The supervisor keeps a Channel's engine across reconnects and replaces it on
+# reconfiguration or stop. The registered account's IDLE health follows it.
+_idle_health: WeakKeyDictionary[ChannelConversationEngine, _IdleHealth] = WeakKeyDictionary()
 
 
 class EmailChannelAdapter(ChannelAdapter):
@@ -116,6 +132,7 @@ class EmailChannelAdapter(ChannelAdapter):
         self._mailbox: MailboxConnection | None = None
         self._connected = False
         self._retries = 0
+        self._idle = _idle_health.setdefault(engine, _IdleHealth())
         # Each mailbox can spend minutes in IDLE; it cannot occupy a shared
         # parser/SMTP worker or prevent another Channel from connecting.
         self._mailbox_pool = BoundedWorkerPool(
@@ -196,13 +213,40 @@ class EmailChannelAdapter(ChannelAdapter):
             return
         self._retries = 0
         folders = self._settings.folders
-        if not mailbox.supports_idle:
+        if not mailbox.supports_idle or monotonic() < self._idle.probe_at:
             await _sleep(POLL_SECONDS)
             return
         # IDLE watches one folder; the others are checked after each IDLE.
         await self._mailbox_io(mailbox, mailbox.select, folders[0])
         seconds = IDLE_SECONDS if len(folders) == 1 else POLL_SECONDS
-        await self._mailbox_io(mailbox, mailbox.idle, seconds)
+        started = monotonic()
+        try:
+            await self._mailbox_io(mailbox, mailbox.idle, seconds)
+        except IdleRejectedError:
+            self._defer_idle()
+            await _sleep(POLL_SECONDS)
+        except OSError, imaplib.IMAP4.abort:
+            if self._connected:
+                now = monotonic()
+                previous = self._idle.last_early_abort
+                if now - started <= _IDLE_EARLY_ABORT_SECONDS:
+                    if self._idle.probe_at or (previous is not None and now - previous <= 120):
+                        self._defer_idle()
+                    self._idle.last_early_abort = now
+                else:
+                    self._idle.last_early_abort = None
+            # This connection is dead. The next supervised adapter inherits the
+            # engine's IDLE health and opens a fresh connection for polling.
+            raise
+        else:
+            self._idle.last_early_abort = None
+            self._idle.probe_at = 0
+
+    def _defer_idle(self) -> None:
+        self._idle.probe_at = monotonic() + _IDLE_PROBE_SECONDS
+        _LOGGER.info(
+            "Email Channel switched from IMAP IDLE to polling (channel=%s)", self._config.id
+        )
 
     # -- Inbound ----------------------------------------------------------------------
 
