@@ -56,7 +56,7 @@ _LEVELS: dict[str, tuple[str, ...]] = {
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
     "muse-spark-1.3-contributor": ("minimal", "low", "medium", "high", "xhigh"),
     "grok-4.6": ("low", "medium", "high", "xhigh"),
-    "kimi-k3": ("low", "high", "max"),
+    "kimi-k3": ("max",),
 }
 
 # The catalog protocol hint (models.dev AI SDK package) of the hinted entries.

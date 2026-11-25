@@ -340,6 +340,17 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
     } == expected
+    sampling = {"temperature", "top_p", "top_k"}
+    for model_id, effective in (
+        ("grok-4.7", {"temperature", "top_p"}),
+        ("gpt-5.6-luna", set()),
+        ("gpt-6-luna", set()),
+        ("qwen4-max", sampling),
+        ("kimi-k3", set()),
+        ("kimi-k3.1-pro", set()),
+    ):
+        model = registry.get("opencode-go", model_id)
+        assert sampling.intersection(model.capabilities.supported_parameters) == effective
     published = registry.list_for_provider("opencode-go")
     assert {
         model.model_id for model in published if "chat" in model.capabilities.task_types

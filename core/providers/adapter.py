@@ -275,7 +275,8 @@ class ProviderAdapter(ABC):
       as a subset of output; ``input_tokens`` is always the total prompt
       including cached tokens; either primary token counter may be omitted when
       the upstream Provider reports only the other one. A known
-      ``reported_cost_usd`` can also arrive without token counts. Chat
+      ``reported_cost_usd`` or a Provider billing breakdown in ``cost`` can
+      also arrive without token counts. Chat
       estimates the missing counters. Optional ``reported_output_tokens_per_second`` when
       the Provider measured its own decode speed, as local servers do, plus
       ``reported_output_duration_ms`` for its actual measurement window)
@@ -566,8 +567,7 @@ class ProviderAdapter(ABC):
         and Compaction triggers against it; request builders refuse a larger
         input before I/O. Unknown limits stay absent.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).request.input_token_limit
 
     def minimum_output_tokens(
         self, model_id: str, thinking_effort: str | None, *, explicit_limit: Any = None

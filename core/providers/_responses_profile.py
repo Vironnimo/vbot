@@ -124,13 +124,16 @@ def profile_responses_policy(profile: WireProfile, model: Model | None) -> Profi
     """The request policy of ``model`` on a profile-driven Responses wire.
 
     Tool support follows the catalog (:func:`catalog_tool_support`); the
-    request option ``structured_outputs: true`` declares structured output
-    for every Model of the wire, whatever the catalog's ``json_mode`` says.
+    request option ``structured_outputs`` sets support when present.
     """
 
     support = catalog_tool_support(model)
-    if profile.request.options.get("structured_outputs") is True:
-        support["supports_structured_outputs"] = True
+    if not profile.request.forwards_tools:
+        support["supports_tools"] = False
+        support["supports_parallel_tool_calls"] = False
+    structured = profile.request.options.get("structured_outputs")
+    if isinstance(structured, bool):
+        support["supports_structured_outputs"] = structured
     return ProfileResponsesPolicy(
         **support,
         supported_request_parameters=_allowed_request_parameters(profile, model),

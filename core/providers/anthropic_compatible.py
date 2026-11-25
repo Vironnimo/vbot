@@ -60,6 +60,7 @@ from core.providers._messages_wire import (
     _to_anthropic_messages,
     apply_anthropic_cache_usage,
     apply_anthropic_reasoning_usage,
+    apply_messages_response_format,
     extract_anthropic_usage,
     messages_returned_reasoning,
 )
@@ -323,7 +324,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         }
         if system is not None:
             payload["system"] = system
-        if tools:
+        if tools and profile.request.forwards_tools:
             _apply_anthropic_tools(
                 payload, {"tools": list(tools)}, profile=profile.request.tool_schema
             )
@@ -359,6 +360,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        if not rules.forwards_tools:
+            request_kwargs.pop("tools", None)
         # A Model that takes effort updates keeps the effort its history started
         # from and switches with a per-message ``output_config`` where it changed.
         wire_messages = apply_effort_updates(
@@ -450,6 +453,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         )
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
+        apply_messages_response_format(payload)
         payload["messages"] = prepare_message_images(
             payload["messages"], self._image_converter, profile.media
         )

@@ -62,7 +62,11 @@ class GeminiCompatibleAdapter(OpenAICompatibleAdapter):
     ) -> int:
         self._refuse_unadmitted_model(model_id)
         profile = self.wire_profile(model_id)
-        payload = gemini_input_payload(messages, media_types=profile.media.types, tools=tools)
+        payload = gemini_input_payload(
+            messages,
+            media_types=profile.media.types,
+            tools=tools if profile.request.forwards_tools else None,
+        )
         history = estimate_structured_tokens(payload.pop("contents"), model_id=model_id)[0]
         return history + estimate_structured_tokens(payload, model_id=model_id)[0]
 

@@ -1,12 +1,12 @@
 {
-  "fetched_at": "2026-11-25T10:21:08.452110+00:00",
+  "fetched_at": "2026-11-25T15:03:32.484104+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -21,7 +21,13 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -39,7 +45,21 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Beam Free",
@@ -92,14 +112,18 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -118,7 +142,20 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "max_input_tokens": 160000,
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true
+          },
+          "structured_output": true
         }
       },
       "name": "Big Pickle",
@@ -154,11 +191,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -173,7 +216,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Fable 5",
@@ -209,11 +270,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -228,7 +295,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Fable 5.1",
@@ -264,11 +349,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -283,7 +374,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Fable 5.2",
@@ -312,11 +421,20 @@
           "control": "budget",
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -331,7 +449,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Claude Haiku 4.5",
@@ -352,7 +488,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -367,11 +503,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -386,7 +529,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Claude Haiku 5.5",
@@ -432,11 +594,20 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -451,7 +622,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Claude Opus 4.5",
@@ -486,11 +675,20 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -505,7 +703,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Claude Opus 4.6",
@@ -541,11 +757,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -560,7 +782,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Opus 4.7",
@@ -596,11 +836,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -615,7 +861,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Opus 4.8",
@@ -651,11 +915,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -670,7 +940,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Opus 5",
@@ -706,11 +994,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -725,7 +1019,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Opus 5.5",
@@ -754,11 +1066,20 @@
           "control": "budget",
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -773,7 +1094,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Claude Sonnet 4.5",
@@ -820,11 +1159,20 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -839,7 +1187,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Claude Sonnet 4.6",
@@ -875,11 +1241,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -894,7 +1266,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Sonnet 5",
@@ -930,11 +1320,17 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
         ],
         "tools": true,
         "vision": true
@@ -949,7 +1345,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          }
         }
       },
       "name": "Claude Sonnet 5.5",
@@ -1073,7 +1487,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1085,7 +1499,13 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -1104,7 +1524,21 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "DeepSeek V4 Pro",
@@ -1123,7 +1557,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1136,11 +1570,19 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1155,7 +1597,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "DeepSeek V4.1 Flash 1017",
@@ -1174,7 +1634,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1187,11 +1647,19 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1206,7 +1674,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "DeepSeek V4.1 Flash Free",
@@ -1224,7 +1710,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1239,7 +1725,13 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -1258,7 +1750,21 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Flint 40B Free",
@@ -1280,7 +1786,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1294,11 +1800,25 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1313,7 +1833,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 3.5 Flash",
@@ -1335,7 +1897,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1349,11 +1911,25 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1368,7 +1944,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 3.5 Flash Lite",
@@ -1390,7 +2008,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1404,11 +2022,25 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1423,7 +2055,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 3.6 Flash",
@@ -1445,7 +2119,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1458,11 +2132,25 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1477,7 +2165,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 3.7 Flash",
@@ -1499,7 +2229,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1512,11 +2242,25 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1531,7 +2275,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 3.8 Flash",
@@ -1553,7 +2339,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1566,11 +2352,22 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1585,7 +2382,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 4 Argon",
@@ -1607,7 +2446,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1620,11 +2459,22 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1639,7 +2489,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 4 Carbon",
@@ -1661,7 +2553,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1675,11 +2567,22 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1694,7 +2597,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 4 Hydrogen",
@@ -1716,7 +2661,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1730,11 +2675,22 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1749,7 +2705,49 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "gemini",
-          "npm": "@ai-sdk/google"
+          "npm": "@ai-sdk/google",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp",
+              "audio/wav",
+              "audio/mp3",
+              "audio/aiff",
+              "audio/aac",
+              "audio/ogg",
+              "audio/flac",
+              "audio/mpeg",
+              "audio/m4a",
+              "audio/l16",
+              "audio/opus",
+              "audio/alaw",
+              "audio/mulaw",
+              "audio/webm",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Gemini 4 Neon",
@@ -1906,7 +2904,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1919,7 +2917,13 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -1938,7 +2942,21 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GLM-5.3",
@@ -1955,10 +2973,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -1971,11 +2988,19 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -1990,7 +3015,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "video/mp4",
+              "video/x-matroska",
+              "video/quicktime"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GLM-5.3-Flash",
@@ -2009,7 +3053,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2023,11 +3067,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2042,7 +3091,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5",
@@ -2061,7 +3129,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2075,11 +3143,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2094,7 +3167,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5 Nano",
@@ -2113,7 +3205,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2127,11 +3219,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2146,7 +3245,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.1",
@@ -2165,7 +3283,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2180,11 +3298,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2199,7 +3324,26 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.2",
@@ -2216,10 +3360,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2234,11 +3377,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2253,7 +3403,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.3 Codex",
@@ -2271,7 +3441,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2285,7 +3455,10 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -2304,7 +3477,22 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 128000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.3 Codex Spark",
@@ -2321,10 +3509,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2339,11 +3526,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2358,7 +3552,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.4",
@@ -2386,10 +3600,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2404,11 +3617,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2423,7 +3643,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.4 Mini",
@@ -2440,10 +3680,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2458,11 +3697,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2477,7 +3723,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 272000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.4 Nano",
@@ -2494,8 +3760,7 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -2510,11 +3775,15 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2529,7 +3798,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": false
         }
       },
       "name": "GPT-5.4 Pro",
@@ -2546,10 +3835,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2564,11 +3852,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2583,7 +3878,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.5",
@@ -2611,8 +3926,7 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -2627,11 +3941,15 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2646,7 +3964,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": false
         }
       },
       "name": "GPT-5.5 Pro",
@@ -2663,10 +4001,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2682,11 +4019,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2701,7 +4045,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.6 Luna",
@@ -2731,10 +4095,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2750,11 +4113,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2769,7 +4139,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.6 Sol",
@@ -2799,10 +4189,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2818,11 +4207,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2837,7 +4233,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-5.6 Terra",
@@ -2867,10 +4283,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2885,11 +4300,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2904,7 +4324,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6 Astra",
@@ -2934,10 +4374,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -2953,11 +4392,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -2972,7 +4418,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6 Luna",
@@ -3056,10 +4522,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3075,11 +4540,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3094,7 +4566,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6 Sol",
@@ -3124,10 +4616,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3142,11 +4633,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3161,7 +4657,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6.1 Sol",
@@ -3191,10 +4707,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3209,11 +4724,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3228,7 +4748,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6.2 Astra",
@@ -3258,10 +4798,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3276,11 +4815,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3295,7 +4839,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "max_input_tokens": 922000,
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "GPT-6.2 Sol",
@@ -3361,7 +4925,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3374,11 +4938,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3393,7 +4964,23 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Grok 4.5",
@@ -3423,7 +5010,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3437,11 +5024,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3456,7 +5050,23 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Grok 4.6",
@@ -3484,10 +5094,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3501,11 +5110,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3520,7 +5136,24 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Grok 4.7",
@@ -3548,21 +5181,27 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3577,7 +5216,24 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Grok Build 0.1",
@@ -3642,11 +5298,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3660,7 +5323,25 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
-          "catalog_protocol": "chat_completions"
+          "catalog_protocol": "chat_completions",
+          "max_input_tokens": 983040,
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "image/gif"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Hy4 flash Free",
@@ -3685,7 +5366,9 @@
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -3702,7 +5385,15 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "catalog_protocol": "chat_completions"
+          "catalog_protocol": "chat_completions",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          }
         }
       },
       "name": "Iceman Free",
@@ -3824,21 +5515,25 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3853,7 +5548,37 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/bmp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Kimi K2.7 Code",
@@ -3870,10 +5595,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3886,11 +5610,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3905,7 +5634,37 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/bmp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Kimi K3",
@@ -3923,10 +5682,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -3939,11 +5697,16 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -3958,7 +5721,37 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/bmp",
+              "image/heic",
+              "image/heif",
+              "video/mp4",
+              "video/mpeg",
+              "video/mov",
+              "video/avi",
+              "video/x-flv",
+              "video/mpg",
+              "video/webm",
+              "video/wmv",
+              "video/3gpp"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": false,
+            "top_k": false,
+            "top_p": false
+          },
+          "structured_output": true
         }
       },
       "name": "Kimi K3.1 Pro",
@@ -3984,7 +5777,11 @@
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -4003,7 +5800,20 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          }
         }
       },
       "name": "MiniMax-M2.7",
@@ -4020,8 +5830,7 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -4031,11 +5840,17 @@
           "control": "on_off",
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4050,7 +5865,28 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "video/x-msvideo",
+              "video/quicktime",
+              "video/x-matroska"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          }
         }
       },
       "name": "MiniMax-M3",
@@ -4104,7 +5940,7 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4116,11 +5952,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4135,7 +5978,25 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "npm": "@ai-sdk/mistral"
+          "npm": "@ai-sdk/mistral",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/gif"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Mistral Large 4",
@@ -4152,11 +6013,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video",
-          "pdf"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4172,11 +6031,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4191,7 +6057,27 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "application/pdf"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Muse Ember 1.0",
@@ -4221,12 +6107,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video",
-          "pdf",
-          "audio"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4241,11 +6124,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4260,7 +6150,29 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "application/pdf",
+              "audio/mpeg",
+              "audio/wav"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Muse Spark 1.2",
@@ -4277,12 +6189,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video",
-          "pdf",
-          "audio"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4297,11 +6206,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4316,7 +6232,29 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "application/pdf",
+              "audio/mpeg",
+              "audio/wav"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Muse Spark 1.3",
@@ -4333,12 +6271,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video",
-          "pdf",
-          "audio"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4354,11 +6289,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4373,7 +6315,29 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "responses",
-          "npm": "@ai-sdk/openai"
+          "npm": "@ai-sdk/openai",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "video/mp4",
+              "application/pdf",
+              "audio/mpeg",
+              "audio/wav"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": false,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Muse Wonder",
@@ -4391,14 +6355,20 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -4417,7 +6387,21 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Nemotron 3.5 Lightning Free",
@@ -4452,11 +6436,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4470,7 +6461,23 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "max_input_tokens": 1048576,
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/jpeg",
+              "image/png"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Nemotron 3.5 Super VL Free",
@@ -4522,8 +6529,7 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -4533,11 +6539,18 @@
           "control": "budget",
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4552,7 +6565,32 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/bmp",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/webp",
+              "image/heic",
+              "video/mp4",
+              "video/x-msvideo",
+              "video/x-matroska",
+              "video/quicktime",
+              "video/x-flv",
+              "video/x-ms-wmv"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Qwen3.5 Plus",
@@ -4570,8 +6608,7 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -4581,11 +6618,18 @@
           "control": "budget",
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4600,7 +6644,32 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/bmp",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/webp",
+              "image/heic",
+              "video/mp4",
+              "video/x-msvideo",
+              "video/x-matroska",
+              "video/quicktime",
+              "video/x-flv",
+              "video/x-ms-wmv"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Qwen3.6 Plus",
@@ -4618,10 +6687,9 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "video"
+          "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -4634,11 +6702,19 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "response_format",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4653,7 +6729,33 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "messages",
-          "npm": "@ai-sdk/anthropic"
+          "npm": "@ai-sdk/anthropic",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/bmp",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/webp",
+              "image/heic",
+              "video/mp4",
+              "video/x-msvideo",
+              "video/x-matroska",
+              "video/quicktime",
+              "video/x-flv",
+              "video/x-ms-wmv"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          },
+          "structured_output": true
         }
       },
       "name": "Qwen3.8 Flash",
@@ -4686,11 +6788,18 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "image_input",
+          "image_understanding"
         ],
         "tools": true,
         "vision": true
@@ -4704,7 +6813,26 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "catalog_protocol": "chat_completions"
+          "catalog_protocol": "chat_completions",
+          "reported_modalities": {
+            "input_modalities": [
+              "text",
+              "image/bmp",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/webp",
+              "image/heic"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true,
+            "top_k": true,
+            "top_p": true
+          }
         }
       },
       "name": "Qwen3.8 Max",
@@ -4809,7 +6937,10 @@
           ],
           "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "temperature",
+          "tools"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -4827,7 +6958,18 @@
       "metadata": {
         "opencode_zen": {
           "catalog_protocol": "chat_completions",
-          "interleaved_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "reported_modalities": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          },
+          "sampling": {
+            "temperature": true
+          }
         }
       },
       "name": "Tidepool Alpha Free",

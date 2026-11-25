@@ -329,6 +329,9 @@ class OpenCodeGoAdapter(OpenCodeSessionRouting, OpenAICompatibleAdapter):
                 [dict(message) for message in messages],
                 model_id=model_id,
                 tools=tools,
+                policy=profile_responses_policy(
+                    self.wire_profile(model_id), self._catalog_model(model_id)
+                ),
             )
         if protocol == "messages":
             return self._messages.estimate_request_input_tokens(

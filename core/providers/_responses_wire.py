@@ -134,6 +134,7 @@ def estimate_responses_input_tokens(
     model_id: str | None = None,
     document_media_types: frozenset[str] = frozenset(),
     tools: Sequence[Mapping[str, Any]] | None = None,
+    policy: ResponsesRequestPolicy | None = None,
 ) -> int:
     """Estimate one stateless ``/responses`` request's input footprint.
 
@@ -155,7 +156,7 @@ def estimate_responses_input_tokens(
     if instructions:
         instruction_tokens, _ = estimate_tokens(instructions)
         total_tokens += instruction_tokens
-    if tools:
+    if tools and (policy is None or policy.supports_tools):
         tool_tokens, _ = estimate_structured_tokens(
             [
                 _to_responses_function_tool(tool)
@@ -566,6 +567,10 @@ def _apply_responses_text_format(
     if isinstance(text, Mapping):
         payload["text"] = dict(text)
     if response_format is not None:
+        if isinstance(response_format, Mapping) and response_format.get("type") == "json_schema":
+            descriptor = response_format.get("json_schema")
+            if isinstance(descriptor, Mapping):
+                response_format = {**descriptor, "type": "json_schema"}
         current_text = payload.get("text")
         existing_text = current_text if isinstance(current_text, dict) else {}
         payload["text"] = {**existing_text, "format": response_format}

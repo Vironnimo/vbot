@@ -330,9 +330,13 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         model_id: str,
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> int:
-        if self._uses_responses(model_id):
+        profile = self.wire_profile(model_id)
+        if profile.protocol == "responses":
             return estimate_responses_input_tokens(
-                [dict(message) for message in messages], model_id=model_id, tools=tools
+                [dict(message) for message in messages],
+                model_id=model_id,
+                tools=tools,
+                policy=profile_responses_policy(profile, self._catalog_model(model_id)),
             )
         return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
 

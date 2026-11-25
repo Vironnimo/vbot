@@ -215,6 +215,16 @@ class ModelsDevModel:
         return self._entry is not None
 
     @property
+    def chat_flags(self) -> dict[str, bool]:
+        """Declared Tool and structured-output support for an identity-only chat listing."""
+        entry = self._entry or {}
+        return {
+            field: value
+            for name, field in (("tool_call", "tools"), ("structured_output", "json_mode"))
+            if isinstance(value := entry.get(name), bool)
+        }
+
+    @property
     def reasoning_control(self) -> dict[str, Any] | None:
         return (
             derive_reasoning_control(_reasoning_options_of(self._entry))

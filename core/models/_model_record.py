@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -277,7 +277,7 @@ def derive_model_task_types(
         tasks.add("image_input")
         if has_text_output:
             tasks.add("image_understanding")
-    if "file" in inputs:
+    if inputs & {"file", "pdf"}:
         tasks.add("file_input")
         if has_text_output:
             tasks.add("file_understanding")
@@ -310,6 +310,20 @@ def derive_model_task_types(
         tasks.add("video_generation")
 
     return tuple(task for task in MODEL_TASK_ORDER if task in tasks)
+
+
+def narrow_chat_input_tasks(
+    task_types: Collection[str],
+    advertised_inputs: Collection[str],
+    effective_inputs: Collection[str],
+    output_modalities: Collection[str],
+) -> tuple[str, ...]:
+    """Keep explicit chat tasks and derive the rest from transportable inputs."""
+    explicit = set(task_types).difference(
+        derive_model_task_types(advertised_inputs, output_modalities)
+    )
+    actual = explicit.union(derive_model_task_types(effective_inputs, output_modalities))
+    return tuple(task for task in MODEL_TASK_ORDER if task in actual)
 
 
 @dataclass(frozen=True)

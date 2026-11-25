@@ -53,6 +53,7 @@ _MODELS = [
         "tts", family="voice-line", output_modalities=("text", "speech"), context_window=128000
     ),
     _make_model("window-less", context_window=None),
+    _make_model("document-reader", input_modalities=("text", "pdf")),
 ]
 
 
@@ -136,6 +137,12 @@ def test_query_is_frozen() -> None:
     [
         pytest.param(ModelQuery(), [model.model_id for model in _MODELS], id="empty-query"),
         pytest.param(ModelQuery(tasks=("image_generation",)), ["image-gen"], id="task"),
+        pytest.param(
+            ModelQuery(tasks=("file_input", "file_understanding")),
+            ["document-reader"],
+            id="pdf-is-a-readable-file",
+        ),
+        pytest.param(ModelQuery(input_modalities=("file",)), [], id="pdf-is-specific"),
         pytest.param(
             ModelQuery(tasks=("chat", "image_understanding")),
             ["vision-tools"],

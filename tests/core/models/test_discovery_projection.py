@@ -15,10 +15,11 @@ import httpx
 import pytest
 import respx
 
+from core.models import ModelQuery
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import ModelsDevCatalog
-from core.providers import OpenCodeZenAdapter
+from core.providers import OpenCodeGoAdapter, OpenCodeZenAdapter
 from core.providers._wire_profile_files import (
     WIRE_PROFILE_FORMAT_VERSION,
     parse_wire_profile_file,
@@ -256,6 +257,9 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
     assert refreshed_gemini["pricing"] == gemini["pricing"]
     assert refreshed_gemini["capabilities"]["input_modalities"] == modalities["input"]
     loaded = ModelRegistry.load(resources_dir)
+    assert "gemini-3.5-flash" in {
+        model.model_id for _, model in loaded.query(ModelQuery(tasks=("file_understanding",)))
+    }
     new_model = loaded.get("opencode-zen", "deepseek-future-free")
     assert new_model.context_window is None
     assert new_model.max_output_tokens is None
@@ -304,6 +308,52 @@ async def test_refresh_admits_by_the_wire_files_it_is_given(tmp_path: Path) -> N
 async def test_opencode_go_projects_its_catalog_without_excluded_models(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     config = opencode_go_config(catalog_exclusions=frozenset({"broken-preview"}))
+    native = {
+        "id": "future-chat",
+        "type": "chat",
+        "name": "Future Chat",
+        "api": {"chat-completions": {"compatibility": {"reasoning_field": "reasoning_content"}}},
+        "capabilities": {
+            "tools": {"supported": False},
+            "structured_output": True,
+            "reasoning": {"supported": True, "effort": ["max"]},
+            "temperature": False,
+            "top_p": False,
+            "top_k": False,
+        },
+        "modalities": {
+            "input": [
+                "text",
+                "image/jpeg",
+                "image/png",
+                "application/pdf",
+                "audio/mpeg",
+                "video/mp4",
+            ],
+            "output": ["text"],
+        },
+        "limit": {"context": 32768, "input": 24576, "output": 8192},
+    }
+    catalog = ModelsDevCatalog(
+        {
+            "models": {"future-chat": {"reasoning": False, "modalities": {"input": ["text"]}}},
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "models": {
+                        "future-chat": {
+                            "id": "future-chat",
+                            "provider": {"npm": "@ai-sdk/anthropic"},
+                            "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+                            "limit": {"context": 200000},
+                            "reasoning": False,
+                            "tool_call": True,
+                        },
+                    },
+                }
+            },
+        }
+    )
     route = respx.get(OPENCODE_GO_MODELS_URL).mock(
         return_value=httpx.Response(
             200,
@@ -311,20 +361,58 @@ async def test_opencode_go_projects_its_catalog_without_excluded_models(tmp_path
                 "data": [
                     raw_openrouter_model(model_id="deepseek/deepseek-r1", name="DeepSeek R1"),
                     raw_openrouter_model(model_id="broken-preview", name="Broken"),
+                    native,
+                    {"id": "unavailable-codec", "api": {"interactions": {}}},
                 ]
             },
         )
     )
 
-    result = await refresh_models(config, API_KEY, resources_dir)
+    result = await refresh_models(config, API_KEY, resources_dir, models_dev_catalog=catalog)
 
-    assert result["model_count"] == 1
+    assert result["model_count"] == 2
     assert set(read_models_file(resources_dir, "opencode-go.json")["models"]) == {
-        "deepseek/deepseek-r1"
+        "deepseek/deepseek-r1",
+        "future-chat",
     }
     model = ModelRegistry.load(resources_dir).get("opencode-go", "deepseek/deepseek-r1")
     assert model.name == "DeepSeek R1"
     assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+
+    # When the gateway's upstream catalog is down, identity still confirms
+    # availability. A stale mirror cannot replace the Model's native wire.
+    route.mock(return_value=httpx.Response(200, json={"data": [{"id": "future-chat"}]}))
+    await refresh_models(config, API_KEY, resources_dir, models_dev_catalog=catalog)
+    registry = ModelRegistry.load(resources_dir)
+    future = registry.get("opencode-go", "future-chat")
+    assert future.name == "Future Chat"
+    assert (future.context_window, future.max_output_tokens) == (32768, 8192)
+    assert future.capabilities.input_modalities == ("text", "image", "audio")
+    assert "speech_to_text" in future.capabilities.task_types
+    for task in ("file_understanding", "video_understanding"):
+        assert registry.query(ModelQuery(tasks=(task,))) == []
+    assert future.capabilities.tools is False and future.capabilities.json_mode is True
+    assert future.capabilities.supported_parameters == ("response_format",)
+    assert future.capabilities.reasoning.levels == ("max",)
+    adapter = OpenCodeGoAdapter(config, API_KEY, model_lookup=lambda _: future)
+    try:
+        assert adapter.wire_profile("future-chat").protocol == "chat_completions"
+        assert adapter.input_token_limit("future-chat") == 24576
+        sent = respx.post("https://opencode-go.example/openai/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        )
+        await adapter.send(
+            [{"role": "user", "content": "ok"}],
+            model_id="future-chat",
+            temperature=0.2,
+            top_p=0.7,
+            top_k=4,
+        )
+        assert {"temperature", "top_p", "top_k"}.isdisjoint(
+            json.loads(sent.calls.last.request.content)
+        )
+    finally:
+        await adapter.aclose()
 
 
 @respx.mock

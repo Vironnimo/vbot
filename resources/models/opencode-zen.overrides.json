@@ -47,14 +47,8 @@
       "context_window": 1050000,
       "max_output_tokens": 128000,
       "capabilities": {
-        "vision": true,
         "tools": true,
         "json_mode": true,
-        "input_modalities": [
-          "text",
-          "image",
-          "pdf"
-        ],
         "reasoning": {
           "supported": true,
           "control": "levels",
