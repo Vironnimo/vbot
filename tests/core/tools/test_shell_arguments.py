@@ -157,8 +157,9 @@ def test_calls_asking_for_a_different_effect_fail_with_the_fix(arguments, messag
 @pytest.mark.parametrize(
     ("platform", "argv", "command"),
     [
-        # Codex runs every command through a login shell; the script is the command.
-        ("linux", ["bash", "-lc", "ls -la | head -5"], "ls -la | head -5"),
+        ("linux", ["bash", "-c", "echo 'a b'"], "echo 'a b'"),
+        ("linux", ["bash", "-lc", "ls -la | head -5"], "bash -lc 'ls -la | head -5'"),
+        ("linux", ["bash", "--login", "-c", "echo ok"], "bash --login -c 'echo ok'"),
         ("linux", ["BASH", "-c", "pwd"], "BASH -c pwd"),
         ("linux", ["bash", "-C", "script.sh"], "bash -C script.sh"),
         ("linux", ["bash", "-c", "-c", "arg"], "bash -c -c arg"),

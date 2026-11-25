@@ -218,7 +218,7 @@ def _command_text(value: Any) -> Any:
 
 
 def _host_shell_script(argv: list[str]) -> str | None:
-    """The script of an argv that only starts the host shell on it, such as bash -lc."""
+    """Unwrap a shell invocation only when its options match the host shell."""
     # Only an unqualified host-shell wrapper is representation. An explicit
     # path names a particular executable, even when its basename is pwsh/bash.
     if "/" in argv[0] or "\\" in argv[0]:
@@ -237,13 +237,11 @@ def _host_shell_script(argv: list[str]) -> str | None:
             if option not in _POWERSHELL_WRAPPER_OPTIONS:
                 break
         return None
-    if argv[0] == "bash" and argv[1:-1] in (
-        ["-c"],
-        ["-lc"],
-        ["-cl"],
-        ["-l", "-c"],
-        ["--login", "-c"],
-    ):
+    if argv[0] != "bash":
+        return None
+    if argv[1:] in (["-c"], ["-lc"], ["-cl"], ["-l", "-c"], ["--login", "-c"]):
+        raise ValueError(_not_run(f"{argv[-1]} needs a script. Pass the script as command."))
+    if argv[1:-1] == ["-c"]:
         return argv[-1]
     return None
 
