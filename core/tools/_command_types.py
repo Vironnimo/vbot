@@ -201,10 +201,12 @@ class CommandReport:
 
     @property
     def status(self) -> CommandStatus:
-        """``running``, ``completed`` (exit code 0), ``failed`` (another or an
-        unknown exit code) or ``stopped`` (vBot stopped it)."""
+        """A completed command ran and exited with zero. A refused request is failed."""
         return command_status(
-            ended=self.ended, stop_reason=self.stop_reason, exit_code=self.exit_code
+            ended=self.ended,
+            stop_reason=self.stop_reason,
+            exit_code=self.exit_code,
+            not_run=self.not_run,
         )
 
     @property
@@ -221,13 +223,17 @@ class CommandReport:
 
 
 def command_status(
-    *, ended: bool, stop_reason: StopReason | None, exit_code: int | None
+    *,
+    ended: bool,
+    stop_reason: StopReason | None,
+    exit_code: int | None,
+    not_run: NotRunReason | None,
 ) -> CommandStatus:
     if not ended:
         return "running"
     if stop_reason is not None:
         return "stopped"
-    return "completed" if exit_code == 0 else "failed"
+    return "completed" if exit_code == 0 and not_run is None else "failed"
 
 
 # Builds the body of the command's result delivery from its final report.
@@ -278,6 +284,11 @@ class CommandProcess(Protocol):
 
     async def wait(self) -> int:
         """The root's exit code, as soon as it exited (not when the pipe ends)."""
+        ...
+
+    @property
+    def request_received(self) -> bool | None:
+        """Whether the shell acknowledged its request, or None without a receipt."""
         ...
 
     def interrupt(self) -> bool:

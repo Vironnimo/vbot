@@ -44,8 +44,9 @@ code was no proof: a command that
 ran, printed nothing and exited with it read as one that never ran (shell
 review 2026-10-13). A request too short to carry its code ends the shell with
 ``REQUEST_UNREADABLE_EXIT_CODE``. Without a receipt, only the request-specific
-codes can identify a refusal. With a receipt, an unsignalled event also proves
+codes can identify a refusal. With a receipt, an unsignalled event proves
 the bootstrap never reached the command, even if PowerShell exited with zero.
+A signalled event makes every code the command's own, including a coincidental match.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII

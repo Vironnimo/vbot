@@ -1639,19 +1639,20 @@ async def test_a_background_command_that_ran_nothing_delivers_why(shell: Shell) 
 
 
 @pytest.mark.asyncio
-async def test_a_command_owns_every_exit_code_but_its_requests_own(shell: Shell) -> None:
-    # A command that ran, printed nothing and exited with the bootstrap's fixed code,
-    # or with another request's code, ran: only the code drawn for its request says
-    # that PowerShell ran nothing.
+async def test_a_command_owns_every_exit_code_after_acknowledging_its_request(shell: Shell) -> None:
     first = shell.call({"command": "tool"})
     (await shell.started()).exit(REQUEST_UNREADABLE_EXIT_CODE)
     assert data(await shell.returned(first))["exit_code"] == REQUEST_UNREADABLE_EXIT_CODE
     if sys.platform != "win32":
         return
     second = shell.call({"command": "tool"})
-    other = not_run_code(shell.launcher, "request_unreadable", index=0)
-    (await shell.started(2)).exit(other)
-    assert data(await shell.returned(second))["exit_code"] == other
+    process = await shell.started(2)
+    own_code = not_run_code(shell.launcher, "request_unreadable", index=1)
+    process.request_received = True
+    process.write("command output\n")
+    process.exit(own_code)
+    result = data(await shell.returned(second))
+    assert (result["exit_code"], result["output"]) == (own_code, "command output")
 
 
 @pytest.mark.parametrize("companion", [True, False])

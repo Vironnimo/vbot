@@ -76,7 +76,7 @@ from core.utils.processes import (
     wait_for_exit,
 )
 
-from ._command_types import CommandProcess, NotRunReason
+from ._command_types import CommandProcess
 from ._powershell import PowerShellRequest
 from .process_tree import ProcessTree, ProcessTreeTracker
 
@@ -104,7 +104,6 @@ class PipeCommandProcess:
         self._writer = writer
         self._child_exit = child_exit
         self._receipt: int | None = None
-        self._not_run_codes: Mapping[int, NotRunReason] = {}
 
     @property
     def pid(self) -> int:
@@ -125,23 +124,15 @@ class PipeCommandProcess:
             code = await self._child_exit.wait()
             if code is not None:
                 return code
-        code = await wait_for_exit(self._process)
-        # A successful pipe write can leave the entire request in the kernel
-        # buffer. Only the bootstrap can confirm it received the command.
-        if (
-            sys.platform == "win32"
-            and self._receipt is not None
-            and code not in self._not_run_codes
-        ):
+        return await wait_for_exit(self._process)
+
+    @property
+    def request_received(self) -> bool | None:
+        if sys.platform == "win32" and self._receipt is not None:
             import _winapi
 
-            if _winapi.WaitForSingleObject(self._receipt, 0) == _winapi.WAIT_TIMEOUT:
-                return next(
-                    code
-                    for code, reason in self._not_run_codes.items()
-                    if reason == "request_unreadable"
-                )
-        return code
+            return _winapi.WaitForSingleObject(self._receipt, 0) == _winapi.WAIT_OBJECT_0
+        return None
 
     def interrupt(self) -> bool:
         if sys.platform == "win32":
@@ -203,7 +194,6 @@ class PipeCommandProcess:
 
                 name = "Local\\vBot-shell-" + secrets.token_hex(16)
                 self._receipt = _winapi.CreateEventW(0, True, False, name)
-                self._not_run_codes = request.not_run_codes
                 data = request.with_receipt(name)
             else:
                 data = request

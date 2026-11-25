@@ -183,7 +183,7 @@ than waiting for an answer.
   uses `REQUEST_UNREADABLE_EXIT_CODE`. After applying the complete request, the
   bootstrap signals the event before processing the command. Without this receipt,
   even exit zero means the command did not start. The request-specific refusal codes
-  retain their reasons. The receipt adds no bytes to output or logs. For standalone
+  retain their reasons only while the event is unsignalled. After acknowledgement every exit code belongs to the command. The receipt adds no bytes to output or logs. For standalone
   input only the request-specific codes establish a refusal. `_shell_results.not_run_problem` serves foreground failure,
   background delivery and `background_tasks` consistently, with no command exit
   code or empty log presented as a result. Only an unreadable request is retryable.

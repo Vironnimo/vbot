@@ -145,6 +145,7 @@ class CommandRecord:
         self._log_lease = log_lease
         self._services = services
         self._not_run_codes = dict(not_run_codes or {})
+        self._not_run: NotRunReason | None = None
         self._consumed_once_secrets = consumed_once_secrets
         self.started_at = services.monotonic()
         # When the last output arrived; None before the first.
@@ -217,7 +218,10 @@ class CommandRecord:
     @property
     def status(self) -> CommandStatus:
         return command_status(
-            ended=self.ended, stop_reason=self._stop_reason, exit_code=self._exit_code
+            ended=self.ended,
+            stop_reason=self._stop_reason,
+            exit_code=self._exit_code,
+            not_run=self._not_run,
         )
 
     @property
@@ -300,11 +304,7 @@ class CommandRecord:
                 0.0,
                 ended_at - (self.started_at if self._output_at is None else self._output_at),
             ),
-            not_run=(
-                self._not_run_codes.get(self._exit_code)
-                if self.ended and self._stop_reason is None and self._exit_code is not None
-                else None
-            ),
+            not_run=self._not_run if self.ended and self._stop_reason is None else None,
             log_loss=log_loss,
             output_incomplete=self._output_incomplete,
             jobs_ended=facts is not None and facts.jobs_ended > 0,
@@ -750,13 +750,17 @@ class CommandRecord:
         running command and it stays listed and stoppable, until a later poll
         shows what runs.
         """
+        received = self._process.request_received
+        if received is not True:
+            self._not_run = self._not_run_codes.get(exit_code)
+            if received is False and self._not_run is None:
+                self._not_run = "request_unreadable"
         self._exit_code = exit_code
-        reason = self._not_run_codes.get(exit_code)
-        if reason is not None and self._stop_reason is None:
+        if self._not_run is not None and self._stop_reason is None:
             _LOGGER.warning(
                 "Command %s did not run: its shell reported %s",
                 self.command_id,
-                reason.replace("_", " "),
+                self._not_run.replace("_", " "),
             )
         if facts is not None:
             self._facts = facts
