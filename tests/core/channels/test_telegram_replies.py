@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -483,3 +483,96 @@ async def test_files_are_sent_as_photos_documents_or_media_groups(
 
     assert [(method, describe(method, payload)) for method, payload in sent] == expected
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_migration_retries_only_the_refused_chunk_and_remembers_its_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    persist = Mock()
+    adapter, _sessions, _trigger, bot = make_adapter(
+        tmp_path, monkeypatch, allowed_chat_ids=[-500], chat_migration_persister=persist
+    )
+    bot.send_message.side_effect = [None, ChatMigrated(-100500), None, None]
+    first = "x" * TELEGRAM_MESSAGE_LIMIT
+    try:
+        await adapter.send(first + "tail", "-500")
+        await adapter.send("next", "-500")
+        assert [
+            (c.kwargs["chat_id"], c.kwargs["text"]) for c in bot.send_message.await_args_list
+        ] == [(-500, first), (-500, "tail"), (-100500, "tail"), (-100500, "next")]
+        persist.assert_called_once_with("-500", "-100500")
+    finally:
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("destination_allowed", "current_account"), [(True, True), (False, True), (True, False)]
+)
+async def test_old_reply_targets_after_restart_require_a_confirmed_allowed_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination_allowed: bool,
+    current_account: bool,
+) -> None:
+    persist = Mock()
+    adapter, _sessions, _trigger, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-100500] if destination_allowed else [-42],
+        chat_migration_persister=persist,
+    )
+    monkeypatch.setattr(adapter, "_migration_account_is_current", lambda: current_account)
+    bot.send_message.side_effect = [ChatMigrated(-100500), None]
+    try:
+        if destination_allowed and current_account:
+            await adapter._transport.send_text("-500", "reply", reply_to_message_id="19")
+            assert bot.send_message.await_args.kwargs == {"chat_id": -100500, "text": "reply"}
+        else:
+            with pytest.raises(ChannelError):
+                await adapter.send("reply", "-500")
+            assert bot.send_message.await_count == 1
+        persist.assert_not_called()
+    finally:
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("album", [False, True])
+async def test_only_photo_specific_refusals_resend_the_rejected_batch_as_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, album: bool
+) -> None:
+    adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, allowed_chat_ids=[-500])
+    photos = [_file("a.png", "image/png")]
+    if album:
+        photos.append(_file("b.jpg", "image/jpeg"))
+    method = bot.send_media_group if album else bot.send_photo
+    method.side_effect = (
+        [BadRequest("PHOTO_INVALID_DIMENSIONS"), None]
+        if album
+        else BadRequest("PHOTO_INVALID_DIMENSIONS")
+    )
+    try:
+        await adapter.send("caption", "-500", files=photos, thread_id="42")
+        fallback = bot.send_media_group if album else bot.send_document
+        sent = fallback.await_args.kwargs
+        assert (sent["chat_id"], sent["message_thread_id"]) == (-500, 42)
+        if album:
+            assert [item.type for item in sent["media"]] == ["document", "document"]
+            assert [item.caption for item in sent["media"]] == ["caption", None]
+            assert [item.media.input_file_content for item in sent["media"]] == [
+                f.data for f in photos
+            ]
+        else:
+            assert (sent["caption"], sent["document"].input_file_content) == (
+                "caption",
+                photos[0].data,
+            )
+        calls = fallback.await_count
+        method.side_effect = BadRequest("Not enough rights to send photos")
+        with pytest.raises(ChannelError):
+            await adapter.send(None, "-500", files=photos)
+        assert fallback.await_count == calls + int(album)
+    finally:
+        await adapter.stop()

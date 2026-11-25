@@ -108,17 +108,24 @@ class TelegramChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         chat_migration_persister: Callable[[str, str], None] | None = None,
+        migration_account_is_current: Callable[[], bool] | None = None,
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
         ) = None,
         update_offset_store: UpdateOffsetStore | None = None,
     ) -> None:
         self._config = config
-        self._transport = TelegramTransport(config.id, self._require_bot, attachment_store)
+        self._transport = TelegramTransport(
+            config.id,
+            self._require_bot,
+            attachment_store,
+            adopt_migration=self._adopt_outbound_migration,
+        )
         # Persists a group→supergroup chat-id swap into the channel config and
         # group access state (ChannelService wires it). It blocks, so the adapter
         # runs it on its state I/O pool; None keeps the swap runtime-only.
         self._chat_migration_persister = chat_migration_persister
+        self._migration_account_is_current = migration_account_is_current
         # Routes a button tap to the extension registered for its callback prefix.
         # Reads the live extension registry (bound method), so an extension
         # reload/disable needs no channel re-wiring — the next tap uses the current
@@ -585,19 +592,49 @@ class TelegramChannelAdapter(ChannelAdapter):
         migrate_to = getattr(message, "migrate_to_chat_id", None)
         migrate_from = getattr(message, "migrate_from_chat_id", None)
         if _is_integer(migrate_to):
-            old_chat_id, new_chat_id = str(chat_id), str(migrate_to)
+            old, new = chat_id, migrate_to
         elif _is_integer(migrate_from):
-            old_chat_id, new_chat_id = str(migrate_from), str(chat_id)
+            old, new = migrate_from, chat_id
         else:
             return
 
-        # Authorization: only an allowlisted old chat carries its allowance over.
-        # Telegram announces the migration twice (a service message in the old chat
-        # and one in the new); the first one processed swaps the allowlist and the
-        # second finds the old id gone and is a no-op.
-        if old_chat_id not in self._allowed_chat_ids:
+        if not await self._migration_is_current() or not await self._adopt_chat_migration(old, new):
             return
+        try:
+            await self.send(_CHAT_MIGRATED_REPLY, str(new))
+        except ChannelError as error:
+            # Best-effort courtesy note; the migration itself already succeeded.
+            _LOGGER.warning(
+                "Cannot confirm chat migration in new chat (channel=%s): %s",
+                self._config.id,
+                error,
+            )
 
+    async def _migration_is_current(self) -> bool:
+        check = self._migration_account_is_current
+        return check is None or await _STATE_IO_POOL.run(check)
+
+    async def _adopt_outbound_migration(self, old: int, new: int) -> bool:
+        if not await self._migration_is_current():
+            return False
+        if await self._adopt_chat_migration(old, new):
+            return True
+        # An owed reply can still name the old group after an adapter restart.
+        # Telegram confirmed the move for this request and the destination was
+        # already approved; no access or Session state needs migrating again.
+        if str(new) in self._allowed_chat_ids and self._transport.current_chat_id(old) in {
+            old,
+            new,
+        }:
+            self._transport.remember_migration(old, new)
+            return True
+        return False
+
+    async def _adopt_chat_migration(self, old: int, new: int) -> bool:
+        old_chat_id, new_chat_id = str(old), str(new)
+        if old >= 0 or new >= 0 or old == new or old_chat_id not in self._allowed_chat_ids:
+            return False
+        self._transport.remember_migration(old, new)
         self._allowed_chat_ids = frozenset(
             new_chat_id if allowed == old_chat_id else allowed for allowed in self._allowed_chat_ids
         )
@@ -628,15 +665,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                     exc_info=(type(error), error, error.__traceback__),
                 )
 
-        try:
-            await self.send(_CHAT_MIGRATED_REPLY, new_chat_id)
-        except ChannelError as error:
-            # Best-effort courtesy note; the migration itself already succeeded.
-            _LOGGER.warning(
-                "Cannot confirm chat migration in new chat (channel=%s): %s",
-                self._config.id,
-                error,
-            )
+        return True
 
     async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
         """Reply to allowed chats that this message type cannot be processed yet."""
@@ -797,7 +826,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         )
 
     def _conversation_facts_for_target(self, platform_target: str) -> ConversationFacts:
-        chat_id = _parse_platform_target(platform_target)
+        chat_id = self._transport.current_chat_id(_parse_platform_target(platform_target))
         # Telegram private chats use chat_id == user_id, and group chats (negative ids) ignore
         # dm_scope, so the chat id alone determines the routed session for a proactive send.
         return ConversationFacts(

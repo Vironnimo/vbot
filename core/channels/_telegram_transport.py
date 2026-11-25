@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from itertools import batched
 from typing import Any, cast
 
@@ -24,7 +24,13 @@ from core.extensions import (
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
-from ._telegram_api import _buttons_to_markup, _load_telegram, _telegram_error_boundary
+from ._telegram_api import (
+    _buttons_to_markup,
+    _load_telegram,
+    _load_telegram_error,
+    _PhotoRejectedError,
+    _telegram_error_boundary,
+)
 from ._telegram_messages import (
     TELEGRAM_MESSAGE_LIMIT,
     _default_animation_filename,
@@ -63,12 +69,56 @@ class TelegramTransport:
     platform_display_name = "Telegram"
 
     def __init__(
-        self, channel_id: str, bot: Callable[[], Any], attachment_store: AttachmentStore | None
+        self,
+        channel_id: str,
+        bot: Callable[[], Any],
+        attachment_store: AttachmentStore | None,
+        *,
+        adopt_migration: Callable[[int, int], Awaitable[bool]] | None = None,
     ) -> None:
         self._channel_id = channel_id
         self._require_bot = bot
         self._attachment_store = attachment_store
         self.bot_id: int | None = None
+        self._adopt_migration = adopt_migration
+        self._migrated_chats: dict[int, int] = {}
+
+    def current_chat_id(self, chat_id: int) -> int:
+        return self._migrated_chats.get(chat_id, chat_id)
+
+    def remember_migration(self, old: int, new: int) -> None:
+        self._migrated_chats[old] = new
+
+    async def _send_request(self, method: Callable[..., Awaitable[Any]], **payload: Any) -> None:
+        """Switch only the single request that Telegram explicitly refused."""
+        old = payload["chat_id"]
+        current = self.current_chat_id(old)
+        payload["chat_id"] = current
+        if current != old:
+            payload.pop("reply_parameters", None)
+        errors = _load_telegram_error()
+        with _telegram_error_boundary(self._channel_id, write=True):
+            try:
+                await method(**payload)
+                return
+            except errors.ChatMigrated as error:
+                new = error.new_chat_id
+                if (
+                    self._adopt_migration is None
+                    or current != old
+                    or current >= 0
+                    or type(new) is not int
+                    or new >= 0
+                    or new == current
+                ):
+                    raise
+            # The retry and any exception it raises must not chain the original
+            # ChatMigrated: its text contains an external chat ID.
+            if not await self._adopt_migration(current, new):
+                raise ChannelError("Telegram group migration could not be verified")
+            payload["chat_id"] = new
+            payload.pop("reply_parameters", None)
+            await method(**payload)
 
     async def send(
         self,
@@ -164,8 +214,7 @@ class TelegramTransport:
             payload["reply_parameters"] = reply_parameters
 
         async def send_chunk() -> None:
-            with _telegram_error_boundary(self._channel_id, write=True):
-                await bot.send_message(**payload)
+            await self._send_request(bot.send_message, **payload)
 
         try:
             await retry_async(send_chunk)
@@ -211,52 +260,6 @@ class TelegramTransport:
         caption: str | None,
         message_thread_id: int | None = None,
     ) -> None:
-        if not files:
-            return
-
-        await self._send_file_batch(
-            bot, chat_id, files, caption=caption, message_thread_id=message_thread_id
-        )
-
-    async def _send_single_file(
-        self,
-        bot: Any,
-        chat_id: int,
-        file_data: FileData,
-        *,
-        caption: str | None,
-        message_thread_id: int | None = None,
-    ) -> None:
-        telegram = _load_telegram()
-        input_file = telegram.InputFile(file_data.data, filename=file_data.filename)
-
-        if _is_image_media_type(file_data.media_type):
-            payload: dict[str, Any] = {"chat_id": chat_id, "photo": input_file}
-            if caption is not None:
-                payload["caption"] = caption
-            if message_thread_id is not None:
-                payload["message_thread_id"] = message_thread_id
-            with _telegram_error_boundary(self._channel_id, write=True):
-                await bot.send_photo(**payload)
-            return
-
-        payload = {"chat_id": chat_id, "document": input_file}
-        if caption is not None:
-            payload["caption"] = caption
-        if message_thread_id is not None:
-            payload["message_thread_id"] = message_thread_id
-        with _telegram_error_boundary(self._channel_id, write=True):
-            await bot.send_document(**payload)
-
-    async def _send_file_batch(
-        self,
-        bot: Any,
-        chat_id: int,
-        files: list[FileData],
-        *,
-        caption: str | None,
-        message_thread_id: int | None = None,
-    ) -> None:
         image_files: list[FileData] = []
         doc_files: list[FileData] = []
         for file_data in files:
@@ -290,32 +293,41 @@ class TelegramTransport:
         is_image: bool,
         message_thread_id: int | None = None,
     ) -> None:
-        if not files:
-            return
-        if len(files) == 1:
-            await self._send_single_file(
-                bot, chat_id, files[0], caption=caption, message_thread_id=message_thread_id
-            )
-            return
-
         telegram = _load_telegram()
-        media_items: list[Any] = []
 
-        for index, file_data in enumerate(files):
-            item_caption = caption if index == 0 else None
-            # Raw bytes let the library upload each file as its own multipart part and point
-            # the media entry at it (attach://); a prebuilt InputFile would lack that link,
-            # and Telegram then rejects the group with "media not found".
-            media_type = telegram.InputMediaPhoto if is_image else telegram.InputMediaDocument
-            media_items.append(
-                media_type(media=file_data.data, filename=file_data.filename, caption=item_caption)
-            )
+        async def send(as_photos: bool) -> None:
+            payload: dict[str, Any] = {"chat_id": chat_id}
+            if message_thread_id is not None:
+                payload["message_thread_id"] = message_thread_id
+            if len(files) == 1:
+                file = files[0]
+                method = bot.send_photo if as_photos else bot.send_document
+                payload["photo" if as_photos else "document"] = telegram.InputFile(
+                    file.data, filename=file.filename
+                )
+                if caption is not None:
+                    payload["caption"] = caption
+            else:
+                method = bot.send_media_group
+                media_type = telegram.InputMediaPhoto if as_photos else telegram.InputMediaDocument
+                payload["media"] = [
+                    media_type(
+                        media=file.data,
+                        filename=file.filename,
+                        caption=caption if index == 0 else None,
+                    )
+                    for index, file in enumerate(files)
+                ]
+            await self._send_request(method, **payload)
 
-        payload: dict[str, Any] = {"chat_id": chat_id, "media": media_items}
-        if message_thread_id is not None:
-            payload["message_thread_id"] = message_thread_id
-        with _telegram_error_boundary(self._channel_id, write=True):
-            await bot.send_media_group(**payload)
+        try:
+            await send(is_image)
+        except _PhotoRejectedError:
+            if not is_image:
+                raise
+        else:
+            return
+        await send(False)
 
     async def send_text(
         self,
@@ -577,7 +589,7 @@ class TelegramTransport:
     async def _keep_typing(self, platform_target: str, thread_id: str | None = None) -> None:
         try:
             bot = self._require_bot()
-            chat_id = _parse_platform_target(platform_target)
+            chat_id = self.current_chat_id(_parse_platform_target(platform_target))
             message_thread_id = _parse_thread_id(thread_id)
         except ChannelError, ChannelConfigError:
             return
@@ -591,9 +603,9 @@ class TelegramTransport:
             except Exception as error:
                 # Best-effort cosmetic indicator: stop quietly if the API call fails.
                 _LOGGER.debug(
-                    "Telegram typing indicator stopped (channel=%s): %s",
+                    "Telegram typing indicator stopped (channel=%s error_type=%s)",
                     self._channel_id,
-                    error,
+                    type(error).__name__,
                 )
                 return
             await asyncio.sleep(_TYPING_REFRESH_SECONDS)

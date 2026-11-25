@@ -33,6 +33,7 @@ def create_adapter(
     state: ChannelStateStore,
     channel_root: Path,
     chat_migration_persister: Callable[..., None],
+    migration_account_is_current: Callable[[ChannelConfig, str], bool],
     interaction_dispatcher: Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]]
     | None,
     mail_sink: Callable[[], InboundMailSink | None],
@@ -81,12 +82,16 @@ def create_adapter(
     if config.platform == "telegram":
         from core.channels.telegram import TelegramChannelAdapter
 
+        token = credential_resolver(config.token_env_var)
         return TelegramChannelAdapter(
             config,
             engine_for(config),
-            credential_resolver,
+            lambda _key: token,
             attachment_store=attachment_store,
-            chat_migration_persister=partial(chat_migration_persister, config.id),
+            chat_migration_persister=partial(
+                chat_migration_persister, config.id, expected_token=token
+            ),
+            migration_account_is_current=partial(migration_account_is_current, config, token),
             interaction_dispatcher=interaction_dispatcher,
             update_offset_store=state,
         )
