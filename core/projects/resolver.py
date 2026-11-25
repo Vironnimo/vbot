@@ -69,6 +69,7 @@ from core.projects._runtime_agent import (
 )
 from core.projects._session_resolution import (
     DEFAULT_PROJECT_MISSING_MESSAGE,
+    SESSION_PROFILE_MISSING_MESSAGE,
     SKILL_SUBJECT_MISSING_MESSAGE,
     TEAM_WORKING_PROJECT_MESSAGE,
     SessionResolution,
@@ -522,13 +523,19 @@ class AgentResolver:
         return self._session_resolution.clear_session_ceiling(address)
 
     def set_session_permission_rules(
-        self, address: SessionAddress, rules: Mapping[str, Any] | None
+        self,
+        address: SessionAddress,
+        rules: Mapping[str, Any] | None = None,
+        *,
+        profile: str | None = None,
     ) -> tuple[AgentOverrides, bool]:
-        """Set or clear the user's rule set for one Session; whether a ceiling was removed.
+        """Set or clear the user's rules or profile for one Session; whether a ceiling was removed.
 
         Blocking; see ``SessionResolution.set_session_permission_rules``.
         """
-        return self._session_resolution.set_session_permission_rules(address, rules)
+        return self._session_resolution.set_session_permission_rules(
+            address, rules, profile=profile
+        )
 
     def change_session_permission_grants(
         self,
@@ -632,6 +639,33 @@ class AgentResolver:
             return resolve_permission_profile(name, self._permission_profiles())
         except PermissionRulesError as error:
             raise AgentResolutionError(str(error)) from error
+
+    def session_profile_rules(self, overrides: AgentOverrides) -> AgentOverrides:
+        """*overrides* with the current rules of the Session's selected profile.
+
+        Raises :class:`AgentResolutionError` when that profile no longer exists,
+        so the Session stops instead of falling back to wider rules.
+        """
+        if overrides.permission_profile is None:
+            return overrides
+        try:
+            return overrides.with_profile_rules(
+                lambda name: resolve_permission_profile(name, self._permission_profiles())
+            )
+        except PermissionRulesError as error:
+            raise AgentResolutionError(
+                SESSION_PROFILE_MISSING_MESSAGE.format(profile=overrides.permission_profile)
+            ) from error
+
+    def _session_permission_rules_source(
+        self, agent_source: dict[str, Any], overrides: AgentOverrides
+    ) -> dict[str, Any]:
+        """The provenance with the Session's choice; an unavailable profile is reported."""
+        try:
+            resolved = self.session_profile_rules(overrides)
+        except AgentResolutionError as error:
+            return {**agent_source, "source": "session", "error": str(error)}
+        return _session_permission_rules_source(agent_source, resolved)
 
     def _identity_with_permissions(self, agent: Agent) -> Agent:
         if agent.permission_profile is not None:
@@ -788,7 +822,7 @@ class AgentResolver:
                 if name in effective:
                     effective[name] = {"value": value, "source": "session"}
             if overrides.changes_permission_rules and not builtin:
-                effective["permission_rules"] = _session_permission_rules_source(
+                effective["permission_rules"] = self._session_permission_rules_source(
                     effective["permission_rules"], overrides
                 )
         return effective

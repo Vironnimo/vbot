@@ -3,7 +3,7 @@
 ``permissions.validate`` normalizes a candidate rule set without saving it, with
 every problem, the preset it matches and a preview of what it lets the Agent
 reach. ``permissions.session`` describes the limits a Session's Runs work under,
-``permissions.set_session_rules`` sets the user's rules for one Session,
+``permissions.set_session_rules`` sets the user's profile or rules for one Session,
 ``permissions.remove_session_grants`` takes back what the user allowed for the
 rest of a Session, and ``permissions.clear_session_ceiling`` lifts the limits a
 Session inherited. ``permissions.pending`` and ``permissions.resolve`` answer
@@ -21,10 +21,10 @@ from typing import Any, cast
 
 from core.chat import session_permissions
 from core.permissions import (
+    BUILTIN_PERMISSION_PROFILES,
     PERMISSION_PRESETS,
     PermissionRules,
     PermissionRulesError,
-    PresetName,
     RuleSetCheck,
     check_permission_rules,
     describe_layer,
@@ -37,7 +37,12 @@ from core.permissions import (
     preset_definitions,
     resolve_rule_set,
 )
-from core.projects import AgentOverrides, ResolutionAgentNotFoundError, RuntimeAgent
+from core.projects import (
+    AgentOverrides,
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    RuntimeAgent,
+)
 from core.sessions import SessionAddress, WorkingProjectChoice
 from core.tools._tool_context import ToolApprovalCancelledError, ToolAuthorityUnavailableError
 from core.tools.shell_cli import ShellCliAccessError
@@ -174,9 +179,11 @@ async def _session_permissions(state: Any, params: JsonObject) -> JsonObject:
     is described on its own: the Agent's rules (``source`` ``agent``) and every
     ceiling it inherited (``parent``, ``cron``, ``extension``).
     ``stored_ceiling`` says whether the Session stores an inherited ceiling
-    that ``permissions.clear_session_ceiling`` removes. ``session_rules`` is the
-    user's rule set for this Session (``permissions.set_session_rules``) and
-    ``session_preset`` the preset it matches, both ``null`` without one.
+    that ``permissions.clear_session_ceiling`` removes. The access picker's
+    data (``_access_choice``): the ``profiles``, the ``agent_profile``, and the
+    Session's own choice (``permissions.set_session_rules``), a
+    ``session_profile`` name or older ``session_rules``, both ``null`` without
+    one; ``session_profile_error`` when that profile no longer exists.
     ``session_grants`` are the Session Grants, the allow rules the user added
     while approving Tool calls; the Agent's layer already includes them.
     """
@@ -202,20 +209,34 @@ def _session_summary(
 ) -> JsonObject:
     runtime = state.runtime
     resolver = runtime.agent_resolver
-    agent: RuntimeAgent = resolver.resolve_agent(
-        project_id,
-        agent_id,
-        session_id=session_id,
-        require_model=False,
-        include_temporary=session_id is not None,
-    )
     overrides = (
         resolver.session_overrides(SessionAddress(project_id, agent_id, session_id))
         if session_id is not None
         else AgentOverrides()
     )
     ceiling = overrides.ceiling()
-    own = _session_rules(overrides)
+    own = _access_choice(state, agent_id, project_id, overrides)
+    try:
+        agent: RuntimeAgent = resolver.resolve_agent(
+            project_id,
+            agent_id,
+            session_id=session_id,
+            require_model=False,
+            include_temporary=session_id is not None,
+        )
+    except AgentResolutionError as error:
+        if overrides.permission_profile is None or overrides.permission_profile in {
+            profile["name"] for profile in own["profiles"]
+        }:
+            raise
+        # The Session's profile is gone: its Runs stop until the user chooses again.
+        return {
+            "restricted": True,
+            "layers": [],
+            "stored_ceiling": ceiling is not None,
+            "session_profile_error": str(error),
+            **own,
+        }
     data_dir = Path(runtime.storage.data_dir)
     # Composed without the Working Project first: full access resolves no more.
     permissions = session_permissions(agent, data_dir=data_dir, project_root=None, ceiling=ceiling)
@@ -244,15 +265,69 @@ def _session_summary(
     return {"restricted": True, "layers": layers, "stored_ceiling": ceiling is not None, **own}
 
 
-def _session_rules(overrides: AgentOverrides) -> JsonObject:
-    stored = overrides.permission_rules
-    grants = _grant_summary(overrides)
-    if stored is None:
-        return {"session_rules": None, "session_preset": None, **grants}
+def _access_choice(
+    state: Any, agent_id: str, project_id: str | None, overrides: AgentOverrides
+) -> JsonObject:
+    """What the access picker offers and shows as chosen.
+
+    ``profiles`` lists every available Permission Profile and whether it
+    restricts. ``agent_profile`` names the profile the Agent's own rules come
+    from or equal (``full_access`` for none), ``null`` for rules of its own or
+    an Agent that resolves only with its Session (a temporary Agent).
+    """
+    resolver = state.runtime.agent_resolver
+    profiles: dict[str, PermissionRules] = {}
+    for name in resolver.permission_profile_names():
+        try:
+            profiles[name] = resolver.permission_rules_for_profile(name)
+        except AgentResolutionError:
+            continue
+    try:
+        agent: RuntimeAgent | None = resolver.resolve_agent(
+            project_id, agent_id, require_model=False
+        )
+    except AgentResolutionError:
+        agent = None
+    agent_profile: str | None = None
+    if agent is not None:
+        selected = getattr(agent, "permission_profile", None)
+        agent_profile = (
+            selected
+            if isinstance(selected, str) and selected in profiles
+            else _matching_profile(agent.permission_rules, profiles)
+        )
     return {
-        "session_rules": dict(stored),
-        "session_preset": matching_preset(normalize_permission_rules(stored)),
-        **grants,
+        "profiles": [
+            {
+                "name": name,
+                "builtin": name in BUILTIN_PERMISSION_PROFILES,
+                "restricted": rules.restricts,
+            }
+            for name, rules in profiles.items()
+        ],
+        "agent_profile": agent_profile,
+        **_stored_choice(overrides),
+    }
+
+
+def _matching_profile(
+    rules: PermissionRules | None, profiles: dict[str, PermissionRules]
+) -> str | None:
+    """The profile whose complete rules equal *rules*; the built-ins come first."""
+    if rules is None or not rules.restricts:
+        return "full_access"
+    complete = resolve_rule_set(rules, PERMISSION_PRESETS["full_access"])
+    return next((name for name, profile in profiles.items() if profile == complete), None)
+
+
+def _stored_choice(overrides: AgentOverrides) -> JsonObject:
+    """The Session's own access as stored: a profile name, rules of its own, its grants."""
+    return {
+        "session_profile": overrides.permission_profile,
+        "session_rules": (
+            dict(overrides.permission_rules) if overrides.permission_rules is not None else None
+        ),
+        **_grant_summary(overrides),
     }
 
 
@@ -268,34 +343,35 @@ def _grant_summary(overrides: AgentOverrides) -> JsonObject:
 
 
 async def _set_session_rules(state: Any, params: JsonObject) -> JsonObject:
-    """Set the user's rule set for one Session, or ``null`` for the Agent's rules again.
+    """Set the user's access for one Session, or ``null`` for the Agent's rules again.
 
-    Takes either ``permission_rules`` or a ``preset`` name. Only the user can:
-    an Agent's own call must not widen its Session. Rules that restrict nothing
-    in every part (the Full access preset) also remove an inherited ceiling
-    (``ceiling_cleared``). A Run in progress applies the change at its next
-    Tool round.
+    Takes either ``permission_rules`` or a ``profile`` name; the Session keeps
+    a profile by name, so later edits of the profile reach it. Only the user
+    can: an Agent's own call must not widen its Session. A choice that
+    restricts nothing in every part (the Full Access profile) also removes an
+    inherited ceiling (``ceiling_cleared``). A Run in progress applies the
+    change at its next Tool round.
     """
     _reject_unsupported(
         params,
-        {"agent_id", "session_id", "permission_rules", "preset"},
+        {"agent_id", "session_id", "permission_rules", "profile"},
         "permissions.set_session_rules",
     )
     if current_principal() is None:
         raise RpcError("access_denied", "Only the user can change a Session's permission rules.")
-    if ("permission_rules" in params) == ("preset" in params):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params needs either permission_rules or preset")
+    if ("permission_rules" in params) == ("profile" in params):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params needs either permission_rules or profile")
     address = _required_session_address(params)
-    if "preset" in params:
-        preset = params["preset"]
-        if not isinstance(preset, str) or preset not in PERMISSION_PRESETS:
+    resolver = state.runtime.agent_resolver
+    rules = params.get("permission_rules")
+    profile = params.get("profile")
+    if "profile" in params:
+        names = await state.runtime.chat_sessions.run_async(resolver.permission_profile_names)
+        if not isinstance(profile, str) or profile not in names:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
-                f"params.preset must be one of {', '.join(PERMISSION_PRESETS)}",
+                f"params.profile must be one of {', '.join(names)}",
             )
-        rules = permission_rules_to_dict(PERMISSION_PRESETS[cast(PresetName, preset)])
-    else:
-        rules = params["permission_rules"]
     try:
         if rules is not None:
             normalize_permission_rules(rules)
@@ -303,12 +379,12 @@ async def _set_session_rules(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
     try:
         overrides, cleared = await state.runtime.chat_sessions.run_async(
-            state.runtime.agent_resolver.set_session_permission_rules, address, rules
+            lambda: resolver.set_session_permission_rules(address, rules, profile=profile)
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_session_changed(state, address)
-    return {**_session_rules(overrides), "ceiling_cleared": cleared}
+    return {**_stored_choice(overrides), "ceiling_cleared": cleared}
 
 
 async def _clear_session_ceiling(state: Any, params: JsonObject) -> JsonObject:

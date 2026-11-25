@@ -64,7 +64,7 @@ const BUILTIN_ENTRIES = {
     ['core:session-settings.agent', () => t('chat.sessionSettings.agent'), 20],
     [
       'core:session-settings.permissions',
-      () => t('permissions.session.title'),
+      () => t('permissions.session.access'),
       30,
     ],
     ['core:session-settings.more', () => t('chat.sessionSettings.more'), 40],
