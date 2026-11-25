@@ -259,6 +259,11 @@ class ConnectionEvents:
         """Remember an HTTP error status, which the SDK reports without it."""
         self._http_status = status if status >= 400 else None
 
+    @property
+    def transport_refused(self) -> bool:
+        """The handshake verb or its wire format was explicitly rejected."""
+        return self._http_status in {405, 406, 415}
+
     def diagnose(self, error: BaseException | None) -> None:
         """Keep the known cause of the connection failure *error*; ``None`` forgets it."""
         self._problem = (

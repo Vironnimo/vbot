@@ -136,7 +136,7 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
                 },
                 "notion": {
                     "id": "notion",
-                    "transport": "http",
+                    "transport": "auto",
                     "target": "https://mcp.notion.com/mcp",
                     "args": [],
                     "environment": {},
@@ -146,7 +146,7 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
                 },
                 "legacy": {
                     "id": "legacy",
-                    "transport": "sse",
+                    "transport": "auto",
                     "target": "https://example.com/sse",
                     "args": [],
                     "environment": {},
@@ -195,7 +195,7 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
                 },
                 "team": {
                     "id": "team",
-                    "transport": "http",
+                    "transport": "auto",
                     "target": "https://example.com/team/mcp",
                     "args": [],
                     "environment": {},
@@ -228,7 +228,7 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
                 },
                 "deepwiki": {
                     "id": "deepwiki",
-                    "transport": "sse",
+                    "transport": "auto",
                     "target": "https://mcp.deepwiki.com/sse",
                     "args": [],
                     "environment": {},
@@ -263,7 +263,7 @@ def _shape(item: dict[str, Any]) -> dict[str, Any]:
                 {
                     "linear": {
                         "id": "linear",
-                        "transport": "http",
+                        "transport": "auto",
                         "target": "https://mcp.linear.app/mcp",
                         "args": [],
                         "environment": {},

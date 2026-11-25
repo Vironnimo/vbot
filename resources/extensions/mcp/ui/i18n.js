@@ -62,6 +62,7 @@ export default Object.freeze({
     'MCP connections give Agents Tools from other programs and services through the Model Context Protocol. Local programs run on the machine hosting vBot.\n\nAn Agent uses a connection only after you enable it in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
   'mcp.helpAria': 'About MCP connections',
   'mcp.detailsAria': 'Details for {name}',
+  'mcp.auto': 'Server URL (automatic)',
   'mcp.http': 'Server URL (HTTP)',
   'mcp.local': 'Local program',
   'mcp.mappingInvalid': 'Each entry needs a unique, non-empty name.',

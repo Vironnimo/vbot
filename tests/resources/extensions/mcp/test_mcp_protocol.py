@@ -137,12 +137,15 @@ async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["http", "sse"])
-async def test_http_transports(host, server, transport):
+@pytest.mark.parametrize(
+    ("transport", "server_mode"),
+    [("http", "http"), ("sse", "sse"), ("auto", "sse"), ("auto", "http")],
+)
+async def test_http_transports(host, server, transport, server_mode):
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    app = server.streamable_http_app() if transport == "http" else server.sse_app()
+    app = server.streamable_http_app() if server_mode == "http" else server.sse_app()
     http_server = uvicorn.Server(
         uvicorn.Config(app, log_config=None, access_log=False, timeout_graceful_shutdown=1)
     )
@@ -152,7 +155,7 @@ async def test_http_transports(host, server, transport):
             {
                 "id": "http",
                 "transport": transport,
-                "url": f"http://127.0.0.1:{port}/{'mcp' if transport == 'http' else 'sse'}",
+                "url": f"http://127.0.0.1:{port}/{'mcp' if server_mode == 'http' else 'sse'}",
             }
         ),
         host,
@@ -169,6 +172,7 @@ async def test_http_transports(host, server, transport):
                 "tools/call", {"name": "echo", "arguments": {"value": transport}}
             )
         assert json.loads(result["content"][0]["text"]) == {"value": transport}
+        assert runner.active_transport == server_mode
     finally:
         await runner.close()
         http_server.should_exit = True

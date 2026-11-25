@@ -193,6 +193,8 @@ class ConnectionProtocol:
                 "resource_templates": [],
                 "prompts": [],
             }
+            if self._runner.config["transport"] == "auto":
+                catalog["transport"] = self._runner.active_transport
             pages: dict[str, list[dict[str, Any]]] = {}
             for capability, method, field in (
                 (capabilities.tools, client.list_tools, "tools"),

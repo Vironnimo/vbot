@@ -446,9 +446,10 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
         await service.close()
         await databases.release(owners[-1])
 
+    remote = {"id": "example", "transport": "auto", "url": "https://example.test/mcp"}
     try:
         service, registry = await restart()
-        await service.management.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": remote})
         assert _tools(registry) == _NO_TOOLS
         written = asyncio.Event()
         write = service.catalogs._write
@@ -458,6 +459,7 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
             written.set()
 
         monkeypatch.setattr(service.catalogs, "_write", write_before_cleanup)
+        service.runners["example"].active_transport = "sse"
         service._publish(service.runners["example"], _CATALOG)
         known = _tools(registry)
         assert known == "Tools: get_scene_info, execute_blender_code"
@@ -469,11 +471,16 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
 
         service, registry = await restart()
         assert _tools(registry) == known
+        assert service.runners["example"].active_transport == "sse"
+        await service.management.manage(
+            "save", {"connection": {**remote, "url": "https://other.test/mcp"}}
+        )
+        assert service.runners["example"].active_transport == "http"
         await service.management.manage("remove", {"id": "example"})
         await stop(service)
 
         service, registry = await restart()
-        await service.management.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": remote})
         assert _tools(registry) == _NO_TOOLS
         await stop(service)
     finally:

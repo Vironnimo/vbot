@@ -148,6 +148,7 @@
   function transportLabel(connection) {
     return {
       stdio: t('mcp.local'),
+      auto: t('mcp.auto'),
       http: t('mcp.http'),
       sse: t('mcp.sse'),
     }[connection.transport];
