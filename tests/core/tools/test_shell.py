@@ -986,6 +986,9 @@ async def test_running_output_is_the_newest_lines_and_its_log_file_has_every_lin
     ("command", "stage", "powershell"),
     [
         ("python -m unittest 2>&1 | Select-Object -Last 25", "Select-Object -Last 25", True),
+        ("build | Select-Object -Last 2 -Wait", "Select-Object -Last 2 -Wait", True),
+        ("build | Select-Object -Last 2 -First 1 -Wait", None, True),
+        ("build | select -First 0 -Last 2", "select -First 0 -Last 2", True),
         # Select-Object -First passes each line on as it arrives.
         ("python -m unittest 2>&1 | Select-Object -First 25", None, True),
         ("git log | Select-Object -Last 3; npm run dev", None, True),
