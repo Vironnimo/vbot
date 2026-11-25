@@ -84,6 +84,7 @@ OPERATION_SCHEMAS = {
     ),
     "factory.archive": schema(REV, ("id", "expected_revision")),
     "member.list": schema({"factory_id": S, **PAGING}, ("factory_id",)),
+    "member.get": schema(ID, ("id",)),
     "member.add": schema({"factory_id": S, "agent_id": S, **MEMBER}, ("factory_id", "agent_id")),
     "member.create": schema(
         {"factory_id": S, "agent_id": S, "request_id": S, "name": S, "model": S, **MEMBER},
@@ -108,6 +109,7 @@ OPERATION_DESCRIPTIONS = {
         "Change only supplied Factory settings; expected_revision comes from factory.get."
     ),
     "member.add": "Add an existing Identity Agent without changing its global configuration.",
+    "member.get": "Read one Factory member record.",
     "member.create": "Create a durable Identity Agent and add it to the Factory.",
     "member.update": "Change the member's role, instructions, capacity or access in this Factory.",
 }

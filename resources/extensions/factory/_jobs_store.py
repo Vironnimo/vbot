@@ -642,8 +642,11 @@ class FactoryJobsStore:
             next_state = state if state is not None else previous["state"]
             now = utc_now_timestamp()
             next_finished_at = previous["finished_at"]
-            if next_state in FINAL_JOB_RUN_STATES and next_finished_at is None:
-                next_finished_at = now
+            if next_state in FINAL_JOB_RUN_STATES:
+                if next_finished_at is None:
+                    next_finished_at = now
+            else:
+                next_finished_at = None
 
             known_columns = {
                 "id",

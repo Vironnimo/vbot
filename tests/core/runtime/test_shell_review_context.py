@@ -85,7 +85,7 @@ async def test_current_input_authority_only_uses_this_runs_trusted_input(
                 )
             )
         context = replace(
-            tool_context("factory_card", tmp_path),
+            tool_context("factory", tmp_path),
             agent_id="main",
             session_id=session.id,
             run_id=run.id,

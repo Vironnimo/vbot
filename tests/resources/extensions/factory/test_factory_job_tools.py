@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -28,10 +27,6 @@ type Json = dict[str, Any]
 async def _setup_factory_and_tools(tmp_path: Path, factory_store: FactoryStore):
     harness = await build_factory(tmp_path, factory_store)
     harness.service.job_triggers = FactoryJobTriggers(harness.service)  # type: ignore[attr-defined]
-    reported: list[str] = []
-    harness.service.job_execution = SimpleNamespace(  # type: ignore[assignment]
-        mark_reported=lambda run_id: reported.append(run_id)
-    )
     native = factory_store.native
     factory = await native.create_factory(
         "project",
@@ -43,6 +38,7 @@ async def _setup_factory_and_tools(tmp_path: Path, factory_store: FactoryStore):
     worker = await native.add_member(
         factory["id"], "worker", name="Builder", role="builder", agent_proof="p2"
     )
+    leader_member = await native.get_member(factory["leader_member_id"])
     topic = await native.create_topic(
         factory["id"],
         "Leader chat",
@@ -58,7 +54,21 @@ async def _setup_factory_and_tools(tmp_path: Path, factory_store: FactoryStore):
         participant_id="leader",
     )
     leader_group = f"native.{leader_exec['id']}"
-    await native.change_execution(leader_exec["id"], {"group_id": leader_group, "state": "running"})
+    await native.change_execution(
+        leader_exec["id"],
+        {
+            "group_id": leader_group,
+            "state": "running",
+            "runtime": {
+                "member_revision": leader_member["revision"],
+                "factory_revision": factory["revision"],
+                "group_epoch": "1",
+                "generation_id": "gen-1",
+                "run_id": "run-leader",
+                "address": {"agent_id": "leader", "session_id": "sess-leader"},
+            },
+        },
+    )
     worker_exec = await native.create_execution(
         factory["id"],
         "topic",
@@ -69,9 +79,23 @@ async def _setup_factory_and_tools(tmp_path: Path, factory_store: FactoryStore):
         participant_id="worker",
     )
     worker_group = f"native.{worker_exec['id']}"
-    await native.change_execution(worker_exec["id"], {"group_id": worker_group, "state": "running"})
+    await native.change_execution(
+        worker_exec["id"],
+        {
+            "group_id": worker_group,
+            "state": "running",
+            "runtime": {
+                "member_revision": worker["revision"],
+                "factory_revision": factory["revision"],
+                "group_epoch": "1",
+                "generation_id": "gen-1",
+                "run_id": "run-worker",
+                "address": {"agent_id": "worker", "session_id": "sess-worker"},
+            },
+        },
+    )
     tools = FactoryJobTools(harness.service)
-    return harness, tools, factory, worker, leader_group, worker_group, reported
+    return harness, tools, factory, worker, leader_group, worker_group, []
 
 
 def _owner(group_id: str, participant_id: str = "worker") -> RunExecutionOwner:
@@ -158,7 +182,6 @@ async def test_factory_job_status_transitions_and_refusals(
     assert attn["data"]["run"]["question"] == "Approve deployment to staging?"
     assert attn["data"]["run"]["summary"] == "Tests passed; awaiting approval."
     assert ctx1._turn_end_requested is True
-    assert run1["id"] in reported
     assert any(n["key"] == run1["id"] for n in harness.host.notifications)
 
     # failed requires reason.
@@ -231,10 +254,16 @@ async def test_factory_jobs_crud_trigger_and_non_leader_refusal(
     leader_ctx = harness.context(
         tool_name=LEADER_JOBS_TOOL_NAME,
         execution_owner=_owner(leader_group, "leader"),
+        agent_id="leader",
+        session_id="sess-leader",
+        run_id="run-leader",
     )
     worker_ctx = harness.context(
         tool_name=LEADER_JOBS_TOOL_NAME,
         execution_owner=_owner(worker_group, "worker"),
+        agent_id="worker",
+        session_id="sess-worker",
+        run_id="run-worker",
     )
 
     # Non-leader and unbound callers are refused.

@@ -24,6 +24,7 @@ pytestmark = pytest.mark.asyncio
 
 async def _setup_public_tool(tmp_path: Path, factory_store: FactoryStore):
     harness = await build_factory(tmp_path, factory_store)
+    harness.host.authority = "user"
     harness.service.job_triggers = FactoryJobTriggers(harness.service)  # type: ignore[attr-defined]
 
     created_agents: dict[str, Json] = {}
@@ -403,3 +404,39 @@ async def test_public_tool_error_responses(factory_store: FactoryStore, tmp_path
     )
     assert missing_job_id["ok"] is False
     assert missing_job_id["error"]["code"] == "invalid_arguments"
+
+
+async def test_public_tool_refuses_factory_sessions_and_unauthorized_mutations(
+    factory_store: FactoryStore, tmp_path: Path
+) -> None:
+    from core.runs import RunExecutionOwner
+
+    harness, tool = await _setup_public_tool(tmp_path, factory_store)
+
+    factory_owner = RunExecutionOwner(
+        extension="factory",
+        group_id="fjob.jrun_1",
+        participant_id="worker",
+        generation_id="gen-1",
+        epoch="1",
+    )
+    from_factory = await tool.handle(
+        harness.context(tool_call_id="sec-1", execution_owner=factory_owner),
+        {"action": "list_factories"},
+    )
+    assert from_factory["ok"] is False
+    assert from_factory["error"]["code"] == "forbidden"
+
+    harness.host.authority = "none"
+    read_ok = await tool.handle(
+        harness.context(tool_call_id="sec-2"),
+        {"action": "list_factories"},
+    )
+    assert read_ok["ok"] is True
+
+    mut_denied = await tool.handle(
+        harness.context(tool_call_id="sec-3"),
+        {"action": "create_factory", "project_id": "project"},
+    )
+    assert mut_denied["ok"] is False
+    assert mut_denied["error"]["code"] == "forbidden"

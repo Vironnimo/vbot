@@ -91,6 +91,7 @@ class NativeSessions:
             format_leader_jobs_context,
         )
         from ._native_agent_text import PRIVATE_TOOLS, native_instructions
+        from ._public_tool import PUBLIC_TOOL_NAME
 
         try:
             async with self._locks.setdefault(execution_id, asyncio.Lock()):
@@ -123,7 +124,9 @@ class NativeSessions:
                         grants = (
                             set(PRIVATE_TOOLS) | {LEADER_JOBS_TOOL_NAME} if is_leader else set()
                         )
-                        denied = (set(JOB_PRIVATE_TOOLS) | set(PRIVATE_TOOLS)) - grants
+                        denied = (
+                            set(JOB_PRIVATE_TOOLS) | set(PRIVATE_TOOLS) | {PUBLIC_TOOL_NAME}
+                        ) - grants
                         jobs_context = (
                             format_leader_jobs_context(
                                 await self.service.records().jobs.list_jobs(factory["id"])
@@ -153,7 +156,11 @@ class NativeSessions:
                             cwd=Path(project["cwd"]),
                             tool_access=ToolAccess(
                                 mode="all" if allowed is None else "selected",
-                                allowed=tuple(sorted((allowed or set()) | grants)),
+                                allowed=(
+                                    tuple(sorted(((allowed or set()) | grants) - denied))
+                                    if allowed is not None
+                                    else ()
+                                ),
                                 denied=tuple(sorted(denied)),
                                 fixed=allowed is not None,
                             ),

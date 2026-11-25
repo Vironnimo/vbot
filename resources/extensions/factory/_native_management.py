@@ -56,8 +56,6 @@ class NativeFactoryManagement:
         resource = {
             "factory_settings": "factory",
             "factory_members": "member",
-            "factory_tasks": "task",
-            "factory_topics": "topic",
         }[name]
         action = str(arguments.get("action", "")).strip().lower()
         operation = f"{resource}.{action}"
@@ -81,20 +79,6 @@ class NativeFactoryManagement:
                     current = await getter(text(args, "id"))
                     args["expected_revision"] = current["revision"]
                 result = await settle_before_cancelling(self._operation(operation, args, actor))
-            if (
-                resource == "task"
-                and action in {"complete", "pause", "review"}
-                and actor.get("task", {}).get("id") == args.get("id")
-            ):
-                context.request_turn_end()
-            if (
-                resource == "task"
-                and action == "create"
-                and result.get("task", {}).get("conversation_id")
-            ):
-                context.request_turn_end()
-            if resource == "topic" and action == "post":
-                context.request_turn_end()
             return tool_success({"text": self._tool_result(resource, action, result), **result})
         except FactoryError as error:
             return tool_failure(
@@ -181,29 +165,7 @@ class NativeFactoryManagement:
             else:
                 factory = None
         else:
-            try:
-                previous = await getattr(self.store, f"get_{resource}")(text(args, "id"))
-            except FactoryError as error:
-                if name != "task.get" or error.code != "task_not_found":
-                    raise
-                store = self.service.records()
-                try:
-                    card = await store.get_card(text(args, "id"))
-                except FactoryError as card_error:
-                    if card_error.code != "card_not_found":
-                        raise
-                    raise error from card_error
-                if actor and card["project_id"] != actor["factory"]["project_id"]:
-                    raise FactoryError(
-                        "outside_factory", "Read work in your own Project."
-                    ) from error
-                return {
-                    "workflow_run": {
-                        key: card[key]
-                        for key in ("id", "title", "state", "waiting_reason", "summary")
-                    },
-                    "outputs": await store.recent_outputs(card["id"]),
-                }
+            previous = await getattr(self.store, f"get_{resource}")(text(args, "id"))
             factory_id = previous["id"] if resource == "factory" else previous["factory_id"]
             factory = (
                 previous if resource == "factory" else await self.store.get_factory(factory_id)

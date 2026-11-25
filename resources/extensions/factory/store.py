@@ -77,8 +77,8 @@ CREATE TABLE comments (
 ) STRICT;
 CREATE INDEX comments_card ON comments(card_id, id);
 """
-SCHEMA_SQL += JOBS_SCHEMA_SQL
 SCHEMA_SQL += NATIVE_SCHEMA_SQL
+SCHEMA_SQL += JOBS_SCHEMA_SQL
 
 _OUTPUT_FIELDS = (
     "stage_id",

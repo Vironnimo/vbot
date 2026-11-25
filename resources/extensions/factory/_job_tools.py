@@ -10,7 +10,7 @@ from core.tools.contracts import ToolContractError
 from core.utils.logging import get_logger
 
 from ._job_agent_text import JOB_STATUS_TOOL_NAME, LEADER_JOBS_TOOL_NAME
-from ._jobs_store import FINAL_JOB_RUN_STATES
+from ._jobs_store import FINAL_JOB_RUN_STATES, _validate_triggers
 from .store import FactoryError
 
 if TYPE_CHECKING:
@@ -104,10 +104,6 @@ class FactoryJobTools:
         except FactoryError as error:
             return tool_failure(error.code, str(error))
 
-        job_execution = getattr(self.service, "job_execution", None)
-        if job_execution is not None and hasattr(job_execution, "mark_reported"):
-            job_execution.mark_reported(updated["id"])
-
         context.request_turn_end()
         await self._notify_run_change(updated, status=status, question=question or "")
         return tool_success(
@@ -123,6 +119,9 @@ class FactoryJobTools:
             return
         if host.publish_change is not None:
             host.publish_change("job_runs", [run["id"]], run["revision"])
+        job_execution = getattr(self.service, "job_execution", None)
+        if job_execution is not None and hasattr(job_execution, "_refresh_badge"):
+            await job_execution._refresh_badge()
         if status == "needs_attention" and host.notify is not None:
             label = str(run.get("job_name") or run["id"]).strip()
             title = f"Job needs attention: {label}"[:200]
@@ -143,6 +142,26 @@ class FactoryJobTools:
                 )
 
     async def _authenticate_leader(self, context: ToolContext) -> tuple[Json, Json]:
+        native = getattr(self.service, "native", None)
+        if native is not None and hasattr(native, "actor"):
+            try:
+                actor = await native.actor(context)
+            except FactoryError as error:
+                if error.code == "participant_required":
+                    raise FactoryError(
+                        "leader_required",
+                        "Only the active Factory Leader session can use factory_jobs.",
+                    ) from error
+                raise
+            factory = actor["factory"]
+            member = actor["member"]
+            if factory.get("leader_member_id") != member["id"]:
+                raise FactoryError(
+                    "leader_required",
+                    "Only the active Factory Leader can manage Factory jobs.",
+                )
+            return factory, member
+
         group_id = _binding_group_id(context)
         if not group_id.startswith("native."):
             raise FactoryError(
@@ -224,6 +243,9 @@ class FactoryJobTools:
                 or ""
             )
             triggers = arguments.get("triggers")
+            clean_triggers = _validate_triggers(triggers) if triggers is not None else None
+            if job_triggers is not None and clean_triggers:
+                job_triggers.check({"name": name.strip(), "triggers": clean_triggers})
             created = await jobs_store.create_job(
                 factory_id,
                 name=name,
@@ -231,14 +253,9 @@ class FactoryJobTools:
                 description=description,
                 enabled=enabled,
                 agent_member_id=agent_member_id,
-                triggers=triggers,
+                triggers=clean_triggers,
             )
             if job_triggers is not None:
-                try:
-                    job_triggers.check(created)
-                except FactoryError:
-                    await jobs_store.delete_job(created["id"])
-                    raise
                 await job_triggers.sync()
                 enriched_job = job_triggers.enrich_job(created)
             else:
@@ -276,6 +293,18 @@ class FactoryJobTools:
                 else None
             )
             next_triggers = arguments.get("triggers") if "triggers" in arguments else None
+            clean_triggers = (
+                _validate_triggers(next_triggers)
+                if "triggers" in arguments and next_triggers is not None
+                else None
+            )
+            if job_triggers is not None and clean_triggers is not None:
+                job_triggers.check(
+                    {
+                        "name": next_name.strip() if next_name is not None else previous["name"],
+                        "triggers": clean_triggers,
+                    }
+                )
             updated = await jobs_store.update_job(
                 previous["id"],
                 name=next_name,
@@ -283,24 +312,10 @@ class FactoryJobTools:
                 description=next_description,
                 enabled=next_enabled,
                 agent_member_id=next_member_id,
-                triggers=next_triggers,
+                triggers=clean_triggers,
                 expected_revision=previous["revision"],
             )
             if job_triggers is not None:
-                try:
-                    job_triggers.check(updated)
-                except FactoryError:
-                    await jobs_store.update_job(
-                        previous["id"],
-                        name=previous["name"],
-                        prompt=previous["prompt"],
-                        description=previous["description"],
-                        enabled=previous["enabled"],
-                        agent_member_id=previous["agent_member_id"],
-                        triggers=previous["triggers"],
-                        expected_revision=updated["revision"],
-                    )
-                    raise
                 await job_triggers.sync()
                 enriched_job = job_triggers.enrich_job(updated)
             else:

@@ -1,6 +1,6 @@
 {
   "name": "Software Factory",
-  "description": "Permanent Project teams, Kanban tasks and shared discussions, with optional global Workflows.",
+  "description": "Permanent Project Factories with a Leader, specialist Agents, and scheduled or webhook Jobs.",
   "version": "1.0.0",
   "api_version": 41,
   "documentation": [

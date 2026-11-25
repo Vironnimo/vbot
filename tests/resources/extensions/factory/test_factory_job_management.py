@@ -357,3 +357,46 @@ async def test_dashboard_get_aggregates_state(factory_store: FactoryStore, tmp_p
     assert len(dash["upcoming"]) == 1
     assert dash["upcoming"][0]["job_id"] == job["id"]
     assert len(dash["recent_runs"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_dashboard_get_enriches_member_profiles_and_member_get_registered(
+    tmp_path: Path, factory_store: FactoryStore
+) -> None:
+    from types import SimpleNamespace
+
+    from resources.extensions.factory._native_values import OPERATION_SCHEMAS
+    from tests.resources.extensions.factory.factory_test_support import build_factory
+
+    assert "member.get" in OPERATION_SCHEMAS
+
+    harness = await build_factory(tmp_path, factory_store)
+
+    async def get_identity(agent_id: str) -> Json:
+        return {
+            "agent_id": agent_id,
+            "incarnation": "p1",
+            "name": "Leader",
+            "model": "test/worker",
+            "placement": "project",
+            "created_by_owner": False,
+        }
+
+    async def get_profiles(agent_ids: list[str]) -> dict[str, Json]:
+        return {agent_id: await get_identity(agent_id) for agent_id in agent_ids}
+
+    harness.host.identity_agents = SimpleNamespace(  # type: ignore[attr-defined]
+        get=get_identity,
+        profiles=get_profiles,
+    )
+    factory = await factory_store.native.create_factory(
+        "project", leader_agent_id="leader", name="Dash Team", leader_agent_proof="p1"
+    )
+    harness.service.job_triggers = FactoryJobTriggers(harness.service)  # type: ignore[attr-defined]
+    mgmt = FactoryJobManagement(harness.service)
+    dash = await mgmt.operation("dashboard.get", {"factory_id": factory["id"]})
+    assert dash is not None
+    assert "leader_available" in dash["factory"]
+    assert isinstance(dash["factory"]["leader_available"], bool)
+    assert len(dash["members"]) == 1
+    assert "profile_available" in dash["members"][0]

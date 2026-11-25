@@ -83,10 +83,11 @@ class _FakeService:
         self.host: _FakeHost | None = _FakeHost()
         self.lock = asyncio.Lock()
         self.jobs_store = _FakeJobsStore(jobs)
+        self._records = _FakeRecords(self.jobs_store)
         self.schedule_requests = 0
 
     def records(self) -> _FakeRecords:
-        return _FakeRecords(self.jobs_store)
+        return self._records
 
     def request_schedule(self) -> None:
         self.schedule_requests += 1
@@ -386,7 +387,7 @@ async def test_schedule_fire_creates_run_with_missed_count_and_deduplicates() ->
     await jt.fire(fire_event)
     assert len(service.jobs_store.runs) == 1
     run = service.jobs_store.runs[0]
-    assert run["origin"] == "trigger"
+    assert run["origin"] == "schedule"
     assert run["trigger_id"] == "sched1"
     assert run["receipt"] == "cron-1:due:2026-11-25T09:00:00Z"
     assert run["trigger_event"] == {
@@ -454,3 +455,75 @@ async def test_webhook_fire_condenses_limits_to_20_and_deduplicates() -> None:
 def test_condense_non_dict_and_unknown_dict_body() -> None:
     assert condense({"x-custom-event": "ping"}, "hello") == {"event": "ping", "body": "hello"}
     assert condense({}, {"foo": "bar"}) == {"body": '{"foo": "bar"}'}
+
+
+@pytest.mark.asyncio
+async def test_webhook_fire_origin_fallback_receipt_and_paused_factory() -> None:
+    job = _job(
+        triggers=[
+            {
+                "id": "hook1",
+                "type": "webhook",
+                "title": "Hook",
+                "schedule": "",
+                "enabled": True,
+            }
+        ]
+    )
+    service = _FakeService([job])
+    jt = FactoryJobTriggers(service)  # type: ignore[arg-type]
+
+    # Missing trigger_id / seq still produces a non-empty deterministic receipt and webhook origin.
+    await jt.fire(
+        {
+            "key": "job:fac1:job1:hook1",
+            "fired_at": "2026-11-25T10:00:00Z",
+            "requests": [{"headers": {}, "body": {"ok": True}}],
+        }
+    )
+    assert len(service.jobs_store.runs) == 1
+    assert service.jobs_store.runs[0]["origin"] == "webhook"
+    assert service.jobs_store.runs[0]["receipt"]
+
+    # Paused/archived Factory from native store is skipped on fire.
+    class _PausedNative:
+        async def get_factory(self, _factory_id: str) -> Json:
+            return {"id": "fac1", "state": "paused"}
+
+    service.records().native = _PausedNative()  # type: ignore[attr-defined]
+    await jt.fire(
+        {
+            "key": "job:fac1:job1:hook1",
+            "fired_at": "2026-11-25T10:01:00Z",
+            "requests": [{"seq": 99, "headers": {}, "body": {"ok": True}}],
+        }
+    )
+    assert len(service.jobs_store.runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_recreates_on_schedule_to_webhook_transition() -> None:
+    job = _job(
+        triggers=[
+            {
+                "id": "t1",
+                "type": "schedule",
+                "title": "Cron",
+                "schedule": "0 * * * *",
+                "enabled": True,
+            }
+        ]
+    )
+    service = _FakeService([job])
+    jt = FactoryJobTriggers(service)  # type: ignore[arg-type]
+    await jt.sync()
+    first_id = service.host.triggers.list()[0]["id"]  # type: ignore[union-attr]
+
+    job["triggers"] = [
+        {"id": "t1", "type": "webhook", "title": "Hook", "schedule": "", "enabled": True}
+    ]
+    await jt.sync()
+    items = service.host.triggers.list()  # type: ignore[union-attr]
+    assert len(items) == 1
+    assert items[0]["id"] != first_id
+    assert items[0]["schedule_type"] == "webhook"

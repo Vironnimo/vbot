@@ -10,6 +10,7 @@ from core.tools.arguments import optional_bool, optional_int, optional_string, r
 from core.tools.contracts import ToolContractError
 from core.utils.ids import new_id
 
+from ._jobs_store import _validate_triggers
 from .store import FactoryError
 
 if TYPE_CHECKING:
@@ -48,6 +49,9 @@ _JOB_ACTIONS = (
 )
 _ALL_ACTIONS = (*_FACTORY_ACTIONS, *_MEMBER_ACTIONS, *_JOB_ACTIONS)
 _VALID_ACTIONS = frozenset(_ALL_ACTIONS)
+_READ_ACTIONS = frozenset(
+    {"list_factories", "get_factory", "list_members", "list_jobs", "get_job", "list_runs"}
+)
 
 PUBLIC_PARAMETERS: Json = {
     "type": "object",
@@ -203,6 +207,14 @@ class FactoryPublicTool:
         self.service = service
 
     async def handle(self, context: ToolContext, arguments: Json) -> Json:
+        owner = getattr(context, "execution_owner", None)
+        if owner is not None and getattr(owner, "extension", None) == "factory":
+            return tool_failure(
+                "forbidden",
+                "Factory sessions cannot use the public factory tool. "
+                "Use your Factory session tools instead.",
+            )
+
         action = str(arguments.get("action") or "").strip().lower()
         if action not in _VALID_ACTIONS:
             valid = ", ".join(_ALL_ACTIONS)
@@ -214,6 +226,17 @@ class FactoryPublicTool:
                 "invalid_arguments",
                 f"Unknown action {action!r}. Use one of: {valid}.",
             )
+
+        if action not in _READ_ACTIONS:
+            host = getattr(self.service, "host", None)
+            input_authority = getattr(host, "input_authority", None) if host is not None else None
+            if input_authority is not None:
+                authority = await input_authority(context)
+                if authority not in {"user", "automation"}:
+                    return tool_failure(
+                        "forbidden",
+                        "Mutating Factory actions require user or automation authority.",
+                    )
 
         try:
             return await self._dispatch(context, action, arguments)
@@ -399,8 +422,6 @@ class FactoryPublicTool:
                 op_args["instructions"] = (
                     optional_string(arguments.get("instructions"), field_name="instructions") or ""
                 )
-            if "model" in arguments and arguments.get("model") is not None:
-                op_args["model"] = optional_string(arguments.get("model"), field_name="model") or ""
             result = await management.operation("member.update", op_args)
             updated = result["member"]
             return tool_success(
@@ -464,6 +485,9 @@ class FactoryPublicTool:
             )
             triggers = arguments.get("triggers")
             async with self.service.lock:
+                clean_triggers = _validate_triggers(triggers) if triggers is not None else None
+                if job_triggers is not None and clean_triggers:
+                    job_triggers.check({"name": name.strip(), "triggers": clean_triggers})
                 jobs_store = self.service.records().jobs
                 created = await jobs_store.create_job(
                     factory["id"],
@@ -472,14 +496,9 @@ class FactoryPublicTool:
                     description=description,
                     enabled=enabled,
                     agent_member_id=agent_member_id,
-                    triggers=triggers,
+                    triggers=clean_triggers,
                 )
                 if job_triggers is not None:
-                    try:
-                        job_triggers.check(created)
-                    except FactoryError:
-                        await jobs_store.delete_job(created["id"])
-                        raise
                     await job_triggers.sync()
                     enriched = job_triggers.enrich_job(created)
                 else:
@@ -519,6 +538,20 @@ class FactoryPublicTool:
                     else None
                 )
                 next_triggers = arguments.get("triggers") if "triggers" in arguments else None
+                clean_triggers = (
+                    _validate_triggers(next_triggers)
+                    if "triggers" in arguments and next_triggers is not None
+                    else None
+                )
+                if job_triggers is not None and clean_triggers is not None:
+                    job_triggers.check(
+                        {
+                            "name": (
+                                next_name.strip() if next_name is not None else previous["name"]
+                            ),
+                            "triggers": clean_triggers,
+                        }
+                    )
                 updated = await jobs_store.update_job(
                     previous["id"],
                     name=next_name,
@@ -526,24 +559,10 @@ class FactoryPublicTool:
                     description=next_description,
                     enabled=next_enabled,
                     agent_member_id=next_member_id,
-                    triggers=next_triggers,
+                    triggers=clean_triggers,
                     expected_revision=previous["revision"],
                 )
                 if job_triggers is not None:
-                    try:
-                        job_triggers.check(updated)
-                    except FactoryError:
-                        await jobs_store.update_job(
-                            previous["id"],
-                            name=previous["name"],
-                            prompt=previous["prompt"],
-                            description=previous["description"],
-                            enabled=previous["enabled"],
-                            agent_member_id=previous["agent_member_id"],
-                            triggers=previous["triggers"],
-                            expected_revision=updated["revision"],
-                        )
-                        raise
                     await job_triggers.sync()
                     enriched = job_triggers.enrich_job(updated)
                 else:

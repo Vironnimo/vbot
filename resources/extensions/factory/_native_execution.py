@@ -178,6 +178,23 @@ class NativeFactoryExecution:
                         archive=archive,
                     )
                 )
+        if resource in {"factories", "members"}:
+            job_triggers = getattr(self.service, "job_triggers", None)
+            if job_triggers is not None:
+                await job_triggers.sync()
+            job_execution = getattr(self.service, "job_execution", None)
+            if job_execution is not None and (
+                (resource == "factories" and record["state"] == "archived")
+                or (resource == "members" and record["state"] == "retired")
+            ):
+                for run in await self.service.records().jobs.list_active_runs():
+                    if run["factory_id"] == factory_id and (
+                        resource == "factories" or run["member_id"] == record["id"]
+                    ):
+                        await job_execution.cancel_run(run["id"])
+            badge = getattr(self.service, "_badge", None)
+            if badge is not None:
+                await badge()
         self.service.request_schedule()
 
     async def block(self, execution: Json, reason: str, detail: Json | None = None) -> None:

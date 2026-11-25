@@ -175,7 +175,7 @@ class FactoryJobTriggers:
                     if current["schedule"] != values["schedule"]:
                         await triggers.delete(current["id"])
                         await triggers.create(key, **values)
-                elif current["schedule_type"] == "webhook" and values["schedule"] != "webhook":
+                elif (current["schedule_type"] == "webhook") != (values["schedule"] == "webhook"):
                     # A webhook trigger keeps its URL; a changed type gets a new trigger.
                     await triggers.delete(current["id"])
                     await triggers.create(key, **values)
@@ -284,7 +284,17 @@ class FactoryJobTriggers:
         factory_id, job_id, trigger_id = parsed
         service = self.service
         async with service.lock:
-            jobs = service.records().jobs
+            records = service.records()
+            native = getattr(records, "native", None)
+            if native is not None:
+                try:
+                    factory = await native.get_factory(factory_id)
+                except FactoryError:
+                    _LOGGER.warning("Factory job trigger fired for missing Factory (key=%s)", key)
+                    return
+                if factory.get("state") != "active":
+                    return
+            jobs = records.jobs
             try:
                 job = await jobs.get_job(job_id)
             except FactoryError:
@@ -313,12 +323,12 @@ class FactoryJobTriggers:
             }
             events: list[tuple[Json, str]] = []
             if trigger["type"] == "webhook":
-                for request in requests[-_MAX_RUNS_PER_FIRE:]:
+                for idx, request in enumerate(requests[-_MAX_RUNS_PER_FIRE:]):
                     condensed = condense(request.get("headers") or {}, request.get("body"))
                     receipt = (
                         f"{fire_event['trigger_id']}:request:{request['seq']}"
                         if fire_event.get("trigger_id") and "seq" in request
-                        else ""
+                        else f"webhook:{key}:{fire_event.get('fired_at') or 'fire'}:{idx}"
                     )
                     events.append(
                         (
@@ -338,7 +348,10 @@ class FactoryJobTriggers:
                 receipt = (
                     f"{fire_event['trigger_id']}:due:{fire_event['due_at']}"
                     if fire_event.get("trigger_id") and fire_event.get("due_at")
-                    else ""
+                    else (
+                        f"schedule:{key}:"
+                        f"{fire_event.get('due_at') or fire_event.get('fired_at') or 'fire'}"
+                    )
                 )
                 events.append(
                     (
@@ -359,7 +372,7 @@ class FactoryJobTriggers:
                 run = await jobs.create_triggered_run(
                     factory_id,
                     job_id,
-                    origin="trigger",
+                    origin=trigger["type"],
                     trigger_id=trigger_id,
                     receipt=receipt,
                     trigger_event=event,

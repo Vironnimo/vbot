@@ -266,6 +266,21 @@ class FactoryJobManagement:
 
         factory = await store.native.get_factory(factory_id)
         members = await self._list_all_members(factory_id)
+        native_management = getattr(self.service, "native_management", None)
+        if native_management is not None and hasattr(native_management, "identities"):
+            members = await native_management.identities.member_profiles(members)
+            leader = next(
+                (member for member in members if member["id"] == factory.get("leader_member_id")),
+                None,
+            )
+            factory = {
+                **factory,
+                "leader_available": bool(
+                    leader is not None
+                    and leader.get("state") == "active"
+                    and leader.get("profile_available")
+                ),
+            }
         jobs = [triggers.enrich_job(job) for job in await store.jobs.list_jobs(factory_id)]
         needs_attention_runs = await store.jobs.list_runs(
             factory_id, state="needs_attention", limit=1000

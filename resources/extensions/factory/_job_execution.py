@@ -16,6 +16,7 @@ from core.utils.logging import get_logger
 from . import _native_agent_text
 from ._job_agent_text import JOB_PRIVATE_TOOLS
 from ._jobs_store import FINAL_JOB_RUN_STATES, FactoryJobsStore
+from ._public_tool import PUBLIC_TOOL_NAME
 from .store import FactoryError
 
 type Json = dict[str, Any]
@@ -166,7 +167,9 @@ class FactoryJobExecution:
         local = member.get("config", {})
         boundary = factory.get("config", {})
         grants = {_JOB_STATUS_TOOL_NAME}
-        denied = (set(JOB_PRIVATE_TOOLS) | set(_native_agent_text.PRIVATE_TOOLS)) - grants
+        denied = (
+            set(JOB_PRIVATE_TOOLS) | set(_native_agent_text.PRIVATE_TOOLS) | {PUBLIC_TOOL_NAME}
+        ) - grants
         for settings in (boundary, local):
             denied.update(settings.get("denied_tools", []))
         allowed: set[str] | None = None
@@ -188,7 +191,11 @@ class FactoryJobExecution:
             cwd=Path(project["cwd"]),
             tool_access=ToolAccess(
                 mode="all" if allowed is None else "selected",
-                allowed=tuple(sorted((allowed or set()) | grants)),
+                allowed=(
+                    tuple(sorted(((allowed or set()) | grants) - denied))
+                    if allowed is not None
+                    else ()
+                ),
                 denied=tuple(sorted(denied)),
                 fixed=allowed is not None,
             ),
@@ -217,6 +224,16 @@ class FactoryJobExecution:
         )
         if binding is None:
             config = await self._build_config(factory, member, run)
+            allowed_models = factory.get("config", {}).get("allowed_models")
+            host = getattr(self.service, "host", None)
+            inspect_prompt = getattr(host, "inspect_prompt", None) if host is not None else None
+            if allowed_models is not None and inspect_prompt is not None:
+                preview = await inspect_prompt(config, factory["project_id"])
+                if not self.service.native._model_allowed(preview["model"], allowed_models):
+                    raise FactoryError(
+                        "model_unavailable",
+                        "This Model is outside the Factory configuration boundary.",
+                    )
             binding = await self.groups.create(
                 run["group_id"],
                 run["participant_id"],
@@ -259,14 +276,45 @@ class FactoryJobExecution:
         return self._pending_deliveries.get(group_id)
 
     async def before_model_request(self, context: Any) -> None:
-        run = await self.jobs.get_run_by_group(context.binding.group_id)
-        if run["state"] in FINAL_JOB_RUN_STATES:
-            raise FactoryError("stale_run", "This Job Run is already finished.")
+        async with self.service.lock:
+            run = await self.jobs.get_run_by_group(context.binding.group_id)
+            if run["state"] in FINAL_JOB_RUN_STATES:
+                raise FactoryError("stale_run", "This Job Run is already finished.")
+            factory = await self.native_store.get_factory(run["factory_id"])
+            if factory.get("state") != "active":
+                raise FactoryError("factory_archived", "This Factory is not active.")
+            member = await self.native_store.get_member(run["member_id"])
+            if member.get("factory_id") != factory["id"] or member.get("state") != "active":
+                raise FactoryError("member_unavailable", "Selected member is not active.")
+            models = factory.get("config", {}).get("allowed_models")
+            physical_model = getattr(context, "model", None)
+            if (
+                models is not None
+                and physical_model is not None
+                and not self.service.native._model_allowed(physical_model, models)
+            ):
+                raise FactoryError(
+                    "model_unavailable",
+                    "This Model is outside the Factory configuration boundary.",
+                )
 
     async def before_tool_call(
         self, context: Any, *, tool_name: str, tool_call_id: str
     ) -> str | None:
-        _ = context, tool_name, tool_call_id
+        _ = tool_call_id
+        async with self.service.lock:
+            run = await self.jobs.get_run_by_group(context.binding.group_id)
+            factory = await self.native_store.get_factory(run["factory_id"])
+            member = await self.native_store.get_member(run["member_id"])
+            from ._native_policy import tool_permitted
+
+            if not await tool_permitted(
+                self.service,
+                [factory.get("config", {}), member.get("config", {})],
+                tool_name,
+                {_JOB_STATUS_TOOL_NAME},
+            ):
+                return _native_agent_text.tool_refusal(tool_name)
         return None
 
     async def acknowledge_delivery(self, context: Any, delivery: Any) -> None:
@@ -277,36 +325,43 @@ class FactoryJobExecution:
             self._pending_deliveries.pop(context.binding.group_id, None)
 
     async def run_finished(self, context: Any, outcome: str) -> None:
-        if self._quiescing:
-            return
-        group_id = context.binding.group_id
-        try:
-            run = await self.jobs.get_run_by_group(group_id)
-        except FactoryError as exc:
-            if exc.code == "not_found":
+        async with self.service.lock:
+            if self._quiescing:
                 return
-            raise
-        if self._active_run_ids.get(group_id) == context.run_id:
+            group_id = context.binding.group_id
+            if context.run_id != self._active_run_ids.get(group_id):
+                return
+            try:
+                run = await self.jobs.get_run_by_group(group_id)
+            except FactoryError as exc:
+                if exc.code == "not_found":
+                    return
+                raise
             self._active_run_ids.pop(group_id, None)
-        await self._settle_finished(run, outcome, run_id=context.run_id)
+            await self._settle_finished(run, outcome, run_id=context.run_id)
 
     async def _settle_finished(self, run: Json, outcome: str, *, run_id: str | None = None) -> None:
         if run["state"] in {"needs_attention", "failed", "done", "cancelled"}:
-            await self._publish_run(
-                run, notify_attention=run["state"] in {"needs_attention", "failed"}
-            )
+            await self._publish_run(run, notify_attention=False)
             self.service.request_schedule()
             return
 
         if outcome == "cancelled":
-            updated = await self.jobs.transition_run(run["id"], "cancelled")
+            updated = await self.jobs.transition_run(
+                run["id"], "cancelled", expected_revision=run["revision"]
+            )
         elif outcome != "success":
             updated = await self.jobs.transition_run(
-                run["id"], "failed", reason=f"Job run ended with outcome: {outcome}."
+                run["id"],
+                "failed",
+                reason=f"Job run ended with outcome: {outcome}.",
+                expected_revision=run["revision"],
             )
         else:
             summary = await self._extract_summary(run, run_id=run_id)
-            updated = await self.jobs.transition_run(run["id"], "done", summary=summary)
+            updated = await self.jobs.transition_run(
+                run["id"], "done", summary=summary, expected_revision=run["revision"]
+            )
 
         await self._publish_run(
             updated, notify_attention=updated["state"] in {"needs_attention", "failed"}
@@ -339,6 +394,18 @@ class FactoryJobExecution:
         )
         return answer[:_SUMMARY_LIMIT]
 
+    async def _all_group_ids(self, groups: Any) -> set[str]:
+        found: set[str] = set()
+        after = ""
+        while True:
+            page = await groups.groups(after=after, limit=100)
+            if not page:
+                return found
+            found.update(page)
+            if len(page) < 100:
+                return found
+            after = page[-1]
+
     async def quiesce(self, reason: str = "extension") -> None:
         self._quiescing = True
         host = getattr(self.service, "host", None)
@@ -347,7 +414,7 @@ class FactoryJobExecution:
             return
         group_ids = set(self._active_run_ids)
         try:
-            for group_id in await groups.groups():
+            for group_id in await self._all_group_ids(groups):
                 if self.owns(group_id):
                     group_ids.add(group_id)
         except Exception:
@@ -362,11 +429,13 @@ class FactoryJobExecution:
         if not isinstance(text, str) or not text.strip():
             raise FactoryError("invalid_job", "Reply text must be a non-empty string.")
         run = await self.jobs.get_run(run_id)
-        if run["state"] == "cancelled":
-            raise FactoryError("wrong_state", "Cancelled job runs cannot be resumed.")
-        if run["state"] == "running":
-            raise FactoryError("wrong_state", "This job run is already running.")
+        if run["state"] not in {"needs_attention", "failed"}:
+            raise FactoryError(
+                "wrong_state",
+                f"Job run in state {run['state']!r} cannot be resumed.",
+            )
 
+        had_session = run.get("session_address") is not None
         binding, handle = await self._ensure_participant(run)
         session_address = {
             "project_id": binding.address.project_id,
@@ -382,12 +451,32 @@ class FactoryJobExecution:
         )
         await self._publish_run(updated)
 
+        reply = text.strip()
         request_id = f"reply:{updated['revision']}:{new_id('jrp')}"
-        admission = await self.groups.start(
-            handle,
-            updated["participant_id"],
-            TemporaryRunInput("continuation", text.strip(), request_id),
+        run_input = (
+            TemporaryRunInput("continuation", reply, request_id)
+            if had_session
+            else TemporaryRunInput(
+                "initial", f"{_job_message(updated)}\n\nOperator reply:\n{reply}", request_id
+            )
         )
+        try:
+            admission = await self.groups.start(
+                handle,
+                updated["participant_id"],
+                run_input,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failed = await self.jobs.transition_run(
+                updated["id"],
+                "failed",
+                reason=_error_reason(exc),
+                expected_revision=updated["revision"],
+            )
+            await self._publish_run(failed, notify_attention=True)
+            raise
         self._active_run_ids[updated["group_id"]] = admission.run_id
         return updated
 
@@ -413,7 +502,7 @@ class FactoryJobExecution:
         if not running_runs:
             return
         try:
-            live_groups = set(await self.groups.groups())
+            live_groups = await self._all_group_ids(self.groups)
         except Exception:
             live_groups = set()
         for run in running_runs:
@@ -439,14 +528,14 @@ class FactoryJobExecution:
                 await self._publish_run(failed, notify_attention=True)
 
     async def _refresh_badge(self) -> None:
+        badge = getattr(self.service, "_badge", None)
+        if badge is not None:
+            await badge()
+            return
         host = getattr(self.service, "host", None)
         if host is None or getattr(host, "set_page_badge", None) is None:
             return
-        count = await self.attention_count()
-        store = getattr(self.service, "store", None)
-        if store is not None and hasattr(store, "attention_count"):
-            count += await store.attention_count()
-        host.set_page_badge("board", count)
+        host.set_page_badge("board", await self.attention_count())
 
     async def _publish_run(self, run: Json, *, notify_attention: bool = False) -> None:
         host = getattr(self.service, "host", None)
