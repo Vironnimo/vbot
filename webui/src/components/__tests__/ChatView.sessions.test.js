@@ -199,7 +199,8 @@ describe('ChatView Sessions', () => {
       await chat.mountChat(props);
       document.querySelector('.chat-header__info-toggle').click();
       await waitForText('Before rename');
-      await waitForCondition(() => findButtonByText(t('sessions.advanced')));
+      await vi.dynamicImportSettled();
+      flushSync();
       findButtonByText(t('sessions.advanced')).click();
       flushSync();
       findButtonByText(t('sessions.rename')).click();
