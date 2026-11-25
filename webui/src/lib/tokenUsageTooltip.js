@@ -1,17 +1,9 @@
-// Composes the context usage breakdown of the context ring's card
-// (components/chat/ContextUsageRing.svelte): the Context headline
-// ("tokens / contextWindow" in exact counts), the Session's cache hit rate and
-// token totals, and a "Last turn" block that splits the input into its cache
-// shares; plus the ring's warning level.
-//
-// The cache lines matter for spotting prompt-cache breaks: canonical
-// `input_tokens` already contains the cached tokens, so the sub-lines are
-// shares of the input, never additions on top. Whether a Provider reported a
-// figure or vBot estimated it is not shown here; Statistics diagnostics keep
-// that distinction.
+// Context ring and hover card. Cache reads are a share of canonical input.
 import { activeLocaleTag, t } from './i18n.js';
 import {
+  cacheHitRate,
   formatPercent,
+  formatTokens,
   formatTokensExact,
 } from './statisticsView/formatting.js';
 
@@ -108,43 +100,51 @@ export function contextLimitWarning(
   return { level: 'normal', message: '' };
 }
 
-/**
- * Structured model for the context ring's card. `summary` is the
- * "tokens / contextWindow" headline (null without a Context projection);
- * `sections` hold label/value rows (`sub` rows are shares of the row above,
- * never additions): first the Session's cache hit rate and totals, then the
- * last turn. Figures are exact counts; the card lays them out in a
- * right-aligned column.
- */
+/** One row per metric keeps the three scopes comparable in the hover card. */
 export function contextUsageCardModel(
   contextUsage,
-  usage,
-  sessionUsage,
+  { session, run, iteration },
   contextWindow,
 ) {
   const locale = activeLocaleTag();
   const format = (value) => formatTokensExact(value, locale);
-  const sections = [
-    sessionSection(sessionUsage, format),
-    usage ? lastTurnSection(usage, format) : null,
-  ].filter((section) => section && section.rows.length > 0);
-  return {
-    summary: contextSummary(contextUsage, contextWindow, format),
-    sections,
-  };
-}
+  const scopes = [session, run, iteration];
+  const summary = contextSummary(contextUsage, contextWindow, format);
+  if (
+    !scopes.some((scope) => scope?.input_tokens > 0 || scope?.output_tokens > 0)
+  ) {
+    return { summary, rows: [] };
+  }
 
-function row(label, value, sub = false) {
-  return { label, value, sub };
-}
-
-function percent(part, whole) {
-  return formatPercent(part / whole, activeLocaleTag());
+  function metric(id, value) {
+    return {
+      id,
+      label: t(`chat.contextCard.${id}`),
+      session: value(session),
+      run: value(run),
+      iteration: value(iteration),
+    };
+  }
+  const tokenRow = (id, key) =>
+    metric(id, (scope) => {
+      if (!scope) return format(null);
+      const count = scope[key] ?? 0;
+      return count >= 1_000_000 ? formatTokens(count, locale) : format(count);
+    });
+  const rows = [
+    metric('cacheHit', (scope) => formatPercent(cacheHitRate(scope), locale)),
+    tokenRow('input', 'input_tokens'),
+    tokenRow('output', 'output_tokens'),
+  ];
+  if (scopes.some((scope) => scope?.reasoning_tokens > 0)) {
+    rows.push(tokenRow('reasoning', 'reasoning_tokens'));
+  }
+  return { summary, rows };
 }
 
 function contextSummary(contextUsage, contextWindow, format) {
-  const tokens = finiteOrNull(contextUsage?.tokens);
-  if (tokens === null) {
+  const tokens = contextUsage?.tokens;
+  if (!Number.isFinite(tokens)) {
     return null;
   }
   return Number.isFinite(contextWindow) && contextWindow > 0
@@ -153,67 +153,4 @@ function contextSummary(contextUsage, contextWindow, format) {
         context: format(contextWindow),
       })
     : format(tokens);
-}
-
-// Every turn counts; a counter the usage does not report counts as zero.
-function sessionSection(sessionUsage, format) {
-  const input = nonNegative(sessionUsage?.input_tokens);
-  const output = nonNegative(sessionUsage?.output_tokens);
-  if (input <= 0 && output <= 0) {
-    return null;
-  }
-  const rows = [];
-  if (input > 0) {
-    rows.push(
-      row(
-        t('chat.contextCard.cacheHitRate'),
-        percent(nonNegative(sessionUsage.cache_read_tokens), input),
-      ),
-    );
-  }
-  rows.push(row(t('chat.contextCard.totalInput'), format(input)));
-  rows.push(row(t('chat.contextCard.totalOutput'), format(output)));
-  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
-  if (reasoning > 0) {
-    rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
-  }
-  return { id: 'session', title: '', rows };
-}
-
-function lastTurnSection(usage, format) {
-  const input = nonNegative(usage.input_tokens);
-  const output = nonNegative(usage.output_tokens);
-  const cacheRead = nonNegative(usage.cache_read_tokens);
-  const cacheWrite = nonNegative(usage.cache_write_tokens);
-  const reasoning = nonNegative(usage.reasoning_tokens);
-
-  const rows = [
-    row(t('chat.contextCard.input'), format(input)),
-    row(
-      t('chat.contextCard.cacheRead'),
-      input > 0
-        ? `${format(cacheRead)} (${percent(cacheRead, input)})`
-        : format(cacheRead),
-      true,
-    ),
-    row(t('chat.contextCard.cacheWrite'), format(cacheWrite), true),
-    row(
-      t('chat.contextCard.uncached'),
-      format(Math.max(0, input - cacheRead - cacheWrite)),
-      true,
-    ),
-    row(t('chat.contextCard.output'), format(output)),
-  ];
-  if (reasoning > 0) {
-    rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
-  }
-  return { id: 'last-turn', title: t('chat.contextCard.lastTurn'), rows };
-}
-
-function finiteOrNull(value) {
-  return Number.isFinite(value) ? value : null;
-}
-
-function nonNegative(value) {
-  return Number.isFinite(value) && value > 0 ? value : 0;
 }

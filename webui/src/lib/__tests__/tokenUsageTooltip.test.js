@@ -9,107 +9,70 @@ import {
 
 const label = (key, params) => t(`chat.contextCard.${key}`, params);
 
-function rowsText(section) {
-  return section.rows.map(
-    (row) => `${row.sub ? '· ' : ''}${row.label}: ${row.value}`,
-  );
-}
-
 describe('contextUsageCardModel', () => {
-  it('leads with the Session cache hit rate and totals, then the last turn', () => {
+  it('compares cache shares for each scope and keeps reasoning within output', () => {
     const card = contextUsageCardModel(
+      { tokens: 155489 },
       {
-        tokens: 155489,
-        estimated: true,
-        provider_input_tokens: 154731,
-        provider_output_tokens: 243,
-        estimated_delta_tokens: 515,
-      },
-      {
-        input_tokens: 36704,
-        output_tokens: 2190,
-        cache_read_tokens: 6656,
-        cache_write_tokens: 1200,
-        reasoning_tokens: 1400,
-      },
-      {
-        // The hit rate divides by the input of every turn.
-        input_tokens: 10000,
-        output_tokens: 400,
-        cache_read_tokens: 3000,
-        cache_write_tokens: 500,
-        reasoning_tokens: 90,
+        session: {
+          input_tokens: 1_500_000,
+          output_tokens: 9000,
+          cache_read_tokens: 300000,
+          reasoning_tokens: 1000,
+        },
+        run: {
+          input_tokens: 50000,
+          output_tokens: 4000,
+          cache_read_tokens: 30000,
+          reasoning_tokens: 600,
+        },
+        iteration: {
+          input_tokens: 20000,
+          output_tokens: 1000,
+          cache_read_tokens: 18000,
+        },
       },
       262144,
     );
-
     expect(card.summary).toBe('155,489 / 262,144');
     expect(
-      card.sections.map((section) => ({
-        id: section.id,
-        title: section.title,
-        rows: rowsText(section),
-      })),
+      card.rows.map(({ label, session, run, iteration }) => [
+        label,
+        session,
+        run,
+        iteration,
+      ]),
     ).toEqual([
-      {
-        id: 'session',
-        title: '',
-        rows: [
-          `${label('cacheHitRate')}: 30.0%`,
-          `${label('totalInput')}: 10,000`,
-          `${label('totalOutput')}: 400`,
-          `· ${label('reasoning')}: 90`,
-        ],
-      },
-      {
-        id: 'last-turn',
-        title: label('lastTurn'),
-        rows: [
-          `${label('input')}: 36,704`,
-          `· ${label('cacheRead')}: 6,656 (18.1%)`,
-          `· ${label('cacheWrite')}: 1,200`,
-          `· ${label('uncached')}: 28,848`,
-          `${label('output')}: 2,190`,
-          `· ${label('reasoning')}: 1,400`,
-        ],
-      },
+      [label('cacheHit'), '20.0%', '60.0%', '90.0%'],
+      [label('input'), '1.5M', '50,000', '20,000'],
+      [label('output'), '9,000', '4,000', '1,000'],
+      [label('reasoning'), '1,000', '600', '0'],
     ]);
   });
 
-  it('counts figures the usage does not report as zero', () => {
+  it('distinguishes a measured zero share from a scope without input', () => {
     const card = contextUsageCardModel(
-      { tokens: 900, estimated: true },
+      { tokens: 900 },
       {
-        input_tokens: 500,
-        input_tokens_estimated: true,
-        output_tokens: 20,
-        estimated: true,
+        session: { input_tokens: 500 },
+        run: null,
+        iteration: { output_tokens: 15 },
       },
-      { input_tokens: 500, output_tokens: 20 },
       null,
     );
-
     expect(card.summary).toBe('900');
-    expect(card.sections.map(rowsText)).toEqual([
-      [
-        `${label('cacheHitRate')}: 0.0%`,
-        `${label('totalInput')}: 500`,
-        `${label('totalOutput')}: 20`,
-      ],
-      [
-        `${label('input')}: 500`,
-        `· ${label('cacheRead')}: 0 (0.0%)`,
-        `· ${label('cacheWrite')}: 0`,
-        `· ${label('uncached')}: 500`,
-        `${label('output')}: 20`,
-      ],
-    ]);
+    expect(card.rows).toHaveLength(3);
+    expect(card.rows[0]).toMatchObject({
+      session: '0.0%',
+      run: '—',
+      iteration: '—',
+    });
   });
 
-  it('has no headline or sections without any usage', () => {
-    expect(contextUsageCardModel(null, null, null, 262144)).toEqual({
+  it('has no headline or rows without any usage', () => {
+    expect(contextUsageCardModel(null, {}, 262144)).toEqual({
       summary: null,
-      sections: [],
+      rows: [],
     });
   });
 });

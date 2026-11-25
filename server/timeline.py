@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from time import monotonic
 from typing import Any, cast, override
 
+from core.chat.messages import ChatMessage
 from core.chat.timeline import history_timeline, history_tool_call
 from core.runs import Run, RunTimeline
 from core.sessions import SessionAddress
@@ -23,6 +24,7 @@ from server.file_delivery import FILE_PREVIEW_WORKERS
 from server.rpc.payloads import (
     file_url_candidates,
     history_message,
+    remove_opaque_provider_metadata,
     remove_opaque_provider_metadata_async,
     verified_file_urls,
 )
@@ -141,6 +143,8 @@ def project_timeline_history(
     history_response: JsonObject,
     active_run_snapshot: JsonObject | None = None,
     child_limit: int = 0,
+    *,
+    context_messages: Sequence[ChatMessage] = (),
 ) -> JsonObject:
     """Add complete semantic elements to an already public History response."""
     response = {**history_response, "timeline_version": TIMELINE_VERSION}
@@ -152,6 +156,17 @@ def project_timeline_history(
         ),
         None,
     )
+    # The newest page can consist entirely of User or Tool records. Its Context
+    # tail still contains the last measured Assistant, even across Compaction.
+    if last_usage is None and not history_response.get("incremental"):
+        last_usage = next(
+            (
+                remove_opaque_provider_metadata(message.usage)
+                for message in reversed(context_messages)
+                if message.role == "assistant" and message.usage is not None
+            ),
+            None,
+        )
     if last_usage is not None or not history_response.get("incremental"):
         response["last_usage"] = last_usage
     items = history_timeline(
@@ -163,9 +178,11 @@ def project_timeline_history(
         },
     )
     if active_run_snapshot is not None:
-        for field in ("output_speed", "output_latency"):
+        for field in ("output_speed", "output_latency", "run_usage"):
             if field in active_run_snapshot.get("state", {}):
                 response[field] = active_run_snapshot["state"][field]
+        if "usage" in active_run_snapshot.get("state", {}):
+            response["last_usage"] = active_run_snapshot["state"]["usage"]
         run_id = active_run_snapshot["run_id"]
         positions = [index for index, item in enumerate(items) if item.get("run_id") == run_id]
         position = positions[0] if positions else len(items)

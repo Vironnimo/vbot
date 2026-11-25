@@ -207,9 +207,9 @@ describe('ChatComposer', () => {
       expect(card.querySelector('.context-card__meter-fill').style.width).toBe(
         '40%',
       );
-      expect(
-        card.querySelector('.context-card__section-title').textContent,
-      ).toContain(t('chat.contextCard.lastTurn'));
+      expect(card.querySelector('thead').textContent).toContain(
+        t('chat.contextCard.iteration'),
+      );
       expect(card.querySelector('.context-card__level')).toBeNull();
     });
 

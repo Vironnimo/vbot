@@ -23,6 +23,7 @@ export function runEventFromServerEvent(serverEvent) {
   if (payload.usage) {
     runPayload.usage = payload.usage;
   }
+  if (payload.run_usage) runPayload.run_usage = payload.run_usage;
   if (payload.session_usage) {
     runPayload.session_usage = payload.session_usage;
   }

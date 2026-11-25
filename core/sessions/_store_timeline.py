@@ -433,6 +433,7 @@ def chat_history_snapshot(
             )
     usage = _store_history.session_usage(connection, state)
     context = _store_history.context_batch(connection, full_view)
+    run_usage = _store_history.latest_run_usage(connection, full_view, context)
     output_rows = _output_measurement_rows(connection, full_view)
     background = _background_records(
         connection,
@@ -473,6 +474,7 @@ def chat_history_snapshot(
                 ),
             ),
             session_usage=usage,
+            run_usage=run_usage,
             context_messages=tuple(context.messages()),
             background_records=tuple(background),
             generation_id=generation,

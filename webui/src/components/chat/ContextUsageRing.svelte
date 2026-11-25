@@ -15,6 +15,7 @@
     contextUsageCardModel,
   } from '$lib/tokenUsageTooltip.js';
   import Button from '../ui/Button.svelte';
+  import DataTable from '../ui/DataTable.svelte';
   import ContextProviderUsage from './ContextProviderUsage.svelte';
 
   let {
@@ -23,6 +24,7 @@
     contextWindow = null,
     usage = null,
     sessionUsage = null,
+    runUsage = null,
     // The Session's effective Compaction Policy (null while unknown).
     compactionPolicy = null,
     showFigures = false,
@@ -54,8 +56,21 @@
       : RING_CIRCUMFERENCE * (1 - fillRatio),
   );
   let card = $derived(
-    contextUsageCardModel(contextUsage, usage, sessionUsage, contextWindow),
+    contextUsageCardModel(
+      contextUsage,
+      { session: sessionUsage, run: runUsage, iteration: usage },
+      contextWindow,
+    ),
   );
+  let columns = $derived([
+    { id: 'label', label: '', sortable: false },
+    ...['session', 'run', 'iteration'].map((id) => ({
+      id,
+      label: t(`chat.contextCard.${id}`),
+      align: 'end',
+      sortable: false,
+    })),
+  ]);
   // Fill level of the ring and meter, relative to the Session's automatic
   // Compaction trigger. Current Context Usage tokens are the same projection
   // the server's trigger evaluates; see `contextLimitWarning`.
@@ -168,24 +183,18 @@
       {#if providerLimits}
         <ContextProviderUsage provider={providerLimits} {open} />
       {/if}
-      {#each card.sections as section (section.id)}
-        <section class="context-card__section">
-          {#if section.title}
-            <h3 class="context-card__section-title">{section.title}</h3>
-          {/if}
-          <dl class="context-card__rows">
-            {#each section.rows as row, index (index)}
-              <div
-                class="context-card__row"
-                class:context-card__row--sub={row.sub}
-              >
-                <dt>{row.label}</dt>
-                <dd>{row.value}</dd>
-              </div>
-            {/each}
-          </dl>
-        </section>
-      {/each}
+      {#if card.rows.length}
+        <div class="context-card__breakdown">
+          <DataTable
+            {columns}
+            rows={card.rows}
+            rowKey={(row) => row.id}
+            ariaLabel={t('chat.contextCard.usage')}
+            dense
+            focusScrollRegion={false}
+          />
+        </div>
+      {/if}
       {#if onForceCompaction}
         <div class="context-card__footer">
           <Button
@@ -279,7 +288,7 @@
   /* The card on the shared floating card (styles/app/hints.css), portaled to
      <body>. The meter repeats the ring's track and fill colors. */
   .context-card.floating-card {
-    width: min(300px, calc(100vw - 16px));
+    width: min(320px, calc(100vw - 16px));
   }
 
   .context-card__header {
@@ -348,59 +357,31 @@
     color: var(--red);
   }
 
-  /* Breakdown: labelled figures in a right-aligned tabular column; indented
-     sub-rows are shares of the row above, never additions. */
-  .context-card__section {
-    margin-top: 12px;
+  .context-card__breakdown {
+    margin-top: 10px;
   }
 
-  .context-card__section + .context-card__section {
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+  .context-card__breakdown :global(.data-table) {
+    --data-table-pad-y: 2px;
+    --data-table-pad-x: 4px;
   }
 
-  .context-card__section-title {
-    margin: 0 0 4px;
-    color: var(--text-hi);
-    font-size: var(--fs-label-sm);
+  .context-card__breakdown :global(td.data-table__cell) {
+    border: 0;
+  }
+
+  .context-card__breakdown :global(.data-table__cell:first-child) {
+    padding-inline-start: 0;
+    color: var(--text-med);
+  }
+
+  .context-card__breakdown :global(.data-table__cell:last-child) {
+    padding-inline-end: 0;
+  }
+
+  .context-card__breakdown :global(tbody tr:first-child td) {
+    padding-top: 5px;
     font-weight: 600;
-  }
-
-  .context-card__rows {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin: 0;
-  }
-
-  .context-card__row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 16px;
-    font-size: var(--fs-label-sm);
-    line-height: 1.5;
-  }
-
-  .context-card__row dt {
-    min-width: 0;
-    color: var(--text-med);
-  }
-
-  .context-card__row dd {
-    margin: 0;
-    color: var(--text-hi);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .context-card__row--sub dt {
-    padding-left: 12px;
-    color: var(--text-lo);
-  }
-
-  .context-card__row--sub dd {
-    color: var(--text-med);
   }
 
   .context-card__footer {

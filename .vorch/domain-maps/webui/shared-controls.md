@@ -30,7 +30,7 @@ dnd-kit setup: the manager gets its plugins and sensors at construction, because
 
 ## DataTable
 
-`components/ui/DataTable.svelte` owns sortable headers with `aria-sort`, the optional filter with its "N of M" count, the optional row limit with Show all / Show fewer, activatable rows, and the keyboard-scrollable horizontal region, so a wide table scrolls inside itself instead of widening the page; the pure sorting, filtering, and limiting rules live in `lib/dataTable.js`. Callers pass translated column labels, rows, and a stable row key; a column sets `align: 'end'` for numbers, `mono` only for code-like values (paths, commands, codes, opaque ids), and a `cell` snippet called as `(row, column)` for custom markup. Visual rules: `webui/design.md` -> Tables. Tests: `ui/__tests__/DataTable.test.js`, `lib/__tests__/dataTable.test.js`.
+`components/ui/DataTable.svelte` owns sortable headers with `aria-sort`, the optional filter with its "N of M" count, the optional row limit with Show all / Show fewer, activatable rows, and the keyboard-scrollable horizontal region, so a wide table scrolls inside itself instead of widening the page; the pure sorting, filtering, and limiting rules live in `lib/dataTable.js`. Callers pass translated column labels, rows, and a stable row key; a column sets `align: 'end'` for numbers, `mono` only for code-like values (paths, commands, codes, opaque ids), and a `cell` snippet called as `(row, column)` for custom markup. A compact readout that fits its container can set `focusScrollRegion={false}` to leave the Tab stop to its action. Visual rules: `webui/design.md` -> Tables. Tests: `ui/__tests__/DataTable.test.js`, `lib/__tests__/dataTable.test.js`.
 
 ## DateField and TimeField
 

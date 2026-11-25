@@ -736,6 +736,10 @@ class AgenticProgression:
                 )
                 run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
+                run_usage = add_session_turn_usage(
+                    run.terminal_payload_extras.get("run_usage", {}), assistant_message.usage
+                )
+                run.terminal_payload_extras["run_usage"] = run_usage
                 run.terminal_payload_extras["session_usage"] = session_usage
                 run.emit(
                     MODEL_STEP_USAGE_EVENT,
@@ -744,6 +748,7 @@ class AgenticProgression:
                         "model": assistant_message.model,
                         "message_id": assistant_message.id,
                         "session_usage": dict(session_usage),
+                        "run_usage": run_usage,
                         "context_usage": dict(assistant_context_usage),
                         "iteration_count": run.iteration_count,
                     },

@@ -37,6 +37,7 @@ function historyLoadOptions(history) {
     reset: history?.history_reset,
     activeRunId: history?.active_run?.run_id,
     sessionUsage: history?.session_usage,
+    runUsage: history?.run_usage,
     ...(isRecord(history) && Object.hasOwn(history, 'last_usage')
       ? { lastUsage: history.last_usage }
       : {}),
@@ -151,6 +152,7 @@ export function createChatHistory({
     const compactionPolicy = sessionState.compactionPolicy;
     const usage = sessionState.usage;
     const sessionUsage = sessionState.sessionUsage;
+    const runUsage = sessionState.runUsage;
     const contextUsage = sessionState.contextUsage;
     const outputSpeed = sessionState.outputSpeed;
     const outputLatency = sessionState.outputLatency;
@@ -165,6 +167,7 @@ export function createChatHistory({
         }
         // Output from the live Run may have advanced since the read began.
         if (sessionState.usage !== usage) options.preserveUsage = true;
+        if (sessionState.runUsage !== runUsage) options.preserveRunUsage = true;
         if (sessionState.sessionUsage !== sessionUsage)
           options.preserveSessionUsage = true;
         if (sessionState.contextUsage !== contextUsage)
@@ -235,7 +238,7 @@ export function createChatHistory({
               ? { last_usage: result.last_usage }
               : {}),
           ...Object.fromEntries(
-            ['output_speed', 'output_latency'].flatMap((key) =>
+            ['run_usage', 'output_speed', 'output_latency'].flatMap((key) =>
               Object.hasOwn(page, key)
                 ? [[key, page[key]]]
                 : Object.hasOwn(result, key)

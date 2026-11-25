@@ -337,10 +337,18 @@ def test_session_usage_matches_the_canonical_python_aggregation(manager):
             },
         ),
     ]
-    session.append_many(messages)
+    session.append(messages[0])  # Older history without Run attribution.
+    assert read(session).run_usage is None
+    session = session.start_run("second")
+    session.append_many(messages[1:])
+    complete_run(session, summary("second"))
 
-    # The usage covers the whole Session, not only the one-record page.
-    assert read(session, limit=1).session_usage == aggregate_session_usage(messages)
+    # The page contains only the footer. Both scopes include off-page steps.
+    page = read(session, limit=1)
+    assert page.session_usage == aggregate_session_usage(messages)
+    assert page.run_usage == aggregate_session_usage(messages[1:])
+    fork = asyncio.run(manager.fork(session.address))
+    assert read(fork, limit=1).run_usage == page.run_usage
 
 
 def test_output_measurements_follow_the_full_current_view_across_pages_forks_and_edits(manager):

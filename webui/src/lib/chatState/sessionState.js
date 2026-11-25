@@ -67,6 +67,25 @@ export function applyRunContextUsage(session, runId, sequence, payload) {
   );
 }
 
+// The timeline and app socket can repeat a measured step or deliver an older
+// snapshot after it. Replace the three scopes together at their Run sequence.
+export function applyRunTokenUsage(session, runId, sequence, payload) {
+  if (!payload?.usage && !payload?.session_usage && !payload?.run_usage) return;
+  const current = session.currentRun;
+  if (current && current.runId !== runId) return;
+  if (current && Number.isInteger(sequence)) {
+    if (sequence < (current.tokenUsageSequence ?? 0)) return;
+    current.tokenUsageSequence = sequence;
+  }
+  if (payload.usage)
+    updateSessionUsage(session, payload.usage, {
+      model: payload.model,
+      messageId: payload.message_id,
+    });
+  if (payload.run_usage) session.runUsage = payload.run_usage;
+  if (payload.session_usage) session.sessionUsage = payload.session_usage;
+}
+
 export function createChatState() {
   return {
     agents: [],
@@ -249,6 +268,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       // Latest measured latency, including a step too short for a speed.
       outputLatency: null,
       sessionUsage: null,
+      runUsage: null,
       contextUsage: null,
       // The Session's effective Compaction Policy from `chat.history`; null
       // until History reports it.

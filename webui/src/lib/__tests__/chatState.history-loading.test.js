@@ -298,6 +298,7 @@ describe('History reads', () => {
       payload: {
         usage: { input_tokens: 20 },
         session_usage: { input_tokens: 30 },
+        run_usage: { input_tokens: 25 },
         context_usage: { used_tokens: 25, context_window: 100 },
       },
     });
@@ -306,6 +307,7 @@ describe('History reads', () => {
       incremental: true,
       compaction_policy: policy,
       last_usage: { input_tokens: 12 },
+      run_usage: { input_tokens: 12 },
       session_usage: { input_tokens: 12 },
       context_usage: { used_tokens: 7, context_window: 100 },
       active_run: { run_id: 'run-live' },
@@ -314,6 +316,7 @@ describe('History reads', () => {
     expect(source.compactionPolicy).toBe(changedPolicy);
     expect(source.usage).toEqual({ input_tokens: 20 });
     expect(source.sessionUsage).toEqual({ input_tokens: 30 });
+    expect(source.runUsage).toEqual({ input_tokens: 25 });
     expect(source.contextUsage).toEqual({
       used_tokens: 25,
       context_window: 100,
@@ -343,6 +346,7 @@ describe('History reads', () => {
     await replacing;
     expect(source.usage).toBeNull();
     expect(source.sessionUsage).toEqual({ input_tokens: 0 });
+    expect(source.runUsage).toBeNull();
     expect(source.contextUsage).toBeNull();
   });
 

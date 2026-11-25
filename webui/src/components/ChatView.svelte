@@ -1172,6 +1172,7 @@
                   ?.context_window}
                 usage={target.activeSessionState?.usage}
                 sessionUsage={target.activeSessionState?.sessionUsage}
+                runUsage={target.activeSessionState?.runUsage}
                 compactionPolicy={target.activeSessionState?.compactionPolicy}
                 showFigures
               />
@@ -1307,6 +1308,7 @@
                   compactionPolicy={target.activeSessionState?.compactionPolicy}
                   usage={target.activeSessionState?.usage}
                   sessionUsage={target.activeSessionState?.sessionUsage}
+                  runUsage={target.activeSessionState?.runUsage}
                   {getUIContext}
                   onSendMessage={composerSendMessage}
                   onCancelRun={actions.handleCancelRun}

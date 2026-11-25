@@ -18,7 +18,7 @@ import {
 import {
   applyRunContextUsage,
   updateSessionOutputMeasurements,
-  updateSessionUsage,
+  applyRunTokenUsage,
 } from './chatState/sessionState.js';
 
 const HEARTBEAT_TIMEOUT_MS = 25_000;
@@ -181,8 +181,7 @@ export function createChatRunStream({
     session.status = current.status;
     applyRunControls(session, { run_id: data.run_id, ...state });
     applyRunContextUsage(session, data.run_id, data.sequence, state);
-    if (state.session_usage) session.sessionUsage = state.session_usage;
-    if (state.usage) updateSessionUsage(session, state.usage);
+    applyRunTokenUsage(session, data.run_id, data.sequence, state);
     if (data.terminal)
       appendRunEvent(session, {
         type: `run_${state.status ?? current.status}`,

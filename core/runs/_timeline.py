@@ -207,7 +207,14 @@ class RunTimeline:
         message = payload.get("message") or {}
         self.run["timestamp"] = self.run.get("timestamp") or timestamp
         self.run["startTimestamp"] = self.run.get("startTimestamp") or timestamp
-        for key in ("context_usage", "session_usage", "usage", "iteration_count", "controls"):
+        for key in (
+            "context_usage",
+            "session_usage",
+            "run_usage",
+            "usage",
+            "iteration_count",
+            "controls",
+        ):
             if key in payload:
                 self.state[key] = copy.deepcopy(payload[key])
         if kind in {"model_step_usage", "assistant_output"}:

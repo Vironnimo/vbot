@@ -41,6 +41,8 @@
     filter = null,
     emptyText = '',
     dense = false,
+    // A small table inside a hover card can leave Tab to its actions.
+    focusScrollRegion = true,
     maxHeight = '',
     onRowClick = null,
     footer,
@@ -163,7 +165,7 @@
       <div
         class="data-table__scroll"
         role="region"
-        tabindex="0"
+        tabindex={focusScrollRegion ? 0 : undefined}
         aria-label={ariaLabel}
       >
         <table id={tableId} class="data-table__table" aria-label={ariaLabel}>

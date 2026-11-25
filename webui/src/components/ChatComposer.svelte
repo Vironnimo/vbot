@@ -41,6 +41,7 @@
     compactionPolicy = null,
     usage = null,
     sessionUsage = null,
+    runUsage = null,
     draftKey = '',
     historyKey = '',
     focusRequest = 0,
@@ -636,6 +637,7 @@
     {contextWindow}
     {usage}
     {sessionUsage}
+    {runUsage}
     {compactionPolicy}
     {onForceCompaction}
     {compactionState}

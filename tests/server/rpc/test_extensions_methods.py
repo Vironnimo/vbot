@@ -730,6 +730,7 @@ async def test_extension_page_history_projects_only_bound_visible_history(
             before_cursor=before_cursor,
         ),
         session_usage={"input_tokens": 5000},
+        run_usage={"input_tokens": 300},
         # Context usage comes from the canonical tail, outside the visible page.
         context_messages=(
             ChatMessage(
@@ -800,7 +801,8 @@ async def test_extension_page_history_projects_only_bound_visible_history(
         "has_more": before_cursor is not None,
         "session_usage": {"input_tokens": 5000},
         "context_usage": _CONTEXT_USAGE,
-        "last_usage": None,
+        "last_usage": {"input_tokens": 120, "output_tokens": 30, "context_usage": _CONTEXT_USAGE},
+        "run_usage": {"input_tokens": 300},
         "file_urls": ["/api/files/capability.signature"],
     }
 
@@ -852,6 +854,7 @@ async def test_extension_page_history_rejects_stale_page_and_foreign_participant
             return SimpleNamespace(
                 page=SimpleNamespace(messages=(), has_more=False, before_cursor=None),
                 session_usage={},
+                run_usage=None,
             )
 
     state = _page_state(Groups())
@@ -904,6 +907,7 @@ async def test_extension_page_history_projects_only_its_canonical_live_run(
             before_cursor=None,
         ),
         session_usage={},
+        run_usage=None,
         context_messages=(),
     )
 
@@ -977,6 +981,7 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
             before_cursor=None,
         ),
         session_usage={},
+        run_usage=None,
         context_messages=(),
     )
     address = SessionAddress(None, "participant-agent", "participant-session")

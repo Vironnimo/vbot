@@ -189,11 +189,13 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "cache_write_tokens": 0,
         "reasoning_tokens": 0,
     }
+    assert usage_events[0].payload["run_usage"] == measured_session_usage
     assert usage_events[0].payload["session_usage"] == measured_session_usage
     estimated_usage = usage_events[1].payload["usage"]
     assert estimated_usage["estimated"] is True
     assert usage_events[1].payload["context_usage"]["estimated"] is True
     assert usage_events[1].payload["context_usage"]["tokens"] > 18
+    assert usage_events[1].payload["run_usage"] == usage_events[1].payload["session_usage"]
     assert usage_events[1].payload["session_usage"] == {
         **measured_session_usage,
         "input_tokens": 11 + estimated_usage["input_tokens"],

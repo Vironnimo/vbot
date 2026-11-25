@@ -429,6 +429,11 @@ describe('ChatView', () => {
             cache_read_tokens: 3000,
             cache_write_tokens: 200,
           },
+          runUsage: {
+            input_tokens: 10000,
+            output_tokens: 300,
+            cache_read_tokens: 5000,
+          },
           sessionUsage: {
             input_tokens: 40000,
             output_tokens: 1500,
@@ -437,51 +442,30 @@ describe('ChatView', () => {
           },
         },
         [
-          {
-            title: '',
-            rows: [
-              'Cache hit rate: 80.0%',
-              'Total input: 40,000',
-              'Total output: 1,500',
-            ],
-          },
-          {
-            title: 'Last turn',
-            rows: [
-              'Input: 3,886',
-              '· Read from cache: 3,000 (77.2%)',
-              '· Written to cache: 200',
-              '· Uncached: 686',
-              'Output: 92',
-            ],
-          },
+          ['Cache hit', '80.0%', '50.0%', '77.2%'],
+          ['Input', '40,000', '10,000', '3,886'],
+          ['Output', '1,500', '300', '92'],
         ],
       ],
       [
         'without cache usage',
         { usage: { input_tokens: 3886, output_tokens: 92 } },
         [
-          {
-            title: 'Last turn',
-            rows: [
-              'Input: 3,886',
-              '· Read from cache: 0 (0.0%)',
-              '· Written to cache: 0',
-              '· Uncached: 3,886',
-              'Output: 92',
-            ],
-          },
+          ['Cache hit', '—', '—', '0.0%'],
+          ['Input', '—', '—', '3,886'],
+          ['Output', '—', '—', '92'],
         ],
       ],
     ])(
-      'breaks down last-turn and Session usage %s in the ring hover card',
-      async (_case, usage, sections) => {
+      'compares Session, Run and iteration usage %s in the ring hover card',
+      async (_case, usage, rows) => {
         rpcMock.mockImplementation(createChatRpcMock(usage));
         await chat.mountChat();
 
         expect(await hoveredContextRingCard()).toEqual({
           summary: '3,978 / 262,144',
-          sections,
+          headers: ['', 'Session', 'Last run', 'Last iteration'],
+          rows,
         });
       },
     );

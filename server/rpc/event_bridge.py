@@ -534,14 +534,9 @@ async def _server_event_from_run_event(
                 payload[field] = event.payload[field]
         if "timing" in event.payload:
             payload["timing"] = remove_opaque_provider_metadata(event.payload["timing"])
-        if "session_usage" in event.payload:
-            payload["session_usage"] = remove_opaque_provider_metadata(
-                event.payload["session_usage"]
-            )
-        if "context_usage" in event.payload:
-            payload["context_usage"] = remove_opaque_provider_metadata(
-                event.payload["context_usage"]
-            )
+        for field in ("session_usage", "run_usage", "context_usage"):
+            if field in event.payload:
+                payload[field] = remove_opaque_provider_metadata(event.payload[field])
         if "change_stats" in event.payload:
             payload["change_stats"] = event.payload["change_stats"]
         # The Session recorded this completion as read: no unread marker.

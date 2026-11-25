@@ -128,11 +128,24 @@ describe('turn usage from Run events', () => {
       sequence: 2,
       payload: {
         usage: { input_tokens: 8432, output_tokens: 512 },
+        run_usage: { input_tokens: 12000 },
         session_usage: sessionUsage,
         context_usage: contextUsage,
       },
     });
 
+    // A late step from the other transport cannot roll any scope back.
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        usage: { input_tokens: 5 },
+        run_usage: { input_tokens: 5 },
+        session_usage: { input_tokens: 5 },
+      },
+    });
+    expect(sessionState.runUsage).toEqual({ input_tokens: 12000 });
     expect(sessionState.usage).toEqual({
       input_tokens: 8432,
       output_tokens: 512,

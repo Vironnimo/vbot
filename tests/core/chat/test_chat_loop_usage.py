@@ -142,6 +142,7 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
             "cache_write_tokens": 200,
             "reasoning_tokens": 25,
         }
+        assert completed["run_usage"] == completed["session_usage"]
         assert completed["context_usage"] == {
             "tokens": 1000 + _hello_tokens(),
             "estimated": True,

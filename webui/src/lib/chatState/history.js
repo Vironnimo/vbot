@@ -88,6 +88,12 @@ export function loadHistory(sessionState, messages, options = {}) {
       if (lastUsage) sessionState.usage = lastUsage;
     }
   }
+  if (
+    (!options.preserveRunUsage || changedGeneration) &&
+    (options.runUsage !== undefined || !incremental)
+  ) {
+    sessionState.runUsage = options.runUsage ?? null;
+  }
   if (!options.preserveOutputSpeed || changedGeneration) {
     if (Object.hasOwn(options, 'output_speed'))
       sessionState.outputSpeed = options.output_speed;
@@ -289,6 +295,7 @@ export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
     sessionState.timelineItems = sessionState.timelineItems.slice(0, itemIndex);
   sessionState.timelineSequences = {};
   sessionState.usage = findLastUsage(sessionState.messages);
+  sessionState.runUsage = null;
   sessionState.outputSpeed = null;
   sessionState.outputLatency = null;
   sessionState.contextUsage = null;

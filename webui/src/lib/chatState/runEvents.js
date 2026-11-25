@@ -2,7 +2,7 @@ import { isTerminalRunEvent } from '../runEventTypes.js';
 import {
   applySessionCompletionActivity,
   CHAT_STATUS_RUNNING,
-  updateSessionUsage,
+  applyRunTokenUsage,
   CHAT_STATUS_IDLE,
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_FAILED,
@@ -111,7 +111,19 @@ export function appendRunEvent(sessionState, event) {
     (!sessionState.currentRun ||
       sessionState.currentRun.runId === normalizedEvent.run_id)
   ) {
-    applyModelStepUsage(sessionState, normalizedEvent.payload);
+    applyRunTokenUsage(
+      sessionState,
+      normalizedEvent.run_id,
+      normalizedEvent.sequence,
+      normalizedEvent.payload,
+    );
+    const count = normalizedEvent.payload?.iteration_count;
+    if (sessionState.currentRun && Number.isInteger(count) && count >= 0) {
+      sessionState.currentRun.iterationCount = Math.max(
+        sessionState.currentRun.iterationCount ?? 0,
+        count,
+      );
+    }
   }
   if (
     ['user_message_persisted', 'run_started'].includes(normalizedEvent.type) &&
@@ -194,25 +206,6 @@ export function applyRunControls(sessionState, run) {
   current.controlsSequence = run.controls_sequence ?? 0;
 }
 
-function applyModelStepUsage(sessionState, payload) {
-  if (payload?.usage) {
-    updateSessionUsage(sessionState, payload.usage, {
-      model: payload.model,
-      messageId: payload.message_id,
-    });
-  }
-  if (payload?.session_usage) {
-    sessionState.sessionUsage = payload.session_usage;
-  }
-  if (
-    sessionState.currentRun &&
-    Number.isInteger(payload?.iteration_count) &&
-    payload.iteration_count >= 0
-  ) {
-    sessionState.currentRun.iterationCount = payload.iteration_count;
-  }
-}
-
 function appendRunEvents(sessionState, events) {
   for (const event of events) {
     appendRunEvent(sessionState, event);
@@ -236,6 +229,7 @@ function beginRunFromEvent(sessionState, event) {
     runId: event.run_id,
     controls: isSameRun ? currentRun.controls : {},
     controlsSequence: isSameRun ? currentRun.controlsSequence : 0,
+    tokenUsageSequence: isSameRun ? currentRun.tokenUsageSequence : 0,
     contextUsageSequence: isSameRun ? currentRun.contextUsageSequence : 0,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
@@ -282,12 +276,12 @@ function finishRun(sessionState, event) {
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }
-  if (type === 'run_completed' && event?.payload?.usage) {
-    updateSessionUsage(sessionState, event.payload.usage);
-  }
-  if (event?.payload?.session_usage) {
-    sessionState.sessionUsage = event.payload.session_usage;
-  }
+  applyRunTokenUsage(
+    sessionState,
+    completedRunId,
+    event.sequence,
+    event.payload,
+  );
   applySessionCompletionActivity(
     sessionState,
     event?.payload?.notification_activity,

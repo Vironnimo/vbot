@@ -132,8 +132,9 @@ _SESSION_USAGE_KEYS = (
     "reasoning_tokens",
 )
 # Every Assistant turn counts; a counter it does not report counts as zero.
+_USAGE_SUMS = ", ".join(f"COALESCE(SUM(a.{key}), 0) AS {key}" for key in _SESSION_USAGE_KEYS)
 _USAGE_SQL = f"""
-SELECT {", ".join(f"COALESCE(SUM(a.{key}), 0) AS {key}" for key in _SESSION_USAGE_KEYS)}
+SELECT {_USAGE_SUMS}
 FROM entries AS e
 JOIN assistant_entries AS a ON a.entry_key = e.entry_key
 WHERE e.session_key = ? AND e.role = 'assistant' AND e.seq >= ? AND a.usage_present = 1
@@ -148,6 +149,31 @@ def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> JsonObj
     """
     row = connection.execute(_USAGE_SQL, (state["session_key"], own_floor(state))).fetchone()
     return {key: int(row[key]) for key in _SESSION_USAGE_KEYS}
+
+
+def latest_run_usage(
+    connection: sqlite3.Connection,
+    ranges: Sequence[ViewRange],
+    context: _store_codec.EntryBatch,
+) -> JsonObject | None:
+    """Sum the visible steps of the Run that supplied the latest Assistant Usage."""
+    latest = next(
+        (
+            row
+            for row in reversed(context.rows)
+            if row["role"] == "assistant" and context.assistants[row["entry_key"]]["usage_present"]
+        ),
+        None,
+    )
+    if latest is None or latest["run_key"] is None:
+        return None
+    sql, params = _store_lineage.view_query(
+        ranges,
+        _USAGE_SUMS,
+        joins="JOIN assistant_entries AS a ON a.entry_key = e.entry_key",
+        where="e.run_key = ? AND a.usage_present = 1",
+    )
+    return dict(connection.execute(sql, (*params, latest["run_key"])).fetchone())
 
 
 _USAGE_ASSISTANT = (

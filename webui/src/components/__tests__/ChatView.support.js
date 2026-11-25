@@ -211,6 +211,7 @@ export function tick() {
 export function createChatRpcMock({
   usage,
   sessionUsage,
+  runUsage,
   contextUsage,
   contextWindow = 262144,
   sessionMessages,
@@ -290,6 +291,7 @@ export function createChatRpcMock({
           timeline_version: 1,
           has_more: sourceMessages.length > pageMessages.length,
         };
+        response.run_usage = runUsage ?? null;
         if (sessionUsage) {
           response.session_usage = sessionUsage;
         }
@@ -829,23 +831,13 @@ export async function hoveredContextRingCard() {
   flushSync();
   const card = document.body.querySelector('.context-card');
   expect(card.dataset.floatingOpen).toBe('true');
-  // Sections as { title, rows }; a sub-row (a share of the row above)
-  // is prefixed with "· ".
   const content = {
     summary: card.querySelector('.context-card__usage')?.textContent ?? '',
-    sections: [...card.querySelectorAll('.context-card__section')].map(
-      (section) => ({
-        title:
-          section
-            .querySelector('.context-card__section-title')
-            ?.textContent.trim() ?? '',
-        rows: [...section.querySelectorAll('.context-card__row')].map(
-          (row) =>
-            `${row.classList.contains('context-card__row--sub') ? '· ' : ''}${row
-              .querySelector('dt')
-              .textContent.trim()}: ${row.querySelector('dd').textContent.trim()}`,
-        ),
-      }),
+    headers: [...card.querySelectorAll('th')].map((cell) =>
+      cell.textContent.trim(),
+    ),
+    rows: [...card.querySelectorAll('tbody tr')].map((row) =>
+      [...row.cells].map((cell) => cell.textContent.trim()),
     ),
   };
   anchor.dispatchEvent(new Event('pointerleave'));

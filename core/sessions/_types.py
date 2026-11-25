@@ -439,6 +439,7 @@ class SessionChatHistorySnapshot:
     has_newer: bool = False
     runs: tuple[JsonObject, ...] = ()
     unchanged: bool = False
+    run_usage: JsonObject | None = None
     output_speed: JsonObject | None = None
     output_latency: JsonObject | None = None
 

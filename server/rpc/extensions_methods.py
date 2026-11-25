@@ -631,6 +631,7 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
             state.file_delivery,
             active_snapshot,
             child_limit,
+            newest=query.get("before") is None,
         )
         _validate_page_context(state.runtime, registry, name, page)
         return projection
@@ -753,6 +754,8 @@ def _temporary_history_projection(
     delivery: Any,
     active_snapshot: JsonObject | None = None,
     child_limit: int = 0,
+    *,
+    newest: bool,
 ) -> JsonObject:
     """Use the ordinary client projection while withholding internal Session records."""
     from server.timeline import project_timeline_history
@@ -775,6 +778,7 @@ def _temporary_history_projection(
         "incremental": snapshot.incremental,
         "has_newer": snapshot.has_newer,
         "session_usage": snapshot.session_usage,
+        "run_usage": snapshot.run_usage,
         "context_usage": latest_session_context_usage(list(snapshot.context_messages)),
     }
     if snapshot.page.before_cursor is not None:
@@ -790,7 +794,9 @@ def _temporary_history_projection(
             "status": active["state"]["status"],
             "started_at": active["state"]["started_at"],
         }
-    projection = project_timeline_history(response, active, child_limit)
+    projection = project_timeline_history(
+        response, active, child_limit, context_messages=snapshot.context_messages if newest else ()
+    )
     # Grant only the files of what the page receives; steps outside a Run's
     # window are granted with the page that loads them.
     projection["file_urls"] = projected_file_urls(

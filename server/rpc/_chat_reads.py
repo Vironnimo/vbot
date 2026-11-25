@@ -258,6 +258,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         # Whole-session provider-reported token fields: the page above may be
         # a slice, but these always cover the full transcript.
         response["session_usage"] = history.session_usage
+        response["run_usage"] = history.run_usage
         context_usage = (
             active_run_object.terminal_payload_extras.get("context_usage")
             if active_run_object is not None
@@ -304,7 +305,11 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         if active_run is not None and child_limit:
             active_run["timeline_url"] += f"?child_limit={child_limit}"
         return await _CHAT_RPC_WORKERS.run(
-            project_timeline_history, response, live_timeline, child_limit
+            project_timeline_history,
+            response,
+            live_timeline,
+            child_limit,
+            context_messages=history.context_messages if before is None else (),
         )
     return response
 
