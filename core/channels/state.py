@@ -444,6 +444,11 @@ class ChannelStateStore:
 
         def migrate(connection: sqlite3.Connection) -> _AccessRoles | None:
             connection.execute(
+                "UPDATE channel_run_buttons SET platform_target = ? "
+                "WHERE channel_id = ? AND platform_target = ?",
+                (new_scope_id, normalized_id, old_scope_id),
+            )
+            connection.execute(
                 "INSERT OR IGNORE INTO channel_admins (channel_id, access_scope_id, user_id) "
                 "SELECT channel_id, ?, user_id FROM channel_admins "
                 "WHERE channel_id = ? AND access_scope_id = ?",
@@ -628,6 +633,21 @@ class ChannelStateStore:
             )
 
         self._database.write(save)
+
+    async def retarget_run_button_keyboard(
+        self, channel_id: str, old: str, new: str, thread_id: str | None, binding_ids: set[str]
+    ) -> None:
+        """Move the exact keyboard about to be posted via an account-verified group alias."""
+
+        def retarget(connection: sqlite3.Connection) -> None:
+            connection.executemany(
+                "UPDATE channel_run_buttons SET platform_target = ? "
+                "WHERE channel_id = ? AND binding_id = ? AND platform_target = ? "
+                "AND thread_id IS ?",
+                [(new, channel_id, binding_id, old, thread_id) for binding_id in binding_ids],
+            )
+
+        await self._database.run_async(self._database.write, retarget)
 
     def discard_run_button_binding(self, channel_id: str, binding_id: str) -> None:
         """Remove a binding whose outbound platform send failed."""

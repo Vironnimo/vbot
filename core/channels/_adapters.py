@@ -92,6 +92,7 @@ def create_adapter(
                 chat_migration_persister, config.id, expected_token=token
             ),
             migration_account_is_current=partial(migration_account_is_current, config, token),
+            retarget_keyboard=partial(state.retarget_run_button_keyboard, config.id),
             interaction_dispatcher=interaction_dispatcher,
             update_offset_store=state,
         )

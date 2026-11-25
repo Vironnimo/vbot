@@ -15,6 +15,7 @@ from core.channels.adapter import (
     FileData,
     QuotedMessageFacts,
     content_blocks_for_attachment,
+    parse_bound_run_callback_data,
 )
 from core.channels.config import ChannelConfigError, ChannelError
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
@@ -28,6 +29,7 @@ from ._telegram_api import (
     _buttons_to_markup,
     _load_telegram,
     _load_telegram_error,
+    _markup_to_buttons,
     _PhotoRejectedError,
     _telegram_error_boundary,
 )
@@ -75,12 +77,15 @@ class TelegramTransport:
         attachment_store: AttachmentStore | None,
         *,
         adopt_migration: Callable[[int, int], Awaitable[bool]] | None = None,
+        retarget_keyboard: Callable[[str, str, str | None, set[str]], Awaitable[None]]
+        | None = None,
     ) -> None:
         self._channel_id = channel_id
         self._require_bot = bot
         self._attachment_store = attachment_store
         self.bot_id: int | None = None
         self._adopt_migration = adopt_migration
+        self._retarget_keyboard = retarget_keyboard
         self._migrated_chats: dict[int, int] = {}
 
     def current_chat_id(self, chat_id: int) -> int:
@@ -93,13 +98,30 @@ class TelegramTransport:
         """Switch only the single request that Telegram explicitly refused."""
         old = payload["chat_id"]
         current = self.current_chat_id(old)
-        payload["chat_id"] = current
-        if current != old:
-            payload.pop("reply_parameters", None)
+
+        async def send_to(target: int) -> None:
+            payload["chat_id"] = target
+            if target != old:
+                payload.pop("reply_parameters", None)
+                markup = payload.get("reply_markup")
+                if markup is not None and self._retarget_keyboard is not None:
+                    bindings = {
+                        parsed[0]
+                        for row in _markup_to_buttons(markup.inline_keyboard)
+                        for button in row
+                        if (parsed := parse_bound_run_callback_data(button.data)) is not None
+                    }
+                    if bindings:
+                        thread = payload.get("message_thread_id")
+                        await self._retarget_keyboard(
+                            str(old), str(target), None if thread is None else str(thread), bindings
+                        )
+            await method(**payload)
+
         errors = _load_telegram_error()
         with _telegram_error_boundary(self._channel_id, write=True):
             try:
-                await method(**payload)
+                await send_to(current)
                 return
             except errors.ChatMigrated as error:
                 new = error.new_chat_id
@@ -116,9 +138,7 @@ class TelegramTransport:
             # ChatMigrated: its text contains an external chat ID.
             if not await self._adopt_migration(current, new):
                 raise ChannelError("Telegram group migration could not be verified")
-            payload["chat_id"] = new
-            payload.pop("reply_parameters", None)
-            await method(**payload)
+            await send_to(new)
 
     async def send(
         self,

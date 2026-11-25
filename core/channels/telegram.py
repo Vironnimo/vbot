@@ -109,17 +109,21 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         chat_migration_persister: Callable[[str, str], None] | None = None,
         migration_account_is_current: Callable[[], bool] | None = None,
+        retarget_keyboard: Callable[[str, str, str | None, set[str]], Awaitable[None]]
+        | None = None,
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
         ) = None,
         update_offset_store: UpdateOffsetStore | None = None,
     ) -> None:
         self._config = config
+        self._retarget_keyboard = retarget_keyboard
         self._transport = TelegramTransport(
             config.id,
             self._require_bot,
             attachment_store,
             adopt_migration=self._adopt_outbound_migration,
+            retarget_keyboard=self._retarget_migrated_keyboard if retarget_keyboard else None,
         )
         # Persists a group→supergroup chat-id swap into the channel config and
         # group access state (ChannelService wires it). It blocks, so the adapter
@@ -613,6 +617,14 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def _migration_is_current(self) -> bool:
         check = self._migration_account_is_current
         return check is None or await _STATE_IO_POOL.run(check)
+
+    async def _retarget_migrated_keyboard(
+        self, old: str, new: str, thread: str | None, bindings: set[str]
+    ) -> None:
+        if not await self._migration_is_current():
+            raise ChannelError("Telegram group migration could not be verified")
+        assert self._retarget_keyboard is not None
+        await self._retarget_keyboard(old, new, thread, bindings)
 
     async def _adopt_outbound_migration(self, old: int, new: int) -> bool:
         if not await self._migration_is_current():

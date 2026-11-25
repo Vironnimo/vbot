@@ -398,7 +398,22 @@ async def test_group_access_migration_merges_groups_and_removes_old_scope(
     await store.set_member_tools("tg", {"mode": "selected", "allowed": ["read"]}, "-100")
     await store.set_member_tools("tg", {"mode": "selected", "allowed": ["web_fetch"]}, "-200")
 
+    store.save_run_button_binding("tg", _binding("old-button", thread_id="7"))
+    store.reset("other", "telegram")
+    store.save_run_button_binding("other", _binding("old-button", thread_id="7"))
     store.migrate_group_access("tg", "-100", "-200")
+
+    claim = store.claim_run_button_binding
+    assert (
+        claim("tg", "old-button", platform_target="-100", thread_id="7").status == "target_mismatch"
+    )
+    assert (
+        claim("tg", "old-button", platform_target="-200", thread_id="8").status == "target_mismatch"
+    )
+    assert claim("tg", "old-button", platform_target="-200", thread_id="7").status == "claimed"
+    assert claim("other", "old-button", platform_target="-100", thread_id="7").status == "claimed"
+    store.finish_run_button_claim("tg", "old-button")
+    store.finish_run_button_claim("other", "old-button")
 
     access = await store.access_state("tg")
     assert [group["access_scope_id"] for group in access["groups"]] == ["-200"]
