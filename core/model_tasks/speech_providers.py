@@ -59,35 +59,83 @@ def rejects_transcription_format(error: ProviderError, sent_format: str) -> bool
     """Only a definitive input-container rejection can repair a billable request."""
     if type(error) is not ProviderError or error.status_code not in {400, 415, 422}:
         return False
-    message = str(error).lower()
+    message = str(error)
     # Prefer the Provider's diagnostic over fields which may echo user input.
     start = message.find("{")
     if start >= 0:
         try:
             payload = json.loads(message[start:])
-        except ValueError:
+        except ValueError, RecursionError:
             return False
         detail = payload.get("error", payload.get("detail")) if isinstance(payload, dict) else None
         if isinstance(detail, dict):
+            if detail.get("param") not in (
+                None,
+                "file",
+                "audio",
+                "input_audio",
+                "input_audio.format",
+                "mime_type",
+                "format",
+            ):
+                return False
             detail = detail.get("message")
         if not isinstance(detail, str):
             return False
         message = detail
-    if "response_format" in message or "output format" in message:
+    message = message.lower().strip()
+    if re.search(
+        r"\b(?:(?:response|output)[ _-]format|time(?:d? out|out)|forbidden|unauthorized"
+        r"|access (?:is )?denied|permission denied)\b",
+        message,
+    ):
         return False
-    subject = (
-        r"(?:audio (?:file )?(?:format|type|codec|encoding)"
-        r"|(?:input |file )format|(?:input )?mime[ -]?type)"
+    message = re.sub(
+        r"^(?:provider error:\s*)?(?:(?:http\s+)?(?:400|415|422)\b\s*(?:bad request|"
+        r"unsupported media type|unprocessable entity)?\s*[:\-]?\s*)?",
+        "",
+        message,
     )
-    fmt = rf"(?:audio/|video/)?{re.escape(sent_format)}\b"
-    rejected = r"(?:unsupported|invalid|unrecognized|not (?:supported|accepted)|does not support)"
-    return bool(
-        re.search(
-            rf"\b{rejected}\s+(?:(?:input|provided|requested)\s+)?(?:{subject}|{fmt})\b"
-            rf"|\b(?:{subject}(?:\s*[:=]?\s*['\"]?{fmt}['\"]?)?|{fmt})\s+"
-            rf"(?:(?:files? |format )?(?:is |are ))?{rejected}\b",
+    # A list of accepted values is advice, never evidence that its entries were rejected.
+    diagnostic = (
+        re.split(
+            r"[.,;]\s*(?:(?:supported|accepted|allowed)\s+(?:audio\s+)?(?:file\s+)?"
+            r"(?:formats?|types?)\b|please (?:use|upload)\b)",
             message,
+            maxsplit=1,
+        )[0]
+        .strip()
+        .rstrip(".")
+    )
+    subject = (
+        r"(?:(?:input )?audio (?:file )?(?:format|type|codec|encoding)"
+        r"|(?:input |file )format|(?:input )?mime[ _-]?type)"
+    )
+    sent = sent_format.lower()
+    if not sent:
+        return False
+    values = {sent, f"audio/{sent}", f"video/{sent}"}
+    values.update(
+        {
+            "wav": ("audio/x-wav",),
+            "mp3": ("audio/mpeg",),
+            "m4a": ("audio/mp4",),
+            "flac": ("audio/x-flac",),
+        }.get(sent, ())
+    )
+    fmt = r"""[`'"]?(?:""" + "|".join(map(re.escape, sorted(values))) + r""")[`'"]?"""
+    value_after = rf"(?:\s*[:=]\s*|\s+){fmt}"
+    input_format = rf"(?:{subject}(?:{value_after})?|{fmt}(?: (?:files?|format))?)"
+    rejected = r"(?:unsupported|invalid|unrecognized|not (?:supported|accepted)|does not support)"
+    return (
+        re.fullmatch(
+            rf"(?:(?:the|this|provided) )?(?:(?:model )?{rejected}\s+"
+            rf"(?:(?:input|provided|requested)\s+)?"
+            rf"{input_format}|{input_format}\s+(?:(?:is|are) )?{rejected}(?:{value_after})?)"
+            rf"(?: (?:by|for) (?:this|the) (?:model|endpoint))?",
+            diagnostic,
         )
+        is not None
     )
 
 
@@ -109,12 +157,12 @@ class ProviderSpeechClient(ProviderTaskClient):
             # ceiling keeps the Base64 body well below it.
             return TranscriptionInputPolicy(
                 accepted_formats=frozenset(_GOOGLE_TRANSCRIPTION_MEDIA_TYPES),
-                endpoint=self._base_url,
+                route=self.request_route,
             )
         if self._provider.id == "openai":
             # OpenAI Audio Transcriptions API reference, reviewed 2026-10-09.
             return TranscriptionInputPolicy(
-                endpoint=self._base_url,
+                route=self.request_route,
                 accepted_formats=frozenset(
                     {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"}
                 ),
@@ -123,14 +171,14 @@ class ProviderSpeechClient(ProviderTaskClient):
             # OpenRouter's STT guide lists these input formats; individual
             # upstreams may still reject a format they do not support.
             return TranscriptionInputPolicy(
-                endpoint=self._base_url,
+                route=self.request_route,
                 accepted_formats=frozenset({"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}),
                 max_request_bytes=36_000_000,
             )
         # Keep the existing WAV/FLAC conversion path for unverified compatible
         # Providers rather than inferring OpenAI's full media contract.
         return TranscriptionInputPolicy(
-            accepted_formats=frozenset({"wav", "flac"}), endpoint=self._base_url
+            accepted_formats=frozenset({"wav", "flac"}), route=self.request_route
         )
 
     async def transcribe(

@@ -10,10 +10,13 @@ from __future__ import annotations
 import io
 from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
-from typing import Any, cast, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 from core.model_tasks.constants import DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS
 from core.model_tasks.speech_types import SpeechError
+
+if TYPE_CHECKING:
+    from core.providers.task_client import TaskRequestRoute
 
 MAX_TRANSCRIPTION_SECONDS = 30 * 60
 _MAX_FRAME_BYTES = 16 * 1024 * 1024
@@ -32,7 +35,7 @@ class TranscriptionInputPolicy:
     accepted_formats: frozenset[str]
     max_audio_bytes: int = 25_000_000
     max_request_bytes: int | None = None
-    endpoint: str = ""
+    route: TaskRequestRoute | None = None
     rejected_formats: frozenset[str] = frozenset()
 
 

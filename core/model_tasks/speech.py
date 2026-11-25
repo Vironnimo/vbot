@@ -50,7 +50,7 @@ from core.model_tasks.task_execution import (
     TaskUsageContext,
 )
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
-from core.providers.task_client import TaskClientRuntime
+from core.providers.task_client import TaskClientRuntime, TaskRequestRoute
 from core.settings import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.storage.layout import DataDirectoryLayout
 from core.usage import UsageRecorder
@@ -135,7 +135,9 @@ class SpeechService:
         self._max_input_bytes = max_input_bytes
         self._transcriptions = asyncio.Semaphore(_MAX_CONCURRENT_TRANSCRIPTIONS)
         self._pending_transcriptions = 0
-        self._rejected_formats: dict[tuple[str, str, str, str], dict[str, float]] = {}
+        self._rejected_formats: dict[
+            tuple[str, TaskRequestRoute | None, str], dict[str, float]
+        ] = {}
         self._input_workers = BoundedWorkerPool(name="speech_input", max_workers=2)
         self._closed = False
         self.playbacks = SpeechPlaybackStore()
@@ -278,8 +280,7 @@ class SpeechService:
         policy = provider_client.transcription_input_policy()
         route = (
             attempt.target.target,
-            attempt.target.account_id,
-            policy.endpoint,
+            policy.route,
             sha256(json.dumps(attempt.options, sort_keys=True).encode()).hexdigest(),
         )
         known = self._rejected_formats.get(route, {})

@@ -621,6 +621,7 @@ async def test_transcription_learns_confirmed_formats_per_target_and_probes_agai
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rejection: int
 ) -> None:
     from core.model_tasks import TaskModelBinding
+    from core.providers.http import ProviderHTTPTransports
     from tests.core.model_tasks.test_speech_providers import OPENROUTER_BASE, _client
     from tests.core.model_tasks.test_task_execution import _StubModelTasks
 
@@ -653,6 +654,21 @@ async def test_transcription_learns_confirmed_formats_per_target_and_probes_agai
             assert (await service.transcribe(audio)).text == "recovered"
             assert (await service.transcribe(audio)).text == "recovered"
             assert formats == ["webm", "wav", "flac", "flac"]
+            # The same binding now selects a different default Account.
+            transports = ProviderHTTPTransports()
+            monkeypatch.setattr(
+                type(client),
+                "request_route",
+                property(
+                    lambda _: (
+                        OPENROUTER_BASE,
+                        "first",
+                        transports.scope("openrouter", "api-key", "second"),
+                    )
+                ),
+            )
+            await service.transcribe(audio)
+            assert formats[-3:] == ["webm", "wav", "flac"]
             bindings._binding = TaskModelBinding(TASK_SPEECH_TO_TEXT, "openrouter/other::api-key")
             await service.transcribe(audio)
             assert formats[-3:] == ["webm", "wav", "flac"]
@@ -666,7 +682,7 @@ async def test_transcription_learns_confirmed_formats_per_target_and_probes_agai
 
 @pytest.mark.asyncio
 @respx.mock
-@pytest.mark.parametrize("failure", ["response_format", "language", "ambiguous"])
+@pytest.mark.parametrize("failure", ["response_format", "language", "other_container", "ambiguous"])
 async def test_unrelated_and_ambiguous_stt_failures_do_not_reencode_or_fail_over(
     tmp_path: Path, failure: str
 ) -> None:
@@ -686,6 +702,8 @@ async def test_unrelated_and_ambiguous_stt_failures_do_not_reencode_or_fail_over
     route = respx.post(f"{OPENROUTER_BASE}/audio/transcriptions")
     if failure == "ambiguous":
         route.mock(side_effect=httpx.ReadError("response lost"))
+    elif failure == "other_container":
+        route.respond(400, json={"error": {"message": "Unsupported audio format: WMA"}})
     else:
         route.respond(422, json={"error": {"message": f"Invalid {failure} for webm audio"}})
     try:
