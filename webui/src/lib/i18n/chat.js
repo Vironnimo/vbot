@@ -724,26 +724,13 @@ export default Object.freeze({
   'chat.sessionSettings.saveError': 'The Session setting could not be saved.',
   'chat.sessionSettings.speed': 'Output speed',
   'chat.sessionSettings.speedValue': '{rate} tok/s',
-  'chat.sessionSettings.approximateSpeed': '≈{value}',
-  'chat.sessionSettings.speedHint':
-    'The latest step with a measurable output rate; a newer response may have none.',
-  'chat.sessionSettings.speedRate': 'Tokens per second',
-  'chat.sessionSettings.firstToken': 'Time to first token',
-  'chat.sessionSettings.firstAnswer': 'Time to first answer',
-  'chat.sessionSettings.speedMeasured': 'Measured over',
-  'chat.sessionSettings.speedMeasuredValue': '{tokens} tokens in {duration}',
-  'chat.sessionSettings.speedEstimatedValue': '~{tokens} tokens in {duration}',
-  'chat.sessionSettings.speedAnswerOnly':
-    'Approximate answer streaming rate observed by vBot, excluding hidden Reasoning. Network buffering can affect it.',
-  'chat.sessionSettings.speedStreamedOutput':
-    'Approximate streaming rate observed by vBot, including streamed Reasoning and Tool-call output. Network buffering can affect it.',
-  'chat.sessionSettings.speedReported':
-    'Provider-reported decode rate, measured during generation rather than from output arriving at vBot.',
+  'chat.sessionSettings.approximateValue': '≈{value}',
+  'chat.sessionSettings.speedRate': 'TPS (Tokens per Second)',
+  'chat.sessionSettings.firstToken': 'TTFT (Time to First Token)',
+  'chat.sessionSettings.speedSample': 'Sample',
+  'chat.sessionSettings.speedSampleValue': '{tokens} tokens / {seconds} s',
   'chat.sessionSettings.latency': 'Latest response latency',
   'chat.sessionSettings.latencyValue': 'TTFT {duration}',
-  'chat.sessionSettings.latencyModel': 'First token from',
-  'chat.sessionSettings.latencyHint':
-    'Time to first token runs from sending the latest measured request to its first text, Reasoning or Tool-call output, including Provider queueing and prompt processing.',
   'chat.sessionSettings.more': 'More Session settings',
   'sessions.title': 'Sessions',
   'sessions.newSession': 'New Session',

@@ -282,7 +282,7 @@
     });
     return outputSpeed.basis === 'provider'
       ? label
-      : t('chat.sessionSettings.approximateSpeed', { value: label });
+      : t('chat.sessionSettings.approximateValue', { value: label });
   });
   let latencyLabel = $derived(
     Number.isFinite(outputLatency?.first_token_ms)
@@ -293,96 +293,45 @@
   );
   let measureLabel = $derived(speedLabel || latencyLabel);
 
-  function modelName(value) {
-    const { model } = parseModelSelectionValue(value);
-    return modelNames.get(model) || model;
-  }
-
-  function speedRows(speed) {
-    const rows = [
-      {
-        label: t('chat.sessionSettings.speedRate'),
-        value: speed.output_tokens_per_second.toFixed(1),
-      },
-    ];
-    // The Model that answered; the footer may already name another one.
-    if (speed.model) {
-      rows.push({
-        label: t('chat.sessionSettings.model'),
-        value: modelName(speed.model),
-      });
-    }
-    if (Number.isFinite(speed.tokens) && Number.isFinite(speed.window_ms)) {
-      const tokens = speed.tokens;
-      const duration = formatDurationMs(speed.window_ms);
-      rows.push({
-        label: t('chat.sessionSettings.speedMeasured'),
-        value: speed.estimated
-          ? t('chat.sessionSettings.speedEstimatedValue', { tokens, duration })
-          : t('chat.sessionSettings.speedMeasuredValue', { tokens, duration }),
-      });
-    }
-    return rows;
-  }
-
-  function speedNotes(speed) {
-    const notes = [t('chat.sessionSettings.speedHint')];
-    if (speed.basis === 'answer') {
-      notes.push(t('chat.sessionSettings.speedAnswerOnly'));
-    } else if (speed.basis === 'provider') {
-      notes.push(t('chat.sessionSettings.speedReported'));
-    } else {
-      notes.push(t('chat.sessionSettings.speedStreamedOutput'));
-    }
-    return notes;
-  }
-
-  function latencyRows(latency, shownModel) {
-    const rows = [];
-    // A short step moves latency on and keeps the preceding rate, so the two
-    // measurements can come from different Models.
-    if (latency.model && latency.model !== shownModel) {
-      rows.push({
-        label: shownModel
-          ? t('chat.sessionSettings.latencyModel')
-          : t('chat.sessionSettings.model'),
-        value: modelName(latency.model),
-      });
-    }
-    rows.push({
-      label: t('chat.sessionSettings.firstToken'),
-      value: formatDurationMs(latency.first_token_ms),
-    });
-    if (
-      Number.isFinite(latency.first_answer_ms) &&
-      latency.first_answer_ms > latency.first_token_ms
-    ) {
-      rows.push({
-        label: t('chat.sessionSettings.firstAnswer'),
-        value: formatDurationMs(latency.first_answer_ms),
-      });
-    }
-    return rows;
-  }
-
   let measureTooltip = $derived.by(() => {
     if (!measureLabel) return null;
+    const rows = [];
     const speed = speedLabel ? outputSpeed : null;
-    const latency = latencyLabel ? outputLatency : null;
-    return {
-      title: speed
-        ? t('chat.sessionSettings.speed')
-        : t('chat.sessionSettings.latency'),
-      text: [
-        ...(speed ? speedNotes(speed) : []),
-        ...(latency ? [t('chat.sessionSettings.latencyHint')] : []),
-      ].join(' '),
-      rows: [
-        ...(speed ? speedRows(speed) : []),
-        ...(latency ? latencyRows(latency, speed?.model) : []),
-      ],
-      placement: 'top',
-    };
+    if (speed) {
+      rows.push({
+        label: t('chat.sessionSettings.speedRate'),
+        value: speed.output_tokens_per_second.toLocaleString(
+          activeLocaleTag(),
+          {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+          },
+        ),
+      });
+    }
+    if (latencyLabel) {
+      rows.push({
+        label: t('chat.sessionSettings.firstToken'),
+        value: formatDurationMs(outputLatency.first_token_ms),
+      });
+    }
+    if (Number.isFinite(speed?.tokens) && Number.isFinite(speed.window_ms)) {
+      const count = speed.tokens.toLocaleString(activeLocaleTag());
+      const tokens = speed.estimated
+        ? t('chat.sessionSettings.approximateValue', { value: count })
+        : count;
+      const seconds = (speed.window_ms / 1000).toLocaleString(
+        activeLocaleTag(),
+        {
+          maximumFractionDigits: speed.window_ms >= 10000 ? 0 : 3,
+        },
+      );
+      rows.push({
+        label: t('chat.sessionSettings.speedSample'),
+        value: t('chat.sessionSettings.speedSampleValue', { tokens, seconds }),
+      });
+    }
+    return { rows, placement: 'top' };
   });
 
   // --- Thinking effort -------------------------------------------------

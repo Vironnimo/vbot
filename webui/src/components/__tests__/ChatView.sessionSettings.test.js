@@ -628,8 +628,11 @@ describe('ChatView Session settings', () => {
         footer()?.querySelector(
           '[role="group"][aria-label="Latest response latency"]',
         );
-      const tooltipText = () =>
-        document.querySelector('#app-tooltip')?.textContent ?? '';
+      const tooltipFields = () =>
+        Array.from(
+          document.querySelectorAll('#app-tooltip dt, #app-tooltip dd'),
+          (field) => field.textContent,
+        );
       expect(speedValue()).toBeNull();
       session().outputLatency = {
         first_token_ms: 400,
@@ -644,15 +647,18 @@ describe('ChatView Session settings', () => {
         new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
       );
       latencyValue().focus();
-      await waitForCondition(() => tooltipText().includes('provider/latest'));
+      await waitForCondition(() =>
+        latencyValue().hasAttribute('aria-describedby'),
+      );
+      expect(tooltipFields()).toEqual(['TTFT (Time to First Token)', '0.4s']);
       expect(document.activeElement).toBe(latencyValue());
       latencyValue().blur();
 
       session().outputSpeed = {
         first_token_ms: 900,
-        output_tokens_per_second: 62,
-        tokens: 124,
-        window_ms: 2000,
+        output_tokens_per_second: 75.9,
+        tokens: 6707,
+        window_ms: 88366,
         basis: 'stream',
         estimated: true,
         model: 'provider/older',
@@ -662,16 +668,29 @@ describe('ChatView Session settings', () => {
       await waitForCondition(() => speedValue() !== null);
       expect(latencyValue()).toBeNull();
       expect(footer().textContent).not.toContain('TTFT');
-      expect(speedValue().textContent.trim()).toBe('≈62 tok/s');
+      expect(speedValue().textContent.trim()).toBe('≈76 tok/s');
       expect(speedValue().tabIndex).toBe(0);
       speedValue().focus();
-      await waitForCondition(() => tooltipText().includes('provider/older'));
-      expect(tooltipText()).toContain('provider/latest');
-      expect(tooltipText()).toContain('Time to first token');
-      expect(tooltipText()).toContain('First token from');
-      session().outputSpeed = { ...session().outputSpeed, basis: 'provider' };
+      await waitForCondition(() =>
+        speedValue().hasAttribute('aria-describedby'),
+      );
+      expect(document.querySelector('#app-tooltip').childElementCount).toBe(1);
+      expect(tooltipFields()).toEqual([
+        'TPS (Tokens per Second)',
+        '75.9',
+        'TTFT (Time to First Token)',
+        '0.4s',
+        'Sample',
+        '≈6,707 tokens / 88 s',
+      ]);
+      session().outputSpeed = {
+        ...session().outputSpeed,
+        basis: 'provider',
+        estimated: false,
+      };
       flushSync();
-      expect(speedValue().textContent.trim()).toBe('62 tok/s');
+      expect(speedValue().textContent.trim()).toBe('76 tok/s');
+      expect(tooltipFields().at(-1)).toBe('6,707 tokens / 88 s');
     });
 
     it('shows the Session goal and sends its buttons as /goal commands', async () => {
