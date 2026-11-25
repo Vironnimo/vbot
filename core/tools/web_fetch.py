@@ -476,8 +476,7 @@ def _browser_scope(url: str) -> tuple[str, str, str] | None:
     name = path.rsplit("/", 1)[-1]
     if address.query or ("." in name and not name.lower().endswith((".html", ".htm"))):
         return None
-    parent = path.rpartition("/")[0]
-    return address.scheme, address.netloc.lower(), parent + "/" if parent else path
+    return address.scheme, address.netloc.lower(), path
 
 
 _PAGE_NOT_FETCHED = "The page was not fetched"

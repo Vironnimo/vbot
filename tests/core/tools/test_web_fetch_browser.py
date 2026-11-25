@@ -180,7 +180,10 @@ async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_pat
 
     def answer(url):
         requests.append(url)
-        return make_result(headers={"content-type": "text/html"}, text=shell, url=url)
+        content = (
+            _ARTICLE.format("A directly readable manual") if url.endswith("/manual") else shell
+        )
+        return make_result(headers={"content-type": "text/html"}, text=content, url=url)
 
     install_http_get(monkeypatch, answer)
     browser = FakeBrowser(_ARTICLE.format("Public app content"))
@@ -191,16 +194,19 @@ async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_pat
         return await tool.dispatch(context, {"url": f"https://example.com{path}"})
 
     assert (await get("/docs/a"))["ok"]
-    assert (await get("/docs/b"))["ok"] and len(requests) == 1
-    assert (await get("/news/a"))["ok"] and len(requests) == 2
-    assert (await get("/docs/a?print=1"))["ok"] and len(requests) == 3
-    now[0] += 301
-    assert (await get("/docs/a"))["ok"] and len(requests) == 4
-    browser.outcome = browser_module.BrowserAccessError("the site answered HTTP 403 in the browser")
-    assert (await get("/docs/c"))["error"]["code"] == "access_denied"
-    assert len(requests) == 4
+    assert (await get("/docs/a"))["ok"] and len(requests) == 1
+    browser.outcome = browser_module.BrowserAccessError("HTTP 403")
+    assert (await get("/docs/manual"))["ok"] and len(requests) == 2
     browser.outcome = _ARTICLE.format("Public app content")
+    assert (await get("/news/a"))["ok"] and len(requests) == 3
+    assert (await get("/docs/a?print=1"))["ok"] and len(requests) == 4
+    now[0] += 301
     assert (await get("/docs/a"))["ok"] and len(requests) == 5
+    browser.outcome = browser_module.BrowserAccessError("the site answered HTTP 403 in the browser")
+    assert (await get("/docs/a"))["error"]["code"] == "access_denied"
+    assert len(requests) == 5
+    browser.outcome = _ARTICLE.format("Public app content")
+    assert (await get("/docs/a"))["ok"] and len(requests) == 6
 
     events = asyncio.Queue()
     events.put_nowait(
@@ -220,9 +226,9 @@ async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_pat
     with pytest.raises(browser_module.BrowserAccessError) as limited:
         await browser_module._settle(AsyncMock(), "session", events, "main", float("inf"))
     browser.outcome = limited.value
-    assert (await get("/docs/b"))["error"]["code"] == "rate_limited"
+    assert (await get("/docs/a"))["error"]["code"] == "rate_limited"
     assert (await get("/news/b"))["error"]["code"] == "rate_limited"
-    assert len(requests) == 5
+    assert len(requests) == 6
 
 
 @pytest.mark.asyncio
