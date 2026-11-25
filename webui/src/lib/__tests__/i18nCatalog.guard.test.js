@@ -69,6 +69,16 @@ const COMPOSED_KEYS = {
   'calendar.view.*': ['month', 'week', 'day', 'agenda'],
   // sessions/presentation.js REFLECTION_BADGE_RUN_KINDS
   'sessions.runKind.*': ['memory_reflection', 'skill_reflection', 'reflection'],
+  // ContextUsageRing.svelte columns and tokenUsageTooltip.js metric rows.
+  'chat.contextCard.*': [
+    'session',
+    'run',
+    'iteration',
+    'cacheHit',
+    'input',
+    'output',
+    'reasoning',
+  ],
   // ComposerGoal.svelte STATUSES and PAUSE_REASONS
   'chat.goal.status.*': ['active', 'blocked', 'paused', 'complete'],
   'chat.goal.pauseReason.*': [
