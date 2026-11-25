@@ -20,6 +20,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
@@ -38,6 +39,12 @@ from core.model_tasks.embeddings_local import (
 from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
 from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_target_id
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.providers.task_client import TaskClientRuntime
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.usage import UsageRecorder
@@ -122,6 +129,47 @@ class EmbeddingResult:
         return self.response_model_id or self.model_id
 
 
+@dataclass
+class _EmbeddingAvailability:
+    """Transport outage of the active remote binding, shared by indexing and searches."""
+
+    space: str
+    failures: int = 0
+    retry_at: float = 0
+    probing: bool = False
+    status: int | None = None
+
+    def begin(self) -> None:
+        if not self.failures:
+            return
+        remaining = self.retry_at - monotonic()
+        if remaining > 0 or self.probing:
+            cause = ProviderError("Embedding provider temporarily unavailable", retryable=True)
+            cause.status_code = self.status
+            cause.retry_after = max(0, remaining)
+            raise EmbeddingExecutionError(str(cause)) from cause
+        self.probing = True
+
+    def failed(self, error: VBotError) -> None:
+        status = getattr(error, "status_code", None)
+        if not isinstance(
+            error, (NetworkError, ProviderRateLimitError, ProviderTimeoutError)
+        ) and not (
+            isinstance(error, ProviderError)
+            and error.retryable
+            and status is not None
+            and (status == 429 or 500 <= status <= 599)
+        ):
+            return
+        # Concurrent requests admitted before the first refusal share one outage.
+        now = monotonic()
+        if now >= self.retry_at:
+            self.failures += 1
+        delay = max(30 * 2 ** min(self.failures - 1, 6), getattr(error, "retry_after", None) or 0)
+        self.retry_at = max(self.retry_at, now + min(delay, 1800))
+        self.status = 429 if isinstance(error, ProviderRateLimitError) else status
+
+
 class EmbeddingService:
     """Execute text embeddings through the configured task-model binding."""
 
@@ -138,6 +186,7 @@ class EmbeddingService:
         self._usage_recorder = usage_recorder
         self._local = local_executor
         self._secret_masker = secret_masker
+        self._availability: _EmbeddingAvailability | None = None
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=EmbeddingConfigurationError
         )
@@ -183,10 +232,16 @@ class EmbeddingService:
         texts = [masker.mask(text) for text in texts]
 
         if target_ref.kind == "local":
+            self._availability = None
             return await self._embed_local(texts, purpose, options, target_ref)
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
+        availability = self._availability
+        if availability is None or availability.space != identity.fingerprint:
+            availability = self._availability = _EmbeddingAvailability(identity.fingerprint)
+        availability.begin()
+        probing = availability.probing
         try:
             try:
                 provider_client = await ProviderEmbeddingClient.from_runtime_async(
@@ -206,6 +261,7 @@ class EmbeddingService:
         except EmbeddingError:
             raise
         except VBotError as exc:
+            availability.failed(exc)
             # ProviderError / NetworkError / ProviderAuthError / …
             # are expected provider failures and surface as execution failures.
             _LOGGER.warning(
@@ -223,12 +279,16 @@ class EmbeddingService:
                 exc_info=True,
             )
             raise EmbeddingExecutionError(str(exc)) from exc
-
+        finally:
+            if probing:
+                availability.probing = False
         if not response.vectors:
             raise EmbeddingExecutionError(
                 f"Embedding provider returned no vectors for model {target_ref.model_id}"
             )
 
+        availability.failures = 0
+        availability.retry_at = 0
         dimension = len(response.vectors[0])
         return EmbeddingResult(
             vectors=response.vectors,

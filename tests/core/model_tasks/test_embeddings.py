@@ -40,7 +40,7 @@ from core.model_tasks.embeddings_providers import (
     EmbeddingUsage,
     ProviderEmbeddingResponse,
 )
-from core.providers.errors import ProviderAuthError
+from core.providers.errors import ProviderAuthError, ProviderRateLimitError
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.utils.errors import ConfigError
 from tests.core.model_tasks.model_tasks_test_support import configured_task_target
@@ -248,6 +248,38 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
         target_ref.connection_id,
         target_ref.local_connection_id,
     ) == ("openrouter", "google/gemini-embedding-2", "openrouter:api-key", "api-key")
+
+
+@pytest.mark.asyncio
+async def test_search_and_indexing_share_only_the_current_targets_transport_outage(
+    provider_factory: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.model_tasks.embeddings as embeddings
+
+    now = 100.0
+    monkeypatch.setattr(embeddings, "monotonic", lambda: now)
+    tasks = _ModelTasks(OPENROUTER_TARGET)
+    service = EmbeddingService(tasks, MagicMock())
+    error = ProviderRateLimitError("throttled")
+    error.retry_after = 90
+    client = _FakeProviderClient(embed_exception=error)
+    provider_factory.return_value = client
+    with pytest.raises(EmbeddingExecutionError):
+        await service.embed(["old message"], purpose="document")
+    now += 89
+    with pytest.raises(EmbeddingExecutionError):
+        await service.embed(["search"], purpose="query")
+    assert len(client.embed_calls) == 1
+    now += 2
+    client._embed_exception = None
+    assert (await service.embed(["search"], purpose="query")).vectors
+    client._embed_exception = error
+    with pytest.raises(EmbeddingExecutionError):
+        await service.embed(["old message"], purpose="document")
+    tasks._target = "openrouter/another-model::api-key"
+    client._embed_exception = None
+    assert (await service.embed(["search"], purpose="query")).model_id == "another-model"
+    assert len(client.embed_calls) == 4
 
 
 _QWEN_QUERY_PREFIX = (
