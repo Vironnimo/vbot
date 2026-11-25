@@ -33,6 +33,10 @@
   async function cancelRun(run) {
     await model.mutate('job_run.cancel', { run_id: run.id });
   }
+
+  async function dismissRun(run) {
+    await model.mutate('job_run.dismiss', { run_id: run.id });
+  }
 </script>
 
 <div class="factory-overview">
@@ -74,6 +78,14 @@
                     onNavigate(`/job-run/${encodeURIComponent(run.id)}`)}
                   >{t('factory.dashboard.inspect')}</Button
                 >
+                {#if run.state === 'failed'}
+                  <Button
+                    variant="tertiary"
+                    disabled={Boolean(model.pending)}
+                    onClick={() => dismissRun(run)}
+                    >{t('factory.dashboard.dismiss')}</Button
+                  >
+                {/if}
               </div>
               {#if run.question || run.reason}
                 <p class="factory-dash-detail">{run.question || run.reason}</p>

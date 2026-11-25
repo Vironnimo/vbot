@@ -292,9 +292,18 @@ async def test_jobs_schema_coexists_additively_with_legacy_tables(tmp_path: Path
     database = open_offline_database(before)
     try:
         old = FactoryStore(database)
-        card = await old.create_card("project", "Legacy Card", "Keep me", origin="operator")
         factory = await old.native.create_factory(
             "project", leader_agent_id="leader", leader_agent_proof="inc-1"
+        )
+        await database.write_async(
+            lambda conn: conn.execute(
+                "INSERT INTO cards (id, project_id, title, description, origin, origin_session, "
+                "origin_run, state, waiting_reason, position, summary, group_id, runtime_json, "
+                "revision, created_at, updated_at, finished_at, workflow_id, parent_id) "
+                "VALUES ('legacy-1', 'project', 'Legacy Card', 'Keep me', 'operator', '', '', "
+                "'done', '', 1, '', '', '{}', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', "
+                "NULL, '', '')"
+            )
         )
     finally:
         database.close()
@@ -305,11 +314,19 @@ async def test_jobs_schema_coexists_additively_with_legacy_tables(tmp_path: Path
     database = open_offline_database(after)
     try:
         store = FactoryStore(database)
-        assert await store.get_card(card["id"]) == card
+        legacy_title = await database.read_async(
+            lambda conn: conn.execute("SELECT title FROM cards WHERE id = 'legacy-1'").fetchone()[0]
+        )
+        assert legacy_title == "Legacy Card"
         assert (await store.native.get_factory(factory["id"]))["id"] == factory["id"]
 
         job = await store.jobs.create_job(factory["id"], name="New Job", prompt="Work")
         run = await store.jobs.create_run(factory["id"], job["id"], origin="manual")
         assert run["member_id"] == factory["leader_member_id"]
+
+        failed = await store.jobs.transition_run(run["id"], "failed", reason="Boom")
+        assert failed.get("acknowledged") is False
+        dismissed = await store.jobs.acknowledge_run(run["id"])
+        assert dismissed["acknowledged"] is True
     finally:
         database.close()

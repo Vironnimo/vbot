@@ -55,12 +55,13 @@ A Job's `schedule` or `webhook` that queues Job Runs automatically; Cron owns sc
 - Jobs (`factory_jobs`) require `name` (1-200 chars) and `prompt`; `description`, `agent_member_id` (empty string means Leader fallback), `enabled` (default `true`), and `triggers` (`schedule` or `webhook`) are optional.
 - Manual/CLI (`job.trigger`), Leader (`factory_jobs action='trigger'`), and cross-Factory (`factory action='trigger_job'`) triggers accept an optional `member_id` override (resolved by member id, role, or name) and optional `input_note`.
 - `_job_triggers.sync` reconciles enabled/disabled triggers with host Cron (`extensions/host.md`). `job.secret` reads or rotates a webhook trigger's signing secret through the host; secrets never enter Factory SQLite records.
-- Job Runs (`factory_job_runs`) start `queued` and are admitted to `running` within `wip_limit`.
+- Job Runs (`factory_job_runs`) start `queued` and are admitted to `running` within global `wip_limit`, per-Factory `capacity`, and per-member `capacity`.
 - Inside a `fjob.*` Session, the worker receives `factory_job_status` (and never `factory_jobs`, `factory_settings`, or `factory_members`):
   - Calling `factory_job_status` with `needs_attention` (requires `question`), `failed` (requires `reason`), or `done` (optional `summary`) transitions the run, ends the turn (`context.request_turn_end()`), and publishes the change.
   - Ending normally without calling `factory_job_status` settles the run to `done`, extracting the final assistant answer (up to 4000 chars) as `summary`. Cancelled or non-success Run outcomes settle to `cancelled` or `failed`.
 - `before_model_request` refuses calls on runs already in a final state (`done`, `failed`, `cancelled`).
-- `job_run.reply` sends an operator message directly into the run's canonical Session (`TemporaryRunInput("continuation", ...)`), transitioning `needs_attention` or `failed` runs back to `running` (`done` and `cancelled` runs cannot be resumed). `job_run.cancel` closes active `fjob.*` groups outside the service lock and marks the run `cancelled`.
+- `job_run.reply` sends an operator message directly into the run's canonical Session (`TemporaryRunInput("continuation", ...)`), transitioning `needs_attention` or `failed` runs back to `running` (`done` and `cancelled` runs cannot be resumed). `job_run.cancel` closes active `fjob.*` groups outside the service lock and marks the run `cancelled`. `job_run.dismiss` acknowledges a `failed` run to clear it from Needs Attention and the page badge.
+- The Leader's `factory_jobs` Tool supports `list`, `get`, `create`, `update`, `delete`, `trigger`, `runs` (with optional `state` filter), `cancel`, and `reply`.
 - On startup, `reconcile` marks any persisted `running` Job Run whose host Run is no longer live as `failed` ("Interrupted by server restart.").
 
 ## Public `factory` Tool

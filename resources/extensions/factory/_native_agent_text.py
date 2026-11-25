@@ -25,8 +25,6 @@ def _definition(resource: str, actions: tuple[str, ...], description: str) -> tu
             }:
                 if resource == "factory" and key not in {"id", "name"}:
                     continue
-                if resource == "task" and key == "limits":
-                    continue
                 properties[key] = deepcopy(value)
     properties["action"]["description"] = (
         "update changes only supplied fields. " if "update" in actions else ""
@@ -43,11 +41,6 @@ def _definition(resource: str, actions: tuple[str, ...], description: str) -> tu
         properties.pop("model", None)
         properties["clear_fields"]["description"] = (
             "For update: remove these membership access limits."
-        )
-    if resource == "task":
-        properties["outcome"]["description"] = "For complete: what came of the task."
-        properties["evidence"]["description"] = (
-            "For complete: concrete results addressing the completion conditions."
         )
     return description, {"type": "object", "properties": properties, "required": ["action"]}
 
@@ -109,47 +102,16 @@ def native_instructions(
 
 # Canonical records contain execution-control data, including previously authored
 # input. Only these resource views cross the Model-input boundary.
-_TASK_FIELDS = (
-    "id",
-    "factory_id",
-    "title",
-    "objective",
-    "conditions",
-    "assignee_id",
-    "parent_id",
-    "dependencies",
-    "state",
-    "reason",
-    "reviewer_id",
-    "user_approval",
-    "workflow_id",
-    "workflow_card_id",
-    "conversation_id",
-    "result",
-)
 _TOPIC_FIELDS = (
     "id",
     "factory_id",
     "title",
-    "task_id",
     "state",
     "participants",
     "direct_member_id",
-    "card_id",
 )
 _FACTORY_FIELDS = ("id", "project_id", "name", "remit", "state", "limits", "config")
 _MEMBER_FIELDS = ("id", "agent_id", "name", "role", "instructions")
-_CARD_FIELDS = (
-    "id",
-    "workflow_id",
-    "title",
-    "description",
-    "state",
-    "summary",
-    "waiting_reason",
-    "note",
-    "outputs",
-)
 _BOUNDARY_FIELDS = (
     "allowed_models",
     "allowed_tools",
@@ -171,33 +133,6 @@ def _input_view(value: Any, kind: str = "") -> Any:
             for post in value[-20:]
             if isinstance(post, dict)
         ]
-    if kind == "handoff" and isinstance(value, list):
-        progress = []
-        for prior in value[:2]:
-            if not isinstance(prior, dict):
-                continue
-            record = _view(
-                prior, ("member_id", "agent_id", "session_id", "project_id", "generation_id")
-            )
-            messages = []
-            for message in prior.get("messages", [])[-8:]:
-                if not isinstance(message, dict) or message.get("role") not in {
-                    "assistant",
-                    "tool",
-                    "run_summary",
-                }:
-                    continue
-                item = _view(message, ("role", "name", "text", "status"))
-                if isinstance(message.get("tool_calls"), list):
-                    item["tool_calls"] = [
-                        _view(call, ("name", "arguments"))
-                        for call in message["tool_calls"][:4]
-                        if isinstance(call, dict)
-                    ]
-                messages.append(item)
-            record["messages"] = messages
-            progress.append(record)
-        return progress
     if not isinstance(value, dict):
         return value
     if kind == "factory":
@@ -206,13 +141,6 @@ def _input_view(value: Any, kind: str = "") -> Any:
         return result
     if kind == "member":
         return _view(value, _MEMBER_FIELDS)
-    if kind == "card":
-        return _view(value, _CARD_FIELDS)
-    if "objective" in value or kind in {"task", "parent"}:
-        result = _view(value, _TASK_FIELDS)
-        if isinstance(result.get("result"), dict):
-            result["result"] = _view(result["result"], ("outcome", "evidence"))
-        return result
     return _view(value, _TOPIC_FIELDS)
 
 
@@ -256,57 +184,29 @@ def _bounded(value: Any, remaining: list[int], depth: int = 0) -> Any:
     return value
 
 
-def _handoff_excerpt(value: list[Json], remaining: list[int]) -> list[Json]:
-    result = []
-    # Prior executions arrive newest-first; prioritize their newest visible
-    # messages, then retain chronological order inside each execution.
-    for prior in value:
-        if remaining[0] <= 0:
-            break
-        prior = {**prior, "messages": list(reversed(prior["messages"]))}
-        bounded = _bounded(prior, remaining)
-        if isinstance(bounded.get("messages"), list):
-            bounded["messages"].reverse()
-        result.append(bounded)
-    return result
-
-
 def native_input(kind: str, record: Json, **context: Any) -> str:
     """Bounded attributed agreement/evidence; canonical Tools retain complete records."""
-    label = "Task" if "objective" in record else "Topic"
     sections = [
         (key.title(), _input_view(context[key], key))
         for key in ("posts", "updates")
         if context.get(key) is not None
     ]
-    if context.get("handoff"):
-        sections.append(("Prior execution evidence", _input_view(context["handoff"], "handoff")))
-    sections.append((label, _input_view(record)))
-    for key in ("card", "task", "parent", "topic", "factory", "member"):
+    sections.append(("Topic", _input_view(record)))
+    for key in ("topic", "factory", "member"):
         if context.get(key) is not None:
             sections.append((key.replace("_", " ").title(), _input_view(context[key], key)))
     remaining = [24000]
     parts = [f"Factory {kind} input."]
     for label, value in sections:
-        section_budget = [min(10000 if label in {"Task", "Topic"} else 6000, remaining[0])]
+        section_budget = [min(10000 if label == "Topic" else 6000, remaining[0])]
         # Spend discussion budget on the triggering/newest posts first, then
         # present the retained excerpts in their original chronological order.
         if label == "Posts" and isinstance(value, list):
             excerpt = list(reversed(_bounded(list(reversed(value)), section_budget)))
-        elif label == "Prior execution evidence" and isinstance(value, list):
-            excerpt = _handoff_excerpt(value, section_budget)
         else:
             excerpt = _bounded(value, section_budget)
         rendered = _data(label, excerpt)
-        if label == "Prior execution evidence":
-            allowance = 6000
-            while len(rendered) > 6000:
-                allowance //= 2
-                section_budget = [allowance]
-                rendered = _data(label, _handoff_excerpt(value, section_budget))
-        remaining[0] -= (
-            min(10000 if label in {"Task", "Topic"} else 6000, remaining[0]) - section_budget[0]
-        )
+        remaining[0] -= min(10000 if label == "Topic" else 6000, remaining[0]) - section_budget[0]
         # JSON escaping and structural overhead are bounded independently of text.
         if sum(map(len, parts)) + len(rendered) + len(_CUT) + 4 > _INPUT_LIMIT:
             parts.append(_CUT)
@@ -319,16 +219,4 @@ def tool_refusal(tool_name: str) -> str:
     return (
         f"Nothing was changed. Tool {json.dumps(tool_name)} is outside this Factory "
         "execution's Tool selection. Use a Tool allowed for this member."
-    )
-
-
-def native_workflow_instructions(factory: Json, member: Json) -> str:
-    boundary = {
-        "Factory remit": factory.get("remit", ""),
-        "Member instructions": member.get("instructions", ""),
-    }
-    return (
-        "The Workflow step defines your task. Apply this Factory remit and your member "
-        "instructions within that task.\n\n"
-        + _data("Factory agreement", _bounded(boundary, [6000]))
     )

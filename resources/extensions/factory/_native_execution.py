@@ -113,7 +113,7 @@ class NativeFactoryExecution:
         owner = context.execution_owner
         if owner is None or owner.extension != "factory":
             raise FactoryError(
-                "participant_required", "Use this Tool in a Factory task or discussion Session."
+                "participant_required", "Use this Tool in an active Factory Leader Chat Session."
             )
         execution = await self._find(owner.group_id)
         runtime = execution["runtime"]

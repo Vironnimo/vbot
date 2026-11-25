@@ -91,6 +91,7 @@ async def test_exports_and_unknown_operation(factory_store: FactoryStore, tmp_pa
         "job_run.get",
         "job_run.reply",
         "job_run.cancel",
+        "job_run.dismiss",
         "dashboard.get",
     }
     _, management, _, _, _ = await _setup(factory_store, tmp_path)

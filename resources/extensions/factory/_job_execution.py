@@ -109,9 +109,13 @@ class FactoryJobExecution:
     async def attention_count(self) -> int:
         count = 0
         for factory in await self._active_factories():
-            for state in ("needs_attention", "failed"):
-                runs = await self.jobs.list_runs(factory["id"], state=state, limit=1000)
-                count += len(runs)
+            needs_attention = await self.jobs.list_runs(
+                factory["id"], state="needs_attention", limit=1000
+            )
+            failed = await self.jobs.list_runs(factory["id"], state="failed", limit=1000)
+            count += len(needs_attention) + sum(
+                1 for run in failed if not run.get("acknowledged", False)
+            )
         host = getattr(self.service, "host", None)
         pending_approvals = getattr(host, "pending_approvals", None) if host is not None else None
         if pending_approvals is not None and self._active_run_ids:
@@ -129,14 +133,24 @@ class FactoryJobExecution:
         if self._quiescing or wip_limit <= 0:
             return
         active_runs = await self.jobs.list_active_runs()
-        running = sum(1 for run in active_runs if run["state"] == "running")
+        running_runs = [run for run in active_runs if run["state"] == "running"]
+        running = len(running_runs)
         if running >= wip_limit:
             return
         queued = [run for run in active_runs if run["state"] == "queued"]
         if not queued:
             return
 
+        factory_running: dict[str, int] = {}
+        member_running: dict[str, int] = {}
+        for active in running_runs:
+            fid = active["factory_id"]
+            mid = active["member_id"]
+            factory_running[fid] = factory_running.get(fid, 0) + 1
+            member_running[mid] = member_running.get(mid, 0) + 1
+
         factories: dict[str, Json] = {}
+        members: dict[str, Json] = {}
         for run in queued:
             if running >= wip_limit:
                 break
@@ -150,9 +164,25 @@ class FactoryJobExecution:
                 factories[factory_id] = factory
             if factory.get("state") != "active":
                 continue
+            factory_cap = factory.get("capacity", wip_limit)
+            if factory_running.get(factory_id, 0) >= factory_cap:
+                continue
+            member_id = run["member_id"]
+            member = members.get(member_id)
+            if member is None:
+                try:
+                    member = await self.native_store.get_member(member_id)
+                except FactoryError:
+                    member = None
+                if member is not None:
+                    members[member_id] = member
+            if member is not None and member_running.get(member_id, 0) >= member.get("capacity", 1):
+                continue
             try:
                 await self.start_run(run)
                 running += 1
+                factory_running[factory_id] = factory_running.get(factory_id, 0) + 1
+                member_running[member_id] = member_running.get(member_id, 0) + 1
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

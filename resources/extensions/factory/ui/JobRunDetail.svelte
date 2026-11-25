@@ -23,6 +23,9 @@
       run && ['queued', 'running', 'needs_attention'].includes(run.state),
     ),
   );
+  const canDismiss = $derived(
+    Boolean(run && run.state === 'failed' && !run.acknowledged),
+  );
 
   async function sendReply() {
     const text = replyText.trim();
@@ -37,6 +40,11 @@
   async function cancelRun() {
     if (!run) return;
     await model.mutate('job_run.cancel', { run_id: run.id });
+  }
+
+  async function dismissRun() {
+    if (!run) return;
+    await model.mutate('job_run.dismiss', { run_id: run.id });
   }
 </script>
 
@@ -77,6 +85,13 @@
             variant="secondary"
             onClick={() => model.client.openSession(run.session_address)}
             >{t('factory.run.openInChat')}</Button
+          >
+        {/if}
+        {#if canDismiss}
+          <Button
+            variant="secondary"
+            disabled={Boolean(model.pending)}
+            onClick={dismissRun}>{t('factory.run.dismiss')}</Button
           >
         {/if}
         {#if canCancel}

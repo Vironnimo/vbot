@@ -59,10 +59,21 @@ _LEADER_JOBS_PARAMETERS: Json = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["list", "get", "create", "update", "delete", "trigger", "runs"],
+            "enum": [
+                "list",
+                "get",
+                "create",
+                "update",
+                "delete",
+                "trigger",
+                "runs",
+                "cancel",
+                "reply",
+            ],
             "description": (
-                "update changes only the fields you send. "
-                "trigger starts an immediate run. runs lists recent job runs."
+                "update changes only the fields you send. trigger starts an immediate run. "
+                "runs lists recent job runs. cancel stops a queued/running/waiting run. "
+                "reply resumes a waiting or failed run."
             ),
         },
         "job_id": {
@@ -136,6 +147,14 @@ _LEADER_JOBS_PARAMETERS: Json = {
             "type": "string",
             "enum": ["queued", "running", "needs_attention", "done", "failed", "cancelled"],
             "description": "For runs: filter by run state. Omit to include all states.",
+        },
+        "run_id": {
+            "type": "string",
+            "description": "For cancel or reply: Job Run id returned by runs or trigger.",
+        },
+        "reply": {
+            "type": "string",
+            "description": "For reply: message sent to resume a needs_attention or failed run.",
         },
         "limit": {
             "type": "integer",

@@ -37,16 +37,12 @@ class NativeDispatchStore(NativeRecordStore):
         **fields: Any,
     ) -> Json:
         _member(connection, factory_id, member_id)
-        if kind not in {"task", "topic", "review"}:
-            raise _error("invalid_execution", "Execution kind must be task, review or topic.")
-        scope = _get(connection, "task" if kind == "review" else kind, scope_id)
+        if kind != "topic":
+            raise _error("invalid_execution", "Execution kind must be topic.")
+        scope = _get(connection, "topic", scope_id)
         if scope["factory_id"] != factory_id:
             raise _error("factory_mismatch", "Execution scope must belong to the same Factory.")
-        if kind == "task" and (scope["epoch"] != epoch or scope["assignee_id"] != member_id):
-            raise _error("stale_execution", "Task assignment changed before execution admission.")
-        if kind == "review" and (scope["epoch"] != epoch or scope.get("reviewer_id") != member_id):
-            raise _error("stale_execution", "Task review changed before execution admission.")
-        if kind == "topic" and member_id not in scope["participants"]:
+        if member_id not in scope["participants"]:
             raise _error(
                 "participant_required", "Invite this member before starting a topic execution."
             )

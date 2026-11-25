@@ -628,6 +628,7 @@ class FactoryJobsStore:
         reason: str | None = None,
         session_address: Any = _UNSET,
         input_note: str | None = None,
+        acknowledged: bool | None = None,
         expected_revision: int | None = None,
     ) -> Json:
         if state is not None and state not in JOB_RUN_STATES:
@@ -673,6 +674,10 @@ class FactoryJobsStore:
                 body["session_address"] = session_address
             if input_note is not None:
                 body["input_note"] = input_note
+            if acknowledged is not None:
+                body["acknowledged"] = acknowledged
+            elif state is not None:
+                body["acknowledged"] = False
 
             connection.execute(
                 "UPDATE factory_job_runs SET state = ?, revision = ?, updated_at = ?, "
@@ -710,3 +715,14 @@ class FactoryJobsStore:
             session_address=session_address,
             expected_revision=expected_revision,
         )
+
+    async def acknowledge_run(self, run_id: str) -> Json:
+        run = await self.get_run(run_id)
+        if run["state"] != "failed":
+            raise _error(
+                "wrong_state",
+                f"Only failed job runs can be dismissed (current state: {run['state']!r}).",
+            )
+        if run.get("acknowledged"):
+            return run
+        return await self.update_run(run_id, acknowledged=True, expected_revision=run["revision"])

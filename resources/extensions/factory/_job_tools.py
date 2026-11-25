@@ -209,17 +209,55 @@ class FactoryJobTools:
 
     async def _handle_leader_jobs(self, context: ToolContext, arguments: Json) -> Json:
         action = str(arguments.get("action") or "").strip().lower()
-        valid_actions = {"list", "get", "create", "update", "delete", "trigger", "runs"}
+        valid_actions = {
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete",
+            "trigger",
+            "runs",
+            "cancel",
+            "reply",
+        }
         if action not in valid_actions:
             return tool_failure(
                 "invalid_arguments",
-                "Unknown action. Use one of: list, get, create, update, delete, trigger, runs.",
+                "Unknown action. Use one of: list, get, create, update, delete, trigger, runs, "
+                "cancel, reply.",
             )
 
         try:
+            job_execution = getattr(self.service, "job_execution", None)
+            if action == "reply":
+                raw_run_id = optional_string(arguments.get("run_id"), field_name="run_id")
+                if raw_run_id and job_execution is not None:
+                    await job_execution.wait_for_turn_settle(raw_run_id)
+            group_to_close: str | None = None
             async with self.service.lock:
                 factory, _leader = await self._authenticate_leader(context)
-                return await self._dispatch_leader_action(factory, action, arguments)
+                if action == "cancel":
+                    run_id = optional_string(arguments.get("run_id"), field_name="run_id")
+                    if not run_id:
+                        raise FactoryError("invalid_arguments", "run_id is required for cancel.")
+                    if job_execution is None:
+                        raise FactoryError("factory_unavailable", "Job execution is unavailable.")
+                    existing = await self.service.records().jobs.get_run(run_id)
+                    if existing["factory_id"] != factory["id"]:
+                        raise FactoryError(
+                            "not_found", f"Job run {run_id!r} does not belong to this Factory."
+                        )
+                    if existing["state"] in {"running", "needs_attention"}:
+                        group_to_close = existing["group_id"]
+                    cancelled = await job_execution.cancel_run(run_id, close_inline=False)
+                    result = tool_success(
+                        {"text": f"Job run {cancelled['id']} cancelled.", "run": cancelled}
+                    )
+                else:
+                    result = await self._dispatch_leader_action(factory, action, arguments)
+            if group_to_close is not None and job_execution is not None:
+                await job_execution.close_group_safe(group_to_close, reason="cancelled")
+            return result
         except ToolContractError as error:
             return tool_failure("invalid_arguments", f"Nothing was changed. {error}")
         except FactoryError as error:
@@ -368,6 +406,24 @@ class FactoryJobTools:
             return tool_success(
                 {"text": f"Queued job run {run['id']} for {job['name']}.", "run": run}
             )
+
+        if action == "reply":
+            run_id = optional_string(arguments.get("run_id"), field_name="run_id")
+            if not run_id:
+                raise FactoryError("invalid_arguments", "run_id is required for reply.")
+            reply_text = optional_string(arguments.get("reply"), field_name="reply")
+            if not reply_text:
+                raise FactoryError("invalid_arguments", "reply is required for reply.")
+            job_execution = getattr(self.service, "job_execution", None)
+            if job_execution is None:
+                raise FactoryError("factory_unavailable", "Job execution is unavailable.")
+            existing = await jobs_store.get_run(run_id)
+            if existing["factory_id"] != factory_id:
+                raise FactoryError(
+                    "not_found", f"Job run {run_id!r} does not belong to this Factory."
+                )
+            resumed = await job_execution.reply_run(run_id, reply_text)
+            return tool_success({"text": f"Job run {resumed['id']} resumed.", "run": resumed})
 
         # action == "runs"
         job_id = optional_string(arguments.get("job_id"), field_name="job_id")

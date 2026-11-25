@@ -99,6 +99,7 @@ JOB_OPERATION_SCHEMAS: dict[str, Json] = {
     "job_run.get": _schema({"run_id": _S}, ("run_id",)),
     "job_run.reply": _schema({"run_id": _S, "text": _S}, ("run_id", "text")),
     "job_run.cancel": _schema({"run_id": _S}, ("run_id",)),
+    "job_run.dismiss": _schema({"run_id": _S}, ("run_id",)),
     "dashboard.get": _schema(
         {
             "factory_id": _S,
@@ -121,6 +122,9 @@ JOB_OPERATION_DESCRIPTIONS: dict[str, str] = {
     "job_run.get": "Read one Job Run.",
     "job_run.reply": "Send an operator reply to resume a waiting or failed Job Run.",
     "job_run.cancel": "Cancel an active or queued Job Run.",
+    "job_run.dismiss": (
+        "Acknowledge a failed Job Run to clear it from Needs Attention and the badge."
+    ),
     "dashboard.get": (
         "Read the Factory dashboard: team, jobs, attention/running/recent runs, and upcoming fires."
     ),
@@ -306,7 +310,11 @@ class FactoryJobManagement:
         needs_attention_runs = await store.jobs.list_runs(
             factory_id, state="needs_attention", limit=1000
         )
-        failed_runs = await store.jobs.list_runs(factory_id, state="failed", limit=1000)
+        failed_runs = [
+            run
+            for run in await store.jobs.list_runs(factory_id, state="failed", limit=1000)
+            if not run.get("acknowledged", False)
+        ]
         needs_attention = sorted(
             [*needs_attention_runs, *failed_runs],
             key=lambda run: (run["created_at"], run["id"]),
@@ -442,6 +450,14 @@ class FactoryJobManagement:
             run_id = _require_id(arguments, "run_id")
             reply_text = text(arguments, "text")
             run = await self._execution.reply_run(run_id, reply_text)
+            return {"run": run}
+
+        if name == "job_run.dismiss":
+            run_id = _require_id(arguments, "run_id")
+            run = await store.jobs.acknowledge_run(run_id)
+            self._publish_change("job_runs", [run["id"]], run["revision"])
+            if hasattr(self._execution, "_refresh_badge"):
+                await self._execution._refresh_badge()
             return {"run": run}
 
         # job_run.cancel

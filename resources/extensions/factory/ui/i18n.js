@@ -55,6 +55,7 @@ export default {
   'factory.dashboard.replyPlaceholder': 'Reply to resume…',
   'factory.dashboard.reply': 'Reply',
   'factory.dashboard.cancel': 'Cancel',
+  'factory.dashboard.dismiss': 'Dismiss',
   'factory.dashboard.inspect': 'Details',
 
   'factory.jobs.new': 'New Job',
@@ -130,6 +131,7 @@ export default {
   'factory.run.reply': 'Reply to resume',
   'factory.run.sendReply': 'Send reply',
   'factory.run.cancel': 'Cancel Run',
+  'factory.run.dismiss': 'Dismiss',
   'factory.run.openInChat': 'Open in Chat',
   'factory.run.session': 'Run Session',
   'factory.run.sessionPending': 'Session will appear once the Job Run starts.',
