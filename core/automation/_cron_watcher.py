@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -375,10 +375,12 @@ class CronWatcher:
         job.last_check_error = _truncate_error(self._owner._secret_masker().mask(message))
         if transient:
             job.consecutive_failures += int(counts)
-            delay = max(
-                _timing._once_retry_delay(job.consecutive_failures), min(retry_after or 0, 86400)
-            )
-            job.watch_retry_at = (_timing._utc_now() + timedelta(seconds=delay)).isoformat()
+            delay = max(_timing._once_retry_delay(job.consecutive_failures), retry_after or 0)
+            try:
+                retry_at = _timing._utc_now() + timedelta(seconds=delay)
+            except OverflowError:
+                retry_at = datetime.max.replace(tzinfo=UTC)
+            job.watch_retry_at = retry_at.isoformat()
         else:
             job.watch_retry_at = None
             if counts:

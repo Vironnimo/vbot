@@ -129,7 +129,7 @@ async def test_a_transient_url_outage_keeps_the_schedule_and_baseline_across_res
     tmp_path: Path, clock: _Clock
 ) -> None:
     service, _trigger = make_service(tmp_path)
-    failure = WatchCheckError("HTTP 429", transient=True, retry_after=120)
+    failure = WatchCheckError("HTTP 429", transient=True, retry_after=2 * 86400)
     checks = FakeChecks(["before", failure])
     job_id = await _watching_job(
         service, checks, watch=CronWatch.parse("url", "https://example.org")
@@ -143,7 +143,7 @@ async def test_a_transient_url_outage_keeps_the_schedule_and_baseline_across_res
     await recovered._watcher.fire(recovered.get_job(job_id))
     assert next_checks.calls == []
     pending = recovered.get_job(job_id)
-    assert recovered.next_fire_at(pending) == (clock.now + timedelta(hours=1)).isoformat()
+    assert recovered.next_fire_at(pending) == (clock.now + timedelta(days=2)).isoformat()
     scripted_runs(trigger, (RunStatus.COMPLETED, "changed"))
     for _ in range(6):
         pending = recovered.get_job(job_id)
