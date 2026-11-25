@@ -19,10 +19,11 @@ from core.providers.providers import (
 )
 
 API_KEY = "test-opencode-go-key"
-BASE_URL = "https://opencode-go.example/v1"
-CHAT_URL = f"{BASE_URL}/chat/completions"
-MESSAGES_URL = f"{BASE_URL}/messages"
-RESPONSES_URL = f"{BASE_URL}/responses"
+GATEWAY = "https://opencode-go.example/inference/go"
+BASE_URL = f"{GATEWAY}/v1"
+CHAT_URL = f"{GATEWAY}/openai/v1/chat/completions"
+MESSAGES_URL = f"{GATEWAY}/anthropic/v1/messages"
+RESPONSES_URL = f"{GATEWAY}/openai/v1/responses"
 HELLO = [{"role": "user", "content": "hello"}]
 
 # One synthetic Model per wire, used wherever only the wire matters.
@@ -30,8 +31,8 @@ CHAT_MODEL = "deepseek-v4-flash"
 MESSAGES_MODEL = "minimax-m3"
 RESPONSES_MODEL = "gpt-5.6-luna"
 GEMINI_MODEL = "gemini-4-argon-contributor"
-GEMINI_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:generateContent"
-GEMINI_STREAM_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse"
+GEMINI_URL = f"{GATEWAY}/google/v1beta/models/{GEMINI_MODEL}:generateContent"
+GEMINI_STREAM_URL = f"{GATEWAY}/google/v1beta/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse"
 WIRES = {
     "chat": (CHAT_MODEL, CHAT_URL),
     "messages": (MESSAGES_MODEL, MESSAGES_URL),

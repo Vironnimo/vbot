@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-19T21:41:35.163292+00:00",
+  "fetched_at": "2026-11-25T10:21:00.806633+00:00",
   "models": {
     "codestral-2508": {
       "canonical": "mistral/codestral-2508",
@@ -144,7 +144,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -170,12 +171,13 @@
       ],
       "context_window": 262144,
       "family": "magistral-medium",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 262144,
       "name": "mistral-medium-latest",
       "pricing": {
         "rates": {
-          "input": 2.0,
-          "output": 5.0
+          "cache_read": 0.15,
+          "input": 1.5,
+          "output": 7.5
         },
         "source": "models.dev:mistral/magistral-medium-latest"
       }
@@ -264,7 +266,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -291,8 +294,17 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
-      "name": "ministral-14b-2512"
+      "family": "ministral",
+      "max_output_tokens": 262144,
+      "name": "ministral-14b-2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 0.2
+        },
+        "source": "models.dev:mistral/ministral-14b-latest"
+      }
     },
     "ministral-3b-2512": {
       "canonical": "mistral/ministral-3b-2512",
@@ -372,7 +384,7 @@
       ],
       "context_window": 131072,
       "family": "ministral",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "name": "ministral-3b-2512",
       "pricing": {
         "rates": {
@@ -461,7 +473,7 @@
       ],
       "context_window": 262144,
       "family": "ministral",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 262144,
       "name": "ministral-8b-2512",
       "pricing": {
         "rates": {
@@ -564,6 +576,7 @@
       "name": "mistral-embed-2312",
       "pricing": {
         "rates": {
+          "cache_read": 0.01,
           "input": 0.1,
           "output": 0.0
         },
@@ -1210,7 +1223,7 @@
         "api-key"
       ],
       "context_window": 16384,
-      "family": "voxtral",
+      "family": "voxtral-transcribe",
       "max_output_tokens": 0,
       "metadata": {
         "mistral": {
@@ -1895,7 +1908,7 @@
         "api-key"
       ],
       "context_window": 4096,
-      "family": "voxtral",
+      "family": "voxtral-tts",
       "max_output_tokens": 0,
       "metadata": {
         "mistral": {
@@ -1935,7 +1948,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "family": "voxtral",
+      "family": "voxtral-small",
       "max_output_tokens": 32000,
       "name": "Voxtral Small Transcribe",
       "pricing": {
@@ -1978,7 +1991,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "family": "voxtral",
+      "family": "voxtral-small",
       "max_output_tokens": 32000,
       "name": "Voxtral Small Transcribe",
       "pricing": {

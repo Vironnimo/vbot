@@ -200,6 +200,9 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             debug_recorder=debug_recorder,
             http_transport=http_transport,
         )
+        self._messages_endpoint = MESSAGES_ENDPOINT
+        if client is not None and base_url:
+            self._messages_endpoint = f"{base_url.rstrip('/')}{MESSAGES_ENDPOINT}"
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -655,7 +658,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             headers.update(request_headers)
             try:
                 response = await self._client.post(
-                    MESSAGES_ENDPOINT,
+                    self._messages_endpoint,
                     content=request.body,
                     headers=json_body_headers(headers),
                 )
@@ -759,7 +762,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         async def _stream_request(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
             response = await connect_streaming_with_retry(
                 self._client,
-                MESSAGES_ENDPOINT,
+                self._messages_endpoint,
                 request.body,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,

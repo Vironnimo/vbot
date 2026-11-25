@@ -13,13 +13,14 @@ from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
-BASE_URL = "https://opencode.ai/inference/v1"
-RESPONSES_URL = f"{BASE_URL}/responses"
-MESSAGES_URL = f"{BASE_URL}/messages"
-CHAT_URL = f"{BASE_URL}/chat/completions"
+GATEWAY = "https://opencode.ai/inference"
+BASE_URL = f"{GATEWAY}/v1"
+RESPONSES_URL = f"{GATEWAY}/openai/v1/responses"
+MESSAGES_URL = f"{GATEWAY}/anthropic/v1/messages"
+CHAT_URL = f"{GATEWAY}/openai/v1/chat/completions"
 GEMINI_MODEL = "gemini-3.5-flash"
-GEMINI_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:generateContent"
-GEMINI_STREAM_URL = f"{BASE_URL}/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse"
+GEMINI_URL = f"{GATEWAY}/google/v1beta/models/{GEMINI_MODEL}:generateContent"
+GEMINI_STREAM_URL = f"{GATEWAY}/google/v1beta/models/{GEMINI_MODEL}:streamGenerateContent?alt=sse"
 
 # One reviewed Model per Zen wire protocol.
 RESPONSES_MODEL = "gpt-5.6-sol"

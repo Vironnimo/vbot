@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-19T21:42:50.777854+00:00",
+  "fetched_at": "2026-11-25T10:21:08.452110+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -34,10 +34,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "beam",
+      "family": "beam-free",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -49,6 +50,41 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/beam-free"
+      }
+    },
+    "bge-m3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "BGE M3",
+      "pricing": {
+        "rates": {
+          "input": 0.01,
+          "output": 0.0
+        },
+        "source": "opencode-zen:bge-m3"
       }
     },
     "big-pickle": {
@@ -81,6 +117,7 @@
       "max_output_tokens": 32000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -135,6 +172,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -189,6 +227,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -243,6 +282,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -290,6 +330,7 @@
       "max_output_tokens": 64000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -344,6 +385,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -408,6 +450,7 @@
       "max_output_tokens": 64000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -461,6 +504,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -515,6 +559,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -569,6 +614,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -623,6 +669,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -677,6 +724,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -724,6 +772,7 @@
       "max_output_tokens": 64000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -786,9 +835,10 @@
       ],
       "context_window": 1000000,
       "family": "claude-sonnet",
-      "max_output_tokens": 64000,
+      "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -843,6 +893,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -897,6 +948,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -909,6 +961,111 @@
           "output": 10.0
         },
         "source": "models.dev:opencode/claude-sonnet-5-5"
+      }
+    },
+    "codestral-embed": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "Codestral Embed",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 0.0
+        },
+        "source": "opencode-zen:codestral-embed"
+      }
+    },
+    "cohere-embed-v5-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": null,
+      "name": "Embed 5 Fast",
+      "pricing": {
+        "rates": {
+          "input": 0.08,
+          "output": 0.0
+        },
+        "source": "opencode-zen:cohere-embed-v5-fast"
+      }
+    },
+    "cohere-embed-v5-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 128000,
+      "max_output_tokens": null,
+      "name": "Embed 5 Pro",
+      "pricing": {
+        "rates": {
+          "input": 0.12,
+          "output": 0.0
+        },
+        "source": "opencode-zen:cohere-embed-v5-pro"
       }
     },
     "deepseek-v4-pro": {
@@ -942,10 +1099,11 @@
         "account"
       ],
       "context_window": 1000000,
-      "family": "deepseek-thinking",
+      "family": "deepseek-pro",
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -996,15 +1154,16 @@
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
       "name": "DeepSeek V4.1 Flash 1017",
       "pricing": {
         "rates": {
-          "cache_read": 0.006,
-          "input": 0.3,
-          "output": 1.2
+          "cache_read": 0.0024,
+          "input": 0.12,
+          "output": 0.48
         },
         "source": "models.dev:opencode/deepseek-v4.1-flash"
       }
@@ -1042,10 +1201,11 @@
         "account"
       ],
       "context_window": 200000,
-      "family": "deepseek-flash",
+      "family": "deepseek-flash-free",
       "max_output_tokens": 32000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -1093,10 +1253,11 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "flint",
+      "family": "flint-free",
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -1151,6 +1312,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1205,6 +1367,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1259,6 +1422,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1312,6 +1476,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1365,6 +1530,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1418,6 +1584,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1471,6 +1638,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1525,6 +1693,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1579,6 +1748,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "gemini",
           "npm": "@ai-sdk/google"
         }
       },
@@ -1625,6 +1795,76 @@
           "output": 0.0
         },
         "source": "opencode-zen:gemini-decision-1"
+      }
+    },
+    "gemini-embedding-001": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 2048,
+      "max_output_tokens": null,
+      "name": "Gemini Embedding 001",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 0.0
+        },
+        "source": "opencode-zen:gemini-embedding-001"
+      }
+    },
+    "gemini-embedding-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "Gemini Embedding 2",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 0.0
+        },
+        "source": "opencode-zen:gemini-embedding-2"
       }
     },
     "gemini-nano-banana-2.1": {
@@ -1697,15 +1937,16 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
       "name": "GLM-5.3",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
+          "cache_read": 0.104,
+          "input": 0.56,
+          "output": 1.76
         },
         "source": "models.dev:opencode/glm-5.3"
       }
@@ -1748,6 +1989,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -1799,6 +2041,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -1850,6 +2093,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -1901,6 +2145,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -1953,6 +2198,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2006,6 +2252,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2056,6 +2303,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2109,6 +2357,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2173,6 +2422,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2226,6 +2476,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2277,6 +2528,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2330,6 +2582,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2392,6 +2645,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2446,6 +2700,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2513,6 +2768,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2580,6 +2836,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2646,6 +2903,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2713,6 +2971,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2834,6 +3093,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2900,6 +3160,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -2966,6 +3227,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3032,6 +3294,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3129,6 +3392,7 @@
       "max_output_tokens": 500000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3191,6 +3455,7 @@
       "max_output_tokens": 500000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3254,6 +3519,7 @@
       "max_output_tokens": 500000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3310,6 +3576,7 @@
       "max_output_tokens": 256000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3389,8 +3656,13 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "Hy",
+      "family": "hy-flash-free",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "catalog_protocol": "chat_completions"
+        }
+      },
       "name": "Hy4 flash Free",
       "pricing": {
         "rates": {
@@ -3428,6 +3700,11 @@
       ],
       "context_window": 262144,
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "catalog_protocol": "chat_completions"
+        }
+      },
       "name": "Iceman Free",
       "pricing": {
         "rates": {
@@ -3508,6 +3785,41 @@
         "source": "opencode-zen:jev-1.13-free"
       }
     },
+    "jev-1.14": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 64000,
+      "max_output_tokens": null,
+      "name": "Jev 1.14",
+      "pricing": {
+        "rates": {
+          "input": 0.042,
+          "output": 0.0
+        },
+        "source": "opencode-zen:jev-1.14"
+      }
+    },
     "kimi-k2.7-code": {
       "capabilities": {
         "input_modalities": [
@@ -3536,10 +3848,11 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "kimi-k2",
+      "family": "kimi-code",
       "max_output_tokens": 262144,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -3587,10 +3900,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "kimi-k3",
+      "family": "kimi",
       "max_output_tokens": 1048576,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -3605,18 +3919,24 @@
         "source": "models.dev:opencode/kimi-k3"
       }
     },
-    "longcat-2.5-free": {
+    "kimi-k3.1-pro": {
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [],
@@ -3632,22 +3952,24 @@
         "api-key",
         "account"
       ],
-      "context_window": 1000000,
-      "family": "longcat",
-      "max_output_tokens": 262144,
+      "context_window": 1048576,
+      "family": "kimi-pro",
+      "max_output_tokens": 1048576,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
-      "name": "LongCat 2.5 Free",
+      "name": "Kimi K3.1 Pro",
       "pricing": {
         "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
+          "cache_read": 0.2,
+          "cache_write": 2.0,
+          "input": 2.0,
+          "output": 10.0
         },
-        "source": "models.dev:opencode/longcat-2.5-free"
+        "source": "models.dev:opencode/kimi-k3.1-pro"
       }
     },
     "minimax-m2.7": {
@@ -3676,10 +3998,11 @@
         "account"
       ],
       "context_window": 204800,
-      "family": "minimax",
+      "family": "minimax-m",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -3722,10 +4045,11 @@
         "account"
       ],
       "context_window": 512000,
-      "family": "minimax",
+      "family": "minimax-m",
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -3737,6 +4061,41 @@
           "output": 1.2
         },
         "source": "models.dev:opencode/minimax-m3"
+      }
+    },
+    "mistral-embed": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8000,
+      "max_output_tokens": null,
+      "name": "Mistral Embed",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.0
+        },
+        "source": "opencode-zen:mistral-embed"
       }
     },
     "mistral-large-4": {
@@ -3775,6 +4134,7 @@
       "max_output_tokens": 262144,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "npm": "@ai-sdk/mistral"
         }
       },
@@ -3826,10 +4186,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "muse",
+      "family": "muse-ember",
       "max_output_tokens": 270000,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3894,10 +4255,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "muse",
+      "family": "muse-spark",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -3949,10 +4311,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "muse",
+      "family": "muse-spark",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -4005,10 +4368,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "muse",
+      "family": "muse-wonder",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "responses",
           "npm": "@ai-sdk/openai"
         }
       },
@@ -4048,10 +4412,11 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "nemotron",
+      "family": "nemotron-lightning-free",
       "max_output_tokens": 262144,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -4100,10 +4465,11 @@
         "account"
       ],
       "context_window": 1048576,
-      "family": "nemotron",
+      "family": "nemotron-super-free",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -4115,6 +4481,41 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/nemotron-3.5-super-vl-free"
+      }
+    },
+    "qwen3-embedding-8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 32768,
+      "max_output_tokens": null,
+      "name": "Qwen3 Embedding 8B",
+      "pricing": {
+        "rates": {
+          "input": 0.01,
+          "output": 0.0
+        },
+        "source": "opencode-zen:qwen3-embedding-8b"
       }
     },
     "qwen3.5-plus": {
@@ -4146,10 +4547,11 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "qwen",
+      "family": "qwen-plus",
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -4193,10 +4595,11 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "qwen",
+      "family": "qwen-plus",
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -4245,10 +4648,11 @@
         "account"
       ],
       "context_window": 1000000,
-      "family": "qwen",
+      "family": "qwen-flash",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "messages",
           "npm": "@ai-sdk/anthropic"
         }
       },
@@ -4296,8 +4700,13 @@
         "account"
       ],
       "context_window": 262144,
-      "family": "qwen",
+      "family": "qwen-max",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "catalog_protocol": "chat_completions"
+        }
+      },
       "name": "Qwen3.8 Max",
       "pricing": {
         "rates": {
@@ -4307,6 +4716,76 @@
           "output": 6.0
         },
         "source": "models.dev:opencode/qwen3.8-max"
+      }
+    },
+    "text-embedding-3-large": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "text-embedding-3-large",
+      "pricing": {
+        "rates": {
+          "input": 0.13,
+          "output": 0.0
+        },
+        "source": "opencode-zen:text-embedding-3-large"
+      }
+    },
+    "text-embedding-3-small": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "text-embedding-3-small",
+      "pricing": {
+        "rates": {
+          "input": 0.02,
+          "output": 0.0
+        },
+        "source": "opencode-zen:text-embedding-3-small"
       }
     },
     "tidepool-alpha-free": {
@@ -4347,6 +4826,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
+          "catalog_protocol": "chat_completions",
           "interleaved_field": "reasoning_content"
         }
       },
@@ -4358,6 +4838,76 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/tidepool-alpha-free"
+      }
+    },
+    "voyage-4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 32000,
+      "max_output_tokens": null,
+      "name": "voyage-4",
+      "pricing": {
+        "rates": {
+          "input": 0.06,
+          "output": 0.0
+        },
+        "source": "opencode-zen:voyage-4"
+      }
+    },
+    "voyage-code-4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 32000,
+      "max_output_tokens": null,
+      "name": "voyage-code-4",
+      "pricing": {
+        "rates": {
+          "input": 0.12,
+          "output": 0.0
+        },
+        "source": "opencode-zen:voyage-code-4"
       }
     }
   },

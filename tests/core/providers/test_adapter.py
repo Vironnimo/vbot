@@ -289,7 +289,8 @@ def _budget_adapter(wire: str) -> tuple[Any, str, str]:
     )
     config = bearer_config(provider_id, base_url="https://provider.example/v1")
     adapter = adapter_type(config, TOKEN, model_lookup=lambda _model_id: model)
-    return adapter, f"https://provider.example/v1{path}", model_id
+    base = "https://provider.example/openai/v1" if wire == "go-responses" else config.base_url
+    return adapter, f"{base}{path}", model_id
 
 
 @pytest.mark.asyncio

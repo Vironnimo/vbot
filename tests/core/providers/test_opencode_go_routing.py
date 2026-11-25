@@ -28,6 +28,7 @@ from .opencode_go_test_support import (
     CHAT_MODEL,
     CHAT_URL,
     CLOSED_TOOL,
+    GATEWAY,
     GEMINI_MODEL,
     GEMINI_STREAM_URL,
     GEMINI_URL,
@@ -149,17 +150,17 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
 @pytest.mark.parametrize(
     ("model_id", "wire", "path"),
     [
-        ("unlisted-future", "chat", "chat/completions"),
-        ("unlisted-future-free", "chat", "chat/completions"),
-        ("deepseek-v99-flash-free", "chat", "chat/completions"),
-        ("kimi-k99", "chat", "chat/completions"),
-        ("gpt-99", "responses", "responses"),
-        ("grok-99", "responses", "responses"),
-        ("muse-spark-99", "responses", "responses"),
-        ("claude-future", "messages", "messages"),
-        ("minimax-m99", "messages", "messages"),
-        ("qwen99", "messages", "messages"),
-        ("gemini-future", "gemini", "models/gemini-future:generateContent"),
+        ("unlisted-future", "chat", "openai/v1/chat/completions"),
+        ("unlisted-future-free", "chat", "openai/v1/chat/completions"),
+        ("deepseek-v99-flash-free", "chat", "openai/v1/chat/completions"),
+        ("kimi-k99", "chat", "openai/v1/chat/completions"),
+        ("gpt-99", "responses", "openai/v1/responses"),
+        ("grok-99", "responses", "openai/v1/responses"),
+        ("muse-spark-99", "responses", "openai/v1/responses"),
+        ("claude-future", "messages", "anthropic/v1/messages"),
+        ("minimax-m99", "messages", "anthropic/v1/messages"),
+        ("qwen99", "messages", "anthropic/v1/messages"),
+        ("gemini-future", "gemini", "google/v1beta/models/gemini-future:generateContent"),
     ],
 )
 @pytest.mark.asyncio
@@ -169,7 +170,7 @@ async def test_unlisted_models_inherit_their_family_or_provider_wire(
     """A new version needs no catalog facts or exact profile before its first request."""
     adapter = go_adapter()
     with respx.mock:
-        route = respx.post(f"{go_config().base_url}/{path}").mock(
+        route = respx.post(f"{GATEWAY}/{path}").mock(
             return_value=success_response(wire, streaming=False)
         )
         await adapter.send(HELLO, model_id=model_id, thinking_effort="minimal")
@@ -270,7 +271,8 @@ async def test_composed_wire_reads_the_connection_binding_of_the_adapter(
 @pytest.mark.asyncio
 async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
     """The runtime factory's base URL and auth override the config on all four wires."""
-    runtime_url = "https://runtime-opencode-go.example/v1"
+    gateway = "https://runtime-opencode-go.example/proxy/go"
+    runtime_url = f"{gateway}/v1"
     adapter = OpenCodeGoAdapter(
         go_config(),
         API_KEY,
@@ -281,14 +283,14 @@ async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
 
     with respx.mock:
         routes = {
-            wire: respx.post(f"{runtime_url}/{path}").mock(
+            wire: respx.post(f"{gateway}/{path}").mock(
                 return_value=success_response(wire, streaming=False)
             )
             for wire, path in (
-                ("chat", "chat/completions"),
-                ("messages", "messages"),
-                ("responses", "responses"),
-                ("gemini", f"models/{GEMINI_MODEL}:generateContent"),
+                ("chat", "openai/v1/chat/completions"),
+                ("messages", "anthropic/v1/messages"),
+                ("responses", "openai/v1/responses"),
+                ("gemini", f"google/v1beta/models/{GEMINI_MODEL}:generateContent"),
             )
         }
         for model_id in (CHAT_MODEL, MESSAGES_MODEL, "gpt-5.6-luna", GEMINI_MODEL):

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 import httpx
 
 from core.models.models import Model
+from core.providers._opencode_catalog import catalog_model, opencode_api_base
 from core.providers._responses_profile import (
     RESPONSES_REASONING_FIELDS,
     profile_responses_policy,
@@ -222,6 +223,30 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         "gemini",
     )
 
+    @classmethod
+    @override
+    def normalize_catalog_entry(
+        cls,
+        raw: Mapping[str, Any],
+        defaults: Mapping[str, Any] | None = None,
+    ) -> Model:
+        return catalog_model(raw, defaults, "opencode-go")
+
+    def _chat_protocol(self, model_id: str) -> Protocol:
+        model = self._catalog_model(model_id)
+        if model is not None and "chat" not in model.capabilities.task_types:
+            raise ProviderError(
+                f"Model '{model_id}' is a specialized OpenCode task Model. "
+                "Select it in Task Model settings.",
+                retryable=False,
+            )
+        return self.wire_profile(model_id).protocol
+
+    @classmethod
+    @override
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        return opencode_api_base(base_url, "openai/v1")
+
     def __init__(
         self,
         config: ProviderConfig,
@@ -239,10 +264,11 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         # adapter; the inner OpenAI-compatible and Anthropic adapters
         # inherit it through the same parameter.
         del connection_mode
+        gateway = base_url or config.base_url
         super().__init__(
             config,
             token_getter,
-            base_url,
+            self.openai_compatible_base_url(gateway),
             auth_config,
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
@@ -255,7 +281,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self._messages = _OpenCodeGoMessagesAdapter(
             config,
             self._token_getter,
-            base_url=base_url,
+            base_url=opencode_api_base(gateway, "anthropic/v1"),
             auth_config=AuthConfig(
                 header="x-api-key",
                 prefix="",
@@ -272,7 +298,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self._gemini = _OpenCodeGoGeminiAdapter(
             config,
             self._token_getter,
-            base_url=base_url,
+            base_url=opencode_api_base(gateway, "google/v1beta"),
             auth_config=AuthConfig(header="x-goog-api-key", prefix=""),
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
@@ -334,7 +360,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the rendered request for the model-selected OpenCode Go wire."""
 
-        protocol = self.wire_profile(model_id).protocol
+        protocol = self._chat_protocol(model_id)
         if protocol == "gemini":
             return self._gemini.estimate_request_input_tokens(
                 messages, model_id=model_id, tools=tools
@@ -363,7 +389,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        protocol = self.wire_profile(model_id).protocol
+        protocol = self._chat_protocol(model_id)
         if protocol == "gemini":
             return await self._gemini.send(messages, model_id=model_id, **kwargs)
         if protocol == "messages":
@@ -396,7 +422,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        protocol = self.wire_profile(model_id).protocol
+        protocol = self._chat_protocol(model_id)
         if protocol == "gemini":
             return self._gemini.stream(messages, model_id=model_id, **kwargs)
         if protocol == "messages":
@@ -426,7 +452,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
         if model_id is not None:
-            protocol = self.wire_profile(model_id).protocol
+            protocol = self._chat_protocol(model_id)
             if protocol == "gemini":
                 return self._gemini.normalize_response(response, model_id=model_id)
             if protocol == "messages":

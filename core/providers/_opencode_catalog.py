@@ -1,20 +1,32 @@
-"""Specialized OpenCode Console catalog records and native endpoint bases."""
+"""OpenCode Go and Zen catalog records and protocol-specific API bases."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
 from core.models.pricing import TokenPricing, nonnegative_amount
 from core.providers.errors import CatalogEntrySkipped
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 
 
-def zen_api_base(base_url: str, api: str) -> str:
-    """Keep the configured origin. Never send a credential to a host from the feed."""
+def opencode_api_base(base_url: str, api: str) -> str:
+    """Select a sibling protocol on the configured gateway and billing route."""
     base = urlsplit(base_url)
-    return urlunsplit((base.scheme, base.netloc, f"/inference/{api}", "", ""))
+    root = base.path.rstrip("/")
+    for suffix in ("/openai/v1", "/anthropic/v1", "/google/v1beta", "/xai/v1", "/v1"):
+        if root.endswith(suffix):
+            root = root.removesuffix(suffix)
+            break
+    return urlunsplit((base.scheme, base.netloc, f"{root}/{api}", "", ""))
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -40,7 +52,7 @@ def _rates(direction: str, price: Mapping[str, Any]) -> dict[str, float | None]:
     return rates
 
 
-def _decision_pricing(raw: Mapping[str, Any], model_id: str) -> TokenPricing | None:
+def _text_pricing(raw: Mapping[str, Any], provider_id: str, model_id: str) -> TokenPricing | None:
     prices = _mapping(_mapping(raw.get("cost")).get("text"))
     rates: dict[str, Any] = {}
     tiers: dict[int, dict[str, Any]] = {}
@@ -64,14 +76,27 @@ def _decision_pricing(raw: Mapping[str, Any], model_id: str) -> TokenPricing | N
             {**values, "tier": {"type": "context", "size": threshold}}
             for threshold, values in tiers.items()
         ]
-    return TokenPricing.from_cost(rates, source=f"opencode-zen:{model_id}")
+    return TokenPricing.from_cost(rates, source=f"{provider_id}:{model_id}")
 
 
-def task_model(raw: Mapping[str, Any]) -> Model | None:
-    """Recognize executable Console task protocols before applying chat defaults."""
+def catalog_model(
+    raw: Mapping[str, Any], defaults: Mapping[str, Any] | None, provider_id: str
+) -> Model:
+    """Prefer the gateway's exact chat API and expose only executable task protocols."""
     kind = raw.get("type")
     if kind in (None, "chat"):
-        return None
+        model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
+        protocol = {
+            "chat-completions": "chat_completions",
+            "responses": "responses",
+            "messages": "messages",
+            "interactions": "gemini",
+        }.get(str(raw.get("recommended_api")))
+        if not protocol:
+            return model
+        return replace(
+            model, metadata={provider_id.replace("-", "_"): {"catalog_protocol": protocol}}
+        )
     model_id = raw.get("id")
     if not isinstance(model_id, str) or not model_id.strip():
         raise CatalogEntrySkipped("OpenCode task Model has no id")
@@ -81,11 +106,20 @@ def task_model(raw: Mapping[str, Any]) -> Model | None:
     metadata: dict[str, Any] = {}
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
+    if kind == "embedding" and "embeddings" in api:
+        return Model(
+            model_id=model_id,
+            name=str(raw.get("name") or model_id),
+            capabilities=text_embedding_capabilities(),
+            pricing=_text_pricing(raw, provider_id, model_id),
+            context_window=_limit(limits.get("input")) or _limit(limits.get("context")),
+            max_output_tokens=None,
+        )
     if kind == "decision" and "systemone" in api:
         task, inputs, outputs = "decision", ("text",), ("decisions",)
         if maximum := _limit(limits.get("input")):
             options[task] = {"limits": {"max_input_tokens": maximum}}
-    elif kind == "image" and "images" in api:
+    elif provider_id == "opencode-zen" and kind == "image" and "images" in api:
         image_sdk = _mapping(_mapping(api["images"]).get("sdk")).get("aisdk")
         if image_sdk not in ("@ai-sdk/google", "@ai-sdk/openai", "@ai-sdk/xai"):
             raise CatalogEntrySkipped("OpenCode image route has no supported SDK")
@@ -107,7 +141,7 @@ def task_model(raw: Mapping[str, Any]) -> Model | None:
             task_options=options,
         ),
         metadata=metadata,
-        pricing=_decision_pricing(raw, model_id) if task == "decision" else None,
+        pricing=_text_pricing(raw, provider_id, model_id) if task == "decision" else None,
         context_window=_limit(limits.get("context")),
         max_output_tokens=_limit(limits.get("output")),
     )

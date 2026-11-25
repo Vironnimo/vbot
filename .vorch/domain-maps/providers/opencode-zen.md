@@ -1,6 +1,6 @@
 # OpenCode Zen Provider
 
-OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Responses, Anthropic Messages, OpenAI Chat Completions, and native Gemini `generateContent`; the models.dev catalog protocol hint and its wire profile `resources/wire/opencode-zen.json` decide the exact per-Model routing and admission, and `OpenCodeZenAdapter` dispatches on the resolved profile.
+OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Responses, Anthropic Messages, OpenAI Chat Completions, and native Gemini `generateContent`; the Console catalog, the models.dev SDK hint and its wire profile `resources/wire/opencode-zen.json` decide the exact per-Model routing and admission, and `OpenCodeZenAdapter` dispatches on the resolved profile.
 
 ## Interfaces
 
@@ -11,6 +11,10 @@ OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Response
 - Discovery: public `GET https://opencode.ai/inference/v1/models`, normalized by `OpenCodeZenAdapter` and enriched from the models.dev `opencode` section, including the protocol hint `metadata.opencode_zen.npm`
 - Shared native Gemini transport/codec: `core/providers/gemini_compatible.py` and `_gemini_wire.py` (also used by Go)
 - Generated projection: `resources/models/opencode-zen.json`
+
+## Inference paths (2026-11-25)
+
+Zen uses `/inference/openai/v1` for Chat Completions, Responses and embeddings, `/inference/anthropic/v1` for Messages and `/inference/google/v1beta` for Gemini generation. All 76 admitted chat Models matched the public catalog's protocol family. API-key streams completed for Kimi K3.1 Pro, Claude Haiku 5.5, GPT 6.2 Sol and Gemini 3.8 Flash, 4 Argon, Carbon, Hydrogen and Neon. Some Kimi requests hit overload or timed out; a later max-effort stream and Tool continuation succeeded. Route selection and fallback for newly listed Models are shared with Go. [Console inference API](https://opencode.ai/docs/console/api/inference/)
 
 ## Connections and Authentication
 
@@ -164,10 +168,11 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 
 ## Specialized Models
 
-The public [Console catalog](https://opencode.ai/inference/v1/models) publishes Model types, API descriptors, prices and limits. Discovery exposes supported image and Decision Models in Task Model settings and skips other specialized APIs. Credentialed requests always use the configured origin and a supported native path.
+The public [Console catalog](https://opencode.ai/inference/v1/models) publishes Model types, API descriptors, prices and limits. Discovery exposes supported image, Decision and text embedding Models in Task Model settings and skips other specialized APIs. Credentialed requests always use the configured origin and a supported native path.
 
 - Images use the SDK reported in `api.images.sdk.aisdk`. The Google route uses `generateContent`, the OpenAI route uses Images JSON generation or multipart edits, and the xAI route uses JSON for both generation and editing. Source images travel inline. Grok requests Base64 and reads the returned native MIME type. Controls for known image Models are in `resources/models/opencode-zen.overrides.json`. [Console image APIs](https://opencode.ai/docs/console/models/#image-models)
 - Decision Models use the existing System One wire at `/inference/systemone/v1/systemone`. On 2026-11-19 the Zen API-key Connection returned typed judgments from Jev 1.13, Jev 1.13 Free, Gemini Decision 1 and GPT 6 Luna Decision. Catalog input limits are retained for Decision preflight. [Console Decision APIs](https://opencode.ai/docs/console/models/#gpt-6-luna-decision-and-gemini-decision-1)
+- Text embeddings use the OpenAI-compatible embeddings path and carry the catalog input price. An API-key request with `text-embedding-3-small` returned a 1,536-dimensional vector on 2026-11-25. Jev 1.14 also returned a typed judgment on the existing Decision wire.
 - Decision pricing uses the catalog's `cost.text` token rates, including explicit zeroes and GPT 6 Luna Decision's higher input and cache-read rates above 272,000 input tokens. Its cache-write price depends on retention, which the aggregate cache-write count cannot resolve. A reported cost takes precedence. [Console catalog](https://opencode.ai/inference/v1/models)
 - The catalog declares GPT-Live 1 as realtime. On 2026-11-19 its API-key Connection created a native WebRTC session, but the server-side control WebSocket needed for vBot delegations returned HTTP 404. Discovery omits this Model. [OpenCode's hosted voice implementation](https://github.com/anomalyco/opencode/pull/57735)
 

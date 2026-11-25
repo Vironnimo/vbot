@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-19T21:41:35.874749+00:00",
+  "fetched_at": "2026-11-25T10:21:02.595910+00:00",
   "models": {
     "beam": {
       "capabilities": {
@@ -108,7 +108,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "deepseek-thinking",
+      "family": "deepseek-pro",
       "max_output_tokens": 65536,
       "metadata": {
         "ollama": {
@@ -531,6 +531,52 @@
         "source": "models.dev:ollama-cloud/gpt-oss:20b"
       }
     },
+    "hy4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "hy",
+      "max_output_tokens": 65536,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "hy4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.042,
+          "input": 0.834,
+          "output": 2.501
+        },
+        "source": "models.dev:ollama-cloud/hy4"
+      }
+    },
     "inkling-2-small": {
       "capabilities": {
         "input_modalities": [
@@ -566,7 +612,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "ling",
+      "family": "inkling-small",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -612,7 +658,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "family": "kimi-k2",
+      "family": "kimi",
       "max_output_tokens": 262144,
       "metadata": {
         "ollama": {
@@ -658,7 +704,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "family": "kimi-k2",
+      "family": "kimi-code",
       "max_output_tokens": 262144,
       "metadata": {
         "ollama": {
@@ -709,7 +755,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "kimi-k3",
+      "family": "kimi",
       "max_output_tokens": 1048576,
       "metadata": {
         "ollama": {
@@ -761,7 +807,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "kimi-k3",
+      "family": "kimi-pro",
       "max_output_tokens": 1048576,
       "metadata": {
         "ollama": {
@@ -807,7 +853,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "mimo",
+      "family": "mimo-flash",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -853,7 +899,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "mimo",
+      "family": "mimo-pro",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -906,7 +952,7 @@
         "api-key"
       ],
       "context_window": 512000,
-      "family": "minimax",
+      "family": "minimax-m",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -960,7 +1006,7 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "family": "minimax",
+      "family": "minimax-m-flash",
       "max_output_tokens": 512000,
       "metadata": {
         "ollama": {
@@ -1062,7 +1108,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "muse",
+      "family": "muse-spark",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -1105,7 +1151,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "family": "nemotron",
+      "family": "nemotron-super",
       "max_output_tokens": 65536,
       "metadata": {
         "ollama": {
@@ -1148,7 +1194,7 @@
         "api-key"
       ],
       "context_window": 262144,
-      "family": "nemotron",
+      "family": "nemotron-ultra",
       "max_output_tokens": 128000,
       "metadata": {
         "ollama": {

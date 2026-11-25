@@ -306,13 +306,13 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "beam-free",
             "iceman-contributor-free",
             "hy4-flash-free",
-            "longcat-2.5-free",
+            "hungerg-free",
             "glm-5.3-flash",
             "glm-5.3",
             "kimi-k3",
             "kimi-k3.1-pro",
             "kimi-k2.7-code",
-            "longcat-2.0",
+            "longcat-2.5",
             "deepseek-v4.1-flash",
             "deepseek-v4-pro",
             "mimo-v2.6-flash",
@@ -340,7 +340,17 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
     } == expected
-    assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(expected)
+    published = registry.list_for_provider("opencode-go")
+    assert {
+        model.model_id for model in published if "chat" in model.capabilities.task_types
+    } == set(expected)
+    for task, ids in (
+        ("decision", {"jev-1.14", "gemini-decision-1", "gpt-6-luna-decision"}),
+        ("text_embedding", {"gemini-embedding-2", "qwen3-embedding-8b", "text-embedding-3-small"}),
+    ):
+        assert {
+            model.model_id for model in published if task in model.capabilities.task_types
+        } == ids
 
 
 def test_opencode_go_response_fields_are_not_history_field_guesses(

@@ -99,10 +99,10 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     wire_effort: str | None,
     intent: tuple[str, str | None],
 ) -> None:
-    adapter, _, config = bundled_go()
+    adapter, _, _ = bundled_go()
 
     with respx.mock:
-        route = respx.post(f"{config.base_url}/chat/completions").mock(
+        route = respx.post("https://opencode.ai/inference/go/openai/v1/chat/completions").mock(
             return_value=success_response("chat", streaming=False)
         )
         await adapter.send(

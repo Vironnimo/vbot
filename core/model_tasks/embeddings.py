@@ -152,8 +152,9 @@ class EmbeddingService:
 
         *purpose* selects the Model family's query or document handling
         (``input_type`` field or text prefix, see
-        :mod:`core.model_tasks.embedding_profiles`); ``None`` sends the texts
-        unchanged. Prefixes exist only on the wire, never in the caller's text.
+        :mod:`core.model_tasks.embedding_profiles`). An omitted purpose uses
+        the family default where its API requires one. Prefixes exist only on the wire,
+        never in the caller's text.
 
         Raises:
             EmbeddingConfigurationError: No ``text_embedding`` binding

@@ -20,7 +20,7 @@ from core.model_tasks.image_types import (
     JsonObject,
 )
 from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
-from core.providers._opencode_zen_tasks import zen_api_base
+from core.providers._opencode_catalog import opencode_api_base
 from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.http import parse_sse_json_data, split_stream_lines
@@ -170,7 +170,7 @@ class ProviderImageClient(ProviderTaskClient):
                 raise ProviderError(
                     "This OpenCode image Model has no supported native route.", retryable=False
                 )
-            self._base_url = zen_api_base(self._base_url, namespace)
+            self._base_url = opencode_api_base(self._base_url, namespace)
         if selected == "openrouter":
             return await self._generate_openrouter(
                 prompt,

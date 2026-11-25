@@ -258,22 +258,22 @@ WIRES = {
         "github-copilot", "gemini-3.1-pro-preview", "chat_completions", "/chat/completions"
     ),
     "zen-chat-completions": Wire(
-        "opencode-zen", "deepseek-v4-flash", "chat_completions", "/chat/completions"
+        "opencode-zen", "deepseek-v4-flash", "chat_completions", "/openai/v1/chat/completions"
     ),
     "messages": Wire("minimax", "MiniMax-M2.7", "messages", "/messages"),
     "copilot-messages": Wire("github-copilot", "claude-haiku-4.5", "messages", "/v1/messages"),
     "zen-messages-x-api-key": Wire(
-        "opencode-zen", "claude-sonnet-5", "messages", "/messages", "x-api-key", ""
+        "opencode-zen", "claude-sonnet-5", "messages", "/anthropic/v1/messages", "x-api-key", ""
     ),
     "responses": Wire("xai", "grok-4.5", "responses", "/responses"),
-    "zen-responses": Wire("opencode-zen", "gpt-5.6-sol", "responses", "/responses"),
+    "zen-responses": Wire("opencode-zen", "gpt-5.6-sol", "responses", "/openai/v1/responses"),
     "codex-responses": Wire("openai", "gpt-5.6-sol", "responses", "/codex/responses"),
     "copilot-responses": Wire("github-copilot", "gpt-5.4", "responses", "/responses"),
     "zen-gemini": Wire(
         "opencode-zen",
         "gemini-3.5-flash",
         "gemini_generate_content",
-        "/models/gemini-3.5-flash",
+        "/google/v1beta/models/gemini-3.5-flash",
         "x-goog-api-key",
         "",
     ),
@@ -343,6 +343,8 @@ def _adapter(
 def _url(bundled: ProviderRegistry, wire: Wire, streaming: bool) -> str:
     config = bundled.get(wire.provider_id)
     base_url = _oauth_connection(config).base_url or config.base_url
+    if wire.provider_id == "opencode-zen":
+        base_url = base_url.removesuffix("/v1")
     return base_url.rstrip("/") + wire.endpoint(streaming)
 
 
