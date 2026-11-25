@@ -135,6 +135,7 @@ class _EmbeddingAvailability:
 
     space: str
     failures: int = 0
+    revision: int = 0
     retry_at: float = 0
     probing: bool = False
     status: int | None = None
@@ -162,11 +163,13 @@ class _EmbeddingAvailability:
         ):
             return
         # Concurrent requests admitted before the first refusal share one outage.
+        self.revision += 1
         now = monotonic()
         if now >= self.retry_at:
             self.failures += 1
-        delay = max(30 * 2 ** min(self.failures - 1, 6), getattr(error, "retry_after", None) or 0)
-        self.retry_at = max(self.retry_at, now + min(delay, 1800))
+        backoff = min(30 * 2 ** min(self.failures - 1, 6), 1800)
+        delay = max(backoff, getattr(error, "retry_after", None) or 0)
+        self.retry_at = max(self.retry_at, now + delay)
         self.status = 429 if isinstance(error, ProviderRateLimitError) else status
 
 
@@ -242,6 +245,7 @@ class EmbeddingService:
             availability = self._availability = _EmbeddingAvailability(identity.fingerprint)
         availability.begin()
         probing = availability.probing
+        revision = availability.revision
         try:
             try:
                 provider_client = await ProviderEmbeddingClient.from_runtime_async(
@@ -287,8 +291,10 @@ class EmbeddingService:
                 f"Embedding provider returned no vectors for model {target_ref.model_id}"
             )
 
-        availability.failures = 0
-        availability.retry_at = 0
+        # An earlier accepted request can finish after a newer throttling response.
+        if probing and revision == availability.revision:
+            availability.failures = 0
+            availability.retry_at = 0
         dimension = len(response.vectors[0])
         return EmbeddingResult(
             vectors=response.vectors,

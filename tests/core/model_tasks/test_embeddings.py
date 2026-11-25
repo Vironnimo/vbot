@@ -7,6 +7,7 @@ fakes; their own behavior is covered in ``test_embeddings_providers.py`` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
@@ -261,12 +262,29 @@ async def test_search_and_indexing_share_only_the_current_targets_transport_outa
     tasks = _ModelTasks(OPENROUTER_TARGET)
     service = EmbeddingService(tasks, MagicMock())
     error = ProviderRateLimitError("throttled")
-    error.retry_after = 90
+    error.retry_after = 3600
     client = _FakeProviderClient(embed_exception=error)
     provider_factory.return_value = client
+    entered, finish = asyncio.Event(), asyncio.Event()
+    embed = client.embed
+
+    async def overlapping(inputs, options, input_type=None):
+        if not entered.is_set():
+            entered.set()
+            await finish.wait()
+            return ProviderEmbeddingResponse(
+                vectors=([1.0],), model_id=None, usage=EmbeddingUsage(requests=1)
+            )
+        return await embed(inputs, options, input_type)
+
+    monkeypatch.setattr(client, "embed", overlapping)
+    earlier = asyncio.create_task(service.embed(["already accepted"], purpose="query"))
+    await asyncio.wait_for(entered.wait(), 3)
     with pytest.raises(EmbeddingExecutionError):
         await service.embed(["old message"], purpose="document")
-    now += 89
+    finish.set()
+    assert (await earlier).vectors
+    now += 3599
     with pytest.raises(EmbeddingExecutionError):
         await service.embed(["search"], purpose="query")
     assert len(client.embed_calls) == 1

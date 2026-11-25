@@ -15,7 +15,7 @@ A Model that converts text into numerical vectors for semantic comparison; in vB
 
 ## Interfaces
 
-Remote indexing and search share a short outage window for the current embedding-space fingerprint. An exhausted transport timeout, network failure, rate limit or retryable 5xx suppresses further requests for 30 s, doubling to 30 minutes and respecting a longer Retry-After up to that ceiling. One request probes after expiry. A success or change of target clears the outage. Input and local-engine failures never suppress other inputs. During this window Recall uses its existing keyword fallback.
+Remote indexing and search share a short outage window for the current embedding-space fingerprint. An exhausted transport timeout, network failure, rate limit or retryable 5xx suppresses further requests for 30 s, doubling to 30 minutes and respecting a longer explicit Retry-After. One request probes after expiry. A successful probe clears the outage if no newer refusal arrived. A changed target starts with fresh availability. Input and local-engine failures never suppress other inputs. During this window Recall uses its existing keyword fallback.
 
 - Embedding queries and documents use anonymous Secret masking before local or Provider execution. The shared index has no receiving Session whose grants could authorize a named reference.
 - `EmbeddingService(model_tasks, runtime, *, usage_recorder=None, local_executor=None, secret_masker=...)` - runtime-owned service; resolves the `text_embedding` binding and calls the provider embedding client or the `LocalEmbeddingExecutor`. It also forwards the local engine's management surface (`local_setup_for`, `local_memory_status`, `unload_local`, `add_local_ready_listener`) and closes the executor at shutdown.
