@@ -103,3 +103,22 @@ export function hasEnabledTrigger(job) {
     (job.triggers || []).some((trigger) => trigger.enabled !== false),
   );
 }
+
+export function summaryPreview(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/```[\s\S]*?```/g, (block) =>
+      block.replace(/^```[^\n]*\n?/, '').replace(/```$/, ''),
+    )
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(^|\n)\s{0,3}#{1,6}\s+/g, '$1')
+    .replace(/(^|\n)\s*[-*+]\s+/g, '$1')
+    .replace(/(^|\n)\s*>\s?/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,;:!?)])/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}

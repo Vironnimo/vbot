@@ -3,7 +3,12 @@
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
   import FactoryChat from './FactoryChat.svelte';
-  import { memberLabel, runStateLabel, timestamp } from './presentation.js';
+  import {
+    memberLabel,
+    runStateLabel,
+    summaryPreview,
+    timestamp,
+  } from './presentation.js';
 
   let { model, onNavigate } = $props();
   let replies = $state({});
@@ -197,7 +202,9 @@
                 <span class="factory-subtle">{timestamp(run.created_at)}</span>
               </div>
               {#if run.summary || run.reason}
-                <p class="factory-dash-detail">{run.summary || run.reason}</p>
+                <p class="factory-dash-detail factory-dash-detail--clamped">
+                  {summaryPreview(run.summary || run.reason)}
+                </p>
               {/if}
             </li>
           {/each}
@@ -281,6 +288,12 @@
     color: var(--text-med);
     font-size: 13px;
     line-height: 1.45;
+  }
+  .factory-dash-detail--clamped {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .factory-inline-reply {
     display: flex;

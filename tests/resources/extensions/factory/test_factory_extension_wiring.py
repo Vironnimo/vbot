@@ -354,3 +354,59 @@ async def test_runtime_routing_and_quiesce(tmp_path: Path) -> None:
         await service.close()
         if host.database is not None:
             host.database.close()
+
+
+@pytest.mark.asyncio
+async def test_leader_discussion_does_not_replay_read_posts_after_factory_revision_change(
+    tmp_path: Path,
+) -> None:
+    api, _decl, service = _build_service()
+    host = _FakeIdentitiesHost(tmp_path)
+    await service.start(cast(ExtensionHost, host))
+    try:
+        created = await api.operations.invoke(
+            "factory.create",
+            {"project_id": "project", "leader_agent_id": "leader", "name": "Ops Factory"},
+        )
+        factory = created["factory"]
+        store = service.records().native
+        topic = await store.create_topic(
+            factory["id"],
+            "hi",
+            participants=[factory["leader_member_id"]],
+            direct_member_id=factory["leader_member_id"],
+        )
+        post = await store.add_post(
+            topic["id"],
+            "old message",
+            author="user",
+            recipients=[factory["leader_member_id"]],
+            receipt="old-1",
+        )
+        await store.mark_topic_read(topic["id"], factory["leader_member_id"], post["sequence"])
+
+        # Bump factory revision (changes topic_epoch so no current execution exists).
+        await api.operations.invoke(
+            "factory.update",
+            {
+                "id": factory["id"],
+                "expected_revision": factory["revision"],
+                "name": "Ops Factory Renamed",
+            },
+        )
+        while tasks := [t for t in service._tasks if not t.done()]:
+            await tasks[0]
+        assert host.temporary_agents.created == []
+
+        # A genuinely new unread post still wakes the Leader with context.
+        await api.operations.invoke(
+            "conversation.send",
+            {"project_id": "project", "text": "New question", "request_id": "req-new"},
+        )
+        while tasks := [t for t in service._tasks if not t.done()]:
+            await tasks[0]
+        assert len(host.temporary_agents.created) == 1
+    finally:
+        await service.close()
+        if host.database is not None:
+            host.database.close()

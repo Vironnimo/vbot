@@ -30,7 +30,10 @@ _JOB_STATUS_PARAMETERS: Json = {
         },
         "summary": {
             "type": "string",
-            "description": "Short dashboard summary of the outcome. Omit to leave unchanged.",
+            "description": (
+                "1-2 sentence plain-text summary of the outcome for the dashboard. "
+                "Omit to leave unchanged."
+            ),
         },
         "question": {
             "type": "string",
@@ -200,10 +203,11 @@ def build_job_run_instructions(factory: Json, member: Json, job_run: Json) -> st
             ),
         ),
         (
-            "Use factory_job_status with status='needs_attention' and question when you need "
-            "user input or approval, or status='failed' and reason if the job cannot be "
-            "completed. You can call factory_job_status with status='done' and a short "
-            "summary; finishing normally without calling it also completes the job as done."
+            "When finished, call factory_job_status with status='done' and a 1-2 sentence "
+            "plain-text summary for the dashboard (include any full report in your message "
+            "alongside the call). Use status='needs_attention' with question when you need "
+            "user input or approval, or status='failed' with reason if the job cannot be "
+            "completed."
         ),
     ]
     return "\n\n".join(parts)

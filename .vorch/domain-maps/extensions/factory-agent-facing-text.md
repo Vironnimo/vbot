@@ -10,14 +10,14 @@ Factory's runtime Agent-facing texts live in `resources/extensions/factory/_job_
 | `status`: `Use needs_attention to pause and ask the user, failed when the job cannot be completed, or done with a short summary.` | Maps each enum value to its exact lifecycle transition so workers do not use `failed` for user questions or `needs_attention` for hard errors. |
 | `question`: `Required for needs_attention. Clear question or approval prompt for the user.` | Ensures the Dashboard attention card and host notification carry an actionable prompt for the user. |
 | `reason`: `Required for failed; optional context for needs_attention. Explain what blocked or failed.` | Ensures failed runs record why they stopped without forcing a reason on `done`. |
-| `summary`: `Short dashboard summary of the outcome. Omit to leave unchanged.` | Keeps dashboard summaries concise and avoids overwriting an existing summary when omitted. |
+| `summary`: `1-2 sentence plain-text summary of the outcome for the dashboard. Omit to leave unchanged.` | Keeps dashboard cards scannable by asking for a plain-text 1-2 sentence summary instead of raw Markdown reports. |
 | `Manage and trigger your Factory's recurring or on-demand jobs.` (`factory_jobs`) | Scopes the Leader's private Tool to its own Factory's jobs and runs. |
 | `update changes only the fields you send. trigger starts an immediate run. runs lists recent job runs.` | Prevents the Leader from re-sending unchanged fields on `update` and distinguishes `trigger` from `create`. |
 | `agent_member_id`: `Factory member id assigned to run this job. Omit to use the Factory Leader.` | Documents the Leader fallback so the Leader does not invent or look up its own id when omitting assignment. |
 | `member_id`: `For trigger: Factory member id, role, or name to run this execution instead of the job default. Omit to use the job default.` | Documents per-execution member override and accepted identifiers (id, role, or name). |
 | `You are running a Factory job for Factory ... (run ...).` | Frames the Session as an isolated Job Run rather than Leader Chat or an interactive user conversation. |
 | `Factory remit (data)`, `Your Factory role and instructions (data)`, `Input note (data)`, `Trigger event (data)` | Separates authored instructions from untrusted user/webhook data; `_data` escapes `<` and `>` so JSON content cannot close wrapper tags. |
-| `Use factory_job_status with status='needs_attention' ... finishing normally without calling it also completes the job as done.` | Reinforces the exact escalation and normal-completion rules inside the run's system instructions. |
+| `When finished, call factory_job_status with status='done' and a 1-2 sentence plain-text summary for the dashboard (include any full report in your message alongside the call). Use status='needs_attention' ...` | Prompts workers to provide a concise plain-text dashboard summary alongside any detailed report while keeping escalation paths clear. |
 
 ## Public cross-Factory `factory` Tool (`_public_tool.py`)
 

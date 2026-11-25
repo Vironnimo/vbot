@@ -296,4 +296,29 @@ describe('FactoryPage', () => {
 
     expect(bridge.mountSession).toHaveBeenCalled();
   });
+
+  it('strips Markdown noise while preserving identifiers in Recent Job Runs previews', async () => {
+    const { bridge, state } = createFactoryBridge();
+    const recent = state.runs.find((item) => item.id === 'jrun-done');
+    recent.summary =
+      '## Review: `get_for_session` **Verdict: approved** — see [details](https://example.com).';
+
+    await render(bridge, '/factory/fac-one');
+
+    const recentPanel = document.querySelector(
+      `[aria-label="${t('factory.dashboard.recent')}"]`,
+    );
+    const details = [
+      ...(recentPanel?.querySelectorAll('.factory-dash-detail') ?? []),
+    ];
+    const detail = details.find((node) =>
+      node.textContent?.includes('get_for_session'),
+    );
+    expect(detail?.textContent?.trim()).toBe(
+      'Review: get_for_session Verdict: approved — see details.',
+    );
+    expect(detail?.classList.contains('factory-dash-detail--clamped')).toBe(
+      true,
+    );
+  });
 });

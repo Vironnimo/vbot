@@ -42,7 +42,6 @@ class NativeDiscussions:
             factory = await native.store.get_factory(topic["factory_id"])
             if factory["state"] != "active":
                 continue
-            direct = topic["direct_member_id"]
             executions = await native.all_executions(topic["factory_id"])
             for participant in await native.store.topic_participants(topic["id"]):
                 member = await native.store.get_member(participant["member_id"])
@@ -79,20 +78,19 @@ class NativeDiscussions:
                 addressed = [
                     post
                     for post in posts
-                    if post["author"] != f"member:{member['id']}"
+                    if post["sequence"] > read_sequence
+                    and post["author"] != f"member:{member['id']}"
                     and (
                         (post["author"] == "user" and not post["recipients"])
                         or member["id"] in post["recipients"]
                     )
                 ]
-                if current is None and member["id"] != direct and not addressed:
-                    continue
-                if current and not addressed:
-                    if posts:
+                if not addressed:
+                    if posts and posts[-1]["sequence"] > read_sequence:
                         await native.store.mark_topic_read(
                             topic["id"], member["id"], posts[-1]["sequence"]
                         )
-                        if len(posts) == _POST_PAGE_SIZE:
+                        if current is not None and len(posts) == _POST_PAGE_SIZE:
                             native.service.request_schedule()
                     continue
                 active = current is not None and current["state"] == "running"
