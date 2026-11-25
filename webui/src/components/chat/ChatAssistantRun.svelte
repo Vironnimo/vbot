@@ -115,6 +115,7 @@
     // The Runs of this Run's work span whose footer it shows, ending with
     // it (`runFooterGroups`); [] shows none, null shows this Run alone.
     footerRuns = null,
+    firstRunWithOlderHistory = null,
     nowMs = Date.now(),
   } = $props();
 
@@ -123,6 +124,12 @@
   const waitingForApproval = $derived(
     pendingApprovals.some((request) => request.run_id === item.runId),
   );
+
+  // Refresh an open tooltip as the Run advances. A closed tooltip only
+  // captures its inputs and leaves the detail rows unbuilt.
+  function footerTooltip(run, options) {
+    return () => runFooterDetails(run, Date.now(), options);
+  }
 
   // The approval requests a Tool row of this Run waits on.
   function approvalsForTool(child) {
@@ -1000,6 +1007,7 @@
         waiting: sessionWaiting,
         workStartedAt: sessionWorkStartedAt,
         runs: footerRuns ?? [item],
+        firstRunWithOlderHistory,
       }}
       {@const footerParts =
         footerOptions.runs.length > 0
@@ -1020,8 +1028,7 @@
             <button
               type="button"
               class="run-footer__summary"
-              use:tooltip={() =>
-                runFooterDetails(item, Date.now(), footerOptions)}
+              use:tooltip={footerTooltip(item, footerOptions)}
             >
               {#each shownFooterParts as footerPart, index (footerPart)}
                 {#if index > 0}

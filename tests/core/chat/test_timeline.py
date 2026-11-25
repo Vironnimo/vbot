@@ -382,7 +382,7 @@ def test_history_settles_pending_calls_without_changing_completed_results(
         )
     block = run_block(history_timeline(messages))
     assert block["status"] == (status or "interrupted")
-    assert block["iterationCount"] == (3 if status else 0)
+    assert block["iterationCount"] == (3 if status else None)
     assert [(item["toolCallId"], item["status"]) for item in block["items"]] == [
         ("read", "success"),
         ("child", unfinished),

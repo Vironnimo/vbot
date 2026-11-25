@@ -64,6 +64,7 @@ async def test_windowed_run_stream_and_child_pages_preserve_positions_and_genera
 ) -> None:
     active = run()
     messages = [ChatMessage.assistant(model="test/model", content=f"step {i}") for i in range(30)]
+    active.tool_call_count = 5
     speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}
     latency = {"first_token_ms": 20, "duration_ms": 25}
     messages[0] = replace(messages[0], usage={"speed": speed})
@@ -93,6 +94,7 @@ async def test_windowed_run_stream_and_child_pages_preserve_positions_and_genera
         sse_timeline(state, active, child_limit=3, batch_interval_seconds=0)
     ) as stream:
         initial = data(await anext(stream))
+        assert initial["items"][0]["toolCallCount"] == 5
         assert initial["state"]["output_speed"] == {
             **speed,
             "model": "test/model",
@@ -136,12 +138,14 @@ async def test_windowed_run_stream_and_child_pages_preserve_positions_and_genera
                 "other-generation",
             )
         if live:
+            active.tool_call_count += 1
             active.emit(
                 "assistant_output",
                 {"message": ChatMessage.assistant(model="test/model", content="latest").to_dict()},
             )
             patch = data(await anext(stream))
             assert patch["windowed"] is True
+            assert patch["run"]["toolCallCount"] == 6
             assert "order" not in patch
             assert len(patch["children"]) == 1
             assert patch["children"][0]["position"] == 30

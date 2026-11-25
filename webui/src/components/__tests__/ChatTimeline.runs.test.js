@@ -441,7 +441,11 @@ describe('ChatTimeline Runs', () => {
             startedAt: '2026-08-05T18:00:02.500Z',
           }),
         ],
-        { startTimestamp: '2026-08-05T18:00:00.000Z' },
+        {
+          startTimestamp: '2026-08-05T18:00:00.000Z',
+          iterationCount: 0,
+          toolCallCount: 1,
+        },
       ),
     ];
     timeline.render(sessionState);
@@ -451,6 +455,19 @@ describe('ChatTimeline Runs', () => {
     expect(footer.textContent).toContain(t('chat.runStatus.working'));
     expect(footer.textContent).toContain('5.0s');
     expect(toolTime.textContent).toBe('2.5s');
+
+    footer.querySelector('.run-footer__summary').focus();
+    flushSync();
+    const toolCount = () =>
+      [...document.querySelectorAll('#app-tooltip dt')].find(
+        (label) => label.textContent === t('chat.details.toolCalls'),
+      )?.nextElementSibling.textContent;
+    expect(toolCount()).toBe('1');
+    sessionState.timelineItems = [
+      { ...sessionState.timelineItems[0], toolCallCount: 2 },
+    ];
+    flushSync();
+    expect(toolCount()).toBe('2');
 
     await vi.advanceTimersByTimeAsync(500);
     flushSync();
@@ -470,6 +487,7 @@ describe('ChatTimeline Runs', () => {
         endTimestamp: `2026-08-05T${end}Z`,
         durationMs: 2000,
         iterationCount: 2,
+        toolCallCount: 3,
         timing: { work_started_at: spanStart },
       });
     const sessionState = timelineSession();
@@ -490,7 +508,18 @@ describe('ChatTimeline Runs', () => {
     ).toBe('assistant-run-run-woken');
     expect(footer.textContent).toContain(t('chat.runStatus.waiting'));
     expect(footer.textContent).toContain('15s');
-    expect(footer.textContent).toContain(t('chat.runIterations', { count: 4 }));
+    expect(footer.getAttribute('aria-label')).toBe(
+      `${t('chat.runStatus.waiting')} · 15s`,
+    );
+    footer.querySelector('.run-footer__summary').focus();
+    flushSync();
+    const tooltip = document.querySelector('#app-tooltip');
+    const counts = [...tooltip.querySelectorAll('dt')].map((label) => [
+      label.textContent,
+      label.nextElementSibling.textContent,
+    ]);
+    expect(counts).toContainEqual([t('chat.details.modelResponses'), '4']);
+    expect(counts).toContainEqual([t('chat.details.toolCalls'), '6']);
 
     await vi.advanceTimersByTimeAsync(1000);
     flushSync();
