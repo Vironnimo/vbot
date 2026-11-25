@@ -243,10 +243,13 @@ async def test_only_the_observed_upstream_failures_escape_their_status_policy(
 
 @pytest.mark.asyncio
 async def test_other_compatible_providers_keep_the_shared_403_policy() -> None:
-    adapter = OpenAICompatibleAdapter(go_config(), API_KEY)
+    config = go_config()
+    adapter = OpenAICompatibleAdapter(config, API_KEY)
 
     with respx.mock, caller_owns_retries():
-        respx.post(CHAT_URL).mock(return_value=httpx.Response(403, json=UPSTREAM_JSON_FAILURE))
+        respx.post(f"{config.base_url}/chat/completions").mock(
+            return_value=httpx.Response(403, json=UPSTREAM_JSON_FAILURE)
+        )
         with pytest.raises(ProviderAuthError) as failure:
             await adapter.send(HELLO, model_id=CHAT_MODEL)
     await adapter.aclose()

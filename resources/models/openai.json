@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-11-19T21:41:37.386782+00:00",
+  "fetched_at": "2026-11-25T10:21:06.006906+00:00",
   "models": {
     "gpt-5.2": {
       "capabilities": {
@@ -558,7 +558,7 @@
         "input_modalities": [
           "text",
           "image",
-          "audio"
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -575,8 +575,7 @@
           "chat",
           "text_output",
           "image_input",
-          "image_understanding",
-          "audio_input"
+          "image_understanding"
         ],
         "tools": true,
         "vision": true

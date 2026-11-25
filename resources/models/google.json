@@ -2903,14 +2903,7 @@
       "context_window": 1048576,
       "family": "lyria",
       "max_output_tokens": 65536,
-      "name": "Lyria 3 Clip Preview",
-      "pricing": {
-        "rates": {
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:google/lyria-3-clip-preview"
-      }
+      "name": "Lyria 3 Clip Preview"
     },
     "lyria-3-pro-preview": {
       "canonical": "google/lyria-3-pro-preview",
@@ -2942,14 +2935,7 @@
       "context_window": 1048576,
       "family": "lyria",
       "max_output_tokens": 65536,
-      "name": "Lyria 3 Pro Preview",
-      "pricing": {
-        "rates": {
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:google/lyria-3-pro-preview"
-      }
+      "name": "Lyria 3 Pro Preview"
     },
     "lyria-3.5": {
       "capabilities": {

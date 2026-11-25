@@ -110,7 +110,9 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
                             ],
                         },
                         "claude-future-6": section_model("claude-future-6", "@ai-sdk/anthropic"),
-                        "unreviewed-future-model": section_model("unreviewed-future-model"),
+                        "unreviewed-future-model": section_model(
+                            "unreviewed-future-model", "@ai-sdk/openai-compatible"
+                        ),
                         "muse-spark-1.3-contributor-free": section_model(
                             "muse-spark-1.3-contributor-free", "@ai-sdk/openai"
                         ),
@@ -130,7 +132,17 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
         "mimo-v2.6-flash-free",
     ]
     route = respx.get("https://opencode.ai/zen/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": item} for item in live_ids]})
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": item, "recommended_api": "messages"}
+                    if item == "unreviewed-future-model"
+                    else {"id": item}
+                    for item in live_ids
+                ]
+            },
+        )
     )
 
     counts = [
@@ -176,7 +188,7 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
         "gemini-3.5-flash": ("gemini", "available"),
         "claude-future-6": ("messages", "available"),
         "glm-5.1": ("chat_completions", "available"),
-        "unreviewed-future-model": ("chat_completions", "available"),
+        "unreviewed-future-model": ("messages", "available"),
         "deepseek-future-free": ("chat_completions", "available"),
         "muse-spark-1.3-contributor-free": ("responses", "available"),
     }

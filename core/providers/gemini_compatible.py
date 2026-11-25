@@ -90,7 +90,7 @@ class GeminiCompatibleAdapter(OpenAICompatibleAdapter):
             headers = await self._gemini_headers({**request.headers, **request_headers})
             try:
                 response = await self._client.post(
-                    f"/models/{model_id}:generateContent",
+                    f"{self._api_base}/models/{model_id}:generateContent",
                     content=request.body,
                     headers=json_body_headers(headers),
                 )
@@ -158,7 +158,7 @@ class GeminiCompatibleAdapter(OpenAICompatibleAdapter):
         attempt_headers = {**request.headers, **request_headers}
         response = await connect_streaming_with_retry(
             self._client,
-            f"/models/{model_id}:streamGenerateContent?alt=sse",
+            f"{self._api_base}/models/{model_id}:streamGenerateContent?alt=sse",
             request.body,
             build_headers=lambda: self._gemini_headers(attempt_headers),
             handle_error_status=_handle_error_status,

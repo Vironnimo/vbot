@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
 import httpx
 
 from core.models.models import Model
-from core.providers._opencode_zen_tasks import task_model
+from core.providers._opencode_catalog import catalog_model, opencode_api_base
 from core.providers.adapter import (
     ModelLookup,
 )
@@ -24,7 +24,6 @@ from core.providers.errors import (
 from core.providers.gemini_compatible import GeminiCompatibleAdapter
 from core.providers.http import classify_http_status
 from core.providers.openai import OpenAIAdapter
-from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
 from core.providers.wire_profile import Protocol
@@ -162,6 +161,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         del cls, raw, connection
         return True
 
+    @classmethod
+    @override
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        return opencode_api_base(base_url, "openai/v1")
+
     def __init__(
         self,
         config: ProviderConfig,
@@ -174,10 +178,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         connection_mode: str | None = None,
         http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
+        gateway = base_url or config.base_url
         super().__init__(
             config,
             token_getter,
-            base_url,
+            self.openai_compatible_base_url(gateway),
             auth_config,
             model_lookup,
             debug_recorder,
@@ -188,7 +193,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         self._messages = _OpenCodeZenMessagesAdapter(
             config,
             self._token_getter,
-            base_url=base_url,
+            base_url=opencode_api_base(gateway, "anthropic/v1"),
             auth_config=AuthConfig(
                 header="x-api-key",
                 prefix="",
@@ -204,7 +209,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         self._gemini = _OpenCodeZenGeminiAdapter(
             config,
             self._token_getter,
-            base_url=base_url,
+            base_url=opencode_api_base(gateway, "google/v1beta"),
             auth_config=AuthConfig(header="x-goog-api-key", prefix=""),
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
@@ -237,7 +242,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         models.dev protocol hint is projected.
         """
 
-        return task_model(raw) or OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
+        return catalog_model(raw, defaults, "opencode-zen")
 
     def _chat_protocol(self, model_id: str) -> Protocol:
         model = self._model_lookup(model_id) if self._model_lookup else None

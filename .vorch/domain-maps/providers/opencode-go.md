@@ -1,6 +1,6 @@
 # OpenCode Go Provider
 
-OpenAI-compatible gateway with per-Model protocol/request profiles across **four wires** (`/chat/completions`, Anthropic-compatible `/messages`, OpenAI `/responses`, and native Gemini `generateContent`). The current base URL is `https://opencode.ai/inference/go/v1`.
+OpenAI-compatible gateway with per-Model protocol/request profiles across **four wires** (`/chat/completions`, Anthropic-compatible `/messages`, OpenAI `/responses`, and native Gemini `generateContent`). The catalog is at `https://opencode.ai/inference/go/v1/models`. Inference uses the protocol-specific bases below `https://opencode.ai/inference/go`.
 
 ## Interfaces
 
@@ -9,9 +9,17 @@ OpenAI-compatible gateway with per-Model protocol/request profiles across **four
 - Adapter class: `OpenCodeGoAdapter`
 - Gemini transport and codec: `core/providers/gemini_compatible.py` and `_gemini_wire.py`, shared with Zen
 - Gemini Tool JSON Schema transport and dated Go/Zen probe evidence: `opencode-zen.md` -> Limits, Sampling, Tools, and Media
-- Default runtime endpoint: OpenAI-compatible `POST /chat/completions`
-- Alternate runtime endpoint for selected models: `POST /messages` through an internal `AnthropicCompatibleAdapter`
-- Alternate runtime endpoint for selected models: `POST /responses` through the shared stateless Responses machinery (`core/providers/_responses_wire.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)
+- Default runtime endpoint: OpenAI-compatible `POST /openai/v1/chat/completions`
+- Alternate runtime endpoint for selected models: `POST /anthropic/v1/messages` through an internal `AnthropicCompatibleAdapter`
+- Alternate runtime endpoint for selected models: `POST /openai/v1/responses` through the shared stateless Responses machinery (`core/providers/_responses_wire.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)
+
+## Catalog routing (2026-11-25)
+
+The Go and Zen Adapters share `_opencode_catalog.py`. The catalog's `recommended_api` selects a supported chat wire before models.dev package hints and family inference. Each Adapter builds inference URLs from its configured gateway and billing path. Native Gemini uses `google/v1beta/models/{id}:generateContent` or `:streamGenerateContent?alt=sse` for the catalog's Google family. Discovery and usage retain their `v1` paths. [Go catalog](https://opencode.ai/inference/go/v1/models) and [inference API](https://opencode.ai/docs/console/api/inference/).
+
+All 31 admitted Go chat Models matched the catalog's protocol family. API-key streams completed for Kimi K3.1 Pro, LongCat 2.5, HungerG Free, Qwen4 Max, GPT 6 Luna and Gemini 4 Argon. Kimi also completed a Tool-result continuation with max effort on both Go and Zen. These checks establish routing and successful requests; long-context latency has no controlled comparison.
+
+Go Decision Models use `/inference/go/systemone/v1/systemone`; Jev 1.14, Gemini Decision 1 and GPT 6 Luna Decision each answered a typed question. Text embeddings use `/inference/go/openai/v1/embeddings`; Qwen3 Embedding 8B returned a 4,096-dimensional vector. Both task families use the catalog's input prices.
 
 ## Shared OpenCode credentials
 

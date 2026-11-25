@@ -191,6 +191,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             debug_recorder=debug_recorder,
             http_transport=http_transport,
         )
+        # A composed Gemini wire can borrow a client based at a different API.
+        self._api_base = base_url.rstrip("/") if client is not None and base_url else ""
 
     # ------------------------------------------------------------------
     # Lifecycle

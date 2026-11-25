@@ -542,12 +542,15 @@ class _Resolution:
         return self.protocols[0], LAYER_PROTOCOL
 
     def _hinted_protocol(self) -> Protocol | None:
-        """The protocol the catalog's AI SDK package names, if the Adapter speaks it.
+        """The catalog's declared wire, with the per-Model SDK package as fallback.
 
         A hint is a catalog fact, not a curated choice: a package the Adapter
         cannot speak is skipped silently instead of reported as a data issue.
         """
 
+        declared = _catalog_hint(self.provider_id, self.model, "catalog_protocol")
+        if isinstance(declared, str) and declared in self.protocols:
+            return cast(Protocol, declared)
         npm = _catalog_hint(self.provider_id, self.model, "npm")
         protocol = _CATALOG_HINT_PROTOCOLS.get(npm) if isinstance(npm, str) else None
         return protocol if protocol in self.protocols else None

@@ -17,7 +17,7 @@ def test_probe_runs_a_scenario_through_the_configured_connection(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     SecretStore(tmp_path).set_entry(CREDENTIALS, "OPENCODE_API_KEY", "test-key")
-    route = respx.post("https://opencode.ai/inference/go/v1/chat/completions").mock(
+    route = respx.post("https://opencode.ai/inference/go/openai/v1/chat/completions").mock(
         return_value=httpx.Response(
             200,
             json={
