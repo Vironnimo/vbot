@@ -331,9 +331,20 @@ async def test_a_restricted_shell_starts_only_in_its_area_without_vbot_control_o
         ungranted = await shell.returned(
             shell.call({"command": "build", "env_keys": ["OPENAI_API_KEY"]})
         )
-        call = shell.call({"command": "build", "env": {"MODE": "ci"}, "env_keys": ["API_TOKEN"]})
+        withheld = await shell.call(
+            {"command": "build", "env": {"OPENAI_API_KEY": "$OPENAI_API_KEY"}}
+        )
+        assert withheld["error"]["code"] == "invalid_arguments"
+        call = shell.call(
+            {
+                "command": "build",
+                "env": {"MODE": "ci", "FLAVOR": "$FLAVOR"},
+                "env_keys": ["API_TOKEN"],
+            }
+        )
         (await shell.started()).exit(0)
-        assert data(await shell.returned(call))["status"] == "exited"
+        result = data(await shell.returned(call))
+        assert result["status"] == "exited" and len(result["notes"]) == 1
 
     assert refused["error"]["code"] == "permission_denied"
     assert "working in" in refused["error"]["message"]

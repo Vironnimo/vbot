@@ -260,7 +260,8 @@ def test_disagreeing_timeouts_fail_before_running(timeout: int, timeout_ms: int)
         ({"API_TOKEN": "${env:API_TOKEN}"}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
         ({"API_TOKEN": ""}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
         # A reference to an ungranted variable keeps the value the command inherits.
-        ({"HOME": "$HOME"}, (), {}, [], {}),
+        ({"HOME": "$HOME"}, (), {}, ["HOME"], {}),
+        ({"PATH": "/tools/$PATH_SUFFIX"}, (), {"PATH": "/tools/$PATH_SUFFIX"}, [], {}),
         ({"KEYBOARD_LAYOUT": "de"}, (), {"KEYBOARD_LAYOUT": "de"}, [], {}),
         # A Secret reference alone becomes that Secret's value under any name.
         (

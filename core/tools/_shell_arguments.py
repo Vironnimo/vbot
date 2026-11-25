@@ -25,7 +25,13 @@ from typing import Any
 
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
-from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference, unescape_references
+from core.secrets.agent_secrets import (
+    REFERENCE_PATTERN,
+    SecretEnvironmentTargets,
+    find_references,
+    has_reference,
+    unescape_references,
+)
 from core.tools._argument_repair import load_json_value
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
@@ -466,7 +472,7 @@ def resolve_timeout(
 def split_env_object(
     env: Mapping[str, Any] | None, granted: frozenset[str]
 ) -> tuple[dict[str, str], list[str], dict[str, str]]:
-    """Split an env object into plain variables, credential names and Secret references.
+    """Split env into literals, names requested from the environment and Secret references.
 
     A granted credential named with an empty value or a reference to itself
     becomes a credential request; a value that is exactly a Secret reference
@@ -475,7 +481,7 @@ def split_env_object(
     Tool arguments into a process.
     """
     variables: dict[str, str] = {}
-    credentials: list[str] = []
+    requested_names: list[str] = []
     secret_references: dict[str, str] = {}
     for name, raw in (env or {}).items():
         if not isinstance(name, str) or not name or "=" in name or "\x00" in name:
@@ -502,17 +508,19 @@ def split_env_object(
             continue
         if has_reference(value):
             raise ValueError(_secret_in_text_message(f"env value for {name}"))
-        if _references(value, name):
-            if name in granted:
-                credentials.append(name)
-            continue
-        if value == "" and name in granted:
-            credentials.append(name)
+        if _references(value, name) or (value == "" and name in granted):
+            requested_names.append(name)
             continue
         if name in granted or _credential_name(name):
             raise ValueError(_literal_credential_message(name, granted))
+        if environment_name(name) == "PATH" and _PATH_REFERENCE.search(environment_name(value)):
+            raise ValueError(
+                _not_run(
+                    "env takes a literal PATH. To extend the existing PATH, set it inside command."
+                )
+            )
         variables[name] = unescape_references(value)
-    return variables, credentials, secret_references
+    return variables, requested_names, secret_references
 
 
 def _secret_in_text_message(place: str) -> str:
@@ -524,9 +532,19 @@ def _secret_in_text_message(place: str) -> str:
     )
 
 
+def environment_name(name: str) -> str:
+    """Names identify the same environment slot regardless of case only on Windows."""
+    return name.upper() if sys.platform == "win32" else name
+
+
+_PATH_REFERENCE = re.compile(
+    r"(?:^|[:;])(?:\$PATH|\$\{PATH\}|\$(?i:env):PATH|\$\{(?i:env):PATH\}|%PATH%)(?=$|[:;/\\])"
+)
+
+
 def _references(value: str, name: str) -> bool:
     forms = {f"${name}", f"${{{name}}}", f"$env:{name}", f"${{env:{name}}}", f"%{name}%"}
-    return value.strip().casefold() in {form.casefold() for form in forms}
+    return environment_name(value.strip()) in {environment_name(form) for form in forms}
 
 
 def _credential_name(name: str) -> bool:
@@ -664,10 +682,46 @@ class _ShellCall:
     # Agent Secrets: names from env_keys, and env variables set to a reference.
     secret_keys: tuple[str, ...] = ()
     secret_variables: tuple[tuple[str, str], ...] = ()
+    inherited_variables: tuple[str, ...] = ()
 
 
 def _call_error(problem: str) -> ToolContractError:
     return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
+
+
+def _check_env_sources(
+    variables: Mapping[str, str],
+    environment_keys: list[str],
+    references: Mapping[str, str],
+    secret_keys: list[str],
+    targets: SecretEnvironmentTargets,
+) -> None:
+    """Overlapping assignments must identify the same source without reading Secret values."""
+    seen: dict[str, tuple[str, str]] = {}
+
+    def claim(name: str, kind: str, label: str) -> None:
+        key = environment_name(name)
+        source = (kind, label)
+        if seen.setdefault(key, source) != source:
+            raise _call_error(
+                f"more than one source sets {name}. Choose one source for this variable "
+                "in env and env_keys."
+            )
+
+    for name, literal in variables.items():
+        claim(name, "literal", literal)
+    for name in environment_keys:
+        claim(name, "environment", name)
+    for name, reference in references.items():
+        ref = find_references(reference)[0]
+        fields = targets.get(ref.name, {})
+        label = next(
+            (labels[0] for labels in fields.values() if ref.text_name in labels), ref.text_name
+        )
+        claim(name, "secret", label)
+    for key in secret_keys:
+        for name, labels in targets[key.upper()].items():
+            claim(name, "secret", labels[0])
 
 
 def _parse_call(
@@ -676,10 +730,10 @@ def _parse_call(
     projects: ProjectStore | None,
     *,
     terminal_available: bool,
-    secret_names: frozenset[str] = frozenset(),
+    secret_targets: SecretEnvironmentTargets,
     withheld: Container[str] = frozenset(),
 ) -> _ShellCall:
-    """*secret_names* are the names ``env_keys`` accepts for the caller's Agent Secrets;
+    """*secret_targets* maps each accepted Agent Secret name to its environment slots;
     *withheld* are the credentials a confined command does not inherit."""
     notes: list[str] = []
     command = arguments.get("command")
@@ -733,7 +787,7 @@ def _parse_call(
     if env is not None and not isinstance(env, dict):
         raise _call_error("env must be an object of variable names and values.")
     try:
-        variables, env_credentials, secret_references = split_env_object(env, granted)
+        variables, env_names, secret_references = split_env_object(env, granted)
     except ValueError as error:
         raise ToolContractError(str(error)) from error
     raw_keys = arguments.get("env_keys")
@@ -743,17 +797,25 @@ def _parse_call(
         raise _call_error(f"env_keys is invalid: {error}") from error
     # A granted credential keeps its name; Secret names never collide with one.
     secret_keys = [
-        name for name in requested if name not in granted and name.upper() in secret_names
+        name for name in requested if name not in granted and name.upper() in secret_targets
     ]
-    credential_names = [
-        name for name in dict.fromkeys([*requested, *env_credentials]) if name not in secret_keys
-    ]
+    credential_names = [name for name in requested if name not in secret_keys]
+    _check_env_sources(
+        variables,
+        [*credential_names, *env_names],
+        secret_references,
+        secret_keys,
+        secret_targets,
+    )
     ungranted = [name for name in credential_names if name not in granted]
     if ungranted:
         unknown = [name for name in ungranted if name in withheld or inherited_value(name) is None]
         if unknown:
             raise ToolContractError(unknown_env_keys_message(unknown, granted))
         notes.append(inherited_env_keys_note(ungranted))
+    inherited_variables = tuple(name for name in env_names if name not in granted)
+    for name in inherited_variables:
+        notes.append(f"env uses the command's inherited value for {name}.")
     return _ShellCall(
         command=command,
         description=description.strip() if description and description.strip() else None,
@@ -762,10 +824,13 @@ def _parse_call(
         timeout_given=timeout_given,
         background=background,
         variables=variables,
-        credential_names=tuple(name for name in credential_names if name in granted),
+        credential_names=tuple(
+            dict.fromkeys(name for name in [*credential_names, *env_names] if name in granted)
+        ),
         notes=tuple(notes),
         secret_keys=tuple(secret_keys),
         secret_variables=tuple(secret_references.items()),
+        inherited_variables=inherited_variables,
     )
 
 

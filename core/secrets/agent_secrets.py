@@ -80,6 +80,7 @@ __all__ = [
     "SINK_CLASSES",
     "AgentSecret",
     "AgentSecrets",
+    "SecretEnvironmentTargets",
     "EMPTY_MASKER",
     "ChangeListener",
     "Lifetime",
@@ -102,6 +103,9 @@ __all__ = [
 ]
 
 _LOGGER = get_logger("secrets")
+
+# env_keys selector -> environment variable -> equivalent Secret field labels.
+type SecretEnvironmentTargets = dict[str, dict[str, tuple[str, ...]]]
 
 SecretUseFailure = Literal[
     "unknown_secret",
@@ -1082,14 +1086,20 @@ class AgentSecrets:
 
     def environment_targets(
         self, address: SessionAddress, *, passed_only: bool = False
-    ) -> dict[str, tuple[str, ...]]:
-        """Variable names each ``env_keys`` Secret request can set, without reading values."""
-        targets: dict[str, tuple[str, ...]] = {}
+    ) -> SecretEnvironmentTargets:
+        """Fields each env_keys selector supplies, including the default field's short label."""
+        targets: SecretEnvironmentTargets = {}
         for secret in self.usable(address, passed_only=passed_only):
-            names = tuple(secret.environment_names().values())
-            targets.setdefault(secret.name, names)
-            for name in names:
-                targets.setdefault(name, (name,))
+            default = secret.default_field()
+            fields: dict[str, tuple[str, ...]] = {
+                variable: (f"{secret.name}.{field}", secret.name)
+                if default is not None and field == default.name
+                else (f"{secret.name}.{field}",)
+                for field, variable in secret.environment_names().items()
+            }
+            targets.setdefault(secret.name, fields)
+            for name, labels in fields.items():
+                targets.setdefault(name, {name: labels})
         return targets
 
     def environment(

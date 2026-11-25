@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
-from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
+from core.secrets.agent_secrets import (
+    AgentSecrets,
+    SecretEnvironmentTargets,
+    SecretUse,
+    SecretUseError,
+    describe_uses,
+)
 from core.sessions import SessionAddress
 from core.tools._permission_preflight import authorize_command
 from core.tools._powershell import (
@@ -28,6 +34,7 @@ from core.tools._shell_arguments import (
     SHELL_UNADVERTISED_PARAMETERS,
     _parse_call,
     _ShellCall,
+    environment_name,
     normalize_shell_arguments,
     shell_display_parts,
     validate_workdir,
@@ -302,7 +309,7 @@ class ShellTool:
             self._projects,
             terminal_available=names(TERMINAL_TOOL_NAME),
             withheld=withheld,
-            secret_names=frozenset(secret_targets),
+            secret_targets=secret_targets,
         )
         secret_names = {
             *(name for key in call.secret_keys for name in secret_targets[key.upper()]),
@@ -346,14 +353,11 @@ class ShellTool:
                 )
             await run_tool_worker(validate_workdir, context, arguments, call.workdir)
         try:
-            secret_environment, secret_uses = await self._secret_environment(context, call)
+            secret_environment, secret_uses = await self._secret_environment(
+                context, call, secret_targets
+            )
         except SecretUseError as error:
             return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
-        if confined and secret_environment.keys() - secret_names:
-            raise ToolContractError(
-                f"{SHELL_MODEL_NAME} was not run: the Secret's environment variables changed "
-                "while the call was prepared. Call it again."
-            )
         await context.revalidate_permissions()
         if context.permissions.restricted != confined:
             raise ToolContractError(
@@ -460,7 +464,7 @@ class ShellTool:
         return plan is not None and plan.instance_cli_only
 
     async def _secret_environment(
-        self, context: ToolContext, call: _ShellCall
+        self, context: ToolContext, call: _ShellCall, targets: SecretEnvironmentTargets
     ) -> tuple[dict[str, str], list[SecretUse]]:
         """Resolve Secret variables without spending them; blocking sources run off-loop."""
         secrets = self._secrets
@@ -479,9 +483,18 @@ class ShellTool:
                     passed_only=passed_only,
                     consume=False,
                 )
-                if found is not None:
-                    variables.update(found[0])
-                    uses.extend(found[1])
+                expected = targets[name.upper()]
+                if (
+                    found is None
+                    or found[0].keys() - expected.keys()
+                    or {use.label for use in found[1]} - {labels[0] for labels in expected.values()}
+                ):
+                    raise ToolContractError(
+                        f"{SHELL_MODEL_NAME} was not run: the Secret's environment variables "
+                        "changed while the call was prepared. Call it again."
+                    )
+                variables.update(found[0])
+                uses.extend(found[1])
             for name, reference in call.secret_variables:
                 variables[name], found_uses = secrets.substitute(
                     SessionAddress(context.project_id, context.agent_id, context.session_id),
@@ -563,6 +576,15 @@ class ShellTool:
                 credential_names=withheld,
             )
             # PATH lookup probes the filesystem and uses this call's fresh environment.
+            if call.inherited_variables:
+                available = {environment_name(key) for key in environment.complete()}
+                for key in call.inherited_variables:
+                    if environment_name(key) not in available:
+                        raise ToolContractError(
+                            f"{SHELL_MODEL_NAME} was not run: env requests the existing value of "
+                            f"{key}, but this command has no such variable. Omit it from env "
+                            "or ask the user to make it available."
+                        )
             return _shell_start(call, environment, self._protected_folders())
 
         confined = context.permissions.restricted

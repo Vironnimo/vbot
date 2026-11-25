@@ -352,6 +352,19 @@ async def test_agent_secrets_reach_only_the_command_environment(
         tmp_path, secrets=secrets, analyzer=analyzer, permissions=permissions
     ) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        conflicts = [("API_TOKEN", "API_TOKEN"), ("GITHUB_USERNAME", "GITHUB")]
+        if sys.platform == "win32":
+            conflicts.append(("api_token", "API_TOKEN"))
+        for name, source in conflicts:
+            conflict = await shell.call(
+                {
+                    "command": "login",
+                    "env_keys": [source],
+                    "env": {name: "{{secret:GITHUB.password}}"},
+                }
+            )
+            assert conflict["error"]["code"] == "invalid_arguments"
+        assert secrets.recent_uses(secret.id) == [] and shell.launcher.processes == []
         if confined:
             startup = secrets.create(
                 name="BASH_ENV",
@@ -379,7 +392,11 @@ async def test_agent_secrets_reach_only_the_command_environment(
                 # An escaped reference runs as the reference text itself.
                 "command": "login {{!secret:GITHUB}}",
                 "env_keys": ["GITHUB", "API_TOKEN"],
-                "env": {"PGPASSWORD": "{{secret:GITHUB.password}}", "DOC": "{{!secret:A}} b"},
+                "env": {
+                    "PGPASSWORD": "{{secret:GITHUB.password}}",
+                    "GITHUB_PASSWORD": "{{secret:GITHUB}}",
+                    "DOC": "{{!secret:A}} b",
+                },
             }
         )
         process = await shell.started()
@@ -1464,6 +1481,9 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     for argv in wrappers:
         missing_script = await shell.call({"command": argv})
         assert missing_script["error"]["code"] == "invalid_arguments"
+    for env in ({"UNKNOWN_FOR_SHELL_TEST": "$UNKNOWN_FOR_SHELL_TEST"}, {"PATH": "$PATH:extra"}):
+        invalid_env = await shell.call({"command": "ls", "env": env})
+        assert invalid_env["error"]["code"] == "invalid_arguments"
     gone = tmp_path / "gone"
     missing_cwd = await dispatch_as_executor(
         shell.registry,
