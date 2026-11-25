@@ -89,9 +89,6 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         raise FactoryError(
             "ambiguous_conversation", "Choose one conversation or start a new topic."
         )
-    card = await management.service.records().get_card(card_id) if card_id else None
-    if card and card["project_id"] != project_id:
-        raise FactoryError("project_mismatch", "Open the conversation in the work's own Project.")
     factories = await store.list_factories(project_id=project_id)
     factory = factories[0] if factories else None
     if not factory:
@@ -105,12 +102,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
     factory_id = factory["id"]
     if sending and factory["state"] != "active":
         raise FactoryError("factory_inactive", "Resume this Factory before sending a message.")
-    task = await store.get_task(task_id) if task_id else None
-    if task and task["factory_id"] != factory_id:
-        raise FactoryError("outside_factory", "Open the task in its own Project.")
-    member_id = (
-        args.get("member_id") or (task or {}).get("assignee_id") or factory["leader_member_id"]
-    )
+    member_id = args.get("member_id") or factory["leader_member_id"]
     member = await store.get_member(member_id)
     if member["factory_id"] != factory_id or (sending and member["state"] != "active"):
         raise FactoryError("outside_factory", "Choose an active member of this Project.")
@@ -181,7 +173,7 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         else:
             topic = await store.create_topic(
                 factory_id,
-                (task or card or {}).get("title") or body.splitlines()[0][:120],
+                body.splitlines()[0][:120],
                 task_id=task_id,
                 participants=[member_id],
                 initial_text=body,
@@ -192,37 +184,19 @@ async def conversation(management: NativeFactoryManagement, name: str, args: Jso
         await management.service.native.changed("topics", topic)
     if not topic:
         return {"topic": None, "posts": [], **participant}
-    if topic["task_id"] and task is None:
-        task = await store.get_task(topic["task_id"])
     history = await store.conversation_history(topic, args.get("before", ""))
     discussion = await store.latest_execution("topic", topic["id"], recipient_member["id"])
     epoch = management.service.native.topic_epoch(factory, recipient_member)
     current = discussion if discussion and discussion["epoch"] == epoch else None
-    work = None
-    if task and recipient_member["id"] == task["assignee_id"]:
-        work = await store.latest_execution("task", task["id"], recipient_member["id"])
     return {
         "session": discussion["runtime"].get("address") if discussion else None,
-        "task_session": work["runtime"].get("address") if work else None,
+        "task_session": None,
         "session_binding": _session_binding(discussion),
-        "task_session_binding": _session_binding(work),
+        "task_session_binding": None,
         "replying": bool(current and current["state"] in {"admitting", "running"}),
         "topic": topic,
         **history,
         **participant,
-        "task": {
-            key: task[key]
-            for key in (
-                "id",
-                "title",
-                "state",
-                "reason",
-                "updated_at",
-                "revision",
-                "assignee_id",
-            )
-        }
-        if task
-        else None,
+        "task": None,
         "failure": current["runtime"].get("failure", "") if current else "",
     }

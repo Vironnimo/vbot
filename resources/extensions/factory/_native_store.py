@@ -11,6 +11,7 @@ from typing import Any
 from core.utils.timestamps import utc_now_timestamp
 from vbot_extension_sdk import write_profile_assignment
 
+from ._native_dispatch import NativeDispatchStore
 from ._native_records import (
     Json,
     _capacity,
@@ -25,11 +26,10 @@ from ._native_records import (
     _save,
     _text,
 )
-from ._native_tasks import NativeTaskStore
 from ._native_topics import NativeTopicStore
 
 
-class NativeFactoryStore(NativeTaskStore, NativeTopicStore):
+class NativeFactoryStore(NativeDispatchStore, NativeTopicStore):
     """Permanent Factory records; actor authority belongs to the service."""
 
     async def create_factory(

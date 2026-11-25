@@ -1,4 +1,4 @@
-"""Registered Factory Tools and operations with deterministic participant admission."""
+"""Registered Factory Tools and operations with deterministic test host."""
 
 from __future__ import annotations
 
@@ -19,30 +19,11 @@ from core.runs import RunKind
 from core.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 from core.tools.contracts import ToolContractError
 from resources.extensions.factory import register
-from resources.extensions.factory._execution import FactoryExecution
-from resources.extensions.factory._workflows import normalize, templates
+from resources.extensions.factory._public_tool import PUBLIC_TOOL_NAME
 from resources.extensions.factory.extension import FactoryExtension
 from resources.extensions.factory.store import FactoryStore
 
 type Json = dict[str, Any]
-
-
-def template(template_id: str, **changes: Any) -> Json:
-    """A starter Workflow with Agents chosen: reviewers judge, workers do the rest."""
-    workflow = next(item for item in templates() if item["id"] == template_id)
-    for step in workflow["steps"]:
-        step["agent"] = "reviewer" if step["returns_to"] else "worker"
-    return {**workflow, **changes}
-
-
-def implement_workflow(**changes: Any) -> Json:
-    """Implement, Review, then Integrate after approval, in Project ``project``."""
-    return template("implement", **{"project_id": "project", **changes})
-
-
-def drafts_workflow(**changes: Any) -> Json:
-    """Three parallel drafts, a merge and a review: a Workflow without a Project."""
-    return template("drafts", **changes)
 
 
 class FakeTriggers:
@@ -152,72 +133,6 @@ class FakeHost:
         self.notifications.append({"title": title, "body": body, **destination})
 
 
-class FakeExecution:
-    """Record user actions and admit Cards without Sessions or Models.
-
-    A started Card runs its first step, so it occupies a WIP slot like a real one.
-    """
-
-    running = staticmethod(FactoryExecution.running)
-    group_ids = staticmethod(FactoryExecution.group_ids)
-
-    def __init__(self, store: FactoryStore) -> None:
-        self.store = store
-        self.budgets = self
-        self.calls: list[tuple[str, str, str]] = []
-        self.start_gate: tuple[asyncio.Event, asyncio.Event] | None = None
-
-    async def budget_status(self, card: Json, step_id: str, **kwargs: Any) -> Json:
-        return {}
-
-    async def _record(self, action: str, card: Json, detail: str = "", **patch: Any) -> Json:
-        self.calls.append((action, card["id"], detail))
-        return cast(
-            Json,
-            await self.store.change(card["id"], patch, actor="user", event=f"test_{action}"),
-        )
-
-    async def start(self, card: Json) -> Json:
-        self.calls.append(("start", card["id"], ""))
-        if self.start_gate is not None:
-            entered, released = self.start_gate
-            entered.set()
-            await released.wait()
-        runtime = {
-            **card["runtime"],
-            "workflow": {"id": card["workflow_id"], "name": "Workflow", "steps": [{"id": "do"}]},
-            "steps": {"do": {"status": "running"}},
-        }
-        return cast(
-            Json,
-            await self.store.change(
-                card["id"],
-                {"state": "working", "runtime": runtime},
-                actor="factory",
-                event="test_start",
-            ),
-        )
-
-    async def accept(self, card: Json, step: str = "") -> Json:
-        return await self._record("accept", card, step, state="done")
-
-    async def send_back(self, card: Json, comment: str, step: str = "") -> Json:
-        return await self._record("send_back", card, f"{step}:{comment}", state="working")
-
-    async def answer(self, card: Json, text: str, step: str = "") -> Json:
-        return await self._record("answer", card, f"{step}:{text}", state="working")
-
-    async def retry(self, card: Json, step: str = "") -> Json:
-        return await self._record("retry", card, step, state="working")
-
-    async def discard(self, card: Json) -> Json:
-        return await self._record("discard", card, state="discarded")
-
-    async def delete(self, card: Json) -> Json:
-        self.calls.append(("delete", card["id"], ""))
-        return {"id": card["id"], "pending": True}
-
-
 @dataclass
 class FactoryHarness:
     api: ExtensionAPI
@@ -226,7 +141,6 @@ class FactoryHarness:
     service: FactoryExtension
     store: FactoryStore
     host: FakeHost
-    execution: FakeExecution
     config: Json
     directory: Path
 
@@ -238,7 +152,7 @@ class FactoryHarness:
             working_project_id="project",
             run_id="source-run",
             tool_call_id="factory-call",
-            tool_name="factory_card",
+            tool_name=PUBLIC_TOOL_NAME,
             tool_call_index=0,
             workspace=self.directory,
             vbot_root=self.directory,
@@ -252,7 +166,7 @@ class FactoryHarness:
         try:
             return await self.tools.dispatch(context or self.context(), arguments)
         except ToolContractError as error:
-            return tool_failure_for_exception("factory_card", error)
+            return tool_failure_for_exception(PUBLIC_TOOL_NAME, error)
 
     async def operation(self, name: str, /, **arguments: Any) -> Json:
         return await self.api.operations.invoke(name, arguments)
@@ -262,46 +176,15 @@ class FactoryHarness:
         while tasks := [task for task in self.service._tasks if not task.done()]:
             await asyncio.gather(*tasks)
 
-    async def workflow(self, definition: Json | None = None) -> Json:
-        """Save a Workflow directly, without the operation's catalog checks."""
-        normalized = normalize(definition or implement_workflow())
-        return cast(Json, await self.store.save_workflow(normalized, expected_revision=None))
-
-    async def card(
-        self,
-        state: str = "queued",
-        *,
-        project_id: str = "project",
-        waiting_reason: str = "",
-        runtime: Json | None = None,
-    ) -> Json:
-        card = await self.store.create_card(
-            project_id,
-            "Objective",
-            "Acceptance criteria",
-            origin="agent" if state == "proposal" else "operator",
-            workflow_id="implement",
-        )
-        patch: Json = {}
-        if state == "working" and runtime is None:
-            runtime = {"steps": {"do": {"status": "running"}}}
-        if runtime is not None:
-            patch["runtime"] = {**card["runtime"], **runtime}
-        if card["state"] != state or waiting_reason:
-            patch.update(state=state, waiting_reason=waiting_reason)
-        if patch:
-            card = await self.store.change(card["id"], patch, actor="factory", event="test_seed")
-        return cast(Json, card)
-
 
 async def build_factory(directory: Path, store: FactoryStore) -> FactoryHarness:
     declarations = ExtensionDeclarations()
-    config: Json = {"wip_limit": 2, "max_waiting": 0}
+    config: Json = {"wip_limit": 2}
     api = ExtensionAPI(
         "factory", declarations, config={}, logger=None, config_provider=lambda: dict(config)
     )
     register(api)
-    handler = next(tool.handler for tool in declarations.tools if tool.name == "factory_card")
+    handler = next(tool.handler for tool in declarations.tools if tool.name == PUBLIC_TOOL_NAME)
     assert isinstance(handler, MethodType)
     service = handler.__self__
     assert isinstance(service, FactoryExtension)
@@ -314,12 +197,6 @@ async def build_factory(directory: Path, store: FactoryStore) -> FactoryHarness:
     tools = ToolRegistry()
     registry.apply_tools(tools)
     host = FakeHost(directory)
-    execution = FakeExecution(store)
     service.host = cast(ExtensionHost, host)
     service.store = store
-    cast(Any, service).execution = execution
-    harness = FactoryHarness(
-        api, declarations, tools, service, store, host, execution, config, directory
-    )
-    await harness.workflow()
-    return harness
+    return FactoryHarness(api, declarations, tools, service, store, host, config, directory)

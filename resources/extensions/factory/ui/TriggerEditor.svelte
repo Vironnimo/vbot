@@ -6,66 +6,49 @@
   import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
   import CopyButton from '@vbot/extension-sdk/ui/CopyButton.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
-  import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import TextField from '@vbot/extension-sdk/ui/TextField.svelte';
-  import { REPOSITORY_PROJECT } from './workflows.js';
   import { failureText, timestamp } from './presentation.js';
 
-  // One trigger of the edited Workflow. It edits the draft object it gets;
-  // `saved` is the same trigger as last saved, with the host's status: its
-  // webhook URL, next and last fire.
   let {
     trigger = $bindable(),
-    workflow,
+    jobId = '',
+    jobEnabled = true,
+    factoryId = '',
     saved = null,
     model,
     onRemove,
   } = $props();
+
   let secret = $state('');
   let secretError = $state('');
   let secretBusy = $state(false);
   let rotateOpen = $state(false);
+
   const prefix = $derived(`factory-trigger-${trigger.id}`);
-  const status = $derived(
-    saved?.type === trigger.type ? (saved?.status ?? null) : null,
+  const webhookUrl = $derived(
+    saved?.type === 'webhook' ? saved?.webhook_url || '' : '',
   );
-  const webhook = $derived(status?.webhook ?? null);
   const typeOptions = [
     { value: 'schedule', label: t('factory.trigger.schedule') },
     { value: 'webhook', label: t('factory.trigger.webhook') },
   ];
-  const projectOptions = $derived([
-    { value: '', label: t('factory.trigger.noProject') },
-    ...(trigger.type === 'webhook'
-      ? [
-          {
-            value: REPOSITORY_PROJECT,
-            label: t('factory.trigger.repositoryProject'),
-            secondaryLabel: t('factory.trigger.repositoryProjectHelp'),
-          },
-        ]
-      : []),
-    ...(model.catalog.projects ?? []).map((project) => ({
-      value: project.id,
-      label: project.name,
-    })),
-  ]);
 
   function selectType(value) {
     trigger.type = value;
-    if (value === 'schedule' && !trigger.schedule)
+    if (value === 'schedule' && !trigger.schedule) {
       trigger.schedule = '0 9 * * 1-5';
-    if (value === 'schedule' && trigger.project === REPOSITORY_PROJECT)
-      trigger.project = '';
+    }
   }
 
   async function readSecret(rotate = false) {
+    if (!jobId || !factoryId) return;
     secretBusy = true;
     secretError = '';
     try {
-      const result = await model.call('workflow.secret', {
-        id: workflow.id,
-        trigger: trigger.id,
+      const result = await model.call('job.secret', {
+        factory_id: factoryId,
+        job_id: jobId,
+        trigger_id: trigger.id,
         ...(rotate ? { rotate: true } : {}),
       });
       secret = result.secret ?? '';
@@ -89,7 +72,7 @@
     <Button
       variant="tertiary"
       ariaLabel={t('factory.trigger.remove')}
-      onClick={onRemove}>{t('factory.remove')}</Button
+      onClick={onRemove}>{t('factory.trigger.remove')}</Button
     >
   </header>
   <div class="factory-fields">
@@ -108,12 +91,12 @@
     </div>
     {#if trigger.type === 'schedule'}
       <div class="factory-field">
-        <label for={`${prefix}-schedule`}>{t('factory.trigger.when')}</label
-        ><TextField
+        <label for={`${prefix}-schedule`}>{t('factory.trigger.when')}</label>
+        <TextField
           id={`${prefix}-schedule`}
           maxlength="200"
           value={trigger.schedule}
-          invalid={!trigger.schedule.trim()}
+          invalid={!trigger.schedule?.trim()}
           aria-describedby={`${prefix}-schedule-help`}
           onInput={(value) => (trigger.schedule = value)}
         />
@@ -122,62 +105,38 @@
         </p>
       </div>
     {/if}
-    {#if !workflow.project_id}
-      <div class="factory-field">
-        <label id={`${prefix}-project-label`} for={`${prefix}-project`}
-          >{t('factory.project')}</label
-        >
-        <Dropdown
-          id={`${prefix}-project`}
-          ariaLabelledby={`${prefix}-project-label`}
-          value={trigger.project}
-          options={projectOptions}
-          onOpenChange={model.pickerOpen}
-          onValueChange={(value) => (trigger.project = value)}
-        />
-      </div>
-    {/if}
     <div class="factory-field">
-      <label for={`${prefix}-title`}>{t('factory.trigger.title')}</label
-      ><TextField
+      <label for={`${prefix}-title`}>{t('factory.trigger.title')}</label>
+      <TextField
         id={`${prefix}-title`}
         maxlength="200"
         value={trigger.title}
-        placeholder={workflow.name}
         onInput={(value) => (trigger.title = value)}
       />
     </div>
   </div>
-  <div class="factory-field">
-    <label for={`${prefix}-task`}>{t('factory.trigger.task')}</label><TextArea
-      id={`${prefix}-task`}
-      maxlength="20000"
-      rows={2}
-      autoGrow
-      placeholder={t('factory.trigger.taskPlaceholder')}
-      value={trigger.task}
-      onInput={(value) => (trigger.task = value)}
-    />
-  </div>
 
   {#if trigger.type === 'webhook'}
     <section class="factory-webhook" aria-label={t('factory.trigger.webhook')}>
-      {#if webhook}
+      {#if webhookUrl}
         <div class="factory-webhook-row">
           <span class="factory-subtle">{t('factory.trigger.url')}</span>
-          <span class="factory-mono" data-webhook-url>{webhook.url}</span>
-          <CopyButton text={webhook.url} />
+          <span class="factory-mono" data-webhook-url>{webhookUrl}</span>
+          <CopyButton text={webhookUrl} />
         </div>
         <div class="factory-webhook-row">
           <span class="factory-subtle">{t('factory.trigger.secret')}</span>
-          {#if secret}<span class="factory-mono" data-webhook-secret
-              >{secret}</span
-            ><CopyButton text={secret} />{:else}<Button
+          {#if secret}
+            <span class="factory-mono" data-webhook-secret>{secret}</span>
+            <CopyButton text={secret} />
+          {:else}
+            <Button
               variant="tertiary"
               loading={secretBusy}
               onClick={() => readSecret()}
               >{t('factory.trigger.showSecret')}</Button
-            >{/if}
+            >
+          {/if}
           <Button
             variant="tertiary"
             disabled={secretBusy}
@@ -189,27 +148,27 @@
       {:else}
         <p class="factory-help">{t('factory.trigger.saveForUrl')}</p>
       {/if}
-      {#if secretError}<Banner variant="error" role="alert"
-          >{secretError}</Banner
-        >{/if}
+      {#if secretError}
+        <Banner variant="error" role="alert">{secretError}</Banner>
+      {/if}
     </section>
   {/if}
-  {#if status}
+
+  {#if saved}
     <p class="factory-help" data-trigger-status>
-      {#if status.next_fire_at}{t('factory.trigger.next', {
-          time: timestamp(status.next_fire_at),
-        })}{/if}
-      {#if status.last_fired_at}
-        {t('factory.trigger.last', {
-          time: timestamp(status.last_fired_at),
-        })}{/if}
-      {#if !trigger.enabled || !workflow.enabled}{t(
-          'factory.trigger.paused',
-        )}{/if}
+      {#if saved.next_fire}
+        {t('factory.trigger.next', { time: timestamp(saved.next_fire) })}
+      {/if}
+      {#if saved.last_fire}
+        {t('factory.trigger.last', { time: timestamp(saved.last_fire) })}
+      {/if}
+      {#if !trigger.enabled || !jobEnabled}
+        {t('factory.trigger.paused')}
+      {/if}
     </p>
-    {#if status.last_error}<p class="factory-field-error" role="status">
-        {status.last_error}
-      </p>{/if}
+    {#if saved.last_error}
+      <p class="factory-field-error" role="status">{saved.last_error}</p>
+    {/if}
   {/if}
 </article>
 
@@ -230,13 +189,13 @@
     border: 1px solid var(--border);
     border-radius: 9px;
     background: var(--surface-2);
-    padding: 16px;
+    padding: 14px;
     display: grid;
-    gap: 14px;
+    gap: 12px;
     min-width: 0;
   }
   .factory-trigger + :global(.factory-trigger) {
-    margin-top: 12px;
+    margin-top: 10px;
   }
   .factory-trigger-header {
     display: flex;

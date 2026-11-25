@@ -34,24 +34,15 @@ class NativeDiscussions:
     def __init__(self, native: Any) -> None:
         self.native = native
 
-    async def wake_origins(self) -> None:
-        for topic in await self.native._all("list_topics"):
-            factory = await self.native.store.get_factory(topic["factory_id"])
-            if topic["state"] == "open" and factory["state"] == "active":
-                await self._wake_origin(topic)
-
     async def schedule(self, limit: int) -> None:
         native = self.native
         for topic in await native._all("list_topics"):
-            if topic["state"] != "open":
+            if topic["state"] != "open" or not topic.get("direct_member_id"):
                 continue
             factory = await native.store.get_factory(topic["factory_id"])
             if factory["state"] != "active":
                 continue
-            task = await native.store.get_task(topic["task_id"]) if topic.get("task_id") else None
-            direct = topic.get("direct_member_id")
-            if task and task["state"] in ({"paused"} if direct else {"paused", "cancelled"}):
-                continue
+            direct = topic["direct_member_id"]
             executions = await native.all_executions(topic["factory_id"])
             for participant in await native.store.topic_participants(topic["id"]):
                 member = await native.store.get_member(participant["member_id"])
@@ -71,7 +62,7 @@ class NativeDiscussions:
                 read_sequence = participant["read_sequence"]
                 if current and current["state"] == "failed":
                     failed_sequence = current["runtime"].get("failed_sequence")
-                    if not direct or failed_sequence is None:
+                    if failed_sequence is None:
                         continue
                     read_sequence = max(read_sequence, failed_sequence)
                 elif current and (
@@ -94,31 +85,7 @@ class NativeDiscussions:
                         or member["id"] in post["recipients"]
                     )
                 ]
-                if direct and current is None and member["id"] != direct and not addressed:
-                    continue
-                task_handles_replies = task and (
-                    not direct
-                    or task["state"] in {"ready", "working"}
-                    or (
-                        task["state"] == "blocked"
-                        and task.get("reason") in {"input", "peer", "children"}
-                    )
-                )
-                if (
-                    task_handles_replies
-                    and task
-                    and task["assignee_id"] == member["id"]
-                    and current is None
-                    and participant["read_sequence"] > 0
-                ):
-                    continue
-                if (
-                    task_handles_replies
-                    and task
-                    and task["assignee_id"] == member["id"]
-                    and (direct or task["runtime"].get("sessions"))
-                ):
-                    # Linked consultations answer the responsible task Session.
+                if current is None and member["id"] != direct and not addressed:
                     continue
                 if current and not addressed:
                     if posts:
@@ -135,11 +102,7 @@ class NativeDiscussions:
                     "discussion",
                     topic,
                     posts=_context_posts(posts if current is None else addressed),
-                    task=task,
                     member=member,
-                    card=await self._card_context(topic["card_id"])
-                    if topic.get("card_id")
-                    else None,
                 )
                 if current:
                     runtime = deepcopy(current["runtime"])
@@ -166,42 +129,16 @@ class NativeDiscussions:
                 )
                 if not active:
                     native.sessions._launch_later(execution)
-            await self._wake_origin(topic)
-
-    async def _card_context(self, card_id: str) -> Json:
-        from .store import FactoryError
-
-        store = self.native.service.records()
-        try:
-            card = await store.get_card(card_id)
-        except FactoryError as error:
-            if error.code != "card_not_found":
-                raise
-            return {"id": card_id, "state": "deleted"}
-        outputs = await store.recent_outputs(card_id)
-        return {
-            **card,
-            "outputs": [
-                {key: row.get(key, "") for key in ("step_name", "summary", "result", "findings")}
-                for row in outputs
-            ],
-        }
 
     async def publish_answer(self, execution: Json) -> None:
-        """A natural final answer is visible in the same direct conversation as a Tool reply."""
+        """A natural final answer is visible in the same direct conversation."""
         from core.runs import is_silent_answer
 
         native = self.native
-        if execution["kind"] == "topic":
-            topic = await native.store.get_topic(execution["scope_id"])
-            if not topic.get("direct_member_id"):
-                return
-        elif execution["kind"] == "task":
-            task = await native.store.get_task(execution["scope_id"])
-            if not task.get("conversation_id"):
-                return
-            topic = await native.store.get_topic(task["conversation_id"])
-        else:
+        if execution["kind"] != "topic":
+            return
+        topic = await native.store.get_topic(execution["scope_id"])
+        if not topic.get("direct_member_id"):
             return
         if topic["state"] != "open" or execution["member_id"] not in topic["participants"]:
             return
@@ -215,14 +152,6 @@ class NativeDiscussions:
         if snapshot.generation_id != runtime.get("generation_id"):
             return
         messages = [msg for msg in snapshot.page.messages if msg.run_id == run_id]
-        if any(
-            call.name == "factory_topics"
-            and call.arguments.get("action") == "post"
-            and call.arguments.get("id") == topic["id"]
-            for msg in messages
-            for call in msg.tool_calls or ()
-        ):
-            return
         answer = next(
             (
                 msg.content
@@ -243,46 +172,3 @@ class NativeDiscussions:
             await self.native.store.mark_topic_read(
                 execution["scope_id"], execution["member_id"], pending["topic_sequence"]
             )
-
-    async def _wake_origin(self, topic: Json) -> None:
-        if not topic.get("task_id"):
-            return
-        native = self.native
-        task = await native.store.get_task(topic["task_id"])
-        if task["state"] not in {"ready", "working"} and not (
-            task["state"] == "blocked" and task["reason"] in {"input", "peer", "children"}
-        ):
-            return
-        if task["assignee_id"] not in topic["participants"]:
-            return
-        marks = task["runtime"].get("topic_sequences", {})
-        posts = await native.store.list_posts(
-            topic["id"], after=marks.get(topic["id"], 0), limit=_POST_PAGE_SIZE
-        )
-        answers = [
-            post
-            for post in posts
-            if (post["author"] == "user" or post["author"].startswith("member:"))
-            and post["author"] != f"member:{task['assignee_id']}"
-            and (not post["recipients"] or task["assignee_id"] in post["recipients"])
-        ]
-        if not posts:
-            return
-        runtime = deepcopy(task["runtime"])
-        runtime.setdefault("topic_sequences", {})[topic["id"]] = posts[-1]["sequence"]
-        if topic.get("direct_member_id") == task["assignee_id"]:
-            await native.store.mark_topic_read(
-                topic["id"], task["assignee_id"], posts[-1]["sequence"]
-            )
-        if answers:
-            await native._wake_task(
-                task,
-                native_input("peer_answer", task, topic=topic, posts=_context_posts(answers)),
-                runtime_patch={"topic_sequences": runtime["topic_sequences"]},
-            )
-        else:
-            await native.store.change_task(
-                task["id"], {"runtime": runtime}, actor="factory", event="discussion_observed"
-            )
-            if len(posts) == _POST_PAGE_SIZE:
-                native.service.request_schedule()

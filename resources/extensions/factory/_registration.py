@@ -8,11 +8,16 @@ from typing import TYPE_CHECKING, Any
 from core.extensions import ExtensionAPI
 from core.tools import ToolContext, ToolDisplay
 
+from ._job_agent_text import JOB_PRIVATE_TOOLS
+from ._job_management import (
+    JOB_OPERATION_DESCRIPTIONS,
+    JOB_OPERATION_SCHEMAS,
+    JOB_SECRET_OPERATIONS,
+)
 from ._native_agent_text import PRIVATE_TOOLS as NATIVE_TOOLS
 from ._native_values import OPERATION_DESCRIPTIONS as NATIVE_DESCRIPTIONS
 from ._native_values import OPERATION_SCHEMAS as NATIVE_SCHEMAS
-from ._values import OPERATION_DESCRIPTIONS, OPERATION_SCHEMAS, SECRET_OPERATIONS
-from .agent_text import PRIVATE_TOOLS, PUBLIC_DESCRIPTION, PUBLIC_PARAMETERS
+from ._public_tool import PUBLIC_DESCRIPTION, PUBLIC_PARAMETERS, PUBLIC_TOOL_NAME
 
 type Json = dict[str, Any]
 
@@ -33,30 +38,22 @@ def register(api: ExtensionAPI) -> None:
                 "key": "wip_limit",
                 "type": "number",
                 "label": "WIP limit",
-                "description": "Maximum Cards working at once.",
+                "description": "Maximum Factory runs working at once.",
                 "default": 2,
-            },
-            {
-                "key": "max_waiting",
-                "type": "number",
-                "label": "Maximum waiting",
-                "description": "Stop starting Cards while this many wait for you. "
-                "0 means unlimited.",
-                "default": 0,
             },
         ]
     )
     api.register_tool_family("factory", "Software Factory")
     api.register_tool(
-        "factory_card",
+        PUBLIC_TOOL_NAME,
         PUBLIC_DESCRIPTION,
         PUBLIC_PARAMETERS,
         service.public_tool,
-        summary="Create proposed work and read Software Factory Cards.",
+        summary="Manage Software Factories, specialist Agents, and Jobs across Projects.",
         family="factory",
-        display=ToolDisplay(summary_fields=("action", "title", "id")),
+        display=ToolDisplay(summary_fields=("action", "name", "factory_id", "job_id")),
     )
-    for name, (description, parameters) in (PRIVATE_TOOLS | NATIVE_TOOLS).items():
+    for name, (description, parameters) in (JOB_PRIVATE_TOOLS | NATIVE_TOOLS).items():
         api.register_session_tool(
             name, description, parameters, _tool_handler(service, name), parallel_safe=False
         )
@@ -69,13 +66,23 @@ def register(api: ExtensionAPI) -> None:
         quiesce=service.quiesce,
     )
     api.register_page("board", "Software Factory", "web/page.html", icon="factory")
-    for name, parameters in (OPERATION_SCHEMAS | NATIVE_SCHEMAS).items():
+    schemas: dict[str, Json] = {
+        "catalog": {"type": "object", "properties": {}, "additionalProperties": False},
+        **NATIVE_SCHEMAS,
+        **JOB_OPERATION_SCHEMAS,
+    }
+    descriptions: dict[str, str] = {
+        "catalog": "Read available Projects, Agents, Models, permission profiles, and Factories.",
+        **NATIVE_DESCRIPTIONS,
+        **JOB_OPERATION_DESCRIPTIONS,
+    }
+    for name, parameters in schemas.items():
         api.operations.register(
             name,
-            (OPERATION_DESCRIPTIONS | NATIVE_DESCRIPTIONS).get(name, name.replace(".", " ")),
+            descriptions.get(name, name.replace(".", " ")),
             parameters,
             _operation_handler(service, name),
-            secret=name in SECRET_OPERATIONS,
+            secret=name in JOB_SECRET_OPERATIONS,
         )
 
 

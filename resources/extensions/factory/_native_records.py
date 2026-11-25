@@ -83,19 +83,6 @@ def _merge(base: Json, patch: Json) -> Json:
     """Patch known fields without erasing newer nested JSON members."""
     result = deepcopy(base)
     for key, value in patch.items():
-        if key == "limits" and isinstance(value, dict):
-            from ._limits import normalize
-
-            known = {"runs", "tool_calls", "tokens", "cost_usd"}
-            retained = {
-                name: item for name, item in (result.get(key) or {}).items() if name not in known
-            }
-            result[key] = {
-                **retained,
-                **{name: deepcopy(item) for name, item in value.items() if name not in known},
-                **normalize({name: item for name, item in value.items() if name in known}),
-            }
-            continue
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _merge(result[key], value)
         else:

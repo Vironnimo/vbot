@@ -75,7 +75,7 @@ This domain owns the bundled-page paragraphs of the `vbot-docs` Skill's page ref
 
 The Shell Review Decision policy has its sentence reasons in `extensions/shell-review.md` -> Agent-facing text.
 
-Factory participant instructions, continuation notes and Tool texts belong to `resources/extensions/factory/agent_text.py`; their reasons are in `extensions/factory-agent-facing-text.md`.
+Factory Agent-facing texts belong to `resources/extensions/factory/_job_agent_text.py`, `_native_agent_text.py` and `_public_tool.py`; their reasons are in `extensions/factory-agent-facing-text.md`.
 
 ## References
 
@@ -98,6 +98,6 @@ Read these only when your task matches - not by default.
 - Changing the bundled MCP client, transports, Tool opt-ins, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Adding or changing an Extension-owned page or configuration editor -> `webui.md` and `webui/extension-pages.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
-- Changing Project Factories, permanent teams, native tasks/discussions, Workflow Cards, step execution, rework, approval or the Software Factory Board -> `extensions/factory.md`
+- Changing Project Factories, Leader/Specialists, Jobs, triggers, Job Runs or the Software Factory Dashboard -> `extensions/factory.md`
 - Changing Factory participant instructions, continuations or Tool texts -> `extensions/factory-agent-facing-text.md`
 - Informing the Model about a background event or state change -> `model-communication.md`

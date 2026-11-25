@@ -196,7 +196,7 @@ async def test_profile_deletion_checks_persisted_extension_selections_after_disa
         data_dir,
         "factory",
         "factory",
-        factory_store.SCHEMA_SQL.removesuffix(factory_store.NATIVE_SCHEMA_SQL),
+        factory_store.SCHEMA_SQL.replace(factory_store.NATIVE_SCHEMA_SQL, ""),
         migrations=tuple(
             migration
             for migration in factory_store.MIGRATIONS

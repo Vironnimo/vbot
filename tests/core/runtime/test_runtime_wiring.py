@@ -89,7 +89,7 @@ CANONICAL_BUILTIN_TOOLS = [
 HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services"]
 
 COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
-FACTORY_TOOLS = ["factory_card"]
+FACTORY_TOOLS = ["factory"]
 
 # Built-in Tools that only a Session grant or a Live call offers; they stay out of the catalog.
 SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "update_goal", "vbot", "vbot_request"]
