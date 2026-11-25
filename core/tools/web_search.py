@@ -68,7 +68,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
-from core.utils.http_status import MAX_HTTP_COOLDOWN_SECONDS, HttpRequestFailure
+from core.utils.http_status import HttpRequestFailure
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.web_search")
@@ -450,7 +450,7 @@ def _model_view(
     *,
     domains: list[str],
     exclude: list[str],
-    page: int,
+    next_page: int | None,
     notes: list[str],
 ) -> JsonObject:
     results = payload.get("results")
@@ -468,8 +468,8 @@ def _model_view(
     note = " ".join([*notes, *warnings])
     if note:
         data["note"] = note
-    if payload.get("more_results_available") is True and results and page < MAX_WEB_SEARCH_PAGE:
-        data["more"] = f"More results are available with page {page + 1}."
+    if next_page is not None and results and payload.get("more_results_available") is True:
+        data["more"] = f"More results are available with page {next_page}."
     data["content"] = _results_text(results) or _no_results(domains, recency)
     return data
 
@@ -596,9 +596,7 @@ async def web_search_handler(
                 FALLBACK_AVAILABLE.reset(token)
             if alternative is not None and failure is not None and failure.retryable:
                 if cooldown is not None:
-                    deadline = _clock() + min(
-                        MAX_HTTP_COOLDOWN_SECONDS, max(30.0, failure.retry_after or 0.0)
-                    )
+                    deadline = _clock() + max(30.0, failure.retry_after or 0.0)
                     cooldown.until = (
                         max(deadline, cooldown.until) if cooldown.route == route else deadline
                     )
@@ -630,7 +628,7 @@ async def web_search_handler(
         payload,
         domains=request.domains,
         exclude=request.exclude,
-        page=page,
+        next_page=page + 1 if alternative is None and page < MAX_WEB_SEARCH_PAGE else None,
         notes=notes,
     )
     _record_display(context, results, data)
