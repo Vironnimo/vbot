@@ -301,10 +301,16 @@ async def test_search_and_indexing_share_only_the_current_targets_transport_outa
     client._embed_exception = error
     with pytest.raises(EmbeddingExecutionError):
         await service.embed(["old message"], purpose="document")
+    client._embed_exception = None
+    client.request_route = ("https://replacement.invalid", "embedding-model", None)
+    assert (await service.embed(["same binding, new endpoint"], purpose="query")).vectors
+    client._embed_exception = error
+    with pytest.raises(EmbeddingExecutionError):
+        await service.embed(["old message"], purpose="document")
     tasks._target = "openrouter/another-model::api-key"
     client._embed_exception = None
     assert (await service.embed(["search"], purpose="query")).model_id == "another-model"
-    assert len(client.embed_calls) == 4
+    assert len(client.embed_calls) == 6
 
 
 _QWEN_QUERY_PREFIX = (

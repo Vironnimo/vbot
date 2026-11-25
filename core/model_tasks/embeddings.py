@@ -141,6 +141,7 @@ class _EmbeddingAvailability:
     """Transport outage of the active remote binding, shared by indexing and searches."""
 
     space: str
+    route: TaskRequestRoute
     encoding: EmbeddingEncodingPreference = field(default_factory=EmbeddingEncodingPreference)
     failures: int = 0
     revision: int = 0
@@ -248,13 +249,10 @@ class EmbeddingService:
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
-        availability = self._availability
-        if availability is None or availability.space != identity.fingerprint:
-            availability = self._availability = _EmbeddingAvailability(identity.fingerprint)
-        availability.begin()
+        availability: _EmbeddingAvailability | None = None
         route: TaskRequestRoute | None = None
-        probing = availability.probing
-        revision = availability.revision
+        probing = False
+        revision = 0
         try:
             try:
                 provider_client = await ProviderEmbeddingClient.from_runtime_async(
@@ -267,6 +265,17 @@ class EmbeddingService:
                 # factory resolves the Provider, Connection and credentials.
                 raise EmbeddingConfigurationError(str(exc)) from exc
             route = provider_client.request_route
+            availability = self._availability
+            if availability is None or (availability.space, availability.route) != (
+                identity.fingerprint,
+                route,
+            ):
+                availability = self._availability = _EmbeddingAvailability(
+                    identity.fingerprint, route
+                )
+            availability.begin()
+            probing = availability.probing
+            revision = availability.revision
             response = await provider_client.embed(
                 request.inputs,
                 options=options,
@@ -276,7 +285,8 @@ class EmbeddingService:
         except EmbeddingError:
             raise
         except VBotError as exc:
-            availability.failed(exc)
+            if availability is not None:
+                availability.failed(exc)
             # ProviderError / NetworkError / ProviderAuthError / …
             # are expected provider failures and surface as execution failures.
             _LOGGER.warning(
@@ -297,7 +307,7 @@ class EmbeddingService:
             )
             raise EmbeddingExecutionError(str(exc)) from exc
         finally:
-            if probing:
+            if probing and availability is not None:
                 availability.probing = False
         if not response.vectors:
             raise EmbeddingExecutionError(
@@ -305,7 +315,7 @@ class EmbeddingService:
             )
 
         # An earlier accepted request can finish after a newer throttling response.
-        if probing and revision == availability.revision:
+        if probing and availability is not None and revision == availability.revision:
             availability.failures = 0
             availability.retry_at = 0
         dimension = len(response.vectors[0])
