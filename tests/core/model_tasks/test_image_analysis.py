@@ -45,6 +45,7 @@ from core.utils.errors import ConfigError
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 from tests.core.providers.adapter_test_support import response_deltas
 from tests.core.tools.image_test_support import make_context
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -87,10 +88,11 @@ class _UnderstandingModelTasks:
     def model_for_target(self, _target_ref: object) -> Any:
         return self._model
 
-    def validate_execution_target(self, binding: Any) -> None:
+    def validate_execution_target(self, binding: Any):
         assert binding.target in {self._target, *(item.target for item in self._fallbacks)}
         if not self._binding_usable:
             raise TaskModelError("The selected target is no longer usable")
+        return configured_task_target(binding)
 
     def options_with_defaults(self, binding: Any) -> dict[str, Any]:
         return dict(binding.options)

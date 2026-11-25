@@ -465,6 +465,25 @@ async def _validate_continued_session(
     try:
         await resolver.require_model_configured_async(stored.model)
     except ModelConfigurationError as error:
+        # The saved primary can have lost workspace access. Resolve its Session
+        # with the same fallback policy as the next Run before rejecting the send.
+        try:
+            target = await resolver.resolve_agent_async(
+                link.session.project_id,
+                link.session.agent_id,
+                session_id=link.session.session_id,
+                session_overrides=stored,
+                include_temporary=True,
+            )
+        except AgentResolutionError, ModelConfigurationError:
+            pass
+        else:
+            for binding in target.fallback_models:
+                try:
+                    await resolver.require_model_configured_async(binding)
+                except ModelConfigurationError:
+                    continue
+                return None
         return tool_failure(
             "invalid_arguments",
             SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE.format(id=link.id, reason=error),

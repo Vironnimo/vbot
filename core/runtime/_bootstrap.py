@@ -71,6 +71,7 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
+from core.providers.account_catalogs import AccountCatalogs
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.providers.runtime import ProviderRuntime
@@ -280,6 +281,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._provider_credentials = ProviderCredentialResolver(
             runtime._providers,
             fallback_credentials=data_dir_credentials,
+            account_catalogs=AccountCatalogs(
+                runtime._storage.layout.artifacts / "provider-model-access"
+            ),
             token_store=runtime._token_store,
             enabled_overrides_loader=lambda: _provider_connection_enabled_overrides(
                 runtime._storage, runtime.logger

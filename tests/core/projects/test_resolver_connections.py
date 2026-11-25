@@ -11,6 +11,7 @@ from core.agents import (
     skill_subject_id,
 )
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
+from core.providers.account_catalogs import ModelAccountRoutes
 from core.sessions import SessionAddress
 
 from .resolver_test_support import (
@@ -154,6 +155,46 @@ def test_resolver_model_gate_uses_the_domain_checker(
     resolver.require_model_configured("openai/gpt-5.2")
     with pytest.raises(ModelConfigurationError):
         resolver.require_model_configured("openai/ghost-model")
+
+
+def test_saved_workspace_pin_reaches_the_run_fallback_after_access_is_revoked(
+    agents: AgentStore, projects: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pinned = "opencode-go/kimi::api-key:work"
+    fallback = "opencode-go/glm::api-key:work"
+    checker = _checker(
+        catalog={("opencode-go", "kimi"), ("opencode-go", "glm")},
+        providers={"opencode-go": _FakeProviderConfig([_FakeConnection("api-key")])},
+        usable={"opencode-go:api-key:work"},
+    )
+    enabled = {"kimi", "glm"}
+    monkeypatch.setattr(
+        checker._provider_credentials,
+        "account_model_routes",
+        lambda _provider, connection: ModelAccountRoutes(
+            connection, (("work", frozenset(enabled)),)
+        ),
+        raising=False,
+    )
+    agents.create("identity", model=fallback, fallback_models=[fallback])
+    resolver = _resolver(agents, projects, checker)
+    session = agents._session_manager().create("identity")
+    resolver.update_session_overrides(session.address, {"model": pinned})
+    enabled.remove("kimi")
+
+    effective = resolver.resolve_agent(None, "identity", session_id=session.id)
+    assert effective.model == pinned
+    assert effective.fallback_models == [fallback]
+    for options in (
+        {"new_session_overrides": AgentOverrides(model=pinned)},
+        {"session_id": session.id, "run_overrides": AgentOverrides(model=pinned)},
+    ):
+        with pytest.raises(ModelConfigurationError):
+            resolver.resolve_agent(None, "identity", **options)
+        with pytest.raises(ModelConfigurationError):
+            asyncio.run(resolver.resolve_agent_async(None, "identity", **options))
+    with pytest.raises(ModelConfigurationError):
+        resolver.update_session_overrides(session.address, {"model": pinned})
 
 
 def test_session_overrides_persist_in_the_session_and_never_in_the_agent(

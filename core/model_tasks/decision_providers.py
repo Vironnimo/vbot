@@ -13,6 +13,7 @@ import httpx
 from core.model_tasks.decision_pricing import price_decision_usage
 from core.model_tasks.decision_profile import DecisionProfile
 from core.model_tasks.decision_types import DecisionError, validate_answers, wire_questions
+from core.providers._opencode_usage import opencode_usage
 from core.providers.errors import ProviderContentRefusedError
 from core.providers.task_client import (
     DEFAULT_TASK_REQUEST_RETRY_POLICY,
@@ -221,6 +222,8 @@ def _parse(
                 ids.get(key, key): value for key, value in payload["answers"].items()
             }
     result = validate_answers(payload, questions)
+    if isinstance(raw_usage := payload.get("usage"), Mapping):
+        result["usage"].update(opencode_usage(raw_usage))
     result["usage"] = price_decision_usage(result["usage"], profile.pricing)
     return result
 

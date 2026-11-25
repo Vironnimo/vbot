@@ -17,8 +17,10 @@ from core.attachments import AttachmentStore
 from core.chat._request_builder import RequestBuilder
 from core.chat._request_history import _restore_in_run_tool_result_content
 from core.chat._tool_epoch import tool_change_from_note
+from core.chat.errors import ModelAccessError
 from core.chat.messages import ModelFallback
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
+from core.providers.account_catalogs import ModelAccountRoutes
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
     ProviderAuthError,
@@ -161,6 +163,53 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
     assert run.events[-1].payload["iteration_count"] == 1
     assert [request["model_id"] for request in primary_requests] == ["gpt-5.2"] * len(failures)
     assert [request["model_id"] for request in fallback_requests] == ["claude-sonnet-4"]
+
+
+@pytest.mark.parametrize("configured_fallback", [True, False], ids=["fallback", "no-fallback"])
+@pytest.mark.asyncio
+async def test_workspace_denial_only_sends_to_an_explicit_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured_fallback: bool
+) -> None:
+    model_id = "kimi-k3.1-pro"
+    blocked = "opencode-go:api-key:blocked"
+    allowed = "opencode-go:api-key:allowed"
+    pinned = f"opencode-go/{model_id}::api-key:blocked"
+    fallback = f"opencode-go/{model_id}::api-key:allowed"
+    primary = StubAdapter([])
+    permitted = StubAdapter([{"content": "Completed", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(
+            id="coder", model=pinned, fallback_models=[fallback] if configured_fallback else []
+        ),
+        adapter=primary,
+        adapters_by_connection={blocked: primary, allowed: permitted},
+    )
+
+    def routes(_provider_id: str, connection_id: str) -> ModelAccountRoutes:
+        accounts: tuple[tuple[str, frozenset[str]], ...] = (
+            ("blocked", frozenset()),
+            ("allowed", frozenset({model_id})),
+        )
+        if connection_id.count(":") == 2:
+            accounts = tuple(item for item in accounts if connection_id.endswith(":" + item[0]))
+        return ModelAccountRoutes(connection_id, accounts)
+
+    monkeypatch.setattr(runtime.provider_credentials, "account_model_routes", routes, raising=False)
+    chat = build_chat_loop(runtime)
+    if configured_fallback:
+        answer = await chat.send("coder", "Hi", session_id="session-one")
+        assert answer.content == "Completed"
+        assert [request["model_id"] for request in permitted.requests] == [model_id]
+        run = last_run(runtime)
+        assert run.model_reference == fallback
+        assert await _fallback_events(runtime, run) == [(pinned, fallback)]
+        assert persisted_roles(history(runtime)) == ["user", "note", "assistant"]
+    else:
+        with pytest.raises(ModelAccessError):
+            await chat.send("coder", "Hi", session_id="session-one")
+        assert not permitted.requests
+    assert not primary.requests
 
 
 @pytest.mark.asyncio

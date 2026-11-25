@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from copy import copy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, override
@@ -15,6 +16,7 @@ import pytest
 
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._wire_profile_files import parse_wire_profile_file
+from core.providers.account_catalogs import ModelAccountRoutes
 from core.statistics import ModelRouteUse, StatisticsUnavailableError
 from server.rpc import model_methods
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
@@ -367,6 +369,15 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "oauth-token")
     state = make_state(tmp_path, StubAdapter())
     runtime = state.runtime
+    runtime.models._models["openai"] = [
+        _model(
+            "gpt-5.2",
+            "GPT-5.2",
+            capabilities={"supported_parameters": ("temperature", "tools", "top_p")},
+            metadata={"openai": {"sampling": {"top_p": True, "temperature": True}}},
+        ),
+        runtime.models.get("openai", "gpt-4.1-mini"),
+    ]
     wire_file = parse_wire_profile_file(
         "openai",
         {
@@ -407,7 +418,14 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
 
     listed = {model["id"]: model for model in (await rpc_result(state, "model.list"))["models"]}
     model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
+    pinned = (await rpc_result(state, "model.get", model="openai/gpt-5.2::api-key"))["model"]
 
+    assert listed["openai/gpt-5.2"]["capabilities"]["supported_parameters"] == [
+        "temperature",
+        "tools",
+    ]
+    assert model["capabilities"]["supported_parameters"] == ["temperature", "tools"]
+    assert pinned["capabilities"]["supported_parameters"] == ["temperature", "tools", "top_p"]
     assert listed["openai/gpt-5.2"]["wire_profiles"] == {
         "oauth": {
             "wire_status": "configured",
@@ -417,6 +435,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
         "api-key": {
             "wire_status": "verified",
             "verified_at": "2026-09-30",
+            "supported_parameters": ["temperature", "tools", "top_p"],
             **({"fast_mode": True} if fast_connection == "api-key" else {}),
         },
     }
@@ -448,6 +467,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             "wire_status": "verified",
             "verified_at": "2026-09-30",
             "protocol": "chat_completions",
+            "supported_parameters": ["temperature", "tools", "top_p"],
             **({"fast_mode": True} if fast_connection == "api-key" else {}),
             "reasoning_dialect": "reasoning_effort",
             "reasoning_ladder": ["low", "high"],
@@ -480,6 +500,57 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
         "forgotten": 1,
     }
     assert model["wire_profiles"]["oauth"]["learned"]["rejected_parameters"] == []
+    assert model["capabilities"]["supported_parameters"] == ["temperature", "tools", "top_p"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_search_and_detail_use_the_selected_connections_media(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "token")
+    state = make_state(tmp_path, StubAdapter())
+    runtime = state.runtime
+    provider = copy(runtime.providers.get("openai"))
+    provider.id = "opencode-go"
+    runtime.providers._providers[provider.id] = provider
+    runtime.models._models[provider.id] = [_model("multimodal", "Multimodal")]
+    file = parse_wire_profile_file(
+        provider.id,
+        {
+            "format_version": 1,
+            "connections": {
+                "oauth": {"media": {"types": []}},
+                "api-key": {"media": {"types": ["image/png"]}},
+            },
+        },
+        source="opencode-go.json",
+        report=lambda issue: pytest.fail(issue),
+    )
+    assert file is not None
+    runtime.wire_profiles.replace_files({provider.id: file})
+
+    result = await rpc_result(state, "model.list", provider_id=provider.id)
+    (bare,) = result["models"]
+    assert bare["capabilities"]["input_modalities"] == ["text"]
+    assert bare["capabilities"]["vision"] is False
+    assert "image_understanding" not in bare["capabilities"]["task_types"]
+    assert bare["wire_profiles"]["api-key"]["vision"] is True
+    assert bare["wire_profiles"]["api-key"]["input_modalities"] == ["text", "image"]
+    for filters in (
+        {"capability": "vision"},
+        {"input_modality": "image"},
+        {"task": "image_understanding"},
+    ):
+        result = await rpc_result(state, "model.list", provider_id=provider.id, **filters)
+        assert result["models"] == []
+    pinned = (await rpc_result(state, "model.get", model=bare["id"] + "::api-key"))["model"]
+    assert pinned["capabilities"]["vision"] is True
+    assert "image_understanding" in pinned["capabilities"]["task_types"]
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN")
+    result = await rpc_result(state, "model.list", provider_id=provider.id, capability="vision")
+    assert [model["id"] for model in result["models"]] == [bare["id"]]
 
 
 @pytest.mark.asyncio
@@ -530,6 +601,21 @@ async def test_model_get_returns_complete_model_data(
     }
     assert model["usable_connections"] == ["api-key"]
 
+    monkeypatch.setattr(
+        model_methods,
+        "account_model_routes",
+        lambda _credentials, _provider, route: ModelAccountRoutes(
+            route, (("default", frozenset()), ("work", frozenset({"gpt-4o-mini-tts"})))
+        ),
+    )
+    for account, allowed in (("default", []), ("work", ["api-key"])):
+        detail = (
+            await rpc_result(state, "model.get", model=f"openai/gpt-4o-mini-tts::api-key:{account}")
+        )["model"]
+        assert detail["capabilities"] == model["capabilities"]
+        assert detail["usable_connections"] == allowed
+        assert list(detail["wire_profiles"]) == allowed
+
 
 class _RouteUsage:
     """Statistics that answer ``model_route_usage`` with fixed routes, or fail."""
@@ -565,7 +651,8 @@ async def test_model_list_sorted_by_usage_puts_used_models_and_their_connections
     )
     statistics = _RouteUsage(
         [
-            ModelRouteUse("openai/gpt-5.2", "openai:api-key", 12),
+            ModelRouteUse("openai/gpt-5.2", "openai:api-key", 3),
+            ModelRouteUse("openai/gpt-5.2", "openai:api-key:work", 9),
             # Requests recorded before Chat stored the Connection count for the Model only.
             ModelRouteUse("openai/gpt-5.2", "", 5),
             ModelRouteUse("openai/gpt-5.2", "openai:oauth", 2),

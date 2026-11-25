@@ -17,12 +17,16 @@ from core.chat.messages import MessageSender, ToolCall
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
 from core.model_tasks.decision_types import DecisionError
+from core.models.query import ModelQuery
 from core.permissions import (
     BoundaryContext,
     PermissionBoundary,
     PermissionCeiling,
     normalize_permission_rules,
 )
+from core.providers.account_catalogs import credential_fingerprint
+from core.providers.accounts import Account
+from core.providers.credentials import ProviderCredentialResolver
 from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunExecutionOwner, RunKind
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
@@ -439,6 +443,26 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key")
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-owned-workspace")
+    monkeypatch.setenv("OPENCODE_API_KEY__WORK", "test-owned-other-workspace")
+    zen_id = "opencode-zen"
+    allowed_model = next(
+        model.model_id
+        for _, model in runtime.models.query(ModelQuery(provider_id=zen_id))
+        if model.allows_connection("api-key")
+    )
+    credentials = runtime.provider_credentials
+    assert isinstance(credentials, ProviderCredentialResolver)
+    catalogs = credentials.account_catalogs
+    assert catalogs is not None
+    catalogs.replace(
+        Account(zen_id, "api-key"), credential_fingerprint("test-owned-workspace"), frozenset()
+    )
+    catalogs.replace(
+        Account(zen_id, "api-key", "work"),
+        credential_fingerprint("test-owned-other-workspace"),
+        frozenset({allowed_model}),
+    )
     repo = tmp_path / "project-a"
     write_project_skill(repo, "project-skill", "Project sentinel.")
     write_skill(runtime.global_skills_dir, "global-skill", "global sentinel")
@@ -552,6 +576,13 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
                 "mandatory": reasoning.mandatory,
             },
         }
+    allowed_reference = f"{zen_id}/{allowed_model}"
+    assert [model_id for model_id in models if model_id.startswith(f"{zen_id}/")] == [
+        allowed_reference
+    ]
+    runtime.agent_resolver.require_model_configured(allowed_reference)
+    runtime.agent_resolver.require_model_configured(f"{allowed_reference}::api-key:work")
+    assert not runtime.agent_resolver.is_model_configured(f"{allowed_reference}::api-key:default")
     assert any(model_id.startswith("openai/") for model_id in models)
     # An empty allowlist allows every Connection; only the API key is usable here.
     assert runtime.models.get("openai", "gpt-image-2").connections == ()

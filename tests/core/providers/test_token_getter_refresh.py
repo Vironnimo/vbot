@@ -15,6 +15,7 @@ import pytest
 import respx
 
 from core.providers import token_getter
+from core.providers.account_catalogs import OAUTH_CATALOG_GRANT, credential_fingerprint
 from core.providers.accounts import Account
 from core.providers.errors import (
     NetworkError,
@@ -173,6 +174,7 @@ REFRESH_FLOWS = {
         reply=lambda: _ROTATED,
         request={**_FORM_REFRESH, "client_id": "opencode-cli"},
         expires_in=900,
+        refreshed_extra={OAUTH_CATALOG_GRANT: credential_fingerprint(expired_token().access_token)},
     ),
     # MiniMax reports success in the body and may send an absolute millisecond expiry.
     "minimax": RefreshFlow(

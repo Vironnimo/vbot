@@ -89,6 +89,7 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.chat._context_commands import ContextCommandRunner
     from core.chat._request_builder import RequestBuilder
+    from core.chat._request_targets import _ChainRoute
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, Project, ProjectStore
@@ -411,6 +412,7 @@ class _RunExecutionContext:
     # Every Tool Call of this Run checks its accesses against this boundary.
     permissions: PermissionBoundary
     permission_sources: RunPermissions
+    fallback_routes: list[_ChainRoute] = field(default_factory=list)
     # Admission owner only; descendants do not inherit private Session grants.
     owner_binding: TemporarySessionBinding | None = None
     execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
@@ -1037,7 +1039,7 @@ async def create_run_execution_context(
     agent = await resolve_run_agent(
         dependencies, run, request, session_overrides=permission_inputs.overrides
     )
-    target = await requests.targets.for_agent(agent)
+    target, fallback_routes = await requests.targets.for_run_start(agent)
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
         session_address = SessionAddress(
@@ -1198,6 +1200,7 @@ async def create_run_execution_context(
             agent=agent,
             agent_body=agent_body,
             primary_target=target,
+            fallback_routes=fallback_routes,
             project_id=project_id,
             project_cwd=project_cwd,
             project_prompt_context=project_prompt_context,

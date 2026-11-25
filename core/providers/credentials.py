@@ -20,6 +20,12 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 
+from core.providers.account_catalogs import (
+    OAUTH_CATALOG_GRANT,
+    AccountCatalogs,
+    ModelAccountRoutes,
+    credential_fingerprint,
+)
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     Account,
@@ -48,8 +54,10 @@ class ProviderCredentialResolver:
         fallback_credentials: Mapping[str, str] | None = None,
         process_env: Mapping[str, str] | None = None,
         token_store: TokenStore | None = None,
+        account_catalogs: AccountCatalogs | None = None,
         enabled_overrides_loader: Callable[[], Mapping[str, bool]] | None = None,
     ) -> None:
+        self.account_catalogs = account_catalogs
         self._provider_registry = provider_registry
         self._fallback_credentials = dict(fallback_credentials or {})
         self._process_env = os.environ if process_env is None else process_env
@@ -149,6 +157,41 @@ class ProviderCredentialResolver:
             and self._has_connection_credentials(provider_id, connection, None)
             for connection in provider_config.connections
         )
+
+    def account_catalog_fingerprint(
+        self, account: Account, *, used_token: str | None = None
+    ) -> str | None:
+        """Identify one grant across token rotations and reject results for replaced credentials."""
+        connection = self._get_local_connection(account.provider_id, account.local_connection_id)
+        if self._uses_token_store(connection):
+            token = self._token_store.load(account) if self._token_store else None
+            if token is None or (used_token is not None and used_token != token.access_token):
+                return None
+            return token.extra.get(OAUTH_CATALOG_GRANT) or credential_fingerprint(
+                token.access_token
+            )
+        try:
+            credential = self.get_credentials(account.provider_id, account.connection_id)
+        except ConfigError:
+            return None
+        if used_token is not None and credential != used_token:
+            return None
+        return credential_fingerprint(credential)
+
+    def account_model_routes(self, provider_id: str, connection_id: str) -> ModelAccountRoutes:
+        """Snapshot Account access once for a list or a single routing decision."""
+        if self.account_catalogs is None:
+            return ModelAccountRoutes(connection_id)
+        connection, pinned_account = self._get_connection(provider_id, connection_id)
+        candidates: list[tuple[str, frozenset[str] | None]] = []
+        for slot in self.list_accounts(provider_id, connection.id):
+            if not slot.usable or (pinned_account is not None and slot.id != pinned_account):
+                continue
+            account = Account(provider_id, connection.id, slot.id)
+            fingerprint = self.account_catalog_fingerprint(account)
+            if fingerprint is not None:
+                candidates.append((slot.id, self.account_catalogs.get(account, fingerprint)))
+        return ModelAccountRoutes(connection_id, tuple(candidates))
 
     def _connection_enabled(self, provider_id: str, connection: ConnectionConfig) -> bool:
         overrides = self._enabled_overrides()

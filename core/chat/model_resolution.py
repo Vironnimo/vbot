@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
-from core.chat.errors import ChatError
+from core.chat.errors import ChatError, ModelAccessError
+from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS, account_model_routes
 from core.providers.accounts import split_connection_id
 from core.providers.providers import resolve_effective_context_window
 from core.utils.errors import ConfigError
@@ -155,6 +156,17 @@ def _resolve_agent_connection(
     return provider_id, connection_id
 
 
+def validate_run_model(dependencies: ModelResolutionDependencies, agent: Any) -> None:
+    """Admit a Run whose primary or an explicit fallback can use its workspace."""
+    try:
+        provider_id, _ = _resolve_agent_connection(dependencies, agent)
+    except ModelAccessError:
+        if not _resolve_fallback_chain(dependencies, agent):
+            raise
+    else:
+        _ensure_provider_exists(dependencies.providers, provider_id)
+
+
 def _resolve_fallback_chain(
     dependencies: ModelResolutionDependencies, agent: Any
 ) -> list[tuple[str, str, str]]:
@@ -201,32 +213,12 @@ def _resolve_fallback_candidate(
     except ChatError:
         return None
 
-    if fallback_connection_suffix:
-        # A pinned binding faces the same usability gate as a bare one: an
-        # unknown provider or uncredentialed connection is skipped here rather
-        # than failing later at adapter construction, so one dead entry never
-        # takes down the rest of the chain.
-        pinned_connection_id = f"{fallback_provider_id}:{fallback_connection_suffix}"
-        try:
-            usable = dependencies.provider_credentials.is_usable(
-                fallback_provider_id, pinned_connection_id
-            )
-        except ChatError, ConfigError, KeyError:
-            usable = False
-        if not usable:
-            return None
-        return (
-            fallback_model,
-            fallback_provider_id,
-            pinned_connection_id,
-        )
-
     try:
-        fallback_connection_id = _first_usable_connection_id(
-            dependencies,
-            fallback_provider_id,
-            _model_connection_allowlist(dependencies, fallback_provider_id, _fallback_model_id),
-        )
+        if fallback_connection_suffix and not dependencies.provider_credentials.is_usable(
+            fallback_provider_id, f"{fallback_provider_id}:{fallback_connection_suffix}"
+        ):
+            return None
+        _, _, fallback_connection_id = resolve_model_target(dependencies, fallback_model)
     except ChatError, ConfigError, KeyError:
         return None
 
@@ -254,6 +246,8 @@ def _first_usable_connection_id(
     dependencies: ModelResolutionDependencies,
     provider_id: str,
     allowed_connections: tuple[str, ...] = (),
+    *,
+    model_id: str = "",
 ) -> str:
     """Return the first usable ``<provider>:<connection>`` for a bare (unpinned) model.
 
@@ -269,13 +263,21 @@ def _first_usable_connection_id(
         raise ChatError(f"provider not found: {provider_id}") from exc
 
     credential_resolver = dependencies.provider_credentials
+    workspace_denied = False
     for connection in provider_config.connections:
         if allowed_connections and connection.id not in allowed_connections:
             continue
         connection_id = f"{provider_id}:{connection.id}"
         if credential_resolver.is_usable(provider_id, connection_id):
-            return connection_id
+            route = account_model_routes(credential_resolver, provider_id, connection_id)(model_id)
+            if route is not None:
+                return route
 
+            workspace_denied = True
+    if workspace_denied:
+        raise ModelAccessError(
+            f"Model {model_id!r} is unavailable on the configured {provider_id} Accounts"
+        )
     if allowed_connections:
         allowed = ", ".join(allowed_connections)
         raise ChatError(
@@ -304,9 +306,22 @@ def resolve_model_target(
     """Resolve an exact Model binding and its explicit or first allowed usable Connection."""
     provider_id, model_id, connection_suffix = parse_model_with_connection(model)
     if connection_suffix:
-        return provider_id, model_id, f"{provider_id}:{connection_suffix}"
+        connection_id = f"{provider_id}:{connection_suffix}"
+        if provider_id not in WORKSPACE_CATALOG_PROVIDERS:
+            return provider_id, model_id, connection_id
+        route = account_model_routes(dependencies.provider_credentials, provider_id, connection_id)(
+            model_id
+        )
+        if route is None:
+            raise ModelAccessError(
+                f"Model {model_id!r} is unavailable on Connection {connection_id!r}"
+            )
+        return provider_id, model_id, route
     connection_id = _first_usable_connection_id(
-        dependencies, provider_id, _model_connection_allowlist(dependencies, provider_id, model_id)
+        dependencies,
+        provider_id,
+        _model_connection_allowlist(dependencies, provider_id, model_id),
+        model_id=model_id,
     )
     return provider_id, model_id, connection_id
 

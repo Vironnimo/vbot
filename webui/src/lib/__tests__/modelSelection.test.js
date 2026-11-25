@@ -235,6 +235,55 @@ describe('buildModelSelectOptions', () => {
     expect(valuesAndLabels(options)).toEqual(expected());
   });
 
+  it('offers only the Accounts that can run a workspace Model and keeps an unavailable pin visible', () => {
+    const model = {
+      ...catalogModel('opencode-zen/test', 'opencode-zen'),
+      available_accounts: { 'api-key': ['work'] },
+    };
+    const options = buildModelSelectOptions({
+      models: [model],
+      selectedModelValue: 'opencode-zen/test::api-key:default',
+      connections: [
+        usableConnection('opencode-zen:api-key', 'opencode-zen', 'API Key', [
+          account('default'),
+          account('work'),
+        ]),
+        usableConnection('opencode-zen:account', 'opencode-zen', 'Login', [
+          account('default'),
+        ]),
+      ],
+    });
+    expect(
+      options
+        .filter((option) => !option.isUnavailable && option.value)
+        .map((option) => option.value),
+    ).toEqual([
+      'opencode-zen/test::api-key',
+      'opencode-zen/test::api-key:work',
+    ]);
+    expect(
+      options.find((option) => option.value.endsWith(':default')).isUnavailable,
+    ).toBe(true);
+    model.available_accounts['api-key'] = ['default', 'work'];
+    const permitted = buildModelSelectOptions({
+      models: [model],
+      selectedModelValue: 'opencode-zen/test::api-key:default',
+      connections: [
+        usableConnection('opencode-zen:api-key', 'opencode-zen', 'API Key', [
+          account('default'),
+          account('work'),
+        ]),
+      ],
+    });
+    expect(
+      permitted.find((option) => option.value.endsWith(':default'))
+        .isUnavailable,
+    ).toBe(false);
+    expect(
+      selectModelValue('opencode-zen/test::api-key:default', permitted),
+    ).toBe('opencode-zen/test::api-key:default');
+  });
+
   it('offers a connection-restricted model only on its allowed usable connections', () => {
     const apiKey = usableConnection('openai:api-key', 'openai', 'API Key');
     const subscription = usableConnection(

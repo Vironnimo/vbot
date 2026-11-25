@@ -361,7 +361,7 @@ class TemporaryResolution:
         """Check the address's Project, then apply the Session's overrides."""
         self._require_project(getattr(address, "project_id", None))
         resolved = self._owner._session_resolution._apply_overrides(
-            agent, overrides, require_model=require_model
+            agent, overrides, require_model=require_model, stored_model=True
         )
         from core.agents.temporary import OwnedIdentityAgent
 

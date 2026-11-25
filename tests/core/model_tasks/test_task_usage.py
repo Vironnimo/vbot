@@ -37,7 +37,10 @@ from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import StaticTokenGetter
 from core.providers.wire_profile import DecisionWire
 from core.usage import UsageRecorder
-from tests.core.model_tasks.model_tasks_test_support import task_http_transport
+from tests.core.model_tasks.model_tasks_test_support import (
+    configured_task_target,
+    task_http_transport,
+)
 from tests.core.usage.usage_test_support import read_ledger
 
 BASE = "https://provider.example/api/v1"
@@ -93,8 +96,7 @@ class _Bindings:
     def binding_is_usable(self, _kind: str) -> bool:
         return True
 
-    def validate_execution_target(self, _binding: Any) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
         return {}
@@ -383,8 +385,37 @@ async def test_local_cancelled_attempt_stays_unknown_and_cost_projection_keeps_s
         ),
         ({"input_tokens": 1000, "output_tokens": 0, "cost": 0.3}, True, 0.3, "provider"),
         ({"input_tokens": 1000, "output_tokens": 0}, False, None, "unknown"),
+        (
+            {
+                "input_tokens": 1,
+                "output_tokens": 0,
+                "cost": 0,
+                "opencode": {"billing_source": "go", "list_cost": 0.07, "allowance": 0},
+            },
+            True,
+            0,
+            "provider",
+        ),
+        (
+            {
+                "input_tokens": 1,
+                "output_tokens": 0,
+                "opencode": {"billing_source": "byok", "list_cost": 0.07},
+            },
+            True,
+            None,
+            "unknown",
+        ),
     ],
-    ids=["short", "long-context", "cache-buckets", "provider-charge", "no-task-price"],
+    ids=[
+        "short",
+        "long-context",
+        "cache-buckets",
+        "provider-charge",
+        "no-task-price",
+        "go-allowance",
+        "unknown-byok",
+    ],
 )
 async def test_decision_consumption_values_the_task_without_falling_back_to_chat_prices(
     tmp_path: Path,
@@ -419,6 +450,11 @@ async def test_decision_consumption_values_the_task_without_falling_back_to_chat
             assert cost["amount_usd"] is None
         else:
             assert cost["amount_usd"] == pytest.approx(expected_amount)
+        if "opencode" in usage:
+            assert cost["billing_source"] == usage["opencode"]["billing_source"]
+            assert cost["list_cost_usd"] == 0.07
+            if "allowance" in usage["opencode"]:
+                assert cost["allowance_usd"] == 0
         if expected_source == "catalog":
             assert cost["pricing"]["source"] == "openai:decisions/gpt-6-luna"
             assert "reported_cost_usd" not in records[0].usage
@@ -460,8 +496,16 @@ def test_embedding_usage_preserves_report_provenance(
 
 
 @pytest.mark.asyncio
-async def test_embedding_result_preserves_normalized_cost_without_raw_usage(
+@pytest.mark.parametrize(
+    "raw_usage",
+    [
+        None,
+        {"cost": 0.2, "opencode": {"billing_source": "byok", "estimated": True, "list_cost": 0.2}},
+    ],
+)
+async def test_embedding_result_preserves_normalized_cost(
     recorder: UsageRecorder,
+    raw_usage: dict[str, Any] | None,
 ) -> None:
     observer = TaskUsage(
         recorder, "text_embedding", parse_task_model_target_id("openrouter/test/model::api-key")
@@ -469,6 +513,7 @@ async def test_embedding_result_preserves_normalized_cost_without_raw_usage(
     call_id = await observer.start()
     await observer.finish(
         call_id,
+        usage=raw_usage,
         result=SimpleNamespace(
             usage=EmbeddingUsage(
                 requests=1,
@@ -486,3 +531,11 @@ async def test_embedding_result_preserves_normalized_cost_without_raw_usage(
     assert records[0].usage["input_tokens"] == 9
     assert records[0].usage["output_tokens"] == 0
     assert records[0].usage["reported_cost_usd"] == 0.2
+    if raw_usage:
+        assert records[0].usage["cost"] == {
+            "amount_usd": 0.2,
+            "source": "provider",
+            "list_cost_usd": 0.2,
+            "billing_source": "byok",
+            "estimated": True,
+        }

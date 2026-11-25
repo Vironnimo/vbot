@@ -187,6 +187,8 @@ class FakeAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        session_overrides: AgentOverrides | None = None,
+        include_temporary: bool = False,
     ) -> SimpleNamespace:
         if agent_id in self.failures:
             raise self.failures[agent_id]
@@ -198,7 +200,11 @@ class FakeAgentResolver:
             return SimpleNamespace(
                 **{**vars(agent), **(new_session_overrides or AgentOverrides()).agent_changes()}
             )
-        overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
+        overrides = session_overrides or await self.session_overrides_async(
+            address(agent_id, session_id, project_id)
+        )
+        if overrides.model:
+            self.require_configured(overrides.model)
         return SimpleNamespace(**{**vars(agent), **overrides.agent_changes()})
 
     async def require_model_configured_async(self, model: str) -> None:

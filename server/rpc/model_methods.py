@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
+from core.models.models import Capabilities, Model, narrow_chat_input_tasks
 from core.models.query import ModelQuery
+from core.providers.account_catalogs import ModelAccountRoutes, account_model_routes
 from core.providers.accounts import ConnectionRef
+from core.providers.wire_profile import WireProfile
 from core.statistics import ModelRouteUse
 from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
@@ -79,13 +83,17 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     # before listing; on timeout the sweep finishes in the background and this
     # call serves the last known catalog. The runtime method is throttled and
     # never raises.
-    await _await_local_catalog_refresh(state.runtime)
+    await _await_auto_catalog_refresh(state.runtime)
     # A Provider mutation publishes Settings, credentials and registries as one read boundary.
     async with state_read_lock(state, "_settings_mutation_lock"):
         try:
             runtime = state.runtime
             selected_models = runtime.models.query(model_query)
-            local_context_windows, usable_connections_by_provider = await _MODEL_READ_WORKERS.run(
+            (
+                local_context_windows,
+                usable_connections_by_provider,
+                account_routes,
+            ) = await _MODEL_READ_WORKERS.run(
                 _model_access_snapshot, runtime, {provider_id for provider_id, _ in selected_models}
             )
 
@@ -96,6 +104,7 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                     connection
                     for connection in usable_connections_by_provider[provider_id]
                     if model.allows_connection(connection.id)
+                    and account_routes[provider_id, connection.id](model.model_id) is not None
                 ]
                 if not allowed_connections:
                     continue
@@ -105,21 +114,27 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                     provider_config=_provider_config_or_none(runtime, provider_id),
                     local_context_windows=local_context_windows,
                 )
-                response["wire_profiles"] = {
-                    connection.id: {
-                        **_wire_status_response(
-                            *runtime.wire_status(provider_id, connection.id, model.model_id)
-                        ),
-                        **(
-                            {"fast_mode": True}
-                            if runtime.wire_profile(
-                                provider_id, connection.id, model.model_id
-                            ).request.fast_mode
-                            else {}
-                        ),
-                    }
+                available_accounts = {
+                    connection.id: ids
                     for connection in allowed_connections
+                    if (
+                        ids := account_routes[provider_id, connection.id].allowed_accounts(
+                            model.model_id
+                        )
+                    )
+                    is not None
                 }
+                if available_accounts:
+                    response["available_accounts"] = available_accounts
+                if not _attach_model_wires(
+                    response,
+                    model,
+                    runtime,
+                    provider_id,
+                    (conn.id for conn in allowed_connections),
+                    query=model_query,
+                ):
+                    continue
                 if response["wire_profiles"][allowed_connections[0].id].get("fast_mode"):
                     response["fast_mode"] = True
                 reachable = _model_reachability(runtime, provider_id, allowed_connections)
@@ -171,7 +186,8 @@ def _order_by_usage(
         provider_routes.setdefault(provider_id, {})
         if not route.connection_id:
             continue
-        connection_id = route.connection_id.split(":", 1)[-1]
+        # Usage ranks portable Connection bindings. Requests may record an exact Account.
+        connection_id = route.connection_id.removeprefix(f"{provider_id}:").partition(":")[0]
         by_model = model_routes.setdefault(route.model, {})
         by_model[connection_id] = by_model.get(connection_id, 0) + route.calls
         by_provider = provider_routes[provider_id]
@@ -213,7 +229,7 @@ def _order_by_usage(
 
 def _model_access_snapshot(
     runtime: Any, provider_ids: set[str]
-) -> tuple[Any, dict[str, list[Any]]]:
+) -> tuple[Any, dict[str, list[Any]], dict[tuple[str, str], ModelAccountRoutes]]:
     """Read credential/settings projections together, without loop-owned wire state."""
     windows = runtime.local_context_windows()
     usable: dict[str, list[Any]] = {}
@@ -224,7 +240,14 @@ def _model_access_snapshot(
             for connection in getattr(provider, "connections", ())
             if runtime.provider_credentials.is_usable(provider_id, f"{provider_id}:{connection.id}")
         ]
-    return windows, usable
+    account_routes = {
+        (provider_id, connection.id): account_model_routes(
+            runtime.provider_credentials, provider_id, f"{provider_id}:{connection.id}"
+        )
+        for provider_id, connections in usable.items()
+        for connection in connections
+    }
+    return windows, usable, account_routes
 
 
 async def _get_model(state: Any, params: JsonObject) -> JsonObject:
@@ -232,9 +255,10 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
 
     _reject_unsupported(params, rpc_request_fields("model.get"), "model.get")
     model_reference = _required_string(params, "model")
-    bare_reference = (
-        model_reference.rpartition("::")[0] if "::" in model_reference else model_reference
-    )
+    bare_reference, pin_separator, connection_suffix = model_reference.rpartition("::")
+    if not pin_separator:
+        bare_reference, connection_suffix = model_reference, ""
+    pinned_connection, _, pinned_account = connection_suffix.partition(":")
     provider_id, separator, model_id = bare_reference.partition("/")
     if separator != "/" or not provider_id or not model_id:
         raise RpcError(
@@ -242,7 +266,7 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
             "params.model must be '<provider>/<model-id>'",
         )
 
-    await _await_local_catalog_refresh(state.runtime)
+    await _await_auto_catalog_refresh(state.runtime)
     # A Provider mutation publishes Settings, credentials and registries as one read boundary.
     async with state_read_lock(state, "_settings_mutation_lock"):
         runtime = state.runtime
@@ -260,7 +284,7 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
                 f"unknown Model {bare_reference!r}{suffix}",
             ) from exc
 
-        local_context_windows, usable_connections = await _MODEL_READ_WORKERS.run(
+        local_context_windows, usable_connections, account_routes = await _MODEL_READ_WORKERS.run(
             _model_access_snapshot, runtime, {provider_id}
         )
         response = _model_detail_response(
@@ -275,22 +299,100 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
             for connection in getattr(provider, "connections", ())
             if model.allows_connection(connection.id)
         ]
-        response["usable_connections"] = [
-            connection.id
-            for connection in allowed_connections
-            if connection in usable_connections[provider_id]
-        ]
-        response["wire_profiles"] = {
-            connection_id: _wire_profile_detail_response(
-                runtime.wire_profile(provider_id, connection_id, model.model_id),
-                runtime.learned_wire_facts(provider_id, connection_id, model.model_id),
-            )
-            for connection_id in response["usable_connections"]
-        }
+        response["usable_connections"] = []
+        for connection in allowed_connections:
+            if pinned_connection and connection.id != pinned_connection:
+                continue
+            if connection not in usable_connections[provider_id]:
+                continue
+            routes = account_routes[provider_id, connection.id]
+            if routes(model_id) is None:
+                continue
+            if pinned_account:
+                ids = routes.allowed_accounts(model_id)
+                if ids is not None and pinned_account not in ids:
+                    continue
+                if ids is None and not await _MODEL_READ_WORKERS.run(
+                    runtime.provider_credentials.is_usable,
+                    provider_id,
+                    f"{provider_id}:{connection_suffix}",
+                ):
+                    continue
+            response["usable_connections"].append(connection.id)
+        _attach_model_wires(
+            response, model, runtime, provider_id, response["usable_connections"], detailed=True
+        )
         reachable = _model_reachability(runtime, provider_id, allowed_connections)
         if reachable is not None:
             response["reachable"] = reachable
         return {"model": response}
+
+
+def _wire_input_capabilities(profile: WireProfile, catalog: Capabilities) -> Capabilities:
+    if "chat" not in catalog.task_types:
+        return catalog
+    inputs = profile.effective_input_modalities(catalog.input_modalities)
+    if inputs == catalog.input_modalities:
+        return catalog
+    return replace(
+        catalog,
+        input_modalities=inputs,
+        vision="image" in inputs,
+        task_types=narrow_chat_input_tasks(
+            catalog.task_types, catalog.input_modalities, inputs, catalog.output_modalities
+        ),
+    )
+
+
+def _attach_model_wires(
+    response: JsonObject,
+    model: Model,
+    runtime: Any,
+    provider_id: str,
+    connections: Iterable[str],
+    *,
+    query: ModelQuery | None = None,
+    detailed: bool = False,
+) -> bool:
+    """Project the bare or pinned route and drop a list hit if that route cannot serve it."""
+    model_id = model.model_id
+    capabilities = response["capabilities"]
+    advertised = model.capabilities
+    profiles: dict[str, JsonObject] = {}
+    for connection_id in connections:
+        profile = runtime.wire_profile(provider_id, connection_id, model_id)
+        selected = _wire_input_capabilities(profile, advertised)
+        if (
+            not profiles
+            and query is not None
+            and selected is not advertised
+            and not query.matches(replace(model, capabilities=selected))
+        ):
+            return False
+        if detailed:
+            facts = runtime.learned_wire_facts(provider_id, connection_id, model_id)
+            wire = _wire_profile_detail_response(profile, facts)
+        else:
+            wire = _wire_status_response(profile.status, profile.verification)
+            if profile.request.fast_mode:
+                wire["fast_mode"] = True
+        effective: dict[str, Any] = {
+            "supported_parameters": list(
+                profile.effective_parameters(advertised.supported_parameters)
+            ),
+            "input_modalities": list(selected.input_modalities),
+            "task_types": list(selected.task_types),
+            "vision": selected.vision,
+        }
+        if not profiles:
+            capabilities.update(effective)
+        else:
+            wire.update(
+                (key, value) for key, value in effective.items() if capabilities[key] != value
+            )
+        profiles[connection_id] = wire
+    response["wire_profiles"] = profiles
+    return True
 
 
 async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
@@ -348,7 +450,7 @@ async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObjec
     adapter: Any = None
     try:
         runtime = state.runtime
-        _windows, usable = await _MODEL_READ_WORKERS.run(
+        _windows, usable, _account_routes = await _MODEL_READ_WORKERS.run(
             _model_access_snapshot, runtime, {provider_id}
         )
         if not usable[provider_id]:
@@ -402,8 +504,8 @@ def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
         return None
 
 
-async def _await_local_catalog_refresh(runtime: Any) -> None:
-    refresh_task = runtime.start_local_catalog_refresh()
+async def _await_auto_catalog_refresh(runtime: Any) -> None:
+    refresh_task = runtime.start_auto_catalog_refresh()
     # ``asyncio.wait`` (unlike ``wait_for``) does not cancel on timeout — the
     # sweep keeps running in the background and later calls see its result.
     done, _pending = await asyncio.wait({refresh_task}, timeout=LOCAL_CATALOG_REFRESH_WAIT_SECONDS)
@@ -412,7 +514,7 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
         # surprise so it degrades to a logged stale-catalog listing.
         exception = task.exception()
         if exception is not None:
-            _LOGGER.warning("Local catalog auto-refresh failed: %s", exception)
+            _LOGGER.warning("Model catalog auto-refresh failed: %s", exception)
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:

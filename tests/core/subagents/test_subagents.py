@@ -412,6 +412,27 @@ async def test_target_that_cannot_run_fails_before_session_work(
     assert harness.sessions.list("worker") == []
 
 
+@pytest.mark.parametrize("fallback_allowed", [True, False])
+async def test_continuation_checks_the_saved_sessions_fallback_before_enqueuing(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, fallback_allowed: bool
+) -> None:
+    pinned = "opencode-go/kimi::api-key:restricted"
+    fallback = "opencode-go/glm::api-key:other"
+    data = await harness.spawn("review", model=pinned)
+    await harness.settle()
+    harness.resolver.unusable_models.add(pinned)
+    if not fallback_allowed:
+        harness.resolver.unusable_models.add(fallback)
+
+    async def effective_session(*args, session_overrides, **kwargs):
+        assert session_overrides.model == pinned
+        return SimpleNamespace(fallback_models=[fallback])
+
+    monkeypatch.setattr(harness.resolver, "resolve_agent_async", effective_session)
+    result = await harness.call({"action": "send", "id": data["id"], "content": "more"})
+    assert result["ok"] is fallback_allowed
+
+
 @pytest.mark.parametrize("busy", [False, True], ids=["idle", "busy"])
 @pytest.mark.parametrize("replace_effort", [False, True], ids=["keep-effort", "replace-effort"])
 async def test_model_and_thinking_effort_belong_to_the_subagent_session(

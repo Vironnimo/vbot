@@ -11,6 +11,7 @@ import pytest
 from core.model_tasks import TaskModelBinding, TaskModelError
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.utils.errors import TaskError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 
 class _StubConfigurationError(TaskError):
@@ -26,8 +27,7 @@ class _StubModelTasks:
             raise TaskModelError(f"No task model configured for {task_type}")
         return self._binding
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, binding: TaskModelBinding) -> dict[str, Any]:
         return {"merged": True, **dict(binding.options)}
@@ -45,8 +45,9 @@ async def test_resolve_returns_binding_options_and_parsed_target(
     service = _StubModelTasks(binding)
     loop_thread = threading.get_ident()
 
-    def validate_execution_target(_binding: object) -> None:
+    def validate_execution_target(binding: TaskModelBinding):
         assert threading.get_ident() != loop_thread
+        return configured_task_target(binding)
 
     monkeypatch.setattr(service, "validate_execution_target", validate_execution_target)
     resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
@@ -78,28 +79,45 @@ def test_parse_target_wraps_malformed_target_as_configuration_error() -> None:
         resolver.parse_target("not a target")
 
 
-@pytest.mark.parametrize("change", ["credentials", "model", "capability", "connection"])
-def test_execution_rechecks_live_target_after_binding_was_saved(change: str) -> None:
+@pytest.mark.parametrize(
+    "change", ["credentials", "model", "capability", "connection", "account_catalog"]
+)
+def test_execution_rechecks_live_target_after_binding_was_saved(change: str, monkeypatch) -> None:
     from core.model_tasks import TASK_SPEECH_TO_TEXT, TaskModelService
     from tests.core.model_tasks.model_tasks_test_support import (
         _Credentials,
         _model,
         _Models,
+        _provider,
         _Providers,
         _Storage,
     )
 
-    model = _model("transcribe", (TASK_SPEECH_TO_TEXT,))
+    provider = "opencode-zen"
+    connection = f"{provider}:api-key"
+    model = _model("transcribe", (TASK_SPEECH_TO_TEXT,), provider_id=provider)
     models = _Models([model])
-    credentials = _Credentials()
+    credentials = _Credentials({connection})
+    allowed = {model.model_id}
+    monkeypatch.setattr(
+        credentials,
+        "account_model_routes",
+        lambda *_: lambda model_id: f"{connection}:work" if model_id in allowed else None,
+        raising=False,
+    )
     storage = _Storage()
-    service = TaskModelService(_Providers(), models, credentials, storage)
-    service.update({TASK_SPEECH_TO_TEXT: {"target": "openrouter/transcribe::api-key"}})
+    providers = _Providers([_provider(provider, "OpenCode Zen", [("api-key", "API Key")])])
+    service = TaskModelService(providers, models, credentials, storage)
+    target = f"{provider}/transcribe::api-key"
+    service.update({TASK_SPEECH_TO_TEXT: {"target": target}})
     resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
-    assert resolver.resolve(TASK_SPEECH_TO_TEXT)[2].model_id == "transcribe"
+    assert resolver.resolve(TASK_SPEECH_TO_TEXT)[2].connection_id == f"{connection}:work"
+    assert [item.id for item in service.list_targets(TASK_SPEECH_TO_TEXT)] == [target]
 
     if change == "credentials":
         credentials._granted.clear()
+    elif change == "account_catalog":
+        allowed.clear()
     elif change == "model":
         models._models.clear()
     elif change == "capability":
@@ -107,7 +125,8 @@ def test_execution_rechecks_live_target_after_binding_was_saved(change: str) -> 
     else:
         model.allows_connection = lambda _connection: False
 
-    assert service.binding_for(TASK_SPEECH_TO_TEXT).target == "openrouter/transcribe::api-key"
+    assert service.binding_for(TASK_SPEECH_TO_TEXT).target == target
+    assert service.list_targets(TASK_SPEECH_TO_TEXT) == []
     assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
     with pytest.raises(_StubConfigurationError):
         resolver.resolve(TASK_SPEECH_TO_TEXT)
@@ -283,6 +302,7 @@ async def test_unusable_and_incompatible_candidates_do_not_block_later_candidate
     def validate(binding):
         if binding.target == "local/missing":
             raise TaskModelError("removed")
+        return configured_task_target(binding)
 
     monkeypatch.setattr(service, "validate_execution_target", validate)
     resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)

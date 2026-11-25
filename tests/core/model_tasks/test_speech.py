@@ -37,6 +37,7 @@ from core.model_tasks.speech_types import SpeechAudioCallback, SpeechAudioChunk,
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import ConfigError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 
 @pytest.mark.asyncio
@@ -437,8 +438,7 @@ class _SttModelTasks:
             raise TaskModelError("No task model configured")
         return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return dict(self._options)
@@ -448,8 +448,7 @@ class _TtsModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="local/piper", options={})
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
@@ -479,8 +478,7 @@ class _ProviderSttModelTasks:
             options={},
         )
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
@@ -494,8 +492,7 @@ class _ProviderTtsModelTasks:
             options={},
         )
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}

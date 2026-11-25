@@ -43,6 +43,7 @@ from core.model_tasks.embeddings_providers import (
 from core.providers.errors import ProviderAuthError
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.utils.errors import ConfigError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 OPENROUTER_TARGET = "openrouter/google/gemini-embedding-2::api-key"
 
@@ -59,8 +60,7 @@ class _ModelTasks:
             raise TaskModelError("No task model configured for text_embedding")
         return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
         return {"dimensions": None, **self._options}

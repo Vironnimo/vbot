@@ -36,8 +36,7 @@ from core.chat.messages import (
     queue_content_is_editable,
 )
 from core.chat.model_resolution import (
-    _ensure_provider_exists,
-    _resolve_agent_connection,
+    validate_run_model,
 )
 from core.chat.request_runner import WireRequestRunner
 from core.compaction.run_coordination import CompactionRunCoordinator
@@ -589,8 +588,7 @@ class ChatLoop:
             )
             await preparation.bind_working_project(working_project_id)
             _reject_live_input(agent, run_kind)
-            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, self._dependencies, agent)
             manager = self._dependencies.run_manager
             prepared_content, masker_for_input = await prepare_run_input(
                 self._dependencies,
@@ -685,8 +683,7 @@ class ChatLoop:
                 session_id=session_id,
                 run_overrides=executor.request.run_overrides,
             )
-        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _ensure_provider_exists(self._dependencies.providers, provider_id)
+        await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, self._dependencies, agent)
         session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
@@ -892,8 +889,7 @@ class ChatLoop:
                 )
             await preparation.bind_working_project(working_project_id)
             _reject_live_input(agent, run_kind)
-            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, self._dependencies, agent)
             session_agent = agent
             if run_overrides is not None and not run_overrides.is_empty:
                 # Capture ordinary defaults, never the temporary Run settings. A
@@ -1063,8 +1059,7 @@ class ChatLoop:
                 )
             )
             await preparation.bind_working_project(working_project_id)
-            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, self._dependencies, agent)
             await self._get_session_async(
                 binding.address.agent_id,
                 binding.address.session_id,
@@ -1131,8 +1126,7 @@ class ChatLoop:
                 )
             )
             await preparation.bind_working_project(working_project_id)
-            provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
-            _ensure_provider_exists(self._dependencies.providers, provider_id)
+            await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, self._dependencies, agent)
             session = await self._get_session_async(
                 address.agent_id,
                 address.session_id,

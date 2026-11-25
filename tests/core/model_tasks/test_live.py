@@ -55,6 +55,7 @@ from core.tools import called_tool_name
 from core.tools.live import LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 from tests.core.usage.usage_test_support import read_ledger
 
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
@@ -1118,8 +1119,7 @@ class FakeModelTasks:
     def binding_is_usable(self, task_type: str) -> bool:
         return True
 
-    def validate_execution_target(self, binding: Any) -> None:
-        return None
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, binding: Any) -> dict[str, Any]:
         return dict(self.options)

@@ -1190,9 +1190,13 @@ class Runtime(RuntimeServiceGraph):
             provider_id, connection_id
         )
 
-    def start_local_catalog_refresh(self) -> asyncio.Task[None]:
-        """Start a local sweep that Runtime shutdown cancels and drains."""
-        return self._provider_operations().start_local_catalog_refresh()
+    def start_auto_catalog_refresh(self) -> asyncio.Task[None]:
+        """Refresh local and account-specific Model availability for startup or listing."""
+        return self._provider_operations().start_auto_catalog_refresh()
+
+    def start_account_catalog_refresh(self, provider_id: str) -> asyncio.Task[None] | None:
+        """Refresh a Provider's private account catalogs after login or enablement."""
+        return self._provider_operations().start_account_catalog_refresh(provider_id)
 
     def start_external_catalog_refresh(self) -> asyncio.Task[None] | None:
         """Start native discovery separately from local HTTP listing sweeps."""

@@ -28,6 +28,7 @@ from core.models.models_dev import (
     fetch_catalog,
     refresh_canonical_layer,
 )
+from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS
 from core.providers.accounts import Account, ConnectionRef, split_connection_id
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import ConnectionConfig
@@ -110,6 +111,14 @@ async def refresh_model_database(
         outcome, invalid_entry_count = await _publish_model_db_refresh(
             runtime, begin, refresh, notify_changed=notify_changed
         )
+        if target == "runtime" and (
+            provider_id is None or provider_id in WORKSPACE_CATALOG_PROVIDERS
+        ):
+            access_errors = await refresh_account_catalogs(
+                runtime, provider_id=provider_id, force=True
+            )
+            if access_errors:
+                outcome.result.setdefault("errors", []).extend(access_errors)
     result = outcome.result
     if provider_id is None:
         provider_count = int(result.get("refreshed_count", 0))
@@ -132,6 +141,103 @@ async def refresh_model_database(
         invalid_entry_count,
     )
     return result
+
+
+def _account_catalog_targets(
+    runtime: ProviderRuntime, provider_id: str | None
+) -> list[tuple[Account, str]]:
+    targets: list[tuple[Account, str]] = []
+    for candidate in runtime._providers.list_ids():
+        if candidate not in WORKSPACE_CATALOG_PROVIDERS or (
+            provider_id and candidate != provider_id
+        ):
+            continue
+        for connection in runtime._providers.get(candidate).connections:
+            if not runtime._credentials.is_connection_enabled(
+                candidate, f"{candidate}:{connection.id}"
+            ):
+                continue
+            for slot in runtime._credentials.list_accounts(candidate, connection.id):
+                if slot.usable:
+                    account = Account(candidate, connection.id, slot.id)
+                    fingerprint = runtime._credentials.account_catalog_fingerprint(account)
+                    if fingerprint is not None:
+                        targets.append((account, fingerprint))
+    return targets
+
+
+async def refresh_account_catalogs(
+    runtime: ProviderRuntime, *, provider_id: str | None = None, force: bool = False
+) -> list[JsonObject]:
+    """Refresh private memberships independently of the published Model database."""
+    catalogs = getattr(runtime._credentials, "account_catalogs", None)
+    if catalogs is None:
+        return []
+    async with runtime._account_catalog_lock:
+        if runtime._catalog_refresh_closed:
+            return []
+        targets = await _CATALOG_READ_WORKERS.run(_account_catalog_targets, runtime, provider_id)
+        errors: list[JsonObject] = []
+        changed = False
+        limit = asyncio.Semaphore(4)
+
+        async def refresh(account: Account, fingerprint: str) -> None:
+            nonlocal changed
+            previous = runtime._account_catalog_at.get(account)
+            if (
+                not force
+                and previous
+                and previous[0] == fingerprint
+                and time.monotonic() - previous[1] < 300
+            ):
+                return
+            provider = runtime._providers.get(account.provider_id)
+            connection = provider.get_connection(account.local_connection_id)
+            try:
+                async with (
+                    limit,
+                    _runtime_provider_credential(
+                        runtime, account.provider_id, account.connection_id, connection
+                    ) as credential,
+                ):
+                    with caller_owns_retries():
+                        token, ids = await discovery.fetch_account_model_ids(
+                            provider, connection, credential
+                        )
+                observed = await _CATALOG_READ_WORKERS.run(
+                    runtime._credentials.account_catalog_fingerprint, account, used_token=token
+                )
+                if observed is None or observed != fingerprint:
+                    return
+                updated = await _CATALOG_READ_WORKERS.run(
+                    catalogs.replace, account, fingerprint, ids
+                )
+                changed |= updated
+            except (
+                ConfigError,
+                ModelDiscoveryError,
+                ProviderError,
+                NetworkError,
+                httpx.HTTPError,
+                ValueError,
+                OSError,
+            ) as exc:
+                _LOGGER.warning(
+                    "Could not refresh account catalog for %s: %s", account.connection_id, exc
+                )
+                errors.append(
+                    {
+                        "provider_id": account.provider_id,
+                        "connection_id": account.connection_id,
+                        "error": str(exc),
+                    }
+                )
+            runtime._account_catalog_at[account] = (fingerprint, time.monotonic())
+
+        await asyncio.gather(*(refresh(account, fingerprint) for account, fingerprint in targets))
+        if changed:
+            runtime._notify_catalog_changed()
+        return errors
 
 
 async def maybe_refresh_local_catalogs(runtime: ProviderRuntime, *, force: bool = False) -> None:

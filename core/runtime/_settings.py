@@ -305,11 +305,16 @@ def publish_credentials(
 ) -> None:
     if not runtime._started or generation is not runtime._credential_reload_generation:
         return
+    changed_keys = {
+        key for key, value in credentials.items() if runtime._fallback_environment.get(key) != value
+    }
     runtime._fallback_environment = dict(credentials)
     runtime.provider_credentials.reload_fallback_credentials(credentials)
     runtime._provider_operations().retire_http_transports()
     runtime.agent_secrets.set_system_values(credentials)
     runtime._skill_operations().reload_environment(dict(credentials))
+    if changed_keys:
+        runtime._provider_operations().start_account_catalog_refresh(changed_keys=changed_keys)
 
 
 def reload_custom_providers(runtime: Runtime) -> None:

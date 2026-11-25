@@ -22,6 +22,7 @@ from core.providers.errors import (
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.usage import UsageRecorder
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 from tests.core.usage.usage_test_support import read_ledger
 
 
@@ -209,7 +210,7 @@ async def test_ambiguous_music_start_never_replays_across_fallbacks(
     primary = TaskModelBinding("music_generation", "openrouter/primary::key", {}, (backup,))
     model_tasks = SimpleNamespace(
         binding_for=lambda task_type: primary,
-        validate_execution_target=lambda binding: None,
+        validate_execution_target=configured_task_target,
         options_with_defaults=lambda binding: {},
     )
     resolver = TaskBindingResolver(model_tasks, configuration_error=MusicConfigurationError)

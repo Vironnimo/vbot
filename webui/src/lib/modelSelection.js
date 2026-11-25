@@ -245,13 +245,15 @@ export function buildModelSelectOptions({
     selectedModel.model,
     selectedModel.connectionLocalId,
   );
-  const canonicalSelectedValue = canonicalModelSelectionValue(selectedValue);
   const modelExistsInCatalog = models.some(
     (model) => model.id === selectedModel.model,
   );
   const selectedCatalogModel = models.find(
     (model) => model.id === selectedModel.model,
   );
+  const canonicalSelectedValue = selectedCatalogModel?.available_accounts
+    ? selectedValue
+    : canonicalModelSelectionValue(selectedValue);
   const selectedModelOption =
     selectedModel.model &&
     !selectedModel.connectionLocalId &&
@@ -295,7 +297,11 @@ export function buildModelSelectOptions({
 
   if (
     !selectedValue ||
-    catalogOptions.some((option) => option.value === canonicalSelectedValue) ||
+    catalogOptions.some(
+      (option) =>
+        option.value === selectedValue ||
+        option.value === canonicalSelectedValue,
+    ) ||
     selectedModelOption
   ) {
     return selectedModelOption &&
@@ -405,7 +411,7 @@ export function modelProviderLimits(
       : null;
   // A running reference omits the default Account. An unqualified selection
   // instead uses the first usable Account in the Connection's catalog order.
-  const accounts = usableConnectionAccounts(connection);
+  const accounts = usableConnectionAccounts(connection, catalogModel);
   const account = resolved
     ? accountId || DEFAULT_ACCOUNT_ID
     : accounts.find((entry) => !accountId || entry.id === accountId)?.id;
@@ -471,8 +477,31 @@ export function modelShortName(modelValue) {
 
 function connectionModelOptions(model, connection, showConnectionLabel) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
-  const usableAccounts = usableConnectionAccounts(connection);
+  const usableAccounts = usableConnectionAccounts(connection, model);
   const modelFields = modelOptionFields(model);
+
+  if (model.available_accounts) {
+    const automatic = {
+      value: modelSelectionValue(model.id, localId),
+      label: modelOptionLabel(model, connection, showConnectionLabel),
+      labelLead: modelIdLead(model.id),
+      isUnavailable: false,
+      ...modelFields,
+    };
+    return [
+      automatic,
+      ...usableAccounts.map((account) => ({
+        ...automatic,
+        value: modelSelectionValue(model.id, `${localId}:${account.id}`),
+        label: accountModelOptionLabel(
+          model,
+          connection,
+          account.id,
+          showConnectionLabel,
+        ),
+      })),
+    ];
+  }
 
   if (usableAccounts.length <= 1) {
     return [
@@ -511,17 +540,27 @@ function accountConnectionSuffix(localId, accountId) {
   return `${localId}:${accountId}`;
 }
 
-function usableConnectionAccounts(connection) {
+function usableConnectionAccounts(connection, model) {
   if (!Array.isArray(connection?.accounts)) {
     return [];
   }
 
-  return connection.accounts.filter(
+  const accounts = connection.accounts.filter(
     (account) =>
       account?.usable === true &&
       typeof account.id === 'string' &&
       account.id.length > 0,
   );
+
+  const allowed =
+    model?.available_accounts?.[
+      connectionLocalIdFromConnectionId(connection.id)
+    ];
+  return allowed
+    ? allowed
+        .map((id) => accounts.find((account) => account.id === id))
+        .filter(Boolean)
+    : accounts;
 }
 
 function canonicalModelSelectionValue(value) {
@@ -574,6 +613,14 @@ function usableConnectionsByProvider(connections) {
 }
 
 function connectionsAllowedForModel(model, providerConnections) {
+  if (model?.available_accounts) {
+    return providerConnections.filter(
+      (connection) =>
+        model.available_accounts[
+          connectionLocalIdFromConnectionId(connection.id)
+        ]?.length,
+    );
+  }
   const allowlist = Array.isArray(model?.connections) ? model.connections : [];
   if (allowlist.length === 0) {
     return providerConnections;

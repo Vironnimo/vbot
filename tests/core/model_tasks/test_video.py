@@ -13,6 +13,7 @@ from core.model_tasks import TASK_VIDEO_GENERATION, VideoOptionError, VideoServi
 from core.model_tasks.video import VideoConfigurationError, VideoProfile, build_video_profile
 from core.model_tasks.video_types import VideoGenerationResult
 from core.utils.errors import ConfigError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 _FACTS = {
     "frame_images": ["last_frame", "first_frame", "middle_frame"],
@@ -88,8 +89,7 @@ class _ModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="openrouter/v/m::api-key", options={})
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, Any]:
         return dict(self._options)

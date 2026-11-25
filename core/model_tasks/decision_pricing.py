@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
+from core.providers._opencode_usage import opencode_usage
 
 
 def pricing_for_decision(model: Any | None) -> TokenPricing | None:
@@ -35,7 +36,7 @@ def price_decision_usage(usage: Mapping[str, Any], pricing: TokenPricing | None)
     Unknown task prices explicitly prevent the ledger's general Chat-price
     fallback. A finite Provider-reported charge remains authoritative.
     """
-    result = dict(usage)
+    result = {**usage, **opencode_usage(usage)}
     details = usage.get("input_tokens_details")
     if isinstance(details, Mapping):
         for wire_name, canonical_name in (

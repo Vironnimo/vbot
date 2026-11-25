@@ -38,6 +38,7 @@ from core.utils.workers import BoundedWorkerPool
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 
 @pytest.mark.asyncio
@@ -498,8 +499,7 @@ class _RoutingModelTasks:
             options={},
         )
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, Any]:
         return dict(self._binding_options)
@@ -676,8 +676,7 @@ class _LocalModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="local/sd", options={})
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
@@ -698,8 +697,7 @@ class _ProviderModelTasks:
             options={},
         )
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}

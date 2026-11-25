@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from core.providers.account_catalogs import OAUTH_CATALOG_GRANT, credential_fingerprint
 from core.providers.accounts import Account
 from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
 from core.providers.http import wrap_network_error
@@ -278,6 +279,8 @@ class OAuthTokenGetter:
                     retryable=False,
                 )
             extra = dict(token.extra)
+            if self._oauth_config.device_flow == OPENCODE_OAUTH_DEVICE_FLOW:
+                extra.setdefault(OAUTH_CATALOG_GRANT, credential_fingerprint(token.access_token))
             if self._oauth_config.device_flow == NOUS_OAUTH_DEVICE_FLOW:
                 validate_nous_oauth_scope(response_data, self._oauth_config.scopes)
                 extra[OAUTH_SCOPE_EXTRA_KEY] = oauth_scope_value(

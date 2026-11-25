@@ -807,7 +807,8 @@ class StubRuntime:
     model_database_refresh = Runtime.model_database_refresh
     refresh_model_database = Runtime.refresh_model_database
     provider_discovery_credential = Runtime.provider_discovery_credential
-    start_local_catalog_refresh = Runtime.start_local_catalog_refresh
+    start_auto_catalog_refresh = Runtime.start_auto_catalog_refresh
+    start_account_catalog_refresh = Runtime.start_account_catalog_refresh
     start_external_catalog_refresh = Runtime.start_external_catalog_refresh
     start_installation_catalog_restore = Runtime.start_installation_catalog_restore
     shutdown_catalog_refreshes = Runtime.shutdown_catalog_refreshes

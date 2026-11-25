@@ -297,7 +297,10 @@ class AgentResolver:
                 project_id, agent_id, model_override=overrides.model, require_model=require_model
             )
         agent = self._session_resolution._apply_overrides(
-            agent, overrides, require_model=require_model
+            agent,
+            overrides,
+            require_model=require_model,
+            stored_model=address is not None and not (run_overrides and run_overrides.model),
         )
         if address is None:
             return agent
@@ -385,6 +388,7 @@ class AgentResolver:
                 agent,
                 overrides,
                 require_model=require_model,
+                stored_model=address is not None and not (run_overrides and run_overrides.model),
             )
         key = _skill_binding_key(agent) if project_id is None else None
         if address is not None and key is not None:
@@ -945,7 +949,11 @@ class AgentResolver:
             ("global_default", str(global_defaults.model or "")),
         )
         for source, candidate in tiers:
-            if candidate and self._model_checker.is_configured(candidate):
+            # A pinned workspace remains the selected route even after its catalog
+            # changes. Chat must either use an explicit fallback or report the refusal.
+            if candidate and self._model_checker.is_configured(
+                candidate, defer_workspace_access="::" in candidate
+            ):
                 return {"value": candidate, "source": source}
         return {"value": None, "source": None}
 

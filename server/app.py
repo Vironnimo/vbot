@@ -302,7 +302,7 @@ def create_app(
             app.state.local_catalog_refresh_task = (
                 None
                 if effective_safe_mode is not None
-                else app_runtime.start_local_catalog_refresh()
+                else app_runtime.start_auto_catalog_refresh()
             )
             server_logger.debug(
                 "Server application ready on %s:%s",
