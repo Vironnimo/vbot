@@ -57,7 +57,14 @@ COMMAND_IDLE_WINDOW_SECONDS = 10.0
 COMMAND_STOP_GRACE_SECONDS = 3.0
 
 StopReason = Literal[
-    "agent", "parent", "user", "run_cancelled", "shutdown", "scope", "server_restart"
+    "agent",
+    "parent",
+    "user",
+    "run_cancelled",
+    "shutdown",
+    "scope",
+    "server_restart",
+    "supervisor_error",
 ]
 CommandStatus = Literal["running", "completed", "failed", "stopped"]
 # Why the shell ran nothing of a command: it could not read the request that

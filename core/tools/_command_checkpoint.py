@@ -215,7 +215,9 @@ class CommandCheckpoints:
             "ended": report.ended,
             "finished": report.finished,
             "exit_code": report.exit_code,
-            "stop_reason": report.stop_reason,
+            # Older readers index their known stop reasons when showing a result.
+            "stop_reason": None if report.stop_reason == "supervisor_error" else report.stop_reason,
+            "supervisor_error": report.stop_reason == "supervisor_error",
             "not_run": report.not_run,
             "one_time_secrets_spent": report.consumed_once_secrets,
             "transcript": asdict(report.transcript),
@@ -661,7 +663,9 @@ def _report(row: dict[str, Any]) -> CommandReport:
         ended=bool(state["ended"]),
         finished=bool(state["finished"]),
         exit_code=state["exit_code"],
-        stop_reason=cast(StopReason | None, state["stop_reason"]),
+        stop_reason="supervisor_error"
+        if state.get("supervisor_error")
+        else cast(StopReason | None, state["stop_reason"]),
         transcript=CommandTranscript(
             tuple(transcript["head"]),
             tuple(transcript["tail"]),

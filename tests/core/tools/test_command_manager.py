@@ -37,6 +37,7 @@ from core.storage.temp_files import TemporaryFileManager, artifact_owner
 from core.tools import _command_decoding as command_decoding_module
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
+from core.tools._command_record import CommandRecord
 from core.tools._interpreter_host import InterpreterHost
 from core.tools._shell_results import format_command_delivery, not_run_problem
 from core.tools.command_manager import (
@@ -625,9 +626,11 @@ async def test_working_leftovers_hold_the_end(harness: Harness, activity: str) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("leftover", [False, True], ids=["tree-exited", "quiet-server"])
+@pytest.mark.parametrize(
+    "outcome", ["tree-exited", "quiet-server", "supervisor-failure", "kill-refused"]
+)
 async def test_completion_includes_output_still_being_processed(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch, leftover: bool
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     feed = command_output_module.CommandOutput.feed
@@ -638,27 +641,53 @@ async def test_completion_includes_output_still_being_processed(
         await feed(output, data)
 
     monkeypatch.setattr(command_output_module.CommandOutput, "feed", slow_feed)
+    supervision_failed = outcome in {"supervisor-failure", "kill-refused"}
+    if supervision_failed:
+        tree_facts = CommandRecord._tree_facts
+
+        async def fail_after_exit(record: CommandRecord):
+            if record.report().exit_code is not None:
+                raise RuntimeError("supervision failed after the shell exited")
+            return await tree_facts(record)
+
+        monkeypatch.setattr(CommandRecord, "_tree_facts", fail_after_exit)
     command_id, process = await harness.launch(
-        formatter=lambda report: "\n".join(report.transcript.head)
+        formatter=lambda report: format_command_delivery(
+            report, permissions=PermissionBoundary.UNRESTRICTED
+        )
     )
     harness.manager.to_background(command_id, deliver=True)
+    if outcome == "kill-refused":
+        process.tree.terminate_error = PermissionError("refused")
     process.write("first\n")
     await entered.wait()
     process.write("final diagnosis")
-    process.exit(7, leftovers=[SERVER] if leftover else [])
+    process.exit(0, leftovers=[] if outcome == "tree-exited" else [SERVER])
     try:
         await harness.advance(5)
         assert not harness.manager.report(command_id).ended
         assert not harness.sink.bodies
     finally:
         release.set()
+    if outcome == "kill-refused":
+        assert not process.released and process.tree.terminations == 1
+        process.tree.terminate_error = None
+        await harness.manager.stop(command_id, "user")
     await harness.advance(4)
-    assert harness.sink.bodies == ["first\nfinal diagnosis"]
-    if leftover:
+    (body,) = harness.sink.bodies
+    assert "first\nfinal diagnosis" in body
+    if outcome == "quiet-server":
         assert harness.manager.report(command_id).still_running == (SERVER,)
         process.end_leftovers()
     report = await harness.finish(command_id)
-    assert not report.output_incomplete
+    assert report.output_incomplete == supervision_failed
+    if supervision_failed:
+        assert (report.status, report.stop_reason, report.exit_code) == (
+            "stopped",
+            "supervisor_error",
+            None,
+        )
+        assert "may be incomplete" in body
     assert report.log_path is not None and report.log_path.read_bytes() == b"first\nfinal diagnosis"
 
 
@@ -999,6 +1028,7 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "missing_log",
         "empty_checkpoint",
         "ended",
+        "supervisor_error",
         "delivered",
         "withdrawn",
         "moved",
@@ -1038,6 +1068,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
         else None
     )
     missing_logs = {"missing_log", "empty_checkpoint"}
+    incomplete = outcome in missing_logs or outcome == "supervisor_error"
     running_outcomes = {"running", "moved", "owned_running", *missing_logs}
     expected_latest: dict[int, str] = {}
     restored_owner = OWNER
@@ -1078,7 +1109,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     for count in (-1, 0, 1, COMMAND_RECENT_LINES + 10)
                 }
             if outcome not in running_outcomes:
-                process.exit(9101 if outcome == "not_run_once" else 0)
+                if outcome == "supervisor_error":
+                    process._exit.set_exception(OSError("process wait failed"))
+                else:
+                    process.exit(9101 if outcome == "not_run_once" else 0)
                 await harness.finish(command_id)
                 await eventually(lambda: bool(harness.sink.submissions))
             if outcome in {"delivered", "owned_delivered", "secret_delivered"}:
@@ -1217,7 +1251,9 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert len(notes) == 1
                 assert command_id in str(notes[0].content)
             report = restored.manager.report(command_id)
-            assert report.output_incomplete == (outcome in missing_logs)
+            assert report.output_incomplete == incomplete
+            if outcome == "supervisor_error":
+                assert report.stop_reason == "supervisor_error" and report.exit_code is None
             for count, expected in expected_latest.items():
                 assert restored.manager.latest_output(command_id, count) == expected
             if secret_output:
@@ -1244,7 +1280,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
             assert report.owner == restored_owner
             assert report.status == (
                 "stopped"
-                if outcome in running_outcomes
+                if outcome in running_outcomes or outcome == "supervisor_error"
                 else "failed"
                 if outcome == "not_run_once"
                 else "completed"
@@ -1261,7 +1297,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
         async with command_harness(tmp_path, checkpoint_store=sessions) as again:
             await again.manager.wait_recovered()
             assert again.sink.submissions == []
-            assert again.manager.report(command_id).output_incomplete == (outcome in missing_logs)
+            assert again.manager.report(command_id).output_incomplete == incomplete
             if execution_owner is not None:
                 assert (
                     len(

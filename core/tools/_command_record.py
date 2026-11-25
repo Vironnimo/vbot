@@ -35,6 +35,7 @@ from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import SessionNotFoundError
 from core.storage.temp_files import TemporaryFileLease
 from core.utils.logging import get_logger
+from core.utils.workers import cancel_and_wait
 
 from ._command_checkpoint import wait_for_delivery_retry
 from ._command_output import CommandOutput
@@ -697,13 +698,49 @@ class CommandRecord:
             raise
         except Exception:
             _LOGGER.error(
-                "Following command %s failed; its processes are stopped",
+                "Following command %s failed; attempting to stop its processes",
                 self.command_id,
                 exc_info=True,
             )
-            with contextlib.suppress(Exception):
-                await self._services.run_blocking(self._tree.terminate)
-            self._finish(None)
+            await self._finish_after_supervisor_error()
+
+    async def _finish_after_supervisor_error(self) -> None:
+        self._output_incomplete = True
+        self._draining = False
+        async with self._stop_lock:
+            if not self.ended:
+                self._stop_reason = self._stop_reason or "supervisor_error"
+                self._exit_code = None
+            self._freeze_exits()
+            if not self._killed.is_set():
+                failure: Exception | None
+                try:
+                    failure = await self._kill()
+                except Exception as error:
+                    failure = error
+                if failure is not None:
+                    _LOGGER.warning(
+                        "Stopping command %s after supervision failed was not confirmed",
+                        self.command_id,
+                        exc_info=failure,
+                    )
+        # A failed kill can leave a live tree. Keep it owned and stoppable.
+        while not self._killed.is_set():
+            if await self._services.run_blocking(self._running_now) == ():
+                break
+            await self._wait_or_sleep(self._killed, TREE_POLL_SECONDS)
+        self._draining = True
+        try:
+            await self._finish_output()
+        except Exception:
+            _LOGGER.error(
+                "Draining output after supervision failed (command=%s)",
+                self.command_id,
+                exc_info=True,
+            )
+            if self._reader_task is not None:
+                await cancel_and_wait(self._reader_task)
+        self._finish(replace(self._facts, running=()) if self._facts is not None else None)
 
     def _record_exit(self, exit_code: int, facts: ProcessTreeFacts | None) -> None:
         """The shell exited: keep its exit code while the tree and output settle.

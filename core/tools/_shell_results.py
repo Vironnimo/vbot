@@ -236,6 +236,7 @@ _STOP_TEXTS: dict[StopReason, str] = {
     "run_cancelled": "the turn that started it was cancelled.",
     "shutdown": "vBot shut down.",
     "server_restart": f"vBot stopped unexpectedly. {_RESTART_OUTCOME}",
+    "supervisor_error": "vBot lost track of the command. Check its effects before repeating it.",
     # Read by the Session that ran it and by Agents above it.
     "scope": "it was stopped together with all other work of the Session that ran it.",
 }
@@ -673,6 +674,8 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
         return None
     path = report.log_path
     capture = "Output capture ended before EOF. The final output may be incomplete"
+    if report.stop_reason == "supervisor_error":
+        capture = "The final output may be incomplete"
     if report.output_from_checkpoint:
         capture = "Only the last saved output was recovered. Later output may be missing"
         if loss is None:
