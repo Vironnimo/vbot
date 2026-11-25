@@ -23,7 +23,6 @@ from core.projects.resolver import (
     resolve_skill_scope,
 )
 from core.projects.scan_report import FindingType
-from core.projects.sources import DEFAULT_PROFILE_TOOLS
 from core.projects.store import ProjectStore
 
 OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
@@ -211,6 +210,8 @@ def _resolver(
     global_permission_rules: dict[str, Any] | None = None,
     project_skill_names: dict[str, frozenset[str]] | None = None,
     skill_pool_names: Callable[[str | None], frozenset[str]] | None = None,
+    live_defaults: dict[str, Any] | None = None,
+    tool_names: tuple[str, ...] = (),
 ) -> AgentResolver:
     """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
 
@@ -219,8 +220,11 @@ def _resolver(
     field (the chain falls through). ``""`` is a real value for thinking effort.
     ``project_skill_names`` injects the project-skill probe: a map of project id →
     its own scanned skill names (default: no project skills anywhere).
+    ``live_defaults`` is the map the resolver reads on every call, for a test that
+    changes it; the other ``global_*`` arguments add to it. ``tool_names`` is every
+    registered Tool.
     """
-    defaults: dict[str, Any] = {}
+    defaults: dict[str, Any] = live_defaults if live_defaults is not None else {}
     if global_default:
         defaults["model"] = global_default
     if global_temperature is not None:
@@ -241,6 +245,7 @@ def _resolver(
         lambda: defaults,
         project_skill_names=lambda project_id: skill_names.get(project_id, frozenset()),
         skill_pool_names=skill_pool_names,
+        tool_names=lambda: tool_names,
         # The Agent store's own Session database, which it also closes.
         sessions=agents._session_manager(),
     )
@@ -281,7 +286,6 @@ __all__ = [
     "Any",
     "pytest",
     "AgentStore",
-    "DEFAULT_PROFILE_TOOLS",
     "AgentResolutionError",
     "AgentOverrides",
     "AgentResolver",

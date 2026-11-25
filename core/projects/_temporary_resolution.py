@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, cast
 from core.permissions import PermissionCeiling, PermissionRules
 from core.projects._resolution_context import _RESOLUTION_WORKERS, _require_temporary_binding
 from core.projects._resolution_values import (
-    _project_agent_tool_access,
+    _participant_tool_access,
     _resolve_sampling,
     _resolve_thinking_effort,
     resolve_permission_rules,
+    tool_selection,
 )
 from core.projects._runtime_agent import AgentOverrides, AgentResolutionError, RuntimeAgent
 from core.projects._team_resolution import _profile_skill_allowed
@@ -121,15 +122,10 @@ class TemporaryResolution:
             raise AgentResolutionError("A repository profile requires a Project.")
         project = self._owner._load_project(project_id)
         profile = self._owner._team_resolution._read_agent_fresh(project, config.repository_profile)
-        owner_tools = (
-            config.tool_access.allowed
-            if config.tool_access.mode == "selected"
-            else (self._owner._tool_names() if config.tool_access.mode == "all" else ())
-        )
-        owner_tools = tuple(name for name in owner_tools if name not in config.tool_access.denied)
+        owner_tools = tool_selection(config.tool_access, self._owner._tool_names)
         # Team and temporary Agents use the same translation; a participant's
         # owner bounds it with its own selection.
-        access = _project_agent_tool_access(project, profile, owner_tools)
+        access = _participant_tool_access(project, profile, owner_tools)
         access = replace(
             access,
             allowed=tuple(name for name in access.allowed if name not in config.tool_access.denied),

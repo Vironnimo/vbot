@@ -20,10 +20,10 @@ from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurati
 from core.projects.projects import ProjectError
 from core.projects.resolver import AgentResolver
 from core.sessions import ChatSessionManager, SessionAddress
+from core.settings.agent_defaults import SHIPPED_AGENT_TOOLS
 from core.tools.availability import ToolAccess, resolve_tool_access
 
 from .resolver_test_support import (
-    DEFAULT_PROFILE_TOOLS,
     AgentStore,
     ConfigAgent,
     Path,
@@ -57,13 +57,13 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.model == "openai/gpt-5.2"
     assert runtime_agent.body == "You build.\n"
     # Project Agents have no personal Workspace or Memory. A repository Agent
-    # without a Tool list starts from the default Profile Tools.
+    # without a Tool list inherits the shared default Tools.
     assert runtime_agent.workspace == ""
     assert runtime_agent.memory_prompt_mode == "off"
     assert runtime_agent.project_memory_enabled is True
     assert runtime_agent.tool_access == ToolAccess(
         mode="selected",
-        allowed=DEFAULT_PROFILE_TOOLS,
+        allowed=SHIPPED_AGENT_TOOLS,
     )
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
@@ -359,7 +359,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
         sessions.close()
 
 
-_BASE_TOOLS = DEFAULT_PROFILE_TOOLS
+_BASE_TOOLS = SHIPPED_AGENT_TOOLS
 
 
 @pytest.mark.parametrize(
@@ -390,7 +390,7 @@ _BASE_TOOLS = DEFAULT_PROFILE_TOOLS
         ),
     ],
 )
-def test_repository_denials_narrow_the_default_profile_tools(
+def test_repository_denials_narrow_the_shared_default_tools(
     agents: AgentStore,
     projects: ProjectStore,
     repo: Path,
@@ -407,6 +407,53 @@ def test_repository_denials_narrow_the_default_profile_tools(
     )
     assert set(actual.allowed) == expected
     assert not set(actual.allowed) & set(tool_access.denied)
+
+
+@pytest.mark.parametrize(
+    ("default", "expected"),
+    [
+        pytest.param(
+            {"mode": "selected", "allowed": ["read", "bash", "analyze_image"]},
+            ToolAccess(mode="selected", allowed=("read", "bash", "analyze_image")),
+            id="selected",
+        ),
+        # all is every registered Tool; its denials stay denied (followers too).
+        pytest.param(
+            {"mode": "all", "denied": ["bash"]},
+            ToolAccess(mode="selected", allowed=("read", "analyze_image"), denied=("bash",)),
+            id="all",
+        ),
+        pytest.param({"mode": "none"}, ToolAccess(mode="selected"), id="none"),
+    ],
+)
+def test_shared_default_tools_reach_a_member_without_a_tool_list_live(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    default: dict[str, Any],
+    expected: ToolAccess,
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    shared: dict[str, Any] = {}
+    resolver = _resolver(
+        agents,
+        projects,
+        _openai_configured(),
+        live_defaults=shared,
+        tool_names=("read", "bash", "analyze_image"),
+    )
+
+    shipped = resolver.resolve_agent("vbot", "builder").tool_access
+    # The member inherits defaults.agent.tool_access at resolution time, so a
+    # changed default applies on the next resolution.
+    shared["tool_access"] = default
+    changed = resolver.resolve_agent("vbot", "builder").tool_access
+    effective = resolver.effective_config("vbot", "builder")["tool_access"]
+
+    assert shipped == ToolAccess(mode="selected", allowed=SHIPPED_AGENT_TOOLS)
+    assert changed == expected
+    assert effective == {"value": expected.to_dict(), "source": "agent"}
 
 
 def test_vbot_tool_override_replaces_repository_denials_until_cleared(
@@ -602,7 +649,7 @@ def test_opt_in_grant_survives_project_resolution_and_reset(
     usable: tuple[str, ...],
 ) -> None:
     # An opt-in Tool such as the image-analysis vision exception needs an explicit
-    # grant, which the default Profile Tools never carry.
+    # grant, which vBot's shipped default Tools never carry.
     tools = [SimpleNamespace(name="analyze_image", requires_opt_in=True)]
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
@@ -622,7 +669,7 @@ def test_opt_in_grant_survives_project_resolution_and_reset(
     assert granted == granted_access
     assert resolve_tool_access(granted, tools, "off").allowed_tools == usable
     assert effective == {"value": policy, "source": "override"}
-    assert reset == ToolAccess(mode="selected", allowed=DEFAULT_PROFILE_TOOLS)
+    assert reset == ToolAccess(mode="selected", allowed=SHIPPED_AGENT_TOOLS)
 
 
 def test_effective_agent_targets_are_materialized_from_current_project_team(
