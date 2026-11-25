@@ -197,8 +197,10 @@ def host_shell_start(
     Raises ``HostShellMissingError`` when this host has no such shell.
     """
     complete = environment.complete()
-    search_path = next((value for name, value in complete.items() if name.upper() == "PATH"), None)
     if sys.platform == "win32":
+        search_path = next(
+            (value for name, value in complete.items() if name.upper() == "PATH"), None
+        )
         pwsh = powershell_executable(search_path)
         if pwsh is None:
             raise HostShellMissingError("PowerShell 7 (pwsh) is not installed on this host")
@@ -208,10 +210,13 @@ def host_shell_start(
             return HostShellStart(argv, complete, request, warm=False)
         request = powershell_request(command, str(workdir), environment.changes, protected)
         return HostShellStart(argv, environment.base, request)
-    bash = shutil.which("bash", path=search_path)
-    if bash is None:
-        raise HostShellMissingError("bash is not installed on this host")
-    return HostShellStart([bash, "-c", command], complete)
+    # exec searches relative and empty PATH entries from the child's cwd.
+    directory = workdir.absolute()
+    for entry in os.get_exec_path(complete):
+        bash = shutil.which(str(directory / entry / "bash"))
+        if bash is not None:
+            return HostShellStart([bash, "-c", command], complete)
+    raise HostShellMissingError("bash is not installed on this host")
 
 
 def _check_environment_names(variables: Mapping[str, str], opaque_names: set[str]) -> None:

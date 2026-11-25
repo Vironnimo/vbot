@@ -633,7 +633,9 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
         prepared.append((threading.get_ident(), current_path))
         return CommandEnvironment({"PATH": current_path}, {})
 
-    def executable(_name: str, *, path: str | None = None) -> str:
+    def executable(name: str, *, path: str | None = None) -> str:
+        if path is None:
+            path = str(Path(name).parent)
         resolved.append((threading.get_ident(), path))
         return str(tmp_path / str(path) / "fixture-shell")
 
@@ -650,7 +652,10 @@ async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
         assert shell.launcher.envs[-1]["PATH"] == path
         (await shell.started(count)).exit(0)
 
-    assert [path for _thread, path in resolved] == ["first-path", "changed-path"]
+    assert [path for _thread, path in resolved] == [
+        path if sys.platform == "win32" else str(tmp_path / path)
+        for path in ("first-path", "changed-path")
+    ]
     assert {path for _thread, path in prepared} == {"first-path", "changed-path"}
     assert all(thread != loop_thread for thread, _path in [*prepared, *resolved])
 
@@ -673,6 +678,28 @@ def test_powershell_lookup_uses_only_absolute_path_entries(
         shell_module.powershell_executable(os.pathsep.join((relative_entries, str(install))))
         == binary
     )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX host shell lookup")
+def test_bash_lookup_resolves_path_in_the_commands_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = tmp_path / "server"
+    cwd = tmp_path / "command:workdir"
+    fallback = tmp_path / "fallback"
+    for directory in (server / "bin", cwd / "bin", fallback):
+        directory.mkdir(parents=True)
+        (directory / "bash").touch(mode=0o755)
+    monkeypatch.chdir(server)
+    for path, expected in (
+        (f"bin:{fallback}", cwd / "bin" / "bash"),
+        (f":{fallback}", fallback / "bash"),
+    ):
+        start = shell_module.host_shell_start("true", cwd, CommandEnvironment({"PATH": path}, {}))
+        assert start.argv[0] == str(expected)
+    (cwd / "bash").touch(mode=0o755)
+    start = shell_module.host_shell_start("true", cwd, CommandEnvironment({"PATH": ""}, {}))
+    assert start.argv[0] == str(cwd / "bash")
 
 
 def _numbered(count: int) -> list[str]:
