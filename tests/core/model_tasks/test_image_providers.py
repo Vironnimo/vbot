@@ -98,14 +98,21 @@ async def test_console_edits_use_the_catalog_native_image_wire(model_id: str, pa
         credential="test",
         model_id=model_id,
     )
-    output = (
+    output: dict[str, Any] = (
         _google_answer(_inline_image(b"test"))
         if wire == "google"
         else {"data": [{"b64_json": "dGVzdA==", "mime_type": "image/png"}]}
     )
+    output.update({"cost": 0.008, "opencode": {"list_cost": 0.01, "billing_source": "balance"}})
     route = respx.post("https://opencode.ai/inference/" + path).respond(200, json=output)
     inputs = (ImageInput("a.png", "image/png", b"one"), ImageInput("b.png", "image/png", b"two"))
     result = await client.generate("edit", options={}, input_images=inputs, wire=wire)
+    assert result.usage and result.usage["cost"] == {
+        "amount_usd": 0.008,
+        "source": "provider",
+        "billing_source": "balance",
+        "list_cost_usd": 0.01,
+    }
     assert result.images[0].data == b"test" and result.images[0].media_type == "image/png"
     request = route.calls[0].request
     if wire == "google":

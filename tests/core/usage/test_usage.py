@@ -46,6 +46,8 @@ async def test_cumulative_updates_retain_one_call_and_field_provenance(
 ):
     identifier = await recorder.start(model="p/model::p:api", kind="live_voice")
     provider_cost = {"amount_usd": 0.1, "source": "provider"}
+    if first_field == "cost":
+        provider_cost.update({"billing_source": "go", "list_cost_usd": 0.11, "allowance_usd": 0.03})
     first = await recorder.update(
         identifier,
         {
@@ -56,13 +58,21 @@ async def test_cumulative_updates_retain_one_call_and_field_provenance(
     revision, records = read_ledger(recorder)
     assert first["usage_call_id"] == identifier
     assert "output_tokens" not in records[0].usage
-    assert records[0].usage["cost"] == {"amount_usd": 0.1, "source": "provider"}
+    assert records[0].usage["cost"] == provider_cost
     enriched = await recorder.update(identifier, {"input_tokens": 20, "output_tokens": 3})
     assert enriched["cost"] == provider_cost
     enriched = await recorder.update(
         identifier, {"cost": {"amount_usd": 0.0001, "source": "catalog"}}
     )
     assert enriched["cost"] == provider_cost
+    if first_field == "cost":
+        partial = {key: value for key, value in provider_cost.items() if key != "allowance_usd"}
+        partial["list_cost_usd"] = 0.12
+        enriched = await recorder.finish(identifier, {"cost": partial})
+        assert enriched["cost"] == {**partial, "allowance_usd": 0.03}
+        new_payer = {"amount_usd": 0.1, "source": "provider", "billing_source": "balance"}
+        enriched = await recorder.update(identifier, {"cost": new_payer})
+        assert enriched["cost"] == new_payer
     updated_cost = {"amount_usd": 0.2, "source": "provider"}
     await recorder.update(
         identifier,
@@ -452,11 +462,16 @@ def test_a_restart_keeps_the_ledger_id_and_resumes_the_import_from_its_cursor(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("snapshot_status", "interrupted"),
-    [("started", False), ("started", True), ("completed", False)],
+    ("snapshot_status", "interrupted", "unknown_charge"),
+    [
+        ("started", False, False),
+        ("started", True, False),
+        ("completed", False, False),
+        ("completed", False, True),
+    ],
 )
 async def test_usage_restore_recovers_existing_call_from_newer_session(
-    recorder, snapshot_status, interrupted
+    recorder, snapshot_status, interrupted, unknown_charge
 ):
     root = recorder.database.path.parent
     sessions = ChatSessionManager(root)
@@ -469,15 +484,26 @@ async def test_usage_restore_recovers_existing_call_from_newer_session(
         if snapshot_status == "completed":
             await recorder.finish(
                 identifier,
-                {"input_tokens": 17, "output_tokens": 8, "output_tokens_estimated": True},
+                {"input_tokens": 17, "output_tokens": 3}
+                if unknown_charge
+                else {"input_tokens": 17, "output_tokens": 8, "output_tokens_estimated": True},
             )
         snapshot = create_data_snapshot(
             root, reason="test", databases=(recorder.database, sessions.database)
         )
         assert snapshot is not None
+        final_usage = {"input_tokens": 17, "output_tokens": 3}
+        if unknown_charge:
+            # A newer gateway bill can establish that the balance charge is unknown.
+            final_usage["cost"] = {
+                "source": "unknown",
+                "amount_usd": None,
+                "billing_source": "byok",
+                "list_cost_usd": 0.008,
+            }
         usage = await recorder.finish(
             identifier,
-            {"input_tokens": 17, "output_tokens": 3},
+            final_usage,
             status="cancelled" if interrupted else "completed",
         )
         seed_history(
@@ -538,6 +564,12 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
     sessions = ChatSessionManager(recorder.database.path.parent)
     try:
         provider_cost = {"amount_usd": 0.7, "source": "provider"}
+        archive_cost = {"reported_cost_usd": 0.1}
+        expected_cost = provider_cost
+        if provider_field == "cost":
+            provider_cost.update({"billing_source": "go", "list_cost_usd": 0.9})
+            archive_cost = {"cost": {**provider_cost, "list_cost_usd": 1, "allowance_usd": 0.03}}
+            expected_cost = {**provider_cost, "allowance_usd": 0.03}
         identifier = await recorder.start(
             model="p/original", kind="chat", agent_id="original", session_id="original-session"
         )
@@ -563,7 +595,7 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
                         "output_tokens": 4,
                         "output_tokens_estimated": True,
                         "cache_read_tokens": 1,
-                        "reported_cost_usd": 0.1,
+                        **archive_cost,
                         "speed": SPEED,
                     },
                 )
@@ -578,7 +610,7 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
         assert record.usage["output_tokens_estimated"] is True
         assert record.usage["cache_read_tokens"] == 1
         assert record.usage["speed"] == SPEED
-        assert record.usage["cost"] == provider_cost
+        assert record.usage["cost"] == expected_cost
         if provider_field == "reported_cost_usd":
             assert record.usage["reported_cost_usd"] == 0.7
         assert record.model == "p/original"

@@ -7,6 +7,15 @@ _SPEED_COLUMNS = "\n".join(
     for basis in SPEED_BASES
     for measure in ("calls", "estimated_calls", "tokens", "window_ms")
 )
+_COST_COLUMNS = """    reported_nusd INTEGER NOT NULL,
+    reported_calls INTEGER NOT NULL,
+    estimated_nusd INTEGER NOT NULL,
+    estimated_calls INTEGER NOT NULL,
+    list_nusd INTEGER NOT NULL,
+    list_calls INTEGER NOT NULL,
+    allowance_nusd INTEGER NOT NULL,
+    allowance_calls INTEGER NOT NULL,
+    unpriced_calls INTEGER NOT NULL,"""
 
 ROLLUP_SCHEMA = f"""
 CREATE TABLE agg_runs (
@@ -38,9 +47,7 @@ CREATE TABLE agg_runs (
     reasoning_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
+{_COST_COLUMNS}
     primary_model TEXT,
     models TEXT NOT NULL,
     kinds TEXT NOT NULL,
@@ -65,11 +72,7 @@ CREATE TABLE agg_run_models (
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
     unreported_calls INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    reported_calls INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    estimated_calls INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
+{_COST_COLUMNS}
     retrospective_calls INTEGER NOT NULL,
     uncached_nusd INTEGER NOT NULL,
     uncached_calls INTEGER NOT NULL,
@@ -104,11 +107,7 @@ CREATE TABLE agg_usage (
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
     unreported_calls INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    reported_calls INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    estimated_calls INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
+{_COST_COLUMNS}
     retrospective_calls INTEGER NOT NULL,
     uncached_nusd INTEGER NOT NULL,
     uncached_calls INTEGER NOT NULL,

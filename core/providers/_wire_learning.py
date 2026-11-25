@@ -48,6 +48,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from core.models.pricing import billing_details
 from core.providers.errors import (
     ProviderAuthError,
     ProviderContextOverflowError,
@@ -97,7 +98,30 @@ def _failed_attempt_usage(deltas: list[dict[str, Any]]) -> dict[str, Any] | None
             value = delta.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
                 total[key] = total.get(key, 0) + value
+    _add_attempt_cost(total, deltas)
     return total if len(total) > 1 else None
+
+
+def _add_attempt_cost(result: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    """Add per-request billing measures once; never add a list price to a charge."""
+    details = [billing_details(attempt.get("cost")) for attempt in attempts]
+    if not any(details):
+        return
+    if any((attempt.get("cost") or {}).get("source") == "unknown" for attempt in attempts):
+        # The combined charge is unknown when an attempt explicitly has no price.
+        result.pop("reported_cost_usd", None)
+    amount = result.get("reported_cost_usd")
+    cost = {"amount_usd": amount, "source": "provider" if amount is not None else "unknown"}
+    for name in ("list_cost_usd", "allowance_usd"):
+        amounts = [item[name] for item in details if name in item]
+        if amounts:
+            cost[name] = sum(amounts)
+    sources = {item["billing_source"] for item in details if "billing_source" in item}
+    if sources:
+        cost["billing_source"] = sources.pop() if len(sources) == 1 else "mixed"
+    if any(item.get("estimated") for item in details):
+        cost["estimated"] = True
+    result["cost"] = cost
 
 
 def _include_failed_attempt_usage(
@@ -107,7 +131,9 @@ def _include_failed_attempt_usage(
     if not repaired or delta.get("type") != "usage":
         return delta
     result = dict(delta)
-    result["last_request_usage"] = {key: delta[key] for key in _USAGE_TOTAL_FIELDS if key in delta}
+    result["last_request_usage"] = {
+        key: delta[key] for key in (*_USAGE_TOTAL_FIELDS, "cost") if key in delta
+    }
     if failed is None:
         return result
     for key in _USAGE_TOTAL_FIELDS:
@@ -115,6 +141,8 @@ def _include_failed_attempt_usage(
         previous = failed.get(key)
         if isinstance(value, (int, float)) and isinstance(previous, (int, float)):
             result[key] = value + previous
+    if "cost" in delta or "reported_cost_usd" in delta:
+        _add_attempt_cost(result, [failed, delta])
     return result
 
 
@@ -424,14 +452,15 @@ async def stream_learning_from_rejections(
         try:
             first = await anext(stream)
             while isinstance(first, FailureUsageDelta):
-                failure_usage.append(dict(first))
                 last_attempt_usage.update(
-                    {key: first[key] for key in _USAGE_TOTAL_FIELDS if key in first}
+                    {key: first[key] for key in (*_USAGE_TOTAL_FIELDS, "cost") if key in first}
                 )
                 first = await anext(stream)
         except StopAsyncIteration:
             first = None
         except BaseException:
+            if last_attempt_usage:
+                failure_usage.append(last_attempt_usage)
             await stream.aclose()
             raise
         established.append(request)

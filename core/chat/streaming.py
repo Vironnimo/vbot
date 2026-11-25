@@ -859,7 +859,7 @@ class StreamingAccumulator:
         self._reasoning_meta = merge_reasoning_meta(self._reasoning_meta, reasoning_meta)
 
     def _add_usage(self, delta: JsonObject) -> None:
-        from core.models.pricing import nonnegative_amount
+        from core.models.pricing import nonnegative_amount, project_cost
 
         usage = dict(self._usage or {})
         primary_count = 0
@@ -872,7 +872,12 @@ class StreamingAccumulator:
             usage[token_key] = token_count
             primary_count += 1
         reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
-        if primary_count == 0 and reported_cost is None:
+        snapshot = project_cost(delta.get("cost"))
+        if snapshot is not None:
+            usage["cost"] = snapshot
+            if snapshot["source"] == "unknown" and reported_cost is None:
+                usage.pop("reported_cost_usd", None)
+        if primary_count == 0 and reported_cost is None and snapshot is None:
             raise StreamingDeltaError(
                 "usage delta must include a primary token count or reported cost"
             )
@@ -922,6 +927,8 @@ class StreamingAccumulator:
                         "last_request_usage reported_cost_usd must be non-negative"
                     )
                 last["reported_cost_usd"] = cost
+            if (last_cost := project_cost(final.get("cost"))) is not None:
+                last["cost"] = last_cost
             usage["last_request_usage"] = last
         self._usage = usage
 

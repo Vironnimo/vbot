@@ -79,7 +79,7 @@ class ResponsesStreamState:
     summary_sections: dict[tuple[int, int], tuple[int, StringIO]] = field(default_factory=dict)
     reasoning_meta: dict[str, Any] | None = None
     output_items_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
-    usage: dict[str, int] | None = None
+    usage: dict[str, Any] | None = None
     completed_response: dict[str, Any] | None = None
 
     def normalized_response(self) -> dict[str, Any]:

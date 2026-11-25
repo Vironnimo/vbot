@@ -21,7 +21,7 @@ from core.chat.wire_shaping import (
     _complete_usage_with_estimates,
     quote_external_value,
 )
-from core.models.pricing import TokenPricing, price_usage, project_cost
+from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
@@ -106,11 +106,7 @@ def _prepare_completed_assistant(
         estimated_input_tokens=estimated_input_tokens,
     )
     usage = dict(completed.usage or {})
-    supplied_cost = project_cost(usage.get("cost"))
-    cost = price_usage(usage, pricing)
-    if cost["source"] != "provider" and supplied_cost and supplied_cost["source"] == "provider":
-        cost = supplied_cost
-    completed = replace(completed, usage={**usage, "cost": cost})
+    completed = replace(completed, usage={**usage, "cost": price_usage(usage, pricing)})
     completed = complete_output_speed(completed)
     return _with_assistant_output_files(completed, scope=output_scope)
 

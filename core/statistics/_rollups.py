@@ -49,7 +49,7 @@ from typing import Any
 
 from core.runs import UNATTENDED_RUN_KINDS
 from core.statistics._measurements import SPEED_BASES
-from core.statistics._projection import MICROSECONDS_PER_HOUR
+from core.statistics._projection import COST_CATALOG, COST_PROVIDER_ESTIMATE, MICROSECONDS_PER_HOUR
 from core.statistics._rollup_schema import ROLLUP_SCHEMA as ROLLUP_SCHEMA
 from core.statistics._rollup_schema import ROLLUP_TABLES
 
@@ -449,6 +449,7 @@ USAGE_ORIGIN_SQL = f"""CASE WHEN u.owner_name <> '' THEN 'extension'
 FAILED_STATUS_SQL = "r.status NOT IN ('completed', 'started')"
 _HOUR = f"r.instant / {MICROSECONDS_PER_HOUR}"
 _NUSD = "CAST(ROUND(c.cost_usd * 1000000000) AS INTEGER)"
+_ESTIMATED_COST = f"c.cost_source IN ({COST_CATALOG}, {COST_PROVIDER_ESTIMATE})"
 # Catalog-priced calls that report usage but no cache counter.
 _UNCACHED = "(c.cost_source = 2 AND c.input_tokens IS NOT NULL AND c.has_cache = 0)"
 # The usage measures of ``agg_usage`` and ``agg_run_models`` rows, in report
@@ -469,6 +470,10 @@ USAGE_MEASURES = (
     "reported_calls",
     "estimated_nusd",
     "estimated_calls",
+    "list_nusd",
+    "list_calls",
+    "allowance_nusd",
+    "allowance_calls",
     "unpriced_calls",
     "retrospective_calls",
     "uncached_nusd",
@@ -509,8 +514,12 @@ _MEASURE_SQL = {
     "unreported_calls": "SUM(c.input_tokens IS NULL OR c.output_tokens IS NULL)",
     "reported_nusd": f"SUM(CASE WHEN c.cost_source = 1 THEN {_NUSD} ELSE 0 END)",
     "reported_calls": "SUM(c.cost_source = 1)",
-    "estimated_nusd": f"SUM(CASE WHEN c.cost_source = 2 THEN {_NUSD} ELSE 0 END)",
-    "estimated_calls": "SUM(c.cost_source = 2)",
+    "estimated_nusd": f"SUM(CASE WHEN {_ESTIMATED_COST} THEN {_NUSD} ELSE 0 END)",
+    "estimated_calls": f"SUM({_ESTIMATED_COST})",
+    "list_nusd": "COALESCE(SUM(CAST(ROUND(c.list_cost_usd * 1000000000) AS INTEGER)), 0)",
+    "list_calls": "COUNT(c.list_cost_usd)",
+    "allowance_nusd": "COALESCE(SUM(CAST(ROUND(c.allowance_usd * 1000000000) AS INTEGER)), 0)",
+    "allowance_calls": "COUNT(c.allowance_usd)",
     "unpriced_calls": "SUM(c.cost_source = 0)",
     "retrospective_calls": "SUM(c.cost_source = 2 AND c.retrospective = 1)",
     "uncached_nusd": f"SUM(CASE WHEN {_UNCACHED} THEN {_NUSD} ELSE 0 END)",
@@ -573,17 +582,21 @@ _RUN_MEASURES = (
     "cache_read_tokens",
     "cache_write_tokens",
     "reported_nusd",
+    "reported_calls",
     "estimated_nusd",
+    "estimated_calls",
+    "list_nusd",
+    "list_calls",
+    "allowance_nusd",
+    "allowance_calls",
     "unpriced_calls",
 )
 
 _RUN_COLUMNS = (
     "session_key, run_id, origin, run_kind, status, completion_reason, start_instant, "
     "end_instant, duration_ms, iterations, model_steps, visible_messages, user_messages, "
-    "first_visible_ms, tool_calls, tool_rejected, tool_ms, compactions, errors, calls, "
-    "failed_calls, input_tokens, estimated_input_tokens, output_tokens, "
-    "estimated_output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
-    "reported_nusd, estimated_nusd, unpriced_calls, "
+    "first_visible_ms, tool_calls, tool_rejected, tool_ms, compactions, errors, "
+    f"{', '.join(_RUN_MEASURES)}, "
     "primary_model, models, kinds, changed_files, lines_added, lines_removed"
 )
 

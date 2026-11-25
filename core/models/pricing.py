@@ -111,6 +111,29 @@ class TokenPricing:
         return {"source": self.source, "rates": rates}
 
 
+def billing_details(raw: Any) -> dict[str, Any]:
+    """Project optional billing evidence independently of the charged amount."""
+    if not isinstance(raw, Mapping):
+        return {}
+    result: dict[str, Any] = {}
+    for name in ("list_cost_usd", "allowance_usd"):
+        if (amount := nonnegative_amount(raw.get(name))) is not None:
+            result[name] = amount
+    if raw.get("billing_source") in ("free", "balance", "go", "go-plus", "byok", "mixed"):
+        result["billing_source"] = raw["billing_source"]
+    if raw.get("estimated") is True:
+        result["estimated"] = True
+    return result
+
+
+def provider_cost_evidence(cost: Mapping[str, Any] | None) -> bool:
+    """A gateway may report who pays even when it cannot price the request."""
+    return cost is not None and (
+        cost.get("source") == "provider"
+        or (cost.get("source") == "unknown" and bool(billing_details(cost)))
+    )
+
+
 def project_cost(raw: Any) -> dict[str, Any] | None:
     """Retain only validated accounting fields in derived projections."""
     if not isinstance(raw, Mapping):
@@ -133,8 +156,9 @@ def project_cost(raw: Any) -> dict[str, Any] | None:
             "amount_usd": None,
             "source": "unknown",
             "reason": reason,
+            **billing_details(raw),
         }
-    result: dict[str, Any] = {"amount_usd": amount, "source": source}
+    result: dict[str, Any] = {"amount_usd": amount, "source": source, **billing_details(raw)}
     pricing = TokenPricing.from_dict(raw.get("pricing"))
     if source == "catalog":
         result["estimated_tokens"] = bool(raw.get("estimated_tokens", False))
@@ -147,10 +171,14 @@ def price_usage(usage: Mapping[str, Any] | None, pricing: TokenPricing | None) -
     """Snapshot a cost for one canonical Usage; never sum request tiers first."""
     usage = usage or {}
     reported = nonnegative_amount(usage.get("reported_cost_usd"))
+    supplied = project_cost(usage.get("cost"))
+    details = billing_details(supplied)
     if reported is not None:
-        return {"amount_usd": reported, "source": "provider"}
+        return {"amount_usd": reported, "source": "provider", **details}
+    if supplied and provider_cost_evidence(supplied):
+        return supplied
 
-    unknown: dict[str, Any] = {"amount_usd": None, "source": "unknown"}
+    unknown: dict[str, Any] = {"amount_usd": None, "source": "unknown", **details}
     input_tokens = _count(usage.get("input_tokens"))
     output_tokens = _count(usage.get("output_tokens"))
     if input_tokens is None or output_tokens is None:
@@ -196,4 +224,5 @@ def price_usage(usage: Mapping[str, Any] | None, pricing: TokenPricing | None) -
         "source": "catalog",
         "pricing": pricing.to_dict(),
         "estimated_tokens": estimated,
+        **details,
     }

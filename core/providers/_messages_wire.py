@@ -15,6 +15,7 @@ from core.providers._messages_constants import (
     TEXT_BLOCK_TYPE,
     THINKING_BLOCK_TYPE,
 )
+from core.providers._opencode_usage import opencode_usage
 from core.providers.adapter import (
     canonical_tool_result_is_error,
     normalize_tool_call_candidates,
@@ -262,6 +263,26 @@ def _is_supported_reasoning_block(block: Any) -> bool:
     return block.get("type") in (THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE)
 
 
+def apply_messages_response_format(payload: dict[str, Any]) -> None:
+    """Move a requested JSON schema into the native Messages output configuration."""
+    value = payload.pop("response_format", None)
+    if value is None or (isinstance(value, Mapping) and value.get("type") == "text"):
+        return
+    if not isinstance(value, Mapping) or value.get("type") != "json_schema":
+        raise ProviderError("Messages structured output requires a JSON schema", retryable=False)
+    descriptor = value.get("json_schema", value)
+    schema = descriptor.get("schema") if isinstance(descriptor, Mapping) else None
+    if not isinstance(schema, Mapping):
+        raise ProviderError("Messages json_schema requires an object schema", retryable=False)
+    output_config = payload.setdefault("output_config", {})
+    if not isinstance(output_config, dict):
+        raise ProviderError("Messages output_config must be an object", retryable=False)
+    payload["output_config"] = {
+        **output_config,
+        "format": {"type": "json_schema", "schema": dict(schema)},
+    }
+
+
 def _apply_anthropic_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
@@ -427,7 +448,7 @@ def extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     usage = response.get("usage")
     if not isinstance(usage, dict):
         return None
-    normalized: dict[str, Any] = {}
+    normalized = opencode_usage(usage)
     for key in ("input_tokens", "output_tokens"):
         count = usage.get(key)
         if isinstance(count, int) and not isinstance(count, bool) and count >= 0:

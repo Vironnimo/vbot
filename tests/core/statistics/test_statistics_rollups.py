@@ -768,6 +768,8 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
     assert (run["changed_files"], run["lines_added"], run["lines_removed"]) == (2, 10, 4)
     requests = {key: run[key] for key in list(run)[21:]}
     del requests["changed_files"], requests["lines_added"], requests["lines_removed"]
+    for measure in ("list_nusd", "list_calls", "allowance_nusd", "allowance_calls"):
+        assert requests.pop(measure) == 0
     if source == "saved":
         assert requests == {
             "input_tokens": 130,
@@ -778,8 +780,10 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "cache_read_tokens": 6,
             "cache_write_tokens": 0,
             "reported_nusd": 250_000_000,
+            "reported_calls": 1,
             # b/model's 110 tokens at $1 per million.
             "estimated_nusd": 110_000,
+            "estimated_calls": 1,
             "unpriced_calls": 0,
             "primary_model": "b/model",
             "models": '["b/model","a/model"]',
@@ -796,7 +800,9 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "cache_read_tokens": 0,
             "cache_write_tokens": 0,
             "reported_nusd": 1_500_000_000,
+            "reported_calls": 1,
             "estimated_nusd": 0,
+            "estimated_calls": 0,
             "unpriced_calls": 2,
             "primary_model": "c/model",
             "models": '["c/model","d/model"]',
@@ -818,7 +824,16 @@ async def test_money_sums_are_exact_nano_usd(
     for amount in amounts:
         await _call(
             ledger,
-            {"input_tokens": 1, "output_tokens": 1, "reported_cost_usd": amount},
+            {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "cost": {
+                    "source": "provider",
+                    "amount_usd": amount,
+                    "list_cost_usd": amount,
+                    "allowance_usd": amount,
+                },
+            },
             address=session.address,
             run_id="run",
         )
@@ -827,9 +842,10 @@ async def test_money_sums_are_exact_nano_usd(
 
     # Each amount rounds to whole nano-USD before summing.
     (usage,) = rows["agg_usage"]
-    assert usage["reported_nusd"] == 600_000_003
-    assert usage["reported_calls"] == 5
-    assert _runs(rows)[("session", "run")]["reported_nusd"] == 600_000_003
+    for row in (usage, _runs(rows)[("session", "run")]):
+        for measure in ("reported", "list", "allowance"):
+            assert row[f"{measure}_nusd"] == 600_000_003
+            assert row[f"{measure}_calls"] == 5
 
 
 _SESSION_JOIN = re.compile(r"\bstat_sessions s ON s\.generation_id\b")

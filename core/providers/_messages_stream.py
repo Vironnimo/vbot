@@ -20,6 +20,7 @@ from core.providers._messages_wire import (
     _is_supported_reasoning_block,
     apply_anthropic_reasoning_usage,
 )
+from core.providers._opencode_usage import opencode_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
     TERMINAL_OUTCOME_ERROR,
@@ -140,7 +141,7 @@ class AnthropicMessagesStreamDecoder:
             self._usage.update({key: value for key, value in usage.items() if value is not None})
 
     def _usage_delta(self, *, include_output: bool) -> list[dict[str, Any]]:
-        normalized: dict[str, Any] = {"type": "usage"}
+        normalized = opencode_usage(self._usage)
         input_usage = _extract_anthropic_stream_input_usage(self._usage)
         if input_usage is not None:
             normalized.update(input_usage)
@@ -153,9 +154,7 @@ class AnthropicMessagesStreamDecoder:
         ):
             normalized["output_tokens"] = output_tokens
             apply_anthropic_reasoning_usage(normalized, self._usage)
-        if "input_tokens" not in normalized and "output_tokens" not in normalized:
-            return []
-        return [normalized]
+        return [{"type": "usage", **normalized}] if normalized else []
 
     def _normalize_content_block_start(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         index = self._stream_index(event)

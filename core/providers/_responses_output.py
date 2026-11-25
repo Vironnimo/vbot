@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from core.providers._opencode_usage import opencode_usage
 from core.providers._responses_values import (
     RESPONSES_RESPONSE_OUTPUT_META_KEY,
     _function_call_arguments,
@@ -182,12 +183,12 @@ def _assistant_phase_from_output(output_items: list[Mapping[str, Any]]) -> str |
     return None
 
 
-def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
+def _extract_responses_usage(usage: Any) -> dict[str, Any] | None:
     if not isinstance(usage, Mapping):
         return None
     input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
-    normalized: dict[str, int] = {}
+    normalized = opencode_usage(usage)
     for field_name, value in (("input_tokens", input_tokens), ("output_tokens", output_tokens)):
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             normalized[field_name] = value

@@ -21,6 +21,7 @@ from core.model_tasks.image_types import (
 )
 from core.providers._gemini_wire import _gemini_finish_reason, _normalize_gemini_usage
 from core.providers._opencode_catalog import opencode_api_base
+from core.providers._opencode_usage import opencode_usage
 from core.providers.adapter import TERMINAL_OUTCOME_CONTENT_FILTERED
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.http import parse_sse_json_data, split_stream_lines
@@ -142,6 +143,17 @@ _OPENAI_CODEX_IMAGE_PROMPT_HINT_KEYS: tuple[str, ...] = ("size", "quality", "bac
 # Option name owned by the option-schema layer that is never forwarded as a
 # literal request field: it maps to the nested ``provider.options`` object.
 _PROVIDER_OPTIONS_KEY = "provider_options"
+
+
+def _image_usage(payload: Mapping[str, Any]) -> JsonObject | None:
+    """Images can report billing beside, or inside, their native token usage."""
+    raw = payload.get("usage")
+    if isinstance(raw, Mapping):
+        usage = {**raw, **opencode_usage(raw)}
+    else:
+        usage = _normalize_gemini_usage(payload.get("usageMetadata")) or {}
+    usage.update(opencode_usage(payload))
+    return usage or None
 
 
 class ProviderImageClient(ProviderTaskClient):
@@ -374,14 +386,12 @@ class ProviderImageClient(ProviderTaskClient):
 
     @override
     async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
-        if self._provider.adapter == "google":
+        if self._provider.adapter == "google" or self._provider.id == "opencode-zen":
             try:
                 payload = response.json()
             except ValueError, UnicodeError:
                 return None
-            return _normalize_gemini_usage(
-                payload.get("usageMetadata") if isinstance(payload, Mapping) else None
-            )
+            return _image_usage(payload) if isinstance(payload, Mapping) else None
         if self._connection.mode != CODEX_RESPONSES_MODE:
             return await super()._observe_response_usage(response)
         completed: Mapping[str, Any] | None = None
@@ -545,7 +555,7 @@ def _parse_google_image_response(payload: Any, *, model: str) -> ImageGeneration
         elif isinstance(part.get("text"), str):
             texts.append(part["text"])
     finish = candidate.get("finishReason")
-    usage = _normalize_gemini_usage(payload.get("usageMetadata"))
+    usage = _image_usage(payload)
     raw: JsonObject = {
         key: payload[key]
         for key in ("modelVersion", "responseId", "usageMetadata")
@@ -808,11 +818,10 @@ def _parse_unified_image_response(
             retryable=True,
         )
 
-    usage = payload.get("usage")
     return ImageGenerationResult(
         images=images,
         model=model,
-        usage=usage if isinstance(usage, dict) else None,
+        usage=_image_usage(payload),
         raw=payload,
         failures=failures,
     )
@@ -991,6 +1000,7 @@ def _parse_openai_image_response(
     return ImageGenerationResult(
         images=images,
         model=model,
+        usage=_image_usage(payload),
         raw=payload,
         failures=failures,
     )

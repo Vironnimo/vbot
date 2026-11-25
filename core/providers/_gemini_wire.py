@@ -7,6 +7,7 @@ import json
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
+from core.providers._opencode_usage import opencode_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
     TERMINAL_OUTCOME_ERROR,
@@ -410,14 +411,14 @@ class GeminiStreamDecoder:
         }
 
 
-def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
+def _normalize_gemini_usage(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, Mapping):
         return None
     input_tokens = _nonnegative_int(raw.get("promptTokenCount"))
     visible_output = _nonnegative_int(raw.get("candidatesTokenCount"))
     reasoning_tokens = _nonnegative_int(raw.get("thoughtsTokenCount"))
     cache_read = _nonnegative_int(raw.get("cachedContentTokenCount", 0))
-    usage = {}
+    usage = opencode_usage(raw)
     if input_tokens is not None:
         usage["input_tokens"] = input_tokens
     # Thoughts count separately from candidates, and Gemini omits a zero
@@ -504,7 +505,7 @@ def _apply_gemini_response_format(generation: dict[str, Any], value: Any) -> Non
         generation["responseMimeType"] = "application/json"
         return
     if format_type == "json_schema":
-        json_schema = value.get("json_schema")
+        json_schema = value.get("json_schema", value)
         schema = json_schema.get("schema") if isinstance(json_schema, Mapping) else None
         if not isinstance(schema, Mapping):
             raise ProviderError("Gemini json_schema requires an object schema", retryable=False)
