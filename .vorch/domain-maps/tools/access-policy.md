@@ -23,7 +23,7 @@ Configurable Tools may declare `requires_opt_in=True`. They require an explicit 
 
 A retired Tool name such as `search_files` is an ordinary unknown name in a persisted Tool policy. The policy keeps its selection mode and grants access only to registered Tools. An old search-only selection grants no shell access. `edit` and `write` are registered again as followers of `apply_patch` (`tools/edit.md`): a persisted `denied` entry vetoes one, and an `allowed` entry grants nothing without `apply_patch`.
 
-For a config (Project) Agent, no Project ceiling applies: how its repository definition, the Default Profile Tools and a vBot override make its policy is in `projects/resolution.md` -> Effective Capabilities.
+For a config (Project) Agent, no Project ceiling applies: how its repository definition, the shared default Tool access and a vBot override make its policy is in `projects/resolution.md` -> Effective Capabilities.
 
 ## Readiness
 

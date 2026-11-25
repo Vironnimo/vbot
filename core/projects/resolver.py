@@ -54,6 +54,7 @@ from core.projects._resolution_values import (
     inherited_permission_rules,
     permission_rules_source,
     resolve_permission_rules,
+    tool_selection,
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -84,6 +85,7 @@ from core.projects.sources import (
 )
 from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
+from core.tools.availability import ToolAccess, normalize_tool_access
 from core.tools.tool_loading import complete_tool_loading, inherit_tool_loading
 
 if TYPE_CHECKING:
@@ -697,7 +699,9 @@ class AgentResolver:
         resolved_temperature = _resolve_sampling("temperature", scanned, project, global_defaults)
         resolved_top_p = _resolve_sampling("top_p", scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
-        tool_access = _project_agent_tool_access(project, scanned)
+        tool_access = _project_agent_tool_access(
+            project, scanned, self.default_tool_access(defaults=global_defaults)
+        )
         allowed_skills = effective_project_allowed_skills(
             project, self._project_skill_names(project_id)
         )
@@ -821,9 +825,22 @@ class AgentResolver:
             repository=member.permission_rules if member is not None else None,
         )
 
+    def default_tool_access(self, *, defaults: AgentDefaults | None = None) -> ToolAccess:
+        """Return the Tools of a Team member whose repository definition names none.
+
+        The shared default ``defaults.agent.tool_access`` (vBot's working set while
+        the user sets none) as a selection, read on every resolution like every
+        other inherited field: ``all`` selects every registered Tool and ``none``
+        nothing. Its denials stay, so a denied Tool's followers stay off too.
+        """
+        access = normalize_tool_access((defaults or self.agent_defaults()).tool_access)
+        return ToolAccess(
+            mode="selected", allowed=tool_selection(access, self._tool_names), denied=access.denied
+        )
+
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
-        tool_access = _project_agent_tool_access(project, member)
+        tool_access = _project_agent_tool_access(project, member, self.default_tool_access())
         allowed_agents = _effective_allowed_agents(
             member, self._team_resolution._project_team(project)
         )
@@ -912,7 +929,9 @@ class AgentResolver:
             ),
             "top_p": _config_sampling_source("top_p", project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
-            "tool_access": _config_tool_access_source(project, scanned),
+            "tool_access": _config_tool_access_source(
+                project, scanned, self.default_tool_access(defaults=global_defaults)
+            ),
             "project_memory_enabled": {
                 "value": project.overrides.get(scanned.agent_id, {}).get(
                     "project_memory_enabled", True

@@ -32,7 +32,7 @@ Every explicit edit target is preflighted together before any file change.
   (`ToolAccess.fixed`) with `apply_patch` gets them as well. A persisted `denied: ["edit"]` still vetoes `edit`; the route then
   keeps `apply_patch` (`offer_edit_dialect`). Coverage:
   `test_edit_tools.py::test_edit_and_write_are_available_exactly_when_apply_patch_is`,
-  `test_resolver_config_agent.py` (not in `DEFAULT_PROFILE_TOOLS`).
+  `test_resolver_config_agent.py`.
 - **Dialect helpers** (exported from `core.tools`): `edit_dialect(family)` returns
   `patch` for a casefolded family that starts with `gpt` (not `gpt-oss`), equals
   `o` or starts with `o-`, else `replace` (an unknown family included).

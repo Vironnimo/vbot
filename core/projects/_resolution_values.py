@@ -28,44 +28,90 @@ from core.settings.agent_defaults import InvalidPermissionRulesDefaultError
 from core.skills import WILDCARD_ALLOWLIST
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Any
 
     from core.projects.projects import Project
     from core.tools.availability import ToolAccess
 
 
-def _project_agent_tool_access(
-    project: Project, scanned: AgentProfile, ceiling: tuple[str, ...] | None = None
-) -> ToolAccess:
-    """Return the Tool policy of one Team member, or of a temporary participant.
+def tool_selection(
+    access: ToolAccess, every_tool: Callable[[], tuple[str, ...]]
+) -> tuple[str, ...]:
+    """Return the Tool names ``access`` selects: ``all`` is every registered Tool."""
 
-    A vBot override replaces the repository-scanned Tool policy. A Team member
-    has no ceiling: without an override it starts from its Profile's Tools. A
-    temporary participant passes its owner's selection as ``ceiling``, which
-    bounds the override (``all`` becomes that selection) and the Profile alike.
-    """
+    if access.mode == "selected":
+        names = access.allowed
+    else:
+        names = every_tool() if access.mode == "all" else ()
+    return tuple(name for name in names if name not in access.denied)
+
+
+def _override_tool_access(
+    project: Project, scanned: AgentProfile, ceiling: tuple[str, ...] | None
+) -> ToolAccess | None:
+    """Return the vBot override's Tool policy, bounded by ``ceiling`` when given."""
 
     from core.tools.availability import ToolAccess, normalize_tool_access
 
     raw_override = project.overrides.get(scanned.agent_id, {}).get("tool_access")
-    if raw_override is not None:
-        override = normalize_tool_access(raw_override)
-        if ceiling is None or override.mode == "none":
-            return override
-        if override.mode == "all":
-            return ToolAccess(
-                mode="selected",
-                allowed=ceiling,
-                denied=override.denied,
-                granted=override.granted,
-            )
-        return replace(
-            override, allowed=tuple(name for name in override.allowed if name in ceiling)
+    if raw_override is None:
+        return None
+    override = normalize_tool_access(raw_override)
+    if ceiling is None or override.mode == "none":
+        return override
+    if override.mode == "all":
+        return ToolAccess(
+            mode="selected",
+            allowed=ceiling,
+            denied=override.denied,
+            granted=override.granted,
         )
+    return replace(override, allowed=tuple(name for name in override.allowed if name in ceiling))
 
+
+def _project_agent_tool_access(
+    project: Project, scanned: AgentProfile, inherited: ToolAccess
+) -> ToolAccess:
+    """Return the Tool policy of one Team member.
+
+    A vBot override replaces the repository-scanned Tool policy. Without one the
+    member starts from its Profile's Tools, or from ``inherited`` when its
+    definition names none: the shared default Tool access as a selection
+    (``AgentResolver.default_tool_access``), with its denials.
+    """
+
+    from core.tools.availability import ToolAccess
+
+    override = _override_tool_access(project, scanned, None)
+    if override is not None:
+        return override
     if scanned.unavailable_reason:
         return ToolAccess(mode="none")
-    return profile_tool_access(scanned, scanned.tools if ceiling is None else ceiling)
+    if scanned.allowed_tools is not None:
+        return profile_tool_access(scanned, tuple(sorted(scanned.allowed_tools)))
+    access = profile_tool_access(scanned, inherited.allowed)
+    return replace(access, denied=tuple(sorted({*access.denied, *inherited.denied})))
+
+
+def _participant_tool_access(
+    project: Project, scanned: AgentProfile, ceiling: tuple[str, ...]
+) -> ToolAccess:
+    """Return the Tool policy of a temporary participant using a Team member's Profile.
+
+    The owner's selection is the ``ceiling``: it bounds a vBot override (``all``
+    becomes that selection) and the Profile alike, and takes the place of the
+    shared default Tool access for a Profile without a Tool list.
+    """
+
+    from core.tools.availability import ToolAccess
+
+    override = _override_tool_access(project, scanned, ceiling)
+    if override is not None:
+        return override
+    if scanned.unavailable_reason:
+        return ToolAccess(mode="none")
+    return profile_tool_access(scanned, ceiling)
 
 
 def profile_tool_access(scanned: AgentProfile, selection: tuple[str, ...]) -> ToolAccess:
@@ -341,7 +387,9 @@ def _global_default_thinking_effort(global_defaults: AgentDefaults) -> str | Non
     return value if isinstance(value, str) else None
 
 
-def _config_tool_access_source(project: Project, scanned: AgentProfile) -> dict[str, Any]:
+def _config_tool_access_source(
+    project: Project, scanned: AgentProfile, inherited: ToolAccess
+) -> dict[str, Any]:
     """Return the editable Project Agent Tool policy and its winning source."""
 
     from core.tools.availability import normalize_tool_access
@@ -352,7 +400,7 @@ def _config_tool_access_source(project: Project, scanned: AgentProfile) -> dict[
             "value": normalize_tool_access(raw_override).to_dict(),
             "source": "override",
         }
-    policy = _project_agent_tool_access(project, scanned)
+    policy = _project_agent_tool_access(project, scanned, inherited)
     return {"value": policy.to_dict(), "source": "agent"}
 
 

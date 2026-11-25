@@ -16,7 +16,6 @@ from core.projects.resolver import (
     AgentResolver,
     ModelConfigurationChecker,
 )
-from core.projects.sources import DEFAULT_PROFILE_TOOLS
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
@@ -208,11 +207,20 @@ def _make_state(
         # ``::connection`` suffix (never in these tests), but expose it so a plain
         # model override never trips an AttributeError.
         models=_FakeModels({("openai", "gpt-5.2"), ("openai", "gpt-mini")}),
-        # Mirrors tool.list's registered normal catalog. ``memory`` and
-        # ``skill_manage`` are registered but intentionally not Project-eligible.
+        # Mirrors part of tool.list's registered normal catalog.
         tools=_FakeTools(
             {
-                *DEFAULT_PROFILE_TOOLS,
+                "read",
+                "apply_patch",
+                "bash",
+                "terminal",
+                "web_fetch",
+                "web_search",
+                "subagent",
+                "skill",
+                "status",
+                "show_widget",
+                "portal",
                 "memory",
                 "skill_manage",
             }

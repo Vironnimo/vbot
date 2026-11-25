@@ -477,10 +477,30 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     legacy_config = json.loads(legacy_path.read_bytes())
     del legacy_config["created_at"]
     legacy_path.write_text(json.dumps(legacy_config), encoding="utf-8")
+    runtime.storage.update_settings_sections(
+        {
+            "defaults": {
+                "agent": {
+                    "tool_access": {
+                        "mode": "selected",
+                        "allowed": ["read", "uninstalled_tool"],
+                        "denied": ["bash"],
+                    },
+                    "allowed_skills": ["global-skill"],
+                }
+            }
+        }
+    )
 
     catalog = await host.catalog()
 
     assert {"restricted", "full_access"} <= set(catalog["permission_profiles"])
+    # What an Agent without its own Tool access or Skills inherits, read live;
+    # a Tool no longer registered is left out.
+    assert catalog["agent_defaults"] == {
+        "tool_access": {"mode": "selected", "allowed": ["read"], "denied": ["bash"]},
+        "allowed_skills": ["global-skill"],
+    }
     assert catalog["projects"] == [
         {
             "id": "project-a",
