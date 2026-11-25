@@ -301,8 +301,11 @@ than waiting for an answer.
   to `ExternalScriptInfo`. Observation stores call frames, the prior
   `$LASTEXITCODE` object and newest `$Error`; a failed observer discards its
   evidence and cannot prevent the original host notification or user execution.
-  The frame walk rejects later executed statements, later named blocks and
-  `finally` work. Merely assigning `$LASTEXITCODE`, or code that never ran, is not
+  The frame walk accounts for later executed statements, named blocks and
+  `finally` work even after a bare `return`. A failed native command on the
+  left of `&&` can supply its code when it short-circuits directly. A function
+  wrapping that command can succeed and run the right side, so the caller
+  uses PowerShell's observed status for that chain. Merely assigning `$LASTEXITCODE`, or code that never ran, is not
   a program exit. A matching `NativeCommandExitException` from
   `$PSNativeCommandUseErrorActionPreference` preserves the native code, including when
   `$ErrorActionPreference = 'Stop'` terminates the command at that error;
