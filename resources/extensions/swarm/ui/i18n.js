@@ -287,6 +287,9 @@ export default Object.freeze({
     'Applies to every participant. Select all turns on the Tools available now; Tools added later stay off.',
   'swarm.profile.skillsHeading': 'Skills',
   'swarm.profile.skillsHelp': 'Skills every participant may load.',
+  'swarm.profile.followsSharedDefault':
+    'Follows the shared default for Agents until you change it here.',
+  'swarm.profile.useSharedDefault': 'Use shared default',
   'swarm.profile.skillGroup': 'Installed Skills',
   'swarm.profile.noSkills': 'No Skills are installed.',
   'swarm.profile.communication': 'Communication',

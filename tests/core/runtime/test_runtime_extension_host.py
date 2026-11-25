@@ -387,8 +387,12 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
         "prompt_blocks": [],
         "delivery": {route: {"mode": "all"} for route in ("main", "discussion", "ping")},
     }
+    assert host.catalog is not None
     config = _participant_config(
-        profile, {"ordinal": 1, "model": "fixture/model", "display_name": "Reviewer"}, tmp_path
+        profile,
+        {"ordinal": 1, "model": "fixture/model", "display_name": "Reviewer"},
+        tmp_path,
+        await host.catalog(),
     )
     assert host.inspect_prompt is not None
     preview = await host.inspect_prompt(replace(config, prompt_blocks=None), "repo")

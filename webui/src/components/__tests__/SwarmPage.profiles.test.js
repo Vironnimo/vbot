@@ -244,6 +244,10 @@ describe('Swarm profile settings', () => {
       include_files: false,
       prefix: 'w',
     });
+    // A new Swarm shows the shared defaults and saves none of its own.
+    const tool = (name) => document.querySelector(`[data-tool-name="${name}"]`);
+    expect(tool('read').getAttribute('aria-checked')).toBe('true');
+    expect(tool('write').getAttribute('aria-checked')).toBe('false');
     button(CREATE_SWARM).click();
     await settle(20);
     expect(document.body.textContent).not.toContain(
@@ -263,6 +267,8 @@ describe('Swarm profile settings', () => {
         }),
       }),
     );
+    expect(lastSaved(operation)).not.toHaveProperty('tool_access');
+    expect(lastSaved(operation)).not.toHaveProperty('allowed_skills');
     await reopenEditor(bridge);
     expect(document.getElementById('swarm-instructions').value).toBe(prompt);
   });
@@ -347,6 +353,13 @@ describe('Swarm profile settings', () => {
       mode: 'selected',
       allowed: [],
     });
+    await settle();
+    button(t('swarm.profile.useSharedDefault')).click();
+    await tick();
+    saveButton().click();
+    await tick();
+    await tick();
+    expect(lastSaved(operation)).not.toHaveProperty('tool_access');
   });
 
   it('shows and saves each private Swarm Tool independently', async () => {

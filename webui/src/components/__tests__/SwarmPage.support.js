@@ -177,6 +177,10 @@ function createBridge(initialProfile = profile, detail = swarm) {
             { name: 'write' },
             { name: 'browser', requires_opt_in: true },
           ],
+          agent_defaults: {
+            tool_access: { mode: 'selected', allowed: ['read'] },
+            allowed_skills: ['*'],
+          },
           projects: [{ id: 'project-a', name: 'Project A', cwd: 'C:/project' }],
         },
       });

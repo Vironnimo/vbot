@@ -201,7 +201,7 @@ class SwarmManagement:
         }
         return {
             "preview": await host.inspect_prompt(
-                _participant_config(profile, participant, cwd), project_id
+                _participant_config(profile, participant, cwd, catalog), project_id
             )
         }
 

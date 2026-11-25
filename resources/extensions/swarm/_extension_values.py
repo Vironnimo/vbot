@@ -155,7 +155,15 @@ def _validate_permission_profiles(selections: list[tuple[str, Any]], catalog: Js
             raise SwarmStoreError("permission_profile_unavailable", field=field)
 
 
-def _participant_config(profile: Json, participant: Json, cwd: Path) -> TemporaryAgentConfig:
+def _participant_config(
+    profile: Json, participant: Json, cwd: Path, catalog: Json
+) -> TemporaryAgentConfig:
+    """Return one participant's configuration when its Session is created.
+
+    A profile without its own Tool access or Skills takes what an Agent inherits
+    from the shared defaults now (``catalog["agent_defaults"]``); the profile keeps
+    inheriting, so later participants follow changes to the defaults.
+    """
     ordinal = participant["ordinal"]
     formation = next(
         item for item in profile["participants"] if (ordinal := ordinal - item["count"]) <= 0
@@ -168,8 +176,10 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         and not formation.get("permission_profile"),
         permission_ceiling_profile=profile.get("permission_ceiling_profile"),
         cwd=cwd,
-        tool_access=normalize_tool_access(_tool_access(profile)),
-        allowed_skills=profile["allowed_skills"],
+        tool_access=normalize_tool_access(_tool_access(profile, catalog)),
+        allowed_skills=profile["allowed_skills"]
+        if "allowed_skills" in profile
+        else catalog["agent_defaults"]["allowed_skills"],
         tools=profile["tools"],
         name=participant["display_name"],
         temperature=formation.get("temperature"),
@@ -188,14 +198,22 @@ def _reminder(swarm: Json, event: str) -> str:
     return REMINDER_TEXTS[event] if enabled else ""
 
 
-def _tool_access(profile: Json) -> Json:
+def _tool_access(profile: Json, catalog: Json) -> Json:
     """Return the profile's Tool access, without swarm_inbox when it cannot help.
 
-    When every route delivers automatically, pending messages reach the Agent
-    before its next request anyway; the Inbox would only add round trips.
+    A profile without its own takes the inherited shared default. When every
+    route delivers automatically, pending messages reach the Agent before its
+    next request anyway; the Inbox would only add round trips.
     """
 
-    access = dict(profile["tool_access"])
+    if "tool_access" in profile:
+        access = dict(profile["tool_access"])
+    else:
+        access = dict(catalog["agent_defaults"]["tool_access"])
+        # Mode none would also switch off the Swarm's own Tools, which the
+        # profile controls by denial; inherit it as no ordinary Tools instead.
+        if access["mode"] == "none":
+            access = {**access, "mode": "selected", "allowed": []}
     delivery = profile["delivery"]
     if all(delivery[route]["mode"] == "all" for route in ("main", "discussion", "ping")):
         denied = list(access.get("denied", []))

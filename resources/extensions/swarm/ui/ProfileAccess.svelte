@@ -5,7 +5,12 @@
   // names the allowed Skills otherwise. A change keeps saved names of the
   // chosen Project's own Skills, which the list does not show, but drops names
   // of Skills that no longer exist: the list cannot show them either.
+  // Without its own `tool_access` or `allowed_skills` a Swarm follows the
+  // shared defaults for Agents (`catalog.agent_defaults`), read when each
+  // participant starts. The sections then show that value; a change saves the
+  // Swarm's own, and "Use shared default" removes it again.
   import { SvelteSet } from 'svelte/reactivity';
+  import Button from '@vbot/extension-sdk/ui/Button.svelte';
   import PermissionProfileSelect from '@vbot/extension-sdk/ui/PermissionProfileSelect.svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import SkillSelectionPanel from '@vbot/extension-sdk/ui/SkillSelectionPanel.svelte';
@@ -15,6 +20,22 @@
   let { draft = $bindable(), catalog = {} } = $props();
 
   let skillQuery = $state('');
+
+  const inherited = $derived(catalog.agent_defaults ?? {});
+  const toolAccess = $derived(
+    draft.tool_access ?? inheritedToolAccess(inherited.tool_access),
+  );
+  const allowedSkills = $derived(
+    draft.allowed_skills ?? inherited.allowed_skills ?? ['*'],
+  );
+
+  // Mode none would also switch off the Swarm's own Tools; participants
+  // inherit it as no ordinary Tools instead (`_tool_access` in the backend).
+  function inheritedToolAccess(access = { mode: 'selected', allowed: [] }) {
+    return access.mode === 'none'
+      ? { ...access, mode: 'selected', allowed: [] }
+      : access;
+  }
 
   const tools = $derived(
     (catalog.tools ?? []).filter(
@@ -29,12 +50,12 @@
       (project) => project.id === draft.working_directory?.project_id,
     )?.allowed_skills ?? [],
   );
-  const everySkill = $derived(draft.allowed_skills.includes('*'));
+  const everySkill = $derived(allowedSkills.includes('*'));
   const skillItems = $derived(
     (catalog.skills ?? []).map((skill) => ({
       key: skill.name,
       name: skill.name,
-      allowed: everySkill || draft.allowed_skills.includes(skill.name),
+      allowed: everySkill || allowedSkills.includes(skill.name),
       detail: skill.description || '',
     })),
   );
@@ -74,9 +95,7 @@
     if (everySkill && allowed) return;
     const known = new Set([...skillNames, ...projectSkillNames]);
     const next = new SvelteSet(
-      everySkill
-        ? skillNames
-        : draft.allowed_skills.filter((name) => known.has(name)),
+      everySkill ? skillNames : allowedSkills.filter((name) => known.has(name)),
     );
     for (const name of names) {
       if (allowed) next.add(name);
@@ -128,11 +147,17 @@
     </h3>
   </header>
   <p class="s-section__desc">{t('swarm.profile.toolSelectionHelp')}</p>
+  {#if draft.tool_access === undefined}
+    <p class="s-section__desc">{t('swarm.profile.followsSharedDefault')}</p>
+  {/if}
   <div class="s-section__body">
     <ToolAccessEditor
-      value={draft.tool_access}
+      value={toolAccess}
       memoryPromptMode="off"
       {tools}
+      showReset={draft.tool_access !== undefined}
+      resetLabel={t('swarm.profile.useSharedDefault')}
+      onReset={() => delete draft.tool_access}
       onChange={setToolAccess}
     />
   </div>
@@ -145,6 +170,9 @@
     </h3>
   </header>
   <p class="s-section__desc">{t('swarm.profile.skillsHelp')}</p>
+  {#if draft.allowed_skills === undefined}
+    <p class="s-section__desc">{t('swarm.profile.followsSharedDefault')}</p>
+  {/if}
   <div class="s-section__body">
     <SkillSelectionPanel
       groups={skillGroups}
@@ -158,5 +186,12 @@
       onSetAll={(_group, allowed) => setSkills(skillNames, allowed)}
       emptyTitle={t('swarm.profile.noSkills')}
     />
+    {#if draft.allowed_skills !== undefined}
+      <div>
+        <Button variant="tertiary" onClick={() => delete draft.allowed_skills}
+          >{t('swarm.profile.useSharedDefault')}</Button
+        >
+      </div>
+    {/if}
   </div>
 </section>

@@ -64,9 +64,7 @@
     name: '',
     participants: [{ model: '', count: 2, thinking_effort: '' }],
     working_directory: { kind: 'directory', path: '' },
-    tool_access: { mode: 'selected', allowed: [] },
     tools: {},
-    allowed_skills: ['*'],
     ...untrack(() => catalog.prompt_defaults),
     delivery: {
       main: { mode: 'all', wake_idle: true },
