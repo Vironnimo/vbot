@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Coroutine
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from core.channels.adapter import (
 from core.channels.config import ChannelError
 from core.chat.content_blocks import ContentBlock
 from core.chat.messages import MessageSender, ReplySurface
+from core.database import DatabaseUnavailableError
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -28,8 +30,9 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.utils.logging import get_logger
-from core.utils.retry import retry_async, sleep_for_retry
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.retry import MAX_RETRIES, compute_retry_delay, retry_async, sleep_for_retry
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -67,6 +70,7 @@ _UNANSWERED_TAP_UNAVAILABLE_REPLY = (
 )
 
 _LOGGER = get_logger("channels.engine")
+_retry_sleep = asyncio.sleep
 _APPROVAL_REPLY = (
     "This task is waiting for approval. Open the pending approval requests in vBot "
     "to allow or reject it."
@@ -201,7 +205,7 @@ class ChannelReplies:
         """Owe the Run's answer durably, wait for it, and send it once."""
         reply_id = await self._owe_run_reply(run, reply_plan, pending)
         reply = await self._await_run_reply(run, reply_plan)
-        await self._deliver((reply_id,), reply_plan, reply)
+        await self._deliver((reply_id,), reply_plan, reply, run_answer=True)
 
     async def relay_background(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         """Relay an admitted background Run with the normal Channel reply semantics.
@@ -211,7 +215,7 @@ class ChannelReplies:
         """
         reply_id = await self._owe_run_reply(run, reply_plan, None)
         reply = await self._await_run_reply(run, reply_plan)
-        if not self.spawn(self._deliver((reply_id,), reply_plan, reply)):
+        if not self.spawn(self._deliver((reply_id,), reply_plan, reply, run_answer=True)):
             _LOGGER.debug(
                 "Channel engine ended before a background reply; its next engine sends it "
                 "(channel=%s run=%s)",
@@ -265,6 +269,7 @@ class ChannelReplies:
         run_id: str | None,
         *,
         fallback: str | None = _INTERRUPTED_REPLY,
+        retry_unavailable: bool = False,
         status: str = "interrupted",
         reason: str | None = None,
     ) -> str | None:
@@ -280,6 +285,8 @@ class ChannelReplies:
             )
             messages = await session.load_run_messages_async(run_id)
         except Exception as error:
+            if retry_unavailable and isinstance(error, (DatabaseUnavailableError, OSError)):
+                raise
             _LOGGER.warning(
                 "Channel reply history unavailable (channel=%s run=%s): %s",
                 self._config.id,
@@ -411,13 +418,34 @@ class ChannelReplies:
     async def _resume_run_reply(self, reply: PendingReply) -> None:
         run_id = reply.run_id
         assert run_id is not None
+        if reply.retry_at:
+            delay = (datetime.fromisoformat(reply.retry_at) - datetime.now(UTC)).total_seconds()
+            if delay > 0:
+                await _retry_sleep(delay)
         run = self._trigger_service.running_run(run_id)
-        text = (
-            await self._await_run_reply(run, reply.reply_plan)
-            if run is not None
-            else await self._history_reply(reply.route, reply.run_id)
+        if run is not None:
+            text = await self._await_run_reply(run, reply.reply_plan)
+        else:
+            attempt = 0
+            while True:
+                try:
+                    text = await self._history_reply(
+                        reply.route, run_id, retry_unavailable=bool(reply.retry_at)
+                    )
+                    break
+                except DatabaseUnavailableError, OSError:
+                    if attempt == 0:
+                        _LOGGER.warning("Channel answer waits for Run history (run=%s)", run_id)
+                    delay, _ = compute_retry_delay(min(attempt, 6))
+                    await _retry_sleep(delay)
+                    attempt += 1
+        await self._deliver(
+            (reply.id,),
+            reply.reply_plan,
+            text,
+            run_answer=True,
+            attempt=MAX_RETRIES if reply.retry_at else 0,
         )
-        await self._deliver((reply.id,), reply.reply_plan, text)
 
     async def _resume_unanswered(self, replies: list[PendingReply]) -> None:
         """Reissue each interrupted tap's keyboard; group ordinary messages into one notice."""
@@ -450,9 +478,9 @@ class ChannelReplies:
                 tuple(reply.id for reply in messages), messages[-1].reply_plan, text
             )
 
-    async def _update_pending(self, update: Any, reply_id: str) -> bool:
+    async def _update_pending(self, update: Any, reply_id: str, *args: Any) -> bool:
         try:
-            await self._pending_replies.run_async(update, self._config.id, reply_id)
+            await self._pending_replies.run_async(update, self._config.id, reply_id, *args)
         except Exception as error:
             _LOGGER.warning(
                 "Channel owed reply not updated (channel=%s): %s",
@@ -472,9 +500,25 @@ class ChannelReplies:
             claimed: list[str] = []
             try:
                 for reply_id in recorded:
-                    if await self._pending_replies.run_async(
-                        self._pending_replies.claim_reply, self._config.id, reply_id
-                    ):
+                    task = asyncio.create_task(
+                        self._pending_replies.run_async(
+                            self._pending_replies.claim_reply, self._config.id, reply_id
+                        )
+                    )
+                    try:
+                        acquired = await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        # Even a cancelled worker call may have committed. No send has started.
+                        if await finish_despite_cancel(task):
+                            claimed.append(reply_id)
+                        for acquired_id in claimed:
+                            await finish_despite_cancel(
+                                self._update_pending(
+                                    self._pending_replies.release_reply, acquired_id
+                                )
+                            )
+                        raise
+                    if acquired:
                         claimed.append(reply_id)
             except Exception:
                 # No transport send began. Release the known claims of a
@@ -502,12 +546,14 @@ class ChannelReplies:
         text: str | None,
         *,
         buttons: list[list[InteractionButton]] | None = None,
+        run_answer: bool = False,
+        attempt: int = 0,
     ) -> None:
         """Send one reply at most once over the connected transport, then forget it.
 
         The send waits while the Channel is disconnected. A failure that shows the
         reply did not leave because the adapter went away waits for the next
-        connection; any other failure loses the reply, logged. A send cut off
+        connection. A durably owed Run answer also waits after a retryable refusal. A send cut off
         mid-flight leaves its claim, so no later engine sends it again.
         """
         if text is None:
@@ -537,24 +583,70 @@ class ChannelReplies:
                 }
                 if buttons is not None:
                     send_kwargs["buttons"] = buttons
-                await retry_async(
-                    transport.send_text,
-                    reply_plan.platform_target,
-                    text,
-                    **send_kwargs,
-                )
+                if claimed and run_answer:
+                    await transport.send_text(reply_plan.platform_target, text, **send_kwargs)
+                else:
+                    await retry_async(
+                        transport.send_text, reply_plan.platform_target, text, **send_kwargs
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 unsent = isinstance(error, ChannelError) and not error.possibly_delivered
+                if (
+                    claimed
+                    and run_answer
+                    and isinstance(error, ChannelError)
+                    and unsent
+                    and error.retryable
+                ):
+                    delay, _ = compute_retry_delay(
+                        min(attempt, MAX_RETRIES), retry_after=error.retry_after
+                    )
+                    if attempt >= MAX_RETRIES:
+                        delay = max(60 * 2 ** min(attempt - MAX_RETRIES, 6), delay)
+                    delay = max(delay, min(error.retry_after or 0, 86400))
+                    retry_at = format_canonical_timestamp(
+                        datetime.now(UTC) + timedelta(seconds=delay)
+                    )
+                    if not await settle_before_cancelling(
+                        self._update_pending(
+                            self._pending_replies.release_reply, claimed[0], retry_at
+                        )
+                    ):
+                        return
+                    if attempt >= MAX_RETRIES or delay >= 30:
+                        if attempt == MAX_RETRIES:
+                            _LOGGER.warning(
+                                "Channel Run reply deferred after repeated refusals (channel=%s)",
+                                self._config.id,
+                            )
+                        self.spawn(
+                            self._retry_answer(claimed, reply_plan, text, delay, attempt + 1)
+                        )
+                        return
+                    attempt += 1
+                    await _retry_sleep(delay)
+                    continue
                 if unsent and not self._is_connected(transport) and not self._stopped:
                     for reply_id in claimed:
                         await self._update_pending(self._pending_replies.release_reply, reply_id)
                     continue
                 _log_failed_reply(reply_plan, error)
+            else:
+                if attempt > MAX_RETRIES:
+                    _LOGGER.info(
+                        "Deferred Channel Run reply delivered (channel=%s)", self._config.id
+                    )
             for reply_id in claimed:
                 await self._update_pending(self._pending_replies.settle_reply, reply_id)
             return
+
+    async def _retry_answer(
+        self, claimed: tuple[str, ...], plan: ReplyPlanFacts, text: str, delay: float, attempt: int
+    ) -> None:
+        await _retry_sleep(delay)
+        await self._deliver(claimed, plan, text, run_answer=True, attempt=attempt)
 
     async def send(self, reply_plan: ReplyPlanFacts, text: str) -> None:
         """Send a reply that is not owed durably, waiting while the Channel is disconnected."""

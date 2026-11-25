@@ -14,14 +14,16 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels._conversation_content as content_module
+from core.channels import ChannelError
 from core.channels import _conversation_replies as replies_module
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.engine import ChannelConversationEngine
 from core.chat import ChatMessage
+from core.database import DatabaseUnavailableError
 from core.extensions import InteractionButton, InteractionEvent
 from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run
 from core.runs.run import DEFAULT_RUN_EVENT_RETENTION_LIMIT
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.sessions._types import SessionRunCompletion
 from core.utils.timestamps import utc_now_timestamp
 
@@ -429,6 +431,54 @@ async def test_work_an_ended_engine_never_answered_gets_notices_and_usable_tap_r
         await drain(_next, -100)
         resumed_runs.started.clear()
     await _next.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_run_answer_keeps_its_retry_time_across_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = _Runs()
+    engine, sessions, _trigger, transport = make_engine(tmp_path, trigger_run=runs.trigger)
+    sleeping = asyncio.Event()
+
+    async def stop_in_wait(delay: float) -> None:
+        assert delay >= 90
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(replies_module, "_retry_sleep", stop_in_wait)
+    monkeypatch.setattr(
+        transport,
+        "send_text",
+        AsyncMock(side_effect=ChannelError("limited", retryable=True, retry_after=90)),
+    )
+    await engine.handle_inbound_text(make_conversation(), "question")
+    await runs.started.wait()
+    run = runs.runs[0]
+    sessions.get(_ADDRESS).start_run(run.id)
+    _record_history(sessions, run.id, "answer", "completed")
+    _answer(run, "answer")
+    await sleeping.wait()
+    await engine.stop()
+    retry_wait = AsyncMock()
+    monkeypatch.setattr(replies_module, "_retry_sleep", retry_wait)
+    history = ChatSession.load_run_messages_async
+    reads = 0
+
+    async def load_when_available(session: ChatSession, run_id: str) -> list[ChatMessage]:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise DatabaseUnavailableError("temporarily locked")
+        return await history(session, run_id)
+
+    monkeypatch.setattr(ChatSession, "load_run_messages_async", load_when_available)
+    next_engine, _sessions, restored = await _next_engine(tmp_path)
+    assert retry_wait.await_args_list[0].args[0] > 80
+    assert reads == 2
+    assert restored.sent == [("12345", "answer")]
+    assert channel_state(tmp_path).take_pending_replies("tg-assistant", "later") == ([], 0)
+    await next_engine.stop()
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ import pytest
 import core.channels._conversation_content as content_module
 import core.channels.engine as engine_module
 from core.channels import ChannelError
+from core.channels import _conversation_replies as replies_module
 from core.runs import ASSISTANT_OUTPUT_EVENT, USER_MESSAGE_EVENT, Run
 from core.sessions import SessionAddress
 
@@ -28,6 +29,7 @@ from .engine_test_support import (
     make_engine,
     make_failed_run,
     make_interrupted_run,
+    settle_replies,
 )
 
 
@@ -213,8 +215,8 @@ async def test_topic_message_reply_carries_thread_everywhere(tmp_path: Path) -> 
     [
         ([ChannelError("network blip", retryable=True)], 2, None),
         ([ChannelError("chat not found")], 1, "Channel reply lost"),
-        # One attempt plus the shared maximum of three retries.
-        ([ChannelError("still down", retryable=True)] * 4, 4, "Channel reply lost"),
+        # The Run answer remains owed after its short retries.
+        ([ChannelError("still down", retryable=True)] * 4, 5, None),
         # Earlier chunks reached the chat: the reply is incomplete, not lost.
         (
             [ChannelError("chunk 2 failed", possibly_delivered=True)],
@@ -232,6 +234,7 @@ async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_repl
     attempts: int,
     logged: str | None,
 ) -> None:
+    monkeypatch.setattr(replies_module, "_retry_sleep", AsyncMock())
     transport = FakeTransport()
     deliver = transport.send_text
     errors = iter(send_errors)
@@ -254,6 +257,7 @@ async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_repl
     with caplog.at_level(logging.ERROR, logger="vbot.channels.engine"):
         await engine.handle_inbound_text(make_conversation(), "hello")
         await drain(engine, 12345)
+        await settle_replies(engine)
     await engine.stop()
 
     assert calls == attempts
