@@ -2,11 +2,12 @@ import {
   AUTOSAVE_STILL_SAVING_MS,
   createAutosaveCoordinator,
 } from '$lib/autosave.js';
+import { onServerReady } from '$lib/connectionState.js';
 
 // App's pending-navigation lifecycle. The coordinator owns editor writes;
 // this owner decides whether the latest requested transition may proceed.
 export function createAppAutosave({ onStay }) {
-  const autosaveCoordinator = createAutosaveCoordinator();
+  const autosaveCoordinator = createAutosaveCoordinator(onServerReady);
   // A navigation waits here while pending edits save. `autosavePrompt` is
   // null, 'slow' (a save takes long: Keep waiting / Leave anyway) or
   // 'failed' (Retry / Discard and continue).

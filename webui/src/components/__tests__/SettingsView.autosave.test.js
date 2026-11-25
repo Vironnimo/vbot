@@ -8,10 +8,12 @@ import { flushSync, mount } from 'svelte';
 
 import { dateTimePrefs } from '../../lib/dateTimePrefs.svelte.js';
 import { appearancePrefs } from '../../lib/appearancePrefs.svelte.js';
+import { notifyServerReady, onServerReady } from '../../lib/connectionState.js';
 
 import { createAutosaveCoordinator } from '../../lib/autosave.js';
 import {
   cleanupSettingsViewHarness,
+  buttonByText,
   createSettingsRpcMock,
   flushAsyncUpdates,
   getButton,
@@ -84,10 +86,19 @@ describe('SettingsView editor saving', () => {
   });
 
   async function mountSubAgents(backend = createSettingsRpcMock(), props = {}) {
+    const coordinator = createAutosaveCoordinator(onServerReady);
     rpcMock.mockImplementation(backend);
-    mountedComponent = mount(SettingsView, { target: document.body, props });
+    mountedComponent = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: SettingsView,
+        componentProps: props,
+        coordinator,
+      },
+    });
     flushSync();
     await openSubAgentsPanel();
+    return coordinator;
   }
 
   it.each([
@@ -186,6 +197,53 @@ describe('SettingsView editor saving', () => {
     await flushAsyncUpdates();
     expect(getSettingsUpdateCalls()).toHaveLength(1);
   });
+
+  it.each([
+    ['not committed', null],
+    ['committed', null],
+    ['committed', '7'],
+    ['committed', '4'],
+    ['invalid', null],
+  ])(
+    'reconciles a %s failed save including later input %s on reconnect',
+    async (outcome, later) => {
+      const backend = createSettingsRpcMock();
+      let first = true;
+      const coordinator = await mountSubAgents(async (method, params) => {
+        if (method === 'settings.update' && first) {
+          first = false;
+          if (outcome === 'committed') await backend(method, params);
+          throw Object.assign(new Error('save failure'), {
+            code: outcome === 'invalid' ? 'invalid_params' : 'network_error',
+          });
+        }
+        return backend(method, params);
+      });
+      vi.useFakeTimers();
+      setInputValue(DEPTH, '6');
+      await vi.advanceTimersByTimeAsync(800);
+      await flushAsyncUpdates();
+      expect(getSettingsUpdateCalls()).toHaveLength(1);
+      if (later) setInputValue(DEPTH, later);
+      if (later === '4') {
+        // Even an apparent revert to the old base must survive navigation:
+        // the unacknowledged write may already have changed the server.
+        expect(coordinator.hasPending()).toBe(true);
+        expect(await coordinator.flushPending()).toBe(true);
+      }
+      notifyServerReady();
+      await flushAsyncUpdates();
+      notifyServerReady();
+      await flushAsyncUpdates();
+      expect(getSettingsUpdateCalls()).toHaveLength(
+        outcome === 'not committed' || later ? 2 : 1,
+      );
+      expect(document.querySelector(DEPTH).value).toBe(later ?? '6');
+      if (later)
+        expect(getSettingsUpdateCalls().at(-1)[1].base).toEqual(subagents(6));
+      if (outcome !== 'invalid') expect(buttonByText('Save')).toBeFalsy();
+    },
+  );
 
   it('saves every edited field manually and confirms it in the save state', async () => {
     await mountSubAgents();

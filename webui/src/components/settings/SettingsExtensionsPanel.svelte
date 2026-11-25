@@ -25,7 +25,12 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { isSettingsConflict, rebaseDraft } from '$lib/settingsSave.js';
+  import {
+    isSettingsConflict,
+    rebaseDraft,
+    interruptedWrite,
+    InterruptedSettingsSave,
+  } from '$lib/settingsSave.js';
   import {
     applyExtensionsPanelList,
     buildExtensionsUpdate,
@@ -293,7 +298,7 @@
   // configuration draft onto it: untouched fields take the saved values, and a
   // field changed on both sides takes the saved one. Returns whether any
   // draft value gave way.
-  async function adoptSavedExtensions() {
+  async function adoptSavedExtensions(submitted) {
     const result = await listExtensions();
     const saved = applyExtensionsPanelList(result);
     let conflicted = false;
@@ -316,6 +321,14 @@
         draft,
         buildSchemaFormState(previous.settingsSchema, previous.config),
         savedForm,
+        {
+          submitted: submitted?.has(extension.name)
+            ? buildSchemaFormState(
+                extension.settingsSchema,
+                submitted.get(extension.name),
+              )
+            : undefined,
+        },
       );
       conflicted ||= rebased.conflicts.length > 0;
       // Keep the schema's field order, which the dirty check compares.
@@ -409,6 +422,12 @@
     } catch (error) {
       if (isSettingsConflict(error)) return 'conflict';
       onError(`${t('settings.saveError')} ${error.message}`);
+      if (interruptedWrite(error))
+        throw new InterruptedSettingsSave(error, async () => {
+          const conflict = await adoptSavedExtensions(nextConfigs);
+          onError(conflict ? t('settings.saveConflict') : '');
+          return extensions.some(extensionDraftHasChanges);
+        });
       return false;
     } finally {
       savingConfigNames = [];
