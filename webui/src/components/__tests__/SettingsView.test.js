@@ -1554,12 +1554,14 @@ describe('SettingsView', () => {
       expect(getSettingsUpdateCalls()[0][1]).toEqual({
         web_search: {
           provider: 'searxng',
+          fallback_provider: 'none',
           default_count: 12,
           searxng: { base_url: 'http://localhost:9999' },
         },
         base: {
           web_search: {
             provider: 'brave',
+            fallback_provider: 'none',
             default_count: 12,
             searxng: { base_url: 'http://localhost:8888' },
           },
