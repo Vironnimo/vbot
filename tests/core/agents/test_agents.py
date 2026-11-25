@@ -30,6 +30,7 @@ from core.agents._config import AGENT_DESCRIPTION_MAX_LENGTH
 from core.database import write_bootstrap_marker
 from core.memory import MemoryPromptMode
 from core.permissions import normalize_permission_rules
+from core.settings.agent_defaults import SHIPPED_AGENT_TOOLS
 from core.tools.availability import ToolAccess
 from core.tools.live import LIVE_TOOL_NAMES
 from core.utils.timestamps import is_canonical_timestamp
@@ -60,8 +61,9 @@ def test_create_writes_agent_json_and_workspace_without_a_session(store: AgentSt
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
     assert data["project_memory_enabled"] is True
-    assert data["tool_access"] == {"mode": "all"}
-    assert data["allowed_skills"] == ["*"]
+    # Tool access and Skills follow the shared default until the Agent sets its own.
+    assert "tool_access" not in data
+    assert "allowed_skills" not in data
     assert "tools" not in data
     # No exclusions is the default and is not written.
     assert "excluded_skills" not in data
@@ -161,7 +163,7 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     assert agent.fallback_models == []
     assert agent.temperature is None
     assert agent.thinking_effort is None
-    assert agent.tool_access == ToolAccess(mode="all")
+    assert agent.tool_access == ToolAccess(mode="selected", allowed=SHIPPED_AGENT_TOOLS)
     assert agent.allowed_skills == ["*"]
     assert agent.tools == {}
     assert agent.memory_prompt_mode == "agent_user"
@@ -237,6 +239,12 @@ def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> No
     assert created is not None
     assert created.id == "main-2"
     assert [agent.id for agent in store.personal_roster().agents] == ["main-2"]
+    # The first Agent is the user's own: every Tool, every Skill and full access,
+    # whatever the shared default gives other Agents.
+    data = persisted(store, "main-2")
+    assert data["tool_access"] == {"mode": "all"}
+    assert data["allowed_skills"] == ["*"]
+    assert data["permission_profile"] == "full_access"
 
 
 def test_a_new_agent_never_takes_an_id_that_secret_grants_still_name(
@@ -560,7 +568,7 @@ def test_permission_rules_persist_normalized_and_clear(store: AgentStore) -> Non
     # The normalized form is stored and read back; unset parts stay unset.
     stored = {"read": "work_area", "deny": ["Read({workdir}/x)"]}
     assert persisted(store, "coder")["permission_rules"] == stored
-    assert store.get("coder").permission_rules == normalize_permission_rules(stored)
+    assert store.get_raw("coder").permission_rules == normalize_permission_rules(stored)
 
     with pytest.raises(AgentError, match="permission_rules.write"):
         store.update("coder", permission_rules={"write": "everywhere"})
@@ -578,7 +586,8 @@ def test_permission_rules_persist_normalized_and_clear(store: AgentStore) -> Non
     assert "permission_profile" not in persisted(store, "coder")
     assert persisted(store, "coder")["permission_rules"] == stored
 
-    assert store.update("coder", permission_rules=None).permission_rules is None
+    store.update("coder", permission_rules=None)
+    assert store.get_raw("coder").permission_rules is None
     assert "permission_rules" not in persisted(store, "coder")
 
 

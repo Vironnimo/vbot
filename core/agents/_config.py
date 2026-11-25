@@ -112,6 +112,9 @@ DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_THINKING_EFFORT: str | None = None
 
 DEFAULT_ALLOWED_ITEMS = ("*",)
+# The Agent fields an Agent may leave unset to inherit them from ``defaults.agent``
+# (``Agent.inherits``); every other inherited field has an empty value instead.
+INHERITABLE_AGENT_FIELDS = ("tool_access", "allowed_skills")
 
 _ALLOWLIST_WILDCARD = "*"
 
@@ -805,6 +808,11 @@ def _agent_from_dict(
         ),
         tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
+        inherits=frozenset(
+            name
+            for name in INHERITABLE_AGENT_FIELDS
+            if data.get(name) is None and data.get("builtin") is None
+        ),
         excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
         context_commands=_validate_context_commands(data.get("context_commands")),
         tools=normalize_agent_tools(data.get("tools")),
@@ -880,6 +888,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
     """Return the persisted ``agent.json`` fields of one Agent."""
     persisted = asdict(agent)
     persisted["tool_access"] = agent.tool_access.to_dict()
+    for name in persisted.pop("inherits"):
+        persisted.pop(name)
     if agent.placement is None:
         persisted.pop("placement")
     else:
@@ -981,6 +991,7 @@ def _apply_defaults(agent: Agent, defaults: AgentDefaults) -> Agent:
         thinking_effort=agent.thinking_effort,
         tool_loading=agent.tool_loading,
         permission_rules=agent.permission_rules,
+        inherits=agent.inherits,
         defaults=defaults,
     )
     if agent.builtin is not None:

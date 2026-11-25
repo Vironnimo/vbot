@@ -650,6 +650,9 @@ def _validate_agent_field(state: Any, key: str, value: Any) -> Any:
         return _validate_thinking_effort(value, allow_none=True)
     if key == "memory_prompt_mode":
         return _validate_memory_prompt_mode(value)
+    if key in {"tool_access", "allowed_skills"} and value is None:
+        # Leaves the field to the shared default (``defaults.agent``).
+        return None
     if key == "tool_access":
         try:
             return normalize_tool_access(value)

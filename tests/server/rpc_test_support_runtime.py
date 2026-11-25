@@ -31,6 +31,7 @@ from core.computers import ComputerRegistry
 from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.extensions.services import ExtensionServiceCatalog
 from core.memory import MemoryService
+from core.permissions import BUILTIN_PERMISSION_PROFILES
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -189,6 +190,9 @@ class StubPrompts:
 class StubSkill:
     name: str
     description: str
+    # Read where a restricted Run lists the folders of its allowed Skills.
+    path: Path = Path("SKILL.md")
+    package_ref: Any = None
 
 
 class StubSkills:
@@ -563,7 +567,12 @@ class StubRuntime:
         self.agents = StubAgents(
             initial_agent
             if initial_agent is not None
-            else StubAgent(id="coder", allowed_tools=["*"]),
+            # Like the user's first Agent, the test Agent has full access.
+            else StubAgent(
+                id="coder",
+                allowed_tools=["*"],
+                permission_rules=BUILTIN_PERMISSION_PROFILES["full_access"],
+            ),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
         self.memory = MemoryService(history_root=self.storage.layout.agents)

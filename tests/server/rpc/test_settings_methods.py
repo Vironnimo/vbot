@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from core.secrets import CREDENTIALS
+from core.settings.agent_defaults import effective_agent_defaults
 from core.tools.web_fetch import LocalBrowser
 from server.rpc import settings_methods
 from tests.server.rpc_test_support import (
@@ -275,7 +276,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "chat_working_mode": "normal",
             "ui_layout": None,
         },
-        "defaults": {},
+        "defaults": {"agent": effective_agent_defaults({})},
         "subagents": {
             "max_subagent_depth": 2,
             "max_active_subagents": 10,

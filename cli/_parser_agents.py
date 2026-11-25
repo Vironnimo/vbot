@@ -198,8 +198,11 @@ def _add_agent_change_arguments(
     )
     parser.add_argument(
         "--tool-access-mode",
-        choices=("all", "selected", "none"),
-        help="Replace the complete Tool policy; repeat selections and denials to preserve them",
+        choices=("default", "all", "selected", "none"),
+        help=(
+            "Replace the complete Tool policy; repeat selections and denials to preserve them; "
+            "default follows the shared default (defaults.agent.tool_access)"
+        ),
     )
     parser.add_argument(
         "--tool-allow",
@@ -283,6 +286,14 @@ def _add_agent_change_arguments(
         help=(
             "Replace allowed shared/global/bundled Skills; private and active "
             "Project Skills remain allowed"
+        ),
+    )
+    parser.add_argument(
+        "--default-skills",
+        action="store_true",
+        help=(
+            "Follow the shared default for allowed Skills (defaults.agent.allowed_skills) "
+            "instead of --allowed-skills"
         ),
     )
     parser.add_argument(

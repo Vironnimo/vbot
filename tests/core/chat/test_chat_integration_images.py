@@ -45,6 +45,9 @@ from tests.core.chat.chat_integration_test_support import start_runtime as start
 from tests.core.chat.chat_loop_support import session_address
 from tests.core.runs.runs_test_support import RunTimelines
 
+# These tests drive Tools of their own, beyond the shared default's working set.
+ALL_TOOLS = {"mode": "all"}
+
 _png_stream = io.BytesIO()
 Image.new("RGB", (12, 8), "blue").save(_png_stream, format="PNG")
 _PNG_BYTES = _png_stream.getvalue()
@@ -87,7 +90,9 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
         )
     adapter = LimitedAdapter(responses)
     with start_runtime(adapter) as runtime:
-        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        agent = runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         stream = io.BytesIO()
         pixels = (
             Image.new("RGB", (128, 64), "blue")
@@ -176,7 +181,9 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
         )
     adapter = LimitedAdapter(responses)
     with start_runtime(adapter) as runtime:
-        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
 
         def capture(_context: Any, arguments: JsonObject) -> JsonObject:
@@ -267,7 +274,9 @@ async def test_provider_media_overflow_preserves_fresh_inputs_and_stops_without_
         }
     )
     with start_runtime(adapter) as runtime:
-        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        agent = runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         image_path = Path(agent.workspace) / "frame.png"
         image_path.write_bytes(_PNG_BYTES)
         content: str | list[ContentBlock] = "inspect frame.png"
@@ -330,7 +339,9 @@ async def test_prior_images_are_retired_only_after_an_accepted_response(
 
     adapter = LimitedAdapter({"content": "done", "tool_calls": None})
     with start_runtime(adapter) as runtime:
-        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
         image: list[ContentBlock] = [
             MediaBlock("media", record.id, record.filename, record.media_type)
@@ -550,7 +561,9 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         + [{"content": "done", "tool_calls": None}]
     )
     with start_runtime(adapter) as runtime:
-        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        agent = runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         image_path = Path(agent.workspace) / "front.png"
         await runtime.chat_loop.send("coder", "Inspect each render", session_id="reread")
         assert len(adapter.requests) == len(frames) + 1
@@ -752,7 +765,9 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 },
                 capture,
             )
-            agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+            agent = runtime.agents.create(
+                "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+            )
             for index, frame in enumerate(frames):
                 Path(agent.workspace).joinpath(f"frame-{index}.png").write_bytes(frame)
             assistant = await loop.send(
@@ -979,7 +994,9 @@ async def test_learned_gateway_body_threshold_spares_uploads_and_preserves_fresh
 
     adapter = Gateway({"content": "done", "tool_calls": None})
     with start_runtime(adapter) as runtime:
-        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        runtime.agents.create(
+            "coder", "Coder", model="fake-provider/fake-model-vision", tool_access=ALL_TOOLS
+        )
         record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
         image: list[ContentBlock] = [
             MediaBlock("media", record.id, record.filename, record.media_type)

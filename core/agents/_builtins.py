@@ -127,7 +127,15 @@ class BuiltinAgents:
             ):
                 candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
                 suffix += 1
-            return self._owner.create(candidate, _BOOTSTRAP_AGENT_NAME)
+            # The first Agent is the user's own: it gets every Tool, every Skill
+            # and full access, whatever ``defaults.agent`` gives other Agents.
+            return self._owner.create(
+                candidate,
+                _BOOTSTRAP_AGENT_NAME,
+                tool_access={"mode": "all"},
+                allowed_skills=["*"],
+                permission_profile="full_access",
+            )
 
 
 _BOOTSTRAP_AGENT_ID = "main"
