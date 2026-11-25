@@ -185,11 +185,14 @@ async def test_failed_preferred_service_is_not_repeated_and_direct_fetch_answers
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["fallback", "prefer"])
+@pytest.mark.parametrize(
+    ("mode", "status"), [("fallback", 403), ("fallback", 429), ("prefer", 403)]
+)
 async def test_service_page_is_saved_and_followups_never_bill_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, status: int
 ) -> None:
-    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
+    monkeypatch.setattr(public_http, "sleep_for_retry", AsyncMock())
+    install_http_get(monkeypatch, lambda url: make_result(status_code=status, url=url))
     tool = web_fetch_registry(**_service("tavily", mode))
     context = make_context(tmp_path)
     page = {"results": [{"url": URL, "raw_content": "Service content " * 1000}]}
@@ -206,42 +209,77 @@ async def test_service_page_is_saved_and_followups_never_bill_again(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("key", "answer", "code"),
-    [
-        (None, {"status_code": 403}, "access_denied"),
-        ("  ", {"status_code": 403}, "access_denied"),
-        # A service fetches from its own address, which a firewall block does not cover.
-        (
-            None,
-            {
-                "headers": {"content-type": "text/html"},
-                "text": "<title>Request Rejected</title><p>The requested URL was rejected. "
-                "Your support ID is: 1234567890</p>",
-            },
-            "rate_limited",
-        ),
-    ],
-    ids=["missing", "blank", "firewall"],
-)
+@pytest.mark.parametrize("key", [None, "  "], ids=["missing", "blank"])
 async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     key: str | None,
-    answer: dict[str, Any],
-    code: str,
 ) -> None:
-    install_http_get(monkeypatch, lambda url: make_result(**answer, url=url))
+    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
 
     result = await fetch(tmp_path, {"url": URL}, **_service("firecrawl", "fallback", key=key))
 
-    assert result["error"]["code"] == code
+    assert result["error"]["code"] == "access_denied"
     assert result["error"]["message"].endswith(
         "source. The firecrawl fetch service also failed: The firecrawl fetch "
         "service is selected in Settings, but its API key (FIRECRAWL_API_KEY) is not set. "
         "Tell the user: they can enter the key in Settings under Web page reading, or set "
         "the service back to Direct there."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"status_code": 429, "headers": {"X-RateLimit-Global": "true", "Retry-After": "600"}},
+        {
+            "headers": {"Content-Type": "text/html"},
+            "text": "<!--" + "x" * 8192 + "--><title>Request Rejected</title>"
+            "<p>The requested URL was rejected. "
+            "Your support ID is: 1234567890</p>",
+        },
+    ],
+    ids=["global-rate-limit", "firewall"],
+)
+async def test_host_pause_covers_all_fetch_modes_and_preserves_saved_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, block: dict[str, Any]
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(public_http, "_cooldown_clock", lambda: now[0])
+    direct_calls = []
+    next_url = f"{URL}/after-pause"
+
+    def get(url: str) -> public_http.PublicResponse:
+        direct_calls.append(url)
+        if url == URL:
+            return make_result(text="Saved before the pause", url=url)
+        if url == next_url:
+            return make_result(status_code=403, url=url)
+        return make_result(**block, url=url)
+
+    install_http_get(monkeypatch, get)
+    settings = {"provider": "tavily", "mode": "fallback"}
+    tool = web_fetch_registry(settings_loader=lambda: settings, credential_resolver=lambda _: "key")
+    context = make_context(tmp_path)
+    with respx.mock(assert_all_called=False) as router:
+        service = router.post(TAVILY)
+        saved = await tool.dispatch(context, {"url": URL})
+        for path, mode in [("first", "fallback"), ("second", "fallback"), ("third", "prefer")]:
+            settings["mode"] = mode
+            failure = await tool.dispatch(context, {"url": f"{URL}/{path}"})
+            assert failure["error"]["code"] == "rate_limited"
+        stored = await tool.dispatch(context, {"ref": saved["data"]["ref"]})
+        assert stored["data"]["content"] == "Saved before the pause"
+        assert direct_calls == [URL, f"{URL}/first"]
+        assert not service.called
+
+        now[0] += 601
+        settings["mode"] = "fallback"
+        service.respond(json={"results": [{"url": next_url, "raw_content": "Recovered"}]})
+        recovered = await tool.dispatch(context, {"url": next_url})
+    assert recovered["data"]["content"] == "Recovered"
+    assert direct_calls[-1] == next_url and service.call_count == 1
 
 
 @pytest.mark.asyncio

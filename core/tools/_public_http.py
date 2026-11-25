@@ -133,6 +133,14 @@ class HostSlots:
         self._users: Counter[str] = Counter()
         self._paused: OrderedDict[str, _HostPause] = OrderedDict()
 
+    def is_paused(self, host: str) -> bool:
+        """Whether the host's deadline still rules out an external fetch."""
+        pause = self._paused.get(host)
+        return pause is not None and _cooldown_clock() < pause.until
+
+    def firewall_blocked(self, host: str) -> None:
+        self.pause(host, _FIREWALL_COOLDOWN)
+
     def pause(self, host: str, seconds: float) -> None:
         until = _cooldown_clock() + seconds
         previous = self._paused.get(host)
@@ -700,6 +708,13 @@ def _retries_allowed(error: RequestException) -> int:
     return MAX_RETRIES
 
 
+def _global_rate_limit(response: PublicResponse) -> bool:
+    return (
+        response.status_code == 429
+        and response.headers.get("x-ratelimit-global", "").strip().lower() == "true"
+    )
+
+
 def _is_firewall_page(response: PublicResponse) -> bool:
     from core.tools._web_fetch_html import extract_views
     from core.tools._web_fetch_walls import firewall_block
@@ -730,11 +745,7 @@ async def _request_with_retry(
             )
             async with slot as probe:
                 result = await _http_get(session, url, max_bytes, truncate=truncate)
-                if (
-                    hosts is not None
-                    and result.status_code == 429
-                    and result.headers.get("x-ratelimit-global", "").strip().lower() == "true"
-                ):
+                if hosts is not None and _global_rate_limit(result):
                     hint = parse_retry_after(result.headers)
                     delay = (
                         hint if hint is not None else (2**attempt if attempt < MAX_RETRIES else 30)
@@ -749,7 +760,7 @@ async def _request_with_retry(
                     and "request rejected" in result.text[:8192].lower()
                     and await run_tool_worker(_is_firewall_page, result)
                 ):
-                    hosts.pause(host, _FIREWALL_COOLDOWN)
+                    hosts.firewall_blocked(host)
                 elif hosts is not None:
                     hosts.answered(host, probe, result.status_code)
         except RequestException as error:
@@ -983,7 +994,7 @@ def _status_error(url: str, result: PublicResponse, what: str) -> PublicFetchErr
         message,
         retryable=retryable,
         attempts_made=attempts,
-        recoverable=True,
+        recoverable=not _global_rate_limit(result),
         retry_after=parse_retry_after(result.headers) if retryable else None,
     )
 
@@ -1065,10 +1076,11 @@ def _transport_error(
     )
 
 
-async def check_public_url(url: str) -> None:
-    """Raise ``PublicFetchError`` unless ``url`` is a fetchable public http(s) address."""
+async def check_public_url(url: str) -> str:
+    """Return the canonical host of a public HTTP(S) address, or raise ``PublicFetchError``."""
     try:
-        await _validate_public_target(*_url_parts(url))
+        host, _ip = await _validate_public_target(*_url_parts(url))
+        return host
     except ValueError as error:
         raise _url_error(error) from error
 
