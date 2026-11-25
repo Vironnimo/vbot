@@ -42,8 +42,25 @@ describe('FactoryPage', () => {
     const { bridge, operation } = createFactoryBridge();
     await render(bridge, '/factory/fac-one');
 
-    // Leader chat
-    expect(document.body.textContent).toContain('Ready to coordinate.');
+    // Leader chat: Markdown classes, Context Wheel, direct Open Session, New Session, no Edit Agent
+    const chatSection = document.querySelector('.chat');
+    expect(chatSection?.textContent).toContain('Ready to coordinate.');
+    expect(
+      chatSection?.querySelector('.messages.md-chat .msg-markdown'),
+    ).not.toBeNull();
+    expect(button(t('factory.chat.editAgent'), chatSection)).toBeUndefined();
+    expect(button(t('factory.chat.new'), chatSection)).toBeDefined();
+    expect(
+      chatSection?.querySelector('.context-ring-trigger')?.textContent,
+    ).toContain('10%');
+    button(t('factory.chat.openSession'), chatSection).click();
+    expect(bridge.openSession).toHaveBeenCalledWith({
+      agent_id: 'planner',
+      project_id: 'project-a',
+      session_id: 'sess-leader',
+    });
+    expect(bridge.mountSession).not.toHaveBeenCalled();
+
     const chatInput = document.querySelector('.factory-chat-input');
     chatInput.value = 'Plan next release';
     chatInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -55,12 +72,17 @@ describe('FactoryPage', () => {
       text: 'Plan next release',
     });
 
-    // Dashboard sections
+    // Dashboard sections (Recent Job Runs only lists finished runs)
     expect(document.body.textContent).toContain(
       'Should I proceed with migration?',
     );
     expect(document.body.textContent).toContain('All 42 checks passed.');
     expect(document.body.textContent).toContain('0 9 * * 1-5');
+    const recentPanel = document.querySelector(
+      `[aria-label="${t('factory.dashboard.recent')}"]`,
+    );
+    expect(recentPanel?.textContent).toContain('All 42 checks passed.');
+    expect(recentPanel?.textContent).not.toContain('Release Notes');
 
     // Inline reply on needs_attention run
     fill('reply-jrun-attn', 'Yes, proceed');
@@ -177,6 +199,24 @@ describe('FactoryPage', () => {
 
     expect(document.body.textContent).toContain('Planner');
     expect(document.body.textContent).toContain('Builder');
+    expect(document.body.textContent).toContain('Coordinate work');
+
+    // Member role & instructions editor omits redundant raw tool/skill boundary fields
+    button(t('factory.team.editMembership')).click();
+    await settle();
+    expect(document.getElementById('member-role-mem-leader')).not.toBeNull();
+    expect(
+      document.getElementById('member-instructions-mem-leader'),
+    ).not.toBeNull();
+    expect(
+      document.getElementById('member-allowed-skills-mem-leader'),
+    ).toBeNull();
+    expect(
+      document.getElementById('member-allowed-tools-mem-leader'),
+    ).toBeNull();
+    expect(
+      document.getElementById('member-denied-tools-mem-leader'),
+    ).toBeNull();
 
     button(t('factory.team.addMember')).click();
     await settle();

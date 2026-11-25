@@ -33,7 +33,7 @@ export default {
   'factory.chat.title': 'Chat with {name}',
   'factory.chat.message': 'Message {name}…',
   'factory.chat.earlier': 'Earlier messages',
-  'factory.chat.new': 'New topic',
+  'factory.chat.new': 'New Session',
   'factory.chat.replying': '{name} is replying…',
   'factory.chat.send': 'Send',
   'factory.chat.stop': 'Stop discussion',
@@ -51,7 +51,7 @@ export default {
   'factory.dashboard.upcoming': 'Upcoming Jobs',
   'factory.dashboard.noUpcoming': 'No upcoming scheduled Jobs.',
   'factory.dashboard.recent': 'Recent Job Runs',
-  'factory.dashboard.noRecent': 'No Job Runs yet.',
+  'factory.dashboard.noRecent': 'No completed Job Runs yet.',
   'factory.dashboard.replyPlaceholder': 'Reply to resume…',
   'factory.dashboard.reply': 'Reply',
   'factory.dashboard.cancel': 'Cancel',
@@ -142,7 +142,7 @@ export default {
   'factory.team.replaceLeader':
     'The Leader profile is unavailable. Choose an active team member as Leader or add one first.',
   'factory.team.makeLeader': 'Make Leader',
-  'factory.team.editMembership': 'Edit role & limits',
+  'factory.team.editMembership': 'Role & instructions',
   'factory.team.retire': 'Retire',
   'factory.team.retireTitle': 'Retire team member',
   'factory.team.retireConfirm':

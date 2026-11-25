@@ -231,6 +231,8 @@
               {model}
             />
           {/key}
+        {:else if member.instructions}
+          <p class="factory-member-instructions">{member.instructions}</p>
         {/if}
       </section>
     {/each}
@@ -391,5 +393,12 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .factory-member-instructions {
+    margin: 0;
+    color: var(--text-med);
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
   }
 </style>

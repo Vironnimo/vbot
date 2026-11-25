@@ -54,6 +54,26 @@
   padding: 20px 24px 32px;
 }
 
+.factory-scrollport--overview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 20px;
+}
+
+.factory-scrollport--overview > .banner,
+.factory-scrollport--overview > .factory-tabs {
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .factory-scrollport--overview {
+    display: block;
+    overflow: auto;
+    padding-bottom: 32px;
+  }
+}
+
 .factory-scrollport > .banner {
   margin-bottom: 12px;
 }

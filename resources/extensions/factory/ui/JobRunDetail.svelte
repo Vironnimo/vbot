@@ -104,11 +104,11 @@
       </div>
     </header>
 
-    <div class="factory-run-body">
+    <div class="factory-run-body md-chat">
       {#if run.question}
         <section class="factory-panel factory-panel--attention">
           <h3>{t('factory.run.question')}</h3>
-          <MarkdownContent source={run.question} />
+          <MarkdownContent class="msg-markdown" source={run.question} />
         </section>
       {/if}
 
@@ -122,7 +122,7 @@
       {#if run.summary}
         <section class="factory-panel">
           <h3>{t('factory.run.summary')}</h3>
-          <MarkdownContent source={run.summary} />
+          <MarkdownContent class="msg-markdown" source={run.summary} />
         </section>
       {/if}
 
@@ -155,14 +155,14 @@
       {#if run.prompt}
         <section class="factory-panel">
           <h3>{t('factory.run.prompt')}</h3>
-          <MarkdownContent source={run.prompt} />
+          <MarkdownContent class="msg-markdown" source={run.prompt} />
         </section>
       {/if}
 
       {#if run.input_note}
         <section class="factory-panel">
           <h3>{t('factory.run.inputNote')}</h3>
-          <MarkdownContent source={run.input_note} />
+          <MarkdownContent class="msg-markdown" source={run.input_note} />
         </section>
       {/if}
 

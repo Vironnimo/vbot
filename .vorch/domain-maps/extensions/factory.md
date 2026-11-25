@@ -76,7 +76,7 @@ A Job's `schedule` or `webhook` that queues Job Runs automatically; Cron owns sc
 ## Attention and WebUI
 
 - The `board` page badge sums `needs_attention` and `failed` Job Runs across active Factories plus pending host approvals on active `fjob.*` runs. Entering `needs_attention` or `failed` sends a host notification routed to `/job-run/<id>`.
-- `FactoryPage.svelte` routes: `/project/<id>` (uninitialized Project setup), `/factory/<id>` (Overview: Dashboard attention/running/recent/upcoming + embedded Leader Chat), `/factory/<id>/jobs` (Job CRUD, trigger editor, manual run), `/factory/<id>/team` (Leader + Specialist CRUD and Edit Agent link), `/factory/<id>/settings` (name, remit, capacity, permission ceiling, pause/archive), and `/job-run/<id>` (`JobRunDetail.svelte`: status, summary/question/reason, canonical Session embed, direct reply resume, cancel).
+- `FactoryPage.svelte` routes: `/project/<id>` (uninitialized Project setup), `/factory/<id>` (Overview: full-height Leader Chat with `ContextUsageRing`, direct `openSession`, and `New Session` beside independent Dashboard panels for attention, running, upcoming, and final-state recent runs), `/factory/<id>/jobs` (Job CRUD, trigger editor, manual run), `/factory/<id>/team` (Leader + Specialist CRUD, `Edit Agent` profile link, and inline role & instructions editor without per-member raw tool/skill text fields), `/factory/<id>/settings` (name, remit, capacity, permission ceiling, pause/archive), and `/job-run/<id>` (`JobRunDetail.svelte`: status, summary/question/reason, canonical Session embed, direct reply resume, cancel).
 
 ## Agent-facing text
 
