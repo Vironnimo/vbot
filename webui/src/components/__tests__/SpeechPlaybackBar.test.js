@@ -168,6 +168,33 @@ it('plays simultaneous Session outputs in order and uses durable audio after wai
   );
 });
 
+it('waits for files after two recovered streams, then tries live playback again', async () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(5000);
+  for (const id of ['one', 'two']) {
+    owner.handleServerEvent(speechEvent(id));
+    streams
+      .at(-1)
+      .report({ error: 'lost stream', paused: true, currentTime: 3 });
+    owner.handleServerEvent(speechEvent(id, 'tool_call_result'));
+    const audio = owner.active.resource.audio;
+    audio.dispatchEvent(new Event('canplay'));
+    await flush();
+    expect(audio.currentTime).toBe(3);
+    audio.dispatchEvent(new Event('ended'));
+  }
+  owner.handleServerEvent(speechEvent('three'));
+  expect(streams).toHaveLength(2);
+  owner.handleServerEvent(speechEvent('three', 'tool_call_result'));
+  owner.active.resource.audio.dispatchEvent(new Event('canplay'));
+  await flush();
+  expect(play.mock.instances.at(-1).getAttribute('src')).toBe(
+    '/api/speech/artifacts/three',
+  );
+  now.mockReturnValue(5000 + 5 * 60_000);
+  owner.handleServerEvent(speechEvent('four'));
+  expect(streams).toHaveLength(3);
+});
+
 it('removes active and waiting speech on cancellation and ignores replay after it', async () => {
   owner.handleServerEvent(speechEvent());
   const second = speechEvent('two');
