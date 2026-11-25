@@ -923,6 +923,8 @@ describe('ChatAssistantRun', () => {
         item: assistantRun({
           status: 'completed',
           durationMs: 8000,
+          iterationCount: 3,
+          toolCallCount: 1,
           items: [
             {
               ...outputItem('Checked.'),
@@ -963,6 +965,11 @@ describe('ChatAssistantRun', () => {
       expect(document.querySelector('#app-tooltip').textContent).toContain(
         'test/automation-model · low',
       );
+      const counts = [...document.querySelectorAll('#app-tooltip dt')].map(
+        (label) => [label.textContent, label.nextElementSibling.textContent],
+      );
+      expect(counts).toContainEqual([t('chat.details.modelResponses'), '3']);
+      expect(counts).toContainEqual([t('chat.details.toolCalls'), '1']);
     });
 
     it.each([
@@ -980,13 +987,6 @@ describe('ChatAssistantRun', () => {
         {},
         undefined,
         () => t('chat.runStatus.working'),
-      ],
-      [
-        'the iteration count',
-        { status: 'completed', durationMs: 8000, iterationCount: 3 },
-        undefined,
-        () =>
-          `${t('chat.runStatus.completed')} · 8.0s · ${t('chat.runIterations', { count: 3 })}`,
       ],
     ])('shows %s', (_case, fields, nowMs, label) => {
       run.mount({ item: assistantRun(fields), nowMs });

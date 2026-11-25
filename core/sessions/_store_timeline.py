@@ -271,11 +271,14 @@ def _page_runs(
     ]
     runs = connection.execute(
         "SELECT r.run_key, r.run_id, r.status, r.start_seq, t.seq AS terminal_seq, "
+        "CASE WHEN r.inherited = 0 AND t.seq < ? THEN "
+        "(SELECT COUNT(*) FROM tool_invocations AS i WHERE i.run_key = r.run_key) "
+        "END AS tool_call_count, "
         f"{_RUN_SCHEDULE} AS schedule_id, {_RUN_TASK_INPUT} AS task_input_id "
         "FROM runs AS r LEFT JOIN entries AS t ON t.entry_key = r.end_entry_key "
         f"AND ({visible_terminal}) "
         "WHERE r.run_key IN (SELECT value FROM json_each(?)) ORDER BY r.start_seq, r.run_key",
-        (*terminal_params, _store_values._key_list(run_keys)),
+        (through, *terminal_params, _store_values._key_list(run_keys)),
     ).fetchall()
     result = []
     for run in runs:
@@ -293,6 +296,11 @@ def _page_runs(
                 "status": run["status"],
                 "start_sequence": run["start_seq"],
                 "terminal_sequence": terminal,
+                **(
+                    {"tool_call_count": run["tool_call_count"]}
+                    if run["tool_call_count"] is not None
+                    else {}
+                ),
                 **({"automation": automation} if automation is not None else {}),
                 "complete": terminal is not None
                 and terminal < through

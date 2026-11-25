@@ -348,10 +348,36 @@ async def test_agent_secrets_reach_only_the_command_environment(
     )
     analyzer = FakeAnalyzer(plan("login"))
     permissions = restricted(tmp_path) if confined else PermissionBoundary.UNRESTRICTED
+    scratch = ScratchAreas(
+        tmp_path,
+        identity=lambda _addr: "generation",
+        ancestors=lambda _addr: (),
+        busy_sessions=lambda: (),
+    )
+    reviewed: list[dict[str, str]] = []
+
+    async def review(context: ToolContext, _arguments: JsonObject, **_prepared: Any) -> bool:
+        # The reviewer cannot clear the source bindings later shown by the approval card.
+        clear = getattr(context.shell_credential_sources, "clear", None)
+        if clear:
+            clear()
+        reviewed.append(dict(context.shell_credential_sources))
+        assert secrets.recent_uses(secret.id) == []
+        return True
+
     async with started_shell(
-        tmp_path, secrets=secrets, analyzer=analyzer, permissions=permissions
+        tmp_path,
+        secrets=secrets,
+        analyzer=analyzer,
+        permissions=permissions,
+        review_shell=review,
+        scratch_areas=scratch,
     ) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        shadowed = await shell.call(
+            {"command": "login", "env": {"TMPDIR": "{{secret:GITHUB.password}}"}}
+        )
+        assert shadowed["error"]["code"] == "invalid_arguments"
         conflicts = [("API_TOKEN", "API_TOKEN"), ("GITHUB_USERNAME", "GITHUB")]
         if sys.platform == "win32":
             conflicts.append(("api_token", "API_TOKEN"))
@@ -378,6 +404,11 @@ async def test_agent_secrets_reach_only_the_command_environment(
                 {"BASH_ENV": "{{secret:GITHUB.password}}"},
                 {"Path": "{{secret:GITHUB.password}}"},
                 {"GIT_CONFIG_SYSTEM": "alternate.conf"},
+                *(
+                    [{"PathExt": ".EXE"}, {"ComSpec": "{{secret:GITHUB.password}}"}]
+                    if sys.platform == "win32"
+                    else []
+                ),
             ):
                 blocked = await shell.call({"command": "echo ok", "env": env})
                 assert blocked["error"]["code"] == "invalid_arguments"
@@ -433,12 +464,20 @@ async def test_agent_secrets_reach_only_the_command_environment(
         "hunter2-very-secret",
     )
     assert env["DOC"] == "{{secret:A}} b"
+    assert reviewed == [
+        {
+            "API_TOKEN": "API_TOKEN",
+            "GITHUB_USERNAME": "{{secret:GITHUB.username}}",
+            "GITHUB_PASSWORD": "{{secret:GITHUB}}",
+            "PGPASSWORD": "{{secret:GITHUB.password}}",
+        }
+    ]
     # A credential a command received is masked from then on, like a Secret.
     assert secrets.masker.mask("value-of-API_TOKEN") == "[redacted]"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["permissions", "workdir", "shell", "launch"])
+@pytest.mark.parametrize("failure", ["permissions", "workdir", "shell", "launch", "unicode"])
 async def test_one_time_secrets_are_spent_only_after_shell_preparation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -467,6 +506,9 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
         resolved = True
         if failure == "workdir":
             directory.rmdir()
+        if failure == "unicode":
+            assert result is not None
+            result[0]["ONE_TIME"] = "bad\ud800value"
         return result
 
     monkeypatch.setattr(secrets, "environment", resolve)
@@ -494,7 +536,9 @@ async def test_one_time_secrets_are_spent_only_after_shell_preparation(
         assert resolved
         assert not shell.launcher.processes
         assert result["error"]["code"] == (
-            "invalid_arguments" if failure in ("permissions", "workdir") else "command_not_started"
+            "invalid_arguments"
+            if failure in ("permissions", "workdir", "unicode")
+            else "command_not_started"
         )
         if failure == "launch":
             assert secrets.get(secret.id) is None
@@ -589,12 +633,17 @@ async def test_each_command_launch_ensures_its_sessions_scratch_tmp(
         busy_sessions=lambda: (),
     )
     ordinary_environment = terminal_environment()
+    temp_name = "Temp" if sys.platform == "win32" else "TEMP"
+    variable = {temp_name: "requested-tmp"}
     async with started_shell(tmp_path, scratch_areas=scratch_areas) as shell:
         for count in (1, 2):
-            result = data(await shell.call({"command": "build", "run_in_background": True}))
+            result = data(
+                await shell.call({"command": "build", "env": variable, "run_in_background": True})
+            )
             assert result["status"] == "running"
             _command, environment = launched(shell.launcher, count - 1)
             if scratch_available:
+                assert any(temp_name in note for note in result["notes"])
                 own = Path(environment["VBOT_SCRATCH_DIR"])
                 for name in ("TEMP", "TMP", "TMPDIR"):
                     assert Path(environment[name]) == own / "tmp"
@@ -603,7 +652,9 @@ async def test_each_command_launch_ensures_its_sessions_scratch_tmp(
                 (own / "tmp").rmdir()
             else:
                 assert "VBOT_SCRATCH_DIR" not in environment
-                for name in ("TEMP", "TMP", "TMPDIR"):
+                assert environment["TEMP"] == "requested-tmp"
+                assert not result.get("notes")
+                for name in ("TMP", "TMPDIR"):
                     assert environment.get(name) == ordinary_environment.get(name)
             if sys.platform == "win32":
                 assert "VBOT_SCRATCH_DIR" not in shell.launcher.envs[-1]
@@ -1472,6 +1523,12 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     secret = await shell.call({"command": "ls", "env_keys": ["UNKNOWN_SECRET_FOR_TEST"]})
     # No environment variable can hold a NUL character.
     nul = await shell.call({"command": "ls", "env": {"DATA": "a\x00b"}})
+    for malformed in (
+        {"command": "echo '\ud800'"},
+        {"command": "ls", "env": {"DATA": "\udfff", "EMPTY": ""}},
+        {"command": "ls", "env": {"\ud800": "value"}},
+    ):
+        assert (await shell.call(malformed))["error"]["code"] == "invalid_arguments"
     inspect = await shell.call({"action": {"type": "inspect", "command": "ls"}})
     wrappers = (
         (["pwsh", "-Command"], ["PWSH.exe", "-NoProfile", "-C"])

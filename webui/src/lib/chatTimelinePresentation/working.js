@@ -125,7 +125,7 @@ export function workingGroupDetails(summary) {
   return {
     rows: [
       {
-        label: t('chat.working.toolCalls'),
+        label: t('chat.details.toolCalls'),
         value: String(summary.toolCount),
       },
       {

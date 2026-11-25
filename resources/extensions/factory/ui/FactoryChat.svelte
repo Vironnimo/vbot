@@ -2,8 +2,8 @@
   import { onMount, tick } from 'svelte';
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ContextUsageRing from '@vbot/extension-sdk/ui/ContextUsageRing.svelte';
   import MarkdownContent from '@vbot/extension-sdk/ui/MarkdownContent.svelte';
-  import SessionEmbed from '@vbot/extension-sdk/ui/SessionEmbed.svelte';
   import TextArea from '@vbot/extension-sdk/ui/TextArea.svelte';
   import { failureText } from './presentation.js';
 
@@ -17,16 +17,17 @@
   } = $props();
 
   let chat = $state(null);
+  let usageSnapshot = $state(null);
   let draft = $state('');
   let error = $state('');
   let sending = $state(false);
   let loading = $state(true);
   let loaded = $state(false);
-  let inspectedBinding = $state(null);
   let fresh = $state(false);
   let log = $state(null);
   const inputId = $props.id();
   let request = 0;
+  let usageRequest = 0;
   let disposed = false;
   let attempt = null;
   let historyPages = 1;
@@ -34,11 +35,52 @@
   const name = $derived(
     memberName || chat?.member_name || t('factory.chat.leader'),
   );
+  const catalogContextWindow = $derived.by(() => {
+    const modelId = chat?.agent_model;
+    if (!modelId) return null;
+    const bare = modelId.includes(':')
+      ? modelId.replace(/^([^/:]+):[^/]+\//, '$1/')
+      : modelId;
+    const found = (model.catalog?.models ?? []).find(
+      (item) => item.id === modelId || item.id === bare,
+    );
+    return Number.isFinite(found?.context_window) ? found.context_window : null;
+  });
+  const contextUsage = $derived(usageSnapshot?.context_usage ?? null);
+  const contextWindow = $derived(
+    contextUsage?.context_window ?? catalogContextWindow,
+  );
   const scope = () => ({
     project_id: projectId,
     ...(memberId ? { member_id: memberId } : {}),
     ...(chat?.topic?.id ? { topic_id: chat.topic.id } : {}),
   });
+
+  async function refreshUsage(binding) {
+    if (
+      !binding?.group_id ||
+      !binding?.participant_id ||
+      !model.client.readHistory
+    ) {
+      usageSnapshot = null;
+      return;
+    }
+    const version = ++usageRequest;
+    try {
+      const history = await model.client.readHistory(
+        binding.group_id,
+        binding.participant_id,
+        { limit: 1 },
+      );
+      if (!disposed && version === usageRequest) {
+        usageSnapshot = history ?? null;
+      }
+    } catch {
+      if (!disposed && version === usageRequest) {
+        usageSnapshot = null;
+      }
+    }
+  }
 
   async function show(value) {
     const follow =
@@ -46,6 +88,7 @@
       !log ||
       log.scrollHeight - log.clientHeight - log.scrollTop < 48;
     chat = value;
+    void refreshUsage(value?.session_binding);
     await tick();
     if (follow && log) log.scrollTop = log.scrollHeight;
   }
@@ -150,10 +193,11 @@
     }
   }
 
-  function newTopic() {
+  function newSession() {
     request++;
+    usageRequest++;
     chat = null;
-    inspectedBinding = null;
+    usageSnapshot = null;
     fresh = true;
     loaded = false;
     loading = true;
@@ -165,7 +209,12 @@
   }
 
   function keydown(event) {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      event.keyCode !== 229
+    ) {
       event.preventDefault();
       void send();
     }
@@ -174,32 +223,27 @@
 
 <section class="chat" aria-label={t('factory.chat.title', { name })}>
   <header>
-    <div>
+    <div class="chat-heading">
       <h2>{t('factory.chat.title', { name })}</h2>
-      {#if chat?.topic}<span>{chat.topic.title}</span>{/if}
+      {#if chat?.topic?.title}<span>{chat.topic.title}</span>{/if}
     </div>
     <div class="actions">
-      {#if chat?.profile_available && chat.agent_proof}
-        <Button
-          variant="tertiary"
-          onClick={() =>
-            model.openAgentProfile(
-              chat.agent_id,
-              chat.agent_proof,
-              chat.factory_id,
-            )}>{t('factory.chat.editAgent')}</Button
-        >
-      {/if}
+      <ContextUsageRing
+        {contextUsage}
+        {contextWindow}
+        sessionUsage={usageSnapshot?.session_usage ?? null}
+        runUsage={usageSnapshot?.run_usage ?? null}
+        showFigures
+      />
       {#if chat?.topic?.state === 'open' && !inactive && (chat?.replying || chat.posts?.at(-1)?.author === 'user')}
         <Button variant="danger" onClick={stopDiscussion}
           >{t('factory.chat.stop')}</Button
         >
       {/if}
-      {#if chat?.session_binding}
+      {#if chat?.session}
         <Button
           variant="tertiary"
-          onClick={() =>
-            (inspectedBinding = inspectedBinding ? null : chat.session_binding)}
+          onClick={() => model.client.openSession(chat.session)}
           >{t('factory.chat.openSession')}</Button
         >
       {/if}
@@ -207,31 +251,13 @@
         <Button
           variant="tertiary"
           disabled={sending || Boolean(draft.trim())}
-          onClick={newTopic}>{t('factory.chat.new')}</Button
+          onClick={newSession}>{t('factory.chat.new')}</Button
         >
       {/if}
     </div>
   </header>
 
-  {#if inspectedBinding}
-    <div class="chat-session-panel">
-      <div class="chat-session-header">
-        <Button variant="tertiary" onClick={() => (inspectedBinding = null)}
-          >{t('common.close')}</Button
-        >
-      </div>
-      <div class="chat-session-slot">
-        <SessionEmbed
-          client={model.client}
-          groupId={inspectedBinding.group_id}
-          participantId={inspectedBinding.participant_id ?? inspectedBinding.id}
-          presentation="conversation"
-        />
-      </div>
-    </div>
-  {/if}
-
-  <div class="messages" role="log" bind:this={log}>
+  <div class="messages md-chat" role="log" bind:this={log}>
     {#if chat?.before}
       <Button
         variant="tertiary"
@@ -244,16 +270,21 @@
     {#each chat?.posts || [] as post (post.id)}
       <div class:user={post.author === 'user'} class="bubble">
         {#if post.author_name && post.author !== 'member:' + chat.topic?.direct_member_id}
-          <small>{post.author_name}</small>
+          <small class="bubble-author">{post.author_name}</small>
         {/if}
-        {#if post.evidence}<strong>{t('factory.chat.outcome')}</strong>{/if}
+        {#if post.evidence}<strong class="bubble-outcome"
+            >{t('factory.chat.outcome')}</strong
+          >{/if}
         {#if post.author === 'user'}
           <p>{post.text}</p>
         {:else}
-          <MarkdownContent source={post.text} />
+          <MarkdownContent class="msg-markdown" source={post.text} />
         {/if}
         {#if post.evidence}
-          <MarkdownContent source={String(post.evidence)} />
+          <MarkdownContent
+            class="msg-markdown"
+            source={String(post.evidence)}
+          />
         {/if}
       </div>
     {/each}
@@ -311,6 +342,8 @@
 
 <style>
   .chat {
+    flex: 1;
+    min-height: 0;
     border: 1px solid var(--border);
     border-radius: 12px;
     background: var(--surface);
@@ -325,6 +358,15 @@
     gap: 12px;
     justify-content: space-between;
     padding: 12px 16px;
+    flex-shrink: 0;
+  }
+  header {
+    border-bottom: 1px solid var(--border);
+  }
+  .chat-heading {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
   }
   h2 {
     font-size: 15px;
@@ -336,56 +378,56 @@
   }
   .actions {
     display: flex;
-    gap: 4px;
+    align-items: center;
+    gap: 6px;
   }
   header span {
     color: var(--text-med);
     font-size: 12px;
     overflow-wrap: anywhere;
   }
-  .chat-session-panel {
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    padding: 10px 16px;
-  }
-  .chat-session-header {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 8px;
-  }
-  .chat-session-slot {
-    height: clamp(260px, 45dvh, 520px);
-  }
   .messages {
-    max-height: clamp(14rem, 42vh, 32rem);
-    min-height: 6rem;
-    overflow: auto;
-    padding: 4px 16px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
   }
   .bubble {
     align-self: flex-start;
+    width: 100%;
     min-width: 0;
-    max-width: 94%;
     overflow-wrap: anywhere;
+  }
+  .bubble-author {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-med);
+  }
+  .bubble-outcome {
+    display: block;
+    margin-bottom: 4px;
   }
   .user {
     align-self: flex-end;
+    width: auto;
+    max-width: 85%;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 6px 12px;
+    padding: 8px 14px;
+    font-size: var(--fs-chat-prose, 14.5px);
+    line-height: 1.5;
   }
-  .bubble p {
+  .user p {
     white-space: pre-wrap;
     margin: 0;
   }
   form {
     align-items: flex-end;
     border-top: 1px solid var(--border);
-    margin-top: 8px;
   }
   form :global(.factory-chat-input) {
     flex: 1;
@@ -393,7 +435,8 @@
     max-height: 10rem;
   }
   p[role] {
-    margin: 6px 16px;
+    margin: 8px 16px;
     font-size: 13px;
+    flex-shrink: 0;
   }
 </style>

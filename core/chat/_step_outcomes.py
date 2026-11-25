@@ -13,6 +13,7 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
     ToolCall,
+    ToolCallRejection,
 )
 from core.chat.output_files import OutputFileScope, resolve_assistant_file_references
 from core.chat.usage import ContextTarget, RequestContextEstimate, RequestContextUsage
@@ -28,10 +29,14 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
+    build_tool_call_rejection,
 )
 from core.providers.reasoning import ReasoningReplayPolicy
 from core.sessions import ToolResultFacts
 from core.tools import ToolNotFoundError, called_tool_name, model_tool_name
+from core.tools.arguments import invalid_unicode_arguments
+from core.tools.model_names import BASH_TOOL_NAME
+from core.tools.tool_loading import CALL_TOOL_NAME
 from core.utils.errors import ProviderError
 
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
@@ -178,10 +183,10 @@ def _with_offered_tool_names(
     never remapped, even after it was unregistered, so its call fails as removed.
     """
     tool_calls = assistant_message.tool_calls
-    if not tool_calls or not offered:
+    if not tool_calls:
         return assistant_message
     resolved = _offered_tool_calls(tool_calls, offered, registry, removed=removed)
-    if all(new.name == old.name for new, old in zip(resolved, tool_calls, strict=True)):
+    if resolved == tool_calls:
         return assistant_message
     return replace(assistant_message, tool_calls=resolved)
 
@@ -194,18 +199,35 @@ def _offered_tool_calls(
     removed: Collection[str] = (),
 ) -> list[ToolCall]:
     """Resolve each call's name as :func:`_with_offered_tool_names` does."""
-    if not offered:
-        return list(tool_calls)
     registered = _RegisteredNames(registry, frozenset(removed))
-    return [
-        replace(
-            call,
-            name=called_tool_name(
-                call.name, offered, registered=registered, arguments=call.arguments
-            ),
+    resolved = []
+    for call in tool_calls:
+        name = (
+            called_tool_name(call.name, offered, registered=registered, arguments=call.arguments)
+            if offered
+            else call.name
         )
-        for call in tool_calls
-    ]
+        if name == call.name and not call.arguments_had_lone_surrogates:
+            resolved.append(call)
+            continue
+        rejection = call.rejection
+        if (
+            call.arguments_had_lone_surrogates
+            and rejection is None
+            and name in {BASH_TOOL_NAME, "execute_code", CALL_TOOL_NAME}
+        ):
+            rejection = ToolCallRejection.from_dict(
+                build_tool_call_rejection(
+                    code="invalid_arguments",
+                    message=invalid_unicode_arguments(model_tool_name(name)),
+                    name=name,
+                    arguments=call.arguments,
+                )
+            )
+        resolved.append(
+            replace(call, name=name, rejection=rejection, arguments_had_lone_surrogates=False)
+        )
+    return resolved
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -13,6 +13,7 @@ from core.permissions import (
     PERMISSION_RULE_PARTS,
     PermissionCeiling,
     join_ceilings,
+    normalize_permission_profile_name,
     normalize_permission_rules,
     normalize_read_folders,
     normalize_session_grants,
@@ -161,6 +162,12 @@ class AgentOverrides:
     part (:meth:`rules_over`). Only the user's setter
     (``SessionResolution.set_session_permission_rules``) changes it.
 
+    ``permission_profile`` is the user's choice of a named Permission Profile
+    for this Session alone, instead of ``permission_rules`` (the setter stores
+    one or the other). It stays a name: the resolver reads the profile's current
+    rules at every resolution (:meth:`with_profile_rules`), so an edit of the
+    profile reaches the Session, and a profile deleted since stops its Runs.
+
     ``permission_grants`` are the Session Grants: allow rules the user added
     while approving a Tool call, as normalized rule strings. They add to the
     Agent's own rules (after the Session's rule set) and never to an inherited
@@ -176,6 +183,7 @@ class AgentOverrides:
     thinking_effort_default: bool = False
     permission_ceiling: Mapping[str, Any] | None = None
     permission_rules: Mapping[str, Any] | None = None
+    permission_profile: str | None = None
     permission_grants: tuple[str, ...] = ()
     read_folders: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
@@ -190,6 +198,8 @@ class AgentOverrides:
                 "permission_rules",
                 permission_rules_to_dict(normalize_permission_rules(self.permission_rules)),
             )
+        if self.permission_profile is not None:
+            normalize_permission_profile_name(self.permission_profile)
         object.__setattr__(
             self,
             "permission_grants",
@@ -245,6 +255,7 @@ class AgentOverrides:
             ),
             permission_ceiling=value.get("permission_ceiling"),
             permission_rules=value.get("permission_rules"),
+            permission_profile=value.get("permission_profile"),
             permission_grants=tuple(value.get("permission_grants") or ()),
             read_folders=value.get("read_folders", {}),
         )
@@ -255,13 +266,27 @@ class AgentOverrides:
             return None
         return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
 
+    def with_profile_rules(self, resolve: Callable[[str], PermissionRules]) -> AgentOverrides:
+        """These overrides with the selected profile's current rules as the Session's rules.
+
+        *resolve* reads a profile by name and raises for one that is unavailable;
+        without a selected profile the overrides stay as they are.
+        """
+        if self.permission_profile is None:
+            return self
+        rules = permission_rules_to_dict(resolve(self.permission_profile))
+        return replace(self, permission_rules=rules, permission_profile=None)
+
     def rules_over(self, agent_rules: PermissionRules | None) -> PermissionRules | None:
         """The Session's rule set over *agent_rules* (``None``: full access), per part.
 
         Without Session rules the Agent's rules stay as they are; a part the
         Session sets replaces the Agent's, so the Full access preset lifts them all.
         The Session Grants then add to the allow rules of a restricting result.
+        A selected profile must be resolved first (:meth:`with_profile_rules`).
         """
+        if self.permission_profile is not None:
+            raise ValueError("Resolve the Session's permission profile before applying it.")
         rules = agent_rules
         if self.permission_rules is not None:
             rules = resolve_rule_set(
@@ -280,7 +305,11 @@ class AgentOverrides:
     @property
     def changes_permission_rules(self) -> bool:
         """Whether :meth:`rules_over` can differ from the Agent's rules."""
-        return self.permission_rules is not None or bool(self.permission_grants)
+        return (
+            self.permission_rules is not None
+            or self.permission_profile is not None
+            or bool(self.permission_grants)
+        )
 
     @property
     def grants_full_access(self) -> bool:
@@ -322,6 +351,7 @@ class AgentOverrides:
             not self.thinking_effort_default
             and self.permission_ceiling is None
             and self.permission_rules is None
+            and self.permission_profile is None
             and not self.permission_grants
             and not self.read_folders
             and all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
@@ -330,7 +360,7 @@ class AgentOverrides:
     def as_dict(self) -> dict[str, Any]:
         """Return only the replaced settings as stored, keyed by field name.
 
-        The ``permission_ceiling`` and ``permission_rules`` stay out: they
+        The permission fields stay out: they
         replace no plain Agent field, and :meth:`session_metadata` stores them.
         """
         values = {
@@ -358,6 +388,8 @@ class AgentOverrides:
             stored["permission_ceiling"] = dict(self.permission_ceiling)
         if self.permission_rules is not None:
             stored["permission_rules"] = dict(self.permission_rules)
+        if self.permission_profile is not None:
+            stored["permission_profile"] = self.permission_profile
         if self.permission_grants:
             stored["permission_grants"] = list(self.permission_grants)
         if self.read_folders:

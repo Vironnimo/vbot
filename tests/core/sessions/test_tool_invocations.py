@@ -124,6 +124,7 @@ async def test_started_calls_count_without_results_and_declarations_do_not(manag
         ("interrupted" if termination == "restart" else "cancelled", None),
     ]
     assert session.tool_invocations_since(final.revision).invocations == ()
+    assert session.read_chat_history_snapshot(limit=1).runs[0]["tool_call_count"] == 2
 
 
 @pytest.mark.asyncio

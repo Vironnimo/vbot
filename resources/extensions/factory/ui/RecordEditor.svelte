@@ -11,9 +11,7 @@
   let { kind, record, model } = $props();
   const identity = untrack(() => record.id);
   const fields = untrack(() =>
-    kind === 'factory'
-      ? ['name', 'remit', 'config']
-      : ['role', 'instructions', 'config'],
+    kind === 'factory' ? ['name', 'remit', 'config'] : ['role', 'instructions'],
   );
 
   const listKeys = [
@@ -153,10 +151,10 @@
     />
   {/if}
 
-  <details>
-    <summary>{t('factory.settings.boundaries')}</summary>
-    <p class="factory-help">{t('factory.settings.boundaryHelp')}</p>
-    {#if kind === 'factory'}
+  {#if kind === 'factory'}
+    <details>
+      <summary>{t('factory.settings.boundaries')}</summary>
+      <p class="factory-help">{t('factory.settings.boundaryHelp')}</p>
       <label for="factory-permission-limit"
         >{t('permissions.profile.groupLimit')}</label
       >
@@ -189,44 +187,44 @@
             allowed_models: value,
           })}
       />
-    {/if}
-    <label for={`${kind}-allowed-skills-${identity}`}
-      >{t('factory.settings.allowedSkills')}</label
-    >
-    <TextField
-      id={`${kind}-allowed-skills-${identity}`}
-      value={editor.draft.config.allowed_skills}
-      onInput={(value) =>
-        (editor.draft.config = {
-          ...editor.draft.config,
-          allowed_skills: value,
-        })}
-    />
-    <label for={`${kind}-allowed-tools-${identity}`}
-      >{t('factory.settings.allowedTools')}</label
-    >
-    <TextField
-      id={`${kind}-allowed-tools-${identity}`}
-      value={editor.draft.config.allowed_tools}
-      onInput={(value) =>
-        (editor.draft.config = {
-          ...editor.draft.config,
-          allowed_tools: value,
-        })}
-    />
-    <label for={`${kind}-denied-tools-${identity}`}
-      >{t('factory.settings.deniedTools')}</label
-    >
-    <TextField
-      id={`${kind}-denied-tools-${identity}`}
-      value={editor.draft.config.denied_tools}
-      onInput={(value) =>
-        (editor.draft.config = {
-          ...editor.draft.config,
-          denied_tools: value,
-        })}
-    />
-  </details>
+      <label for={`${kind}-allowed-skills-${identity}`}
+        >{t('factory.settings.allowedSkills')}</label
+      >
+      <TextField
+        id={`${kind}-allowed-skills-${identity}`}
+        value={editor.draft.config.allowed_skills}
+        onInput={(value) =>
+          (editor.draft.config = {
+            ...editor.draft.config,
+            allowed_skills: value,
+          })}
+      />
+      <label for={`${kind}-allowed-tools-${identity}`}
+        >{t('factory.settings.allowedTools')}</label
+      >
+      <TextField
+        id={`${kind}-allowed-tools-${identity}`}
+        value={editor.draft.config.allowed_tools}
+        onInput={(value) =>
+          (editor.draft.config = {
+            ...editor.draft.config,
+            allowed_tools: value,
+          })}
+      />
+      <label for={`${kind}-denied-tools-${identity}`}
+        >{t('factory.settings.deniedTools')}</label
+      >
+      <TextField
+        id={`${kind}-denied-tools-${identity}`}
+        value={editor.draft.config.denied_tools}
+        onInput={(value) =>
+          (editor.draft.config = {
+            ...editor.draft.config,
+            denied_tools: value,
+          })}
+      />
+    </details>
+  {/if}
 
   {#if editor.error}
     <Banner variant="error" role="alert">{editor.error}</Banner>

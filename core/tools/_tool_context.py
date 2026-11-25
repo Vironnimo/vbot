@@ -260,6 +260,11 @@ class ToolContext:
     public_arguments: JsonObject = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    # Prepared shell environment destinations and public source names, for
+    # Permission Rules and Shell Review approvals. Never store values here.
+    shell_credential_sources: tuple[tuple[str, str], ...] = field(
+        default=(), init=False, repr=False, compare=False
+    )
     secret_commit_hook: Callable[[], Awaitable[None]] | None = field(
         default=None, init=False, repr=False, compare=False
     )

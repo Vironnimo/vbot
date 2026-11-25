@@ -1,5 +1,7 @@
 """Variable names that can run code outside the analyzed command."""
 
+import sys
+
 _HOOKS = frozenset(
     {
         "BASH_ENV",
@@ -32,6 +34,8 @@ _HOOKS = frozenset(
 
 def controls_command_execution(name: str) -> bool:
     name = name.upper()
+    if sys.platform == "win32" and name in {"PATHEXT", "COMSPEC"}:
+        return True
     return name in _HOOKS or name.startswith(
         ("BASH_FUNC_", "LD_", "DYLD_", "GIT_CONFIG", "GIT_SSH", "COMPLUS_", "VBOT_")
     )

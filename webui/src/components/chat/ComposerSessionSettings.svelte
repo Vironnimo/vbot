@@ -664,7 +664,7 @@
         },
         {
           id: 'core:session-settings.permissions',
-          title: t('permissions.session.title'),
+          title: t('permissions.session.access'),
           order: 30,
           render: permissionsContribution,
         },

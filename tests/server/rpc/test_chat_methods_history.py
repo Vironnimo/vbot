@@ -897,6 +897,7 @@ async def test_timeline_bounds_run_delivery_and_pages_the_same_durable_children(
     full_run = next(item for item in full["items"] if item["type"] == "assistant_run")
     run = next(item for item in bounded["items"] if item["type"] == "assistant_run")
     gap, *window = run["items"]
+    assert run["toolCallCount"] == 4
     children = full_run["items"]
     assert [child["type"] for child in children[8:]] == [
         "tool_call",

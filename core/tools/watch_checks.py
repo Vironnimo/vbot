@@ -233,6 +233,10 @@ class WatchCheckRunner:
             )
         except HostShellMissingError as error:
             raise WatchCheckError(f"The {noun} did not run: {error}") from error
+        except UnicodeEncodeError:
+            raise WatchCheckError(
+                f"The {noun} did not run: the shell request contains an unpaired Unicode surrogate."
+            ) from None
         try:
             process = await self._launcher.launch(
                 start.argv,

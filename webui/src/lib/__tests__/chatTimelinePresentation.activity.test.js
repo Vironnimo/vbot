@@ -31,7 +31,6 @@ import { backgroundCommandTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
 const seconds = (value) => t('chat.durationSeconds', { seconds: value });
-const iterations = (count) => t('chat.runIterations', { count });
 const minutesSeconds = (minutes, secs) =>
   t('chat.durationMinutesSeconds', { minutes, seconds: secs });
 
@@ -62,32 +61,15 @@ describe('runFooterParts', () => {
 
   it.each([
     [
-      'the canonical Iteration count after the duration, never a tool-count estimate',
+      'only status and duration when activity counts are available',
       {
         status: 'completed',
         durationMs: 8000,
         iterationCount: 3,
-        outputs: [{ content: 'done' }],
-        tools: Array.from({ length: 5 }, () => ({ name: 'read' })),
+        toolCallCount: 5,
         items: [editTool({ path: 'a.txt', added: 3, removed: 2 })],
       },
-      () => [status('completed'), seconds('8.0'), iterations(3)],
-    ],
-    [
-      'no Iteration count without backend truth',
-      {
-        status: 'completed',
-        durationMs: 1000,
-        outputs: [{ content: 'done' }, { content: 'another message' }],
-        tools: [{ name: 'read' }],
-        items: [],
-      },
-      () => [status('completed'), seconds('1.0')],
-    ],
-    [
-      'zero Iterations before the first Model response',
-      { status: 'running', durationMs: null, iterationCount: 0 },
-      () => [status('working'), iterations(0)],
+      () => [status('completed'), seconds('8.0')],
     ],
     [
       'the cancelled label before the runtime',
@@ -173,7 +155,6 @@ describe('runFooterParts', () => {
     expect(runFooterParts(latest, ms('18:12:30'), options)).toEqual([
       status('working'),
       minutesSeconds(12, 30),
-      iterations(50),
     ]);
     // Completed while background work it started still runs: Waiting,
     // still counting from the start of the work.
@@ -185,12 +166,11 @@ describe('runFooterParts', () => {
         workStartedAt: spanStart,
         runs,
       }),
-    ).toEqual([status('waiting'), minutesSeconds(14, 0), iterations(50)]);
+    ).toEqual([status('waiting'), minutesSeconds(14, 0)]);
     // Finished: the whole span from its first Run's start to its last end.
     expect(runFooterParts(done, ms('19:00:00'), { runs })).toEqual([
       status('completed'),
       minutesSeconds(13, 0),
-      iterations(50),
       formatTime(at('18:13:00')),
     ]);
     const details = runFooterDetails(done, ms('19:00:00'), { runs });
@@ -198,9 +178,22 @@ describe('runFooterParts', () => {
       label: t('chat.details.runs'),
       value: '3',
     });
-    expect(details.text).toBe(
-      t('chat.details.modelResponseCount', { count: 50 }),
-    );
+    expect(details.rows).toContainEqual({
+      label: t('chat.details.modelResponses'),
+      value: '50',
+    });
+    const partial = runFooterDetails(done, ms('19:00:00'), {
+      runs: [second, done],
+      firstRunWithOlderHistory: second,
+    });
+    expect(partial.text).toBe(t('chat.details.loadedRunsOnly'));
+    expect(partial.rows).toContainEqual({
+      label: t('chat.details.modelResponses'),
+      value: '12',
+    });
+    expect(
+      partial.rows.some((row) => row.label === t('chat.details.toolCalls')),
+    ).toBe(false);
     // A Run that ended otherwise keeps its own outcome.
     expect(
       runFooterParts({ status: 'cancelled', durationMs: 8000 }, 0, {
@@ -220,6 +213,7 @@ describe('runFooterParts', () => {
           status: 'completed',
           durationMs: 8000,
           iterationCount: 3,
+          toolCallCount: 0,
           startTimestamp: start,
           endTimestamp: end,
           items: [
@@ -239,11 +233,12 @@ describe('runFooterParts', () => {
       ),
     ).toEqual({
       title: status('completed'),
-      text: t('chat.details.modelResponseCount', { count: 3 }),
       rows: [
         { label: t('chat.details.started'), value: moment(start) },
         { label: t('chat.details.finished'), value: moment(end) },
         { label: t('chat.details.duration'), value: seconds('8.0') },
+        { label: t('chat.details.modelResponses'), value: '3' },
+        { label: t('chat.details.toolCalls'), value: '0' },
         { label: t('chat.details.model'), value: 'provider/old' },
         {
           label: t('chat.details.modelAndThinking'),

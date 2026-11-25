@@ -348,12 +348,14 @@ async def test_dashboard_get_aggregates_state(factory_store: FactoryStore, tmp_p
     await factory_store.jobs.transition_run(r_attn["id"], "needs_attention", question="Which env?")
     r_failed = await factory_store.jobs.create_run(factory["id"], job["id"], origin="manual")
     await factory_store.jobs.transition_run(r_failed["id"], "failed", reason="Boom")
+    r_cancelled = await factory_store.jobs.create_run(factory["id"], job["id"], origin="manual")
+    await factory_store.jobs.transition_run(r_cancelled["id"], "cancelled")
     r_done = await factory_store.jobs.create_run(factory["id"], job["id"], origin="manual")
     await factory_store.jobs.transition_run(r_done["id"], "done", summary="All good")
 
     dash = await management.operation(
         "dashboard.get",
-        {"factory_id": factory["id"], "recent_limit": 3, "upcoming_limit": 5},
+        {"factory_id": factory["id"], "recent_limit": 10, "upcoming_limit": 5},
     )
     assert dash is not None
     assert dash["factory"]["id"] == factory["id"]
@@ -364,7 +366,19 @@ async def test_dashboard_get_aggregates_state(factory_store: FactoryStore, tmp_p
     assert {r["id"] for r in dash["running"]} == {r_running["id"], r_queued["id"]}
     assert len(dash["upcoming"]) == 1
     assert dash["upcoming"][0]["job_id"] == job["id"]
-    assert len(dash["recent_runs"]) == 3
+    assert {r["id"] for r in dash["recent_runs"]} == {
+        r_done["id"],
+        r_failed["id"],
+        r_cancelled["id"],
+    }
+
+    capped = await management.operation(
+        "dashboard.get",
+        {"factory_id": factory["id"], "recent_limit": 2, "upcoming_limit": 5},
+    )
+    assert capped is not None
+    assert len(capped["recent_runs"]) == 2
+    assert all(r["state"] in {"done", "failed", "cancelled"} for r in capped["recent_runs"])
 
 
 @pytest.mark.asyncio

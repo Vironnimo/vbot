@@ -127,9 +127,7 @@ export default Object.freeze({
 
   // Session badge (components/permissions/SessionPermissionsBadge.svelte)
   'permissions.session.badge': 'Restricted',
-  'permissions.session.title': 'Permission Rules limit this Session',
-  'permissions.session.text':
-    'Its Tools may ask for approval when these limits do not allow access. Explicit denies remain in force. When several sets of limits are listed, all of them apply.',
+  'permissions.session.badgeLabel': 'Access in this Session: {access}',
   'permissions.session.source.agent': 'This Agent’s rules',
   'permissions.session.source.parent':
     'Inherited from the Agent that started it',
@@ -145,13 +143,21 @@ export default Object.freeze({
     'Later Runs in this Session then follow only this Agent’s own rules. A scheduled job or the Session that started this one adds its limits again when it runs here.',
   'permissions.session.clearConfirm': 'Remove limits',
   'permissions.session.clearFailed': 'The limits could not be removed.',
-  'permissions.session.fullTitle': 'This Session has full access',
-  'permissions.session.fullText':
-    'vBot does not limit which files its Tools read or change, which commands they run or which sites they reach.',
   'permissions.session.access': 'Access in this Session',
   'permissions.session.accessHelp':
     'Applies to this Session only. A reply in progress uses it from its next Tool call, and the Agent is told about the change.',
-  'permissions.session.access.agent': 'This Agent’s rules',
+  'permissions.session.agentDefault': 'Agent default · {profile}',
+  'permissions.session.agentRules': 'its own rules',
+  'permissions.session.customRules': 'Custom rules',
+  'permissions.session.fullAccessHint': 'No limits',
+  'permissions.session.restrictedHint':
+    'Reads anywhere, changes the work area, asks for more',
+  'permissions.session.customProfileHint': 'Your profile',
+  'permissions.session.draftHint':
+    'You can choose another access once the Session has started.',
+  'permissions.session.details': 'Rules and limits',
+  'permissions.session.detailsWithGrants':
+    'Rules and limits · {count} allowed while approving',
   'permissions.session.accessFailed': 'The access could not be changed.',
   'permissions.session.fullConfirmTitle': 'Give this Session full access?',
   'permissions.session.fullConfirmText':

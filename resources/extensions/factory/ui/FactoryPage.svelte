@@ -203,7 +203,12 @@
     {/if}
   </header>
 
-  <div class="factory-scrollport">
+  <div
+    class="factory-scrollport"
+    class:factory-scrollport--overview={Boolean(
+      model.factory && model.view === 'overview',
+    )}
+  >
     {#if model.error}
       <Banner variant="error" role="alert">{model.error}</Banner>
     {/if}

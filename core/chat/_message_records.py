@@ -158,6 +158,9 @@ class ToolCall:
     rejection: ToolCallRejection | None = None
     argument_sequence_index: int | None = None
     argument_sequence_length: int | None = None
+    # Ingestion-only, until name resolution. Code and delegated calls must not
+    # execute the replacement characters used to make their history valid UTF-8.
+    arguments_had_lone_surrogates: bool = False
 
     def __post_init__(self) -> None:
         _message_validation._validate_tool_call_argument_sequence(

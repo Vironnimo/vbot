@@ -303,7 +303,7 @@ RUNNER_STATEMENTS = r"""& {
             $state.Host.LookupHook
     }.GetNewClosure()
     $climb = {
-        [System.Diagnostics.DebuggerHidden()] param($node, $root)
+        [System.Diagnostics.DebuggerHidden()] param($node, $root, $direct)
         $leaves = {
             [System.Diagnostics.DebuggerHidden()] param($ast)
             $ast -is [System.Management.Automation.Language.BreakStatementAst] -or
@@ -313,17 +313,28 @@ RUNNER_STATEMENTS = r"""& {
                 $ast -is [System.Management.Automation.Language.ThrowStatementAst]
         }
         $conditional = $false
+        $leaving = $false
         while (-not [object]::ReferenceEquals($node.Parent, $root)) {
             $parent = $node.Parent
+            if ($leaving -and
+                $parent -isnot [System.Management.Automation.Language.TryStatementAst] -and
+                $parent -isnot [System.Management.Automation.Language.NamedBlockAst]) {
+                $node = $parent
+                continue
+            }
             if ($parent -is [System.Management.Automation.Language.StatementBlockAst] -or
                 $parent -is [System.Management.Automation.Language.NamedBlockAst]) {
                 $after = $false
                 foreach ($statement in $parent.Statements) {
+                    if ($leaving) { break }
                     if ([object]::ReferenceEquals($statement, $node)) { $after = $true }
                     elseif ($after) {
                         $type = $statement.GetType().Name
-                        return $type -eq 'ExitStatementAst' -or
+                        $leaving = $type -eq 'ExitStatementAst' -or
                             ($type -eq 'ReturnStatementAst' -and -not $statement.Pipeline)
+                        if (-not $leaving) { return $false }
+                        # The return skips later statements, but finally and clean still run.
+                        break
                     } elseif ($statement.Find($leaves, $false)) { $conditional = $true }
                 }
                 if ($parent -is [System.Management.Automation.Language.NamedBlockAst]) {
@@ -367,8 +378,10 @@ RUNNER_STATEMENTS = r"""& {
                 # A returned expression executes unchanged; its native status
                 # survives the return just as its output does.
             } elseif ($parent -is [System.Management.Automation.Language.PipelineChainAst]) {
+                # A function can succeed after a native failure in its own frame.
+                # Only its own failed pipeline can show that && skipped the right side.
                 if ([object]::ReferenceEquals($node, $parent.LhsPipelineChain) -and
-                    "$($parent.Operator)" -ne 'AndAnd') { return $false }
+                    (-not $direct -or "$($parent.Operator)" -ne 'AndAnd')) { return $false }
             } else { return $false }
             $node = $parent
         }
@@ -403,7 +416,7 @@ RUNNER_STATEMENTS = r"""& {
                 }, $true)
                 if ($node) { $node = $node.Parent }
             }
-            if (-not $node -or -not (& $climb $node $root)) { return -1 }
+            if (-not $node -or -not (& $climb $node $root ($index -eq 0))) { return -1 }
             if ($index -lt $last) {
                 $kind = $invocation.MyCommand
                 if (-not ($kind -is [System.Management.Automation.FunctionInfo] -or
@@ -585,7 +598,7 @@ try {
     if ($__vbotRequest[-1] -cmatch '^@Local\\vBot-shell-[0-9a-f]{32}$') {
         $__vbotReceipt = $__vbotRequest[-1].Substring(1)
     } elseif ($__vbotRequest[-1] -ne '.') { throw 'ended early' }
-    $__vbotUtf8 = [System.Text.Encoding]::UTF8
+    $__vbotUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
     $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
     $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
     [VBotGuard]::Protect($__vbotUtf8.GetString(
@@ -727,7 +740,7 @@ def powershell_request(
 
 
 def _base64(text: str) -> str:
-    return base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 @dataclass(frozen=True, slots=True)
