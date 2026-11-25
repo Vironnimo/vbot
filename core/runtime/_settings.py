@@ -305,16 +305,31 @@ def publish_credentials(
 ) -> None:
     if not runtime._started or generation is not runtime._credential_reload_generation:
         return
+    previous = runtime._fallback_environment
     changed_keys = {
-        key for key, value in credentials.items() if runtime._fallback_environment.get(key) != value
+        key
+        for key in credentials.keys() | previous.keys()
+        if credentials.get(key) != previous.get(key)
     }
+    if changed_keys and runtime._chat_loop is not None:
+        from core.providers.accounts import account_id_from_credential_key
+
+        for provider_id in runtime.providers.list_ids():
+            for connection in runtime.providers.get(provider_id).connections:
+                for key in changed_keys:
+                    if account := account_id_from_credential_key(
+                        connection.auth.credential_key, key
+                    ):
+                        runtime._chat_loop.account_credentials_changed(
+                            provider_id, connection.id, account
+                        )
     runtime._fallback_environment = dict(credentials)
     runtime.provider_credentials.reload_fallback_credentials(credentials)
     runtime._provider_operations().retire_http_transports()
     runtime.agent_secrets.set_system_values(credentials)
     runtime._skill_operations().reload_environment(dict(credentials))
-    if changed_keys:
-        runtime._provider_operations().start_account_catalog_refresh(changed_keys=changed_keys)
+    if refreshed_keys := changed_keys & credentials.keys():
+        runtime._provider_operations().start_account_catalog_refresh(changed_keys=refreshed_keys)
 
 
 def reload_custom_providers(runtime: Runtime) -> None:

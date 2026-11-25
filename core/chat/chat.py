@@ -1218,6 +1218,17 @@ class ChatLoop:
             agent, session_tool_grants=session_tool_grants
         )
 
+    def account_credentials_changed(
+        self, provider_id: str, local_connection_id: str, account_id: str
+    ) -> None:
+        """Forget the previous credential's quota when its Account slot is replaced."""
+        from core.providers.accounts import DEFAULT_ACCOUNT_ID
+
+        scope = f"{provider_id}::{local_connection_id}"
+        if account_id != DEFAULT_ACCOUNT_ID:
+            scope = f"{scope}:{account_id}"
+        self._execution._route_health.credentials_changed(scope)
+
     async def context_capacity(self, agent: Any) -> int | None:
         """Return the Context capacity *agent*'s Runs budget against on its Model's route."""
         return await self._requests.targets.agent_context_capacity(agent)
