@@ -328,6 +328,7 @@ class PermissionInputs:
             self.sources == other.sources
             and self.stamps == other.stamps
             and self.overrides.permission_rules == other.overrides.permission_rules
+            and self.overrides.permission_profile == other.overrides.permission_profile
             and self.overrides.permission_ceiling == other.overrides.permission_ceiling
             and self.overrides.permission_grants == other.overrides.permission_grants
             and self.overrides.read_folders == other.overrides.read_folders

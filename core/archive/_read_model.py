@@ -111,6 +111,7 @@ def _restores_session_access(services: ArchiveServices, entry: ArchiveEntry) -> 
             return None
         if (
             overrides.permission_rules
+            or overrides.permission_profile is not None
             or overrides.permission_grants
             or overrides.permission_ceiling is not None
             or any(overrides.read_folders.values())
