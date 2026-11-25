@@ -71,7 +71,11 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
     request_input_budget,
 )
-from core.providers.errors import ProviderImageLimitError, ProviderRequestTooLargeError
+from core.providers.errors import (
+    ProviderContextOverflowError,
+    ProviderImageLimitError,
+    ProviderRequestTooLargeError,
+)
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     QueuedRunItem,
@@ -161,6 +165,7 @@ class AgenticProgression:
         evaluated_tool_key: tuple[int, str, bool] | None = None
         # Set when a final answer is followed by selected steering input.
         awaiting_steering = False
+        overflow_recovery_iteration: int | None = None
         track = session_track(run.agent_id, run.session_id, project_id)
         run_args = {"run_id": run.id}
 
@@ -407,7 +412,10 @@ class AgenticProgression:
             messages_for_request, request_estimate = await self._model_step._prepare_model_request(
                 context, target, state
             )
-            if self._compaction_service is not None:
+            if (
+                self._compaction_service is not None
+                and overflow_recovery_iteration != run.iteration_count + 1
+            ):
                 # This request is needed: steering has been delivered (or its
                 # withdrawal ended the Run), complete Tool Results and pending
                 # notes are present, and hooks/media have shaped the exact input.
@@ -531,6 +539,7 @@ class AgenticProgression:
                 context.stream_draft.record_tool_calls(model=public_model, tool_calls=tool_calls)
                 tool_round.start(tool_calls)
 
+            assistant_step = None
             while True:
                 run.raise_if_cancelled()
                 context_capacity = await self._requests.targets.resolve_context_capacity_async(
@@ -598,6 +607,30 @@ class AgenticProgression:
                             if context.owner_binding is not None
                             else None,
                         )
+                except ProviderContextOverflowError:
+                    # Only establishment failures reach here. A fatal break after
+                    # visible output or started Tools returns a step for persistence.
+                    if (
+                        overflow_recovery_iteration == request_iteration_number
+                        or self._compaction_service is None
+                    ):
+                        raise
+                    overflow_recovery_iteration = request_iteration_number
+                    compacted = await self._compaction_runs.maybe_auto_compact_state(
+                        context,
+                        target,
+                        usage=None,
+                        continuation_request_messages=messages_for_request,
+                        request_estimate=request_estimate,
+                        allow_continuation=True,
+                        provider_overflow=True,
+                    )
+                    if compacted is state:
+                        raise
+                    context.request_state = state = compacted
+                    messages, tools = state.messages, state.tools
+                    evaluated_tool_key = None
+                    break
                 except (ProviderRequestTooLargeError, ProviderImageLimitError) as exc:
                     if isinstance(exc, ProviderImageLimitError):
                         target = replace(
@@ -641,6 +674,8 @@ class AgenticProgression:
                         )
                     raise
                 break
+            if assistant_step is None:
+                continue
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
             # Calls or readable Assistant blocks the response contains.

@@ -11,7 +11,7 @@ import pytest
 
 from core.chat import ChatMessage, ToolCall
 from core.compaction import CompactionService
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderContextOverflowError, ProviderError
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, LOCAL_CONTEXT_DEFAULT_CAP
 from core.runs import COMPACTION_STARTED_EVENT, Run
 from core.sessions.history import _skill_context_note_content
@@ -376,6 +376,17 @@ async def test_summary_tail_waits_until_this_runs_loaded_skill_result_is_consume
     if compaction_requested:
         return
     assert service.compactable_context_calls == []
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    context = await boundary_context(
+        loop, run, session, await build_request_messages(loop, agent, session)
+    )
+    assert (
+        await loop._compaction_runs.maybe_auto_compact_state(
+            context, context.primary_target, None, allow_continuation=True, provider_overflow=True
+        )
+        is context.request_state
+    )
+    assert not service.compact_calls
 
     run_session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
     await auto_compact(loop, agent, session, usage={"input_tokens": 90})
@@ -432,6 +443,41 @@ class _OverflowingSkillAdapter(RecordingCompactionAdapter):
         if "HUGE-SKILL" in json.dumps(messages):
             raise ProviderError("context_length_exceeded", retryable=False)
         return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_again", [False, True])
+async def test_remote_overflow_compacts_once_and_continues_same_run(
+    tmp_path: Path, reject_again: bool
+) -> None:
+    error = ProviderContextOverflowError("request exceeds the context window")
+    answer = {"content": "Recovered", "tool_calls": None}
+    adapter = RecordingCompactionAdapter(
+        [error, error if reject_again else answer], summaries=["A useful summary."]
+    )
+    runtime = real_compaction_runtime(
+        tmp_path,
+        adapter,
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 500_000},
+            "strategy": {"type": "summary_tail", "tail_tokens": 1},
+        },
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Previous work " * 1024))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Result"))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+    request = loop.send("coder", "Continue", session_id="session-one")
+    if reject_again:
+        with pytest.raises(ProviderContextOverflowError):
+            await request
+    else:
+        assert (await request).content == "Recovered"
+    assert adapter.events == ["agent", "compaction", "agent"]
+    messages = session.load()
+    assert sum(m.role == "compaction_checkpoint" for m in messages) == 1
+    assert sum(m.role == "user" and m.content == "Continue" for m in messages) == 1
 
 
 @pytest.mark.asyncio
