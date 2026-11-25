@@ -16,13 +16,14 @@ import pytest
 from core.agents.agents import AgentStore
 from core.database import write_bootstrap_marker
 from core.models import Capabilities, Model, ReasoningCapabilities
-from core.permissions import PermissionRules
+from core.permissions import BUILTIN_PERMISSION_PROFILES, PermissionRules, permission_rules_to_dict
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.secrets.agent_secrets import SecretMasker
 from core.sessions import ChatSessionManager
+from core.settings.agent_defaults import SHIPPED_AGENT_TOOLS
 from core.storage import StorageManager
 from core.tools.tool_loading import DEFAULT_ALWAYS_LOADED_TOOLS
 from tests.server.rpc_test_support import (
@@ -305,6 +306,7 @@ def _real_agent_state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
 
 _SHARED_TOOL_LOADING = {"on_demand": True, "always_loaded": ["read"]}
 _SHARED_PERMISSION_RULES = {"read": "work_area", "deny": ["Read(**/.env)"]}
+_RESTRICTED_RULES = permission_rules_to_dict(BUILTIN_PERMISSION_PROFILES["restricted"])
 
 
 @pytest.mark.asyncio
@@ -351,6 +353,8 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         "tool_loading",
         "permission_rules",
         "permission_profile",
+        "tool_access",
+        "allowed_skills",
     }
     # ``config`` is the Agent's own value; the top-level value is the resolved one.
     assert result["config"]["model"] == (own_model or "")
@@ -370,13 +374,21 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
             "always_loaded": list(DEFAULT_ALWAYS_LOADED_TOOLS),
         }
     # ``permission_rules_default`` is the shared rule set an Agent without its own inherits.
-    assert result["permission_rules_default"] == (_SHARED_PERMISSION_RULES if defaults else None)
+    # Unset, it is the restricted Permission Profile's.
+    assert result["permission_rules_default"] == (
+        _SHARED_PERMISSION_RULES if defaults else _RESTRICTED_RULES
+    )
     if own_model is None:
         assert result["config"]["permission_rules"] is None
         assert result["permission_rules"] == _SHARED_PERMISSION_RULES
     else:
-        assert result["config"]["permission_rules"] == result["permission_rules"]
-        assert result["permission_rules"] == {"write": "scratch"}
+        assert result["config"]["permission_rules"] == {"write": "scratch"}
+        assert result["permission_rules"] == {**_RESTRICTED_RULES, "write": "scratch"}
+    # Without its own Tool access and Skills the Agent follows the shared default.
+    assert result["config"]["tool_access"] is None
+    assert result["config"]["allowed_skills"] is None
+    assert result["tool_access"] == {"mode": "selected", "allowed": list(SHIPPED_AGENT_TOOLS)}
+    assert result["allowed_skills"] == ["*"]
 
 
 @pytest.mark.asyncio
@@ -531,8 +543,13 @@ async def test_agent_update_applies_a_mutable_field(
     updated = await rpc_result(state, "agent.update", id="coder", **params)
     stored = await rpc_result(state, "agent.get", id="coder")
 
-    assert updated[field] == expected
-    assert stored[field] == expected
+    # The Agent's own value: ``config`` holds it for a field it may inherit.
+    def own(payload: JsonObject) -> Any:
+        config = payload.get("config") or {}
+        return config[field] if field in config else payload[field]
+
+    assert own(updated) == expected
+    assert own(stored) == expected
 
 
 @pytest.mark.asyncio

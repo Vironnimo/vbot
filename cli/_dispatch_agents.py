@@ -107,6 +107,10 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
         return "--tool-allow and --tool-deny require --tool-access-mode"
     if allowed is not None and mode != "selected":
         return "--tool-allow is valid only with --tool-access-mode selected"
+    if denied is not None and mode == "default":
+        return "--tool-deny is not valid with --tool-access-mode default"
+    if getattr(args, "default_skills", False) and getattr(args, "allowed_skills", None) is not None:
+        return "Choose --default-skills or --allowed-skills"
     if (
         getattr(args, "tools_on_demand", None) is None
         and getattr(args, "always_loaded", None) is not None
@@ -186,7 +190,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
             tool_access["allowed"] = list(args.tool_allow)
         if args.tool_deny is not None:
             tool_access["denied"] = list(args.tool_deny)
-        changes["tool_access"] = tool_access
+        # ``default`` leaves the policy to the shared default.
+        changes["tool_access"] = None if args.tool_access_mode == "default" else tool_access
     tools_on_demand = getattr(args, "tools_on_demand", None)
     if tools_on_demand is not None:
         # The flags replace the agent's own setting; a part they leave out follows the
@@ -207,6 +212,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["permission_profile"] = args.permission_profile
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
+    if getattr(args, "default_skills", False):
+        changes["allowed_skills"] = None
     if args.excluded_skills is not None:
         changes["excluded_skills"] = list(args.excluded_skills)
     if getattr(args, "context_commands", None) is not None:

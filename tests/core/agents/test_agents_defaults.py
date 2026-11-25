@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from core.agents import AgentStore
+from core.settings.agent_defaults import SHIPPED_AGENT_TOOLS
+from core.tools.availability import ToolAccess
 from tests.core.agents.agents_test_support import persisted, rewrite
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
@@ -102,6 +104,40 @@ def test_tool_loading_inherits_each_part_the_agent_does_not_set(
     defaults["tool_loading"] = {"on_demand": True}
     assert store.get("inherits").tool_loading == {"on_demand": True}
     assert store.get("switched_off").tool_loading == {"on_demand": False}
+
+
+def test_tool_access_and_skills_follow_the_shared_default_until_the_agent_sets_its_own(
+    tmp_path: Path, template_dir: Path
+) -> None:
+    defaults: dict[str, Any] = {}
+    store = AgentStore(
+        tmp_path / "data", template_dir=template_dir, defaults_provider=lambda: defaults
+    )
+    store.create("inherits", "Inheriting Agent")
+    store.create("own", "Own Agent", tool_access={"mode": "all"}, allowed_skills=["debugging"])
+
+    # Unset, the shared default is vBot's working set of Tools and every Skill.
+    assert store.get("inherits").tool_access == ToolAccess(
+        mode="selected", allowed=SHIPPED_AGENT_TOOLS
+    )
+    assert store.get("inherits").allowed_skills == ["*"]
+    data = persisted(store, "inherits")
+    assert "tool_access" not in data and "allowed_skills" not in data
+    assert store.get_raw("inherits").inherits == {"tool_access", "allowed_skills"}
+
+    # A changed default reaches the inheriting Agent, never one with its own values.
+    defaults.update(tool_access={"mode": "none"}, allowed_skills=[])
+    assert store.get("inherits").tool_access == ToolAccess(mode="none")
+    assert store.get("inherits").allowed_skills == []
+    assert store.get("own").tool_access == ToolAccess(mode="all")
+    assert store.get("own").allowed_skills == ["debugging"]
+    # An own value is written; null hands the field back to the default.
+    store.update("inherits", tool_access={"mode": "all"})
+    assert persisted(store, "inherits")["tool_access"] == {"mode": "all"}
+    assert store.get("inherits").tool_access == ToolAccess(mode="all")
+    store.update("inherits", tool_access=None)
+    assert "tool_access" not in persisted(store, "inherits")
+    assert store.get("inherits").tool_access == ToolAccess(mode="none")
 
 
 def test_missing_session_pointer_stays_empty_and_missing_workspace_is_repaired_on_load(

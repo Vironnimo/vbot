@@ -10,7 +10,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 
 ## Requirements (user decisions 2026-10-21)
 
-1. Rules are optional and configured explicitly per Agent, or by the user for one Session, replacing the Agent's per part (amended 2026-11-03, as a profile 2026-11-25; `projects/resolution.md` -> Session Agent overrides); without them an Agent has full access. Choosing a Project for a Session confines nothing.
+1. Rules are optional and configured explicitly per Agent, or by the user for one Session, replacing the Agent's per part (amended 2026-11-03, as a profile 2026-11-25; `projects/resolution.md` -> Session Agent overrides); without own ones an Agent inherits the shared default, the `restricted` profile unless the user sets another (amended 2026-11-25). Choosing a Project for a Session confines nothing.
 2. Threat model: mistakes of well-meaning Agents, and Models that must stay out of certain areas. Not a defense against a hostile or prompt-injected Agent.
 3. No OS sandbox: vBot enforces the rules itself. A later OS backend must be able to enforce the same rule model unchanged. User decisions 2026-10-30 and 2026-11-03 add approvals of prepared Tool calls, once or as Session Grants; explicit denies and protected/unsafe/unanalyzable accesses stay hard (`permissions/approvals.md`).
 4. The shell is confined "in a sensible way", not only the file Tools.

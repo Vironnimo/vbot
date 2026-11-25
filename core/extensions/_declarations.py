@@ -25,7 +25,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 41
+API_VERSION = 42
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]

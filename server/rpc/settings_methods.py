@@ -28,6 +28,7 @@ from core.settings import (
     setting_details,
     settings_values_equal,
 )
+from core.settings.agent_defaults import effective_agent_defaults
 from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
 from core.tools.web_fetch import find_local_browser
@@ -674,6 +675,9 @@ def _settings_response_payload(state: Any) -> JsonObject:
     model_tasks = runtime.storage.load_model_task_settings()
     session_titles = runtime.storage.load_session_title_settings()
     defaults = runtime.storage.load_defaults()
+    # Agents inherit vBot's own value of a field the user leaves unset, so the
+    # Shared defaults show it too.
+    defaults["agent"] = effective_agent_defaults(defaults.get("agent"))
     server_bind = _server_bind_response(state)
     raw_settings = runtime.storage.load_settings()
 

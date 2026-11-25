@@ -30,6 +30,9 @@ async def _setup_public_tool(tmp_path: Path, factory_store: FactoryStore):
     created_agents: dict[str, Json] = {}
 
     async def create_identity(agent_id: str, **config: Any) -> Json:
+        # A new Leader or Specialist sets no Tool access or Skills of its own,
+        # so it inherits the shared defaults.
+        assert set(config) <= {"request_id", "name", "model"}
         created_agents[agent_id] = {
             "agent_id": agent_id,
             "incarnation": f"proof-{agent_id}",

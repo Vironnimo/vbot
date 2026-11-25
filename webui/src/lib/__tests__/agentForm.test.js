@@ -32,7 +32,9 @@ describe('createAgentFormValues', () => {
       memory_prompt_mode: 'agent_user',
       project_memory_enabled: true,
       tool_access: { mode: 'all' },
+      tool_access_inherited: true,
       allowed_skills: ['*'],
+      allowed_skills_inherited: true,
       excluded_skills: [],
       context_commands: '',
       tools: {},
@@ -320,6 +322,49 @@ describe('normalizeAgentForm', () => {
       id: 'coder',
       top_p: 0.5,
       temperature: null,
+    });
+  });
+
+  it('leaves Tool access and Skills to the shared default until the Agent sets its own', () => {
+    // A new Agent sends null for both: the server leaves them to the default.
+    expect(
+      normalizeAgentForm(createAgentFormValues({ id: 'coder' })).payload,
+    ).toMatchObject({ tool_access: null, allowed_skills: null });
+
+    const inheriting = createAgentFormValues({
+      id: 'coder',
+      tool_access: { mode: 'selected', allowed: ['read'] },
+      allowed_skills: ['*'],
+      config: { tool_access: null, allowed_skills: null },
+    });
+    expect(inheriting).toMatchObject({
+      tool_access: { mode: 'selected', allowed: ['read'] },
+      tool_access_inherited: true,
+      allowed_skills_inherited: true,
+    });
+    const edit = (initialValues, change) =>
+      normalizeAgentForm(
+        { ...initialValues, ...change },
+        { mode: AGENT_FORM_MODE_EDIT, initialValues },
+      ).payload;
+    expect(edit(inheriting, {})).toEqual({ id: 'coder' });
+    expect(
+      edit(inheriting, {
+        tool_access: { mode: 'all' },
+        tool_access_inherited: false,
+      }),
+    ).toEqual({ id: 'coder', tool_access: { mode: 'all' } });
+
+    // Choosing the shared default again sends null.
+    const own = createAgentFormValues({
+      id: 'coder',
+      allowed_skills: ['debugging'],
+      config: { tool_access: { mode: 'all' }, allowed_skills: ['debugging'] },
+    });
+    expect(own.allowed_skills_inherited).toBe(false);
+    expect(edit(own, { allowed_skills_inherited: true })).toEqual({
+      id: 'coder',
+      allowed_skills: null,
     });
   });
 

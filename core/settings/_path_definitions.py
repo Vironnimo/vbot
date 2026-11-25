@@ -39,7 +39,7 @@ from core.settings._rules import (
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     default_timezone_name,
 )
-from core.settings.agent_defaults import agent_default_catalog
+from core.settings.agent_defaults import agent_default_catalog, shipped_agent_default
 from core.settings.normalizers import (
     ARCHIVE_SETTING_DEFAULTS,
     COMPACTION_SETTING_DEFAULTS,
@@ -293,7 +293,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
             f"defaults.agent.{field}",
             value_type,
             description,
-            default=None,
+            default=shipped_agent_default(field),
             nullable=True,
             allowed_values=allowed_values,
             minimum=minimum,

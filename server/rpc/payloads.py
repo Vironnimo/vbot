@@ -279,6 +279,10 @@ def _agent_response(
         ),
         "tool_access": agent.tool_access.to_dict(),
         "allowed_skills": list(agent.allowed_skills),
+        # The shared defaults an Agent follows while ``config.tool_access`` or
+        # ``config.allowed_skills`` is ``None``.
+        "tool_access_default": copy.deepcopy(defaults.agent.tool_access),
+        "allowed_skills_default": list(defaults.agent.allowed_skills),
         "excluded_skills": list(getattr(agent, "excluded_skills", ()) or ()),
         "context_commands": list(getattr(agent, "context_commands", ()) or ()),
         "tools": dict(getattr(agent, "tools", {})),
@@ -345,6 +349,13 @@ def _agent_raw_config(raw: Any) -> JsonObject:
         "tool_loading": _tool_loading_payload(raw),
         "permission_rules": _permission_rules_payload(raw),
         "permission_profile": getattr(raw, "permission_profile", None),
+        # ``None`` while the Agent inherits the shared default.
+        "tool_access": (
+            None if "tool_access" in getattr(raw, "inherits", ()) else raw.tool_access.to_dict()
+        ),
+        "allowed_skills": (
+            None if "allowed_skills" in getattr(raw, "inherits", ()) else list(raw.allowed_skills)
+        ),
     }
 
 

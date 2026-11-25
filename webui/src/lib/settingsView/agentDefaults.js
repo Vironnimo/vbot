@@ -1,5 +1,5 @@
 import { normalizePermissionRules } from '../permissionRules.js';
-import { normalizeToolLoading } from '../toolAccess.js';
+import { normalizeToolAccess, normalizeToolLoading } from '../toolAccess.js';
 import { isPlainObject } from '../values.js';
 import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
 
@@ -107,6 +107,36 @@ export function buildPermissionRulesDefaultPayload(formValues) {
         permission_rules: normalizePermissionRules(
           formValues?.permission_rules,
         ),
+      },
+    },
+  };
+}
+
+// The shared Tool access and Skills defaults (`defaults.agent.tool_access`,
+// `.allowed_skills`) every Agent without its own follows. settings.get reports
+// them always, vBot's own values standing in for unset ones.
+export function normalizeAgentAccessDefaultSettings(rawSettings) {
+  const source =
+    isPlainObject(rawSettings) && !('defaults' in rawSettings)
+      ? rawSettings
+      : rawSettings?.defaults?.agent;
+  return {
+    tool_access: normalizeToolAccess(source?.tool_access),
+    allowed_skills: Array.isArray(source?.allowed_skills)
+      ? source.allowed_skills.filter(
+          (name) => typeof name === 'string' && name.trim(),
+        )
+      : ['*'],
+  };
+}
+
+export function buildAgentAccessDefaultPayload(formValues) {
+  const values = normalizeAgentAccessDefaultSettings(formValues);
+  return {
+    defaults: {
+      agent: {
+        tool_access: values.tool_access,
+        allowed_skills: values.allowed_skills,
       },
     },
   };

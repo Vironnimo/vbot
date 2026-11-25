@@ -186,6 +186,16 @@ class AgentMutations:
                 project_memory_enabled=validated_project_memory_enabled,
                 tool_access=validated_tool_access,
                 allowed_skills=validated_allowed_skills,
+                # A built-in Agent keeps its own capabilities; any other Agent
+                # inherits what it is not given.
+                inherits=frozenset(
+                    ()
+                    if builtin is not None
+                    else (
+                        *(("tool_access",) if tool_access is None else ()),
+                        *(("allowed_skills",) if allowed_skills is None else ()),
+                    )
+                ),
                 excluded_skills=validated_excluded_skills,
                 tools=validated_tools,
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
@@ -289,6 +299,7 @@ class AgentMutations:
                 "updated_at",
                 "delegation_bindings",
                 "placement",
+                "inherits",
             }
             unknown_fields = sorted(set(changes) - allowed_fields)
             if unknown_fields:
@@ -335,12 +346,25 @@ class AgentMutations:
                 changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
                     changes["memory_prompt_mode"]
                 )
+            # ``None`` leaves the field to ``defaults.agent`` again; a built-in
+            # Agent keeps its own value.
+            inherits = set(agent.inherits)
             if "tool_access" in changes:
+                if changes["tool_access"] is None and agent.builtin is None:
+                    inherits.add("tool_access")
+                else:
+                    inherits.discard("tool_access")
                 changes["tool_access"] = _validate_tool_access(changes["tool_access"])
             if "allowed_skills" in changes:
+                if changes["allowed_skills"] is None and agent.builtin is None:
+                    inherits.add("allowed_skills")
+                else:
+                    inherits.discard("allowed_skills")
                 changes["allowed_skills"] = _validate_allowed_items(
                     "allowed_skills", changes["allowed_skills"]
                 )
+            if inherits != agent.inherits:
+                changes["inherits"] = frozenset(inherits)
             if "excluded_skills" in changes:
                 changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
             if "context_commands" in changes:

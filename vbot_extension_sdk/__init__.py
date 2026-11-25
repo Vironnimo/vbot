@@ -5,8 +5,8 @@ from typing import Any
 from ._exports import HostUnavailableError as HostUnavailableError
 from ._exports import exports_for, resolve
 
-SDK_VERSION = "41.0.0"
-API_VERSION = 41
+SDK_VERSION = "42.0.0"
+API_VERSION = 42
 
 _EXPORTS = exports_for(
     **{

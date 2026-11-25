@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import BUILTIN_PERMISSION_PROFILES, permission_rules_to_dict
 from core.storage import StorageManager
 from server.access import bound_principal
 from server.access._principal import HOST
@@ -142,9 +143,11 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
     member = _member(overridden)
     saved = {"write": "scratch", "allow": ["Edit(docs/**)"]}
     assert member["overrides"] == {"permission_rules": saved}
-    # Neither the repository nor the shared default restricts this agent.
-    assert member["permission_rules_default"] is None
-    assert member["effective"]["permission_rules"]["value"] == saved
+    # The repository does not restrict this agent; the shared default is unset, so
+    # the override's unset parts come from the restricted profile.
+    restricted = permission_rules_to_dict(BUILTIN_PERMISSION_PROFILES["restricted"])
+    assert member["permission_rules_default"] == restricted
+    assert member["effective"]["permission_rules"]["value"] == {**restricted, **saved}
     state.runtime.projects.set_override("vbot", "builder", "permission_profile", "restricted")
     stale_edit = await rpc_error(
         state, "project.set_override", **override, value=value, require_no_permission_profile=True

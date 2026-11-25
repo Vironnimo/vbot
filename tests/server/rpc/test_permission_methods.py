@@ -14,7 +14,13 @@ import pytest
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import write_bootstrap_marker
-from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
+from core.permissions import (
+    BUILTIN_PERMISSION_PROFILES,
+    BoundaryContext,
+    PermissionBoundary,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.projects import AgentOverrides, AgentResolutionError
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
@@ -168,6 +174,8 @@ _FULL_ACCESS: JsonObject = {
     "allow": [],
     "deny": [],
 }
+# Unset, the shared default is the restricted profile; these tests start unrestricted.
+_UNRESTRICTED_DEFAULT: JsonObject = {"permission_rules": _FULL_ACCESS}
 
 
 @pytest.mark.asyncio
@@ -373,7 +381,7 @@ async def test_validate_rejects_malformed_requests(
 
 @pytest.mark.asyncio
 async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> None:
-    state = _state(tmp_path, {})
+    state = _state(tmp_path, _UNRESTRICTED_DEFAULT)
     state.runtime.agents.create("coder", "Coder")
     state.runtime.agents.create("free", "Free", permission_rules=_FULL_ACCESS)
     state.runtime.chat_sessions.create("coder", session_id="s1")
@@ -424,7 +432,12 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert result["restricted"] is True
     own, inherited = result["layers"]
     root = _posix(workspace.resolve())
-    assert (own["source"], own["read"], own["write"]) == ("agent", [root, "{scratch}"], None)
+    # The shared default's write stays within the Agent's own read area.
+    assert (own["source"], own["read"], own["write"]) == (
+        "agent",
+        [root, "{scratch}"],
+        [root, "{scratch}"],
+    )
     assert inherited["source"] == "parent"
     assert inherited["read"] is None
     assert inherited["write"] == ["{scratch}"]
@@ -526,7 +539,9 @@ async def test_the_user_sets_a_sessions_own_access(tmp_path: Path) -> None:
         assert narrowed["ceiling_cleared"] is False
         rules = resolver.resolve_agent(None, "coder", session_id="s1").permission_rules
         assert (rules.read, rules.write, rules.web) == ("work_area", "work_area", "listed")
-        assert resolver.resolve_agent(None, "coder", session_id="s2").permission_rules.write is None
+        # Another Session keeps the Agent's rules over the restricted shared default.
+        other = resolver.resolve_agent(None, "coder", session_id="s2").permission_rules
+        assert other.write == "work_area"
         assert (
             resolver.effective_config(None, "coder", session_id="s1")["permission_rules"]["source"]
             == "session"
@@ -804,14 +819,17 @@ async def test_reviewed_agent_change_requires_the_same_effective_rules(tmp_path:
         reviewed_clear = await rpc_result(state, "permissions.validate", **preview)
         assert reviewed_clear["effective"] == inherited
         clear = {"id": "new", "permission_rules": None, "permission_profile": None}
+        # Unset, the shared default is the restricted profile.
         defaults["permission_rules"] = None
-        full_access = await rpc_result(state, "permissions.validate", **preview)
-        assert full_access["valid"] and full_access["effective"] is None
+        restricted = await rpc_result(state, "permissions.validate", **preview)
+        assert restricted["valid"] and restricted["effective"] == permission_rules_to_dict(
+            BUILTIN_PERMISSION_PROFILES["restricted"]
+        )
         defaults["permission_rules"] = {"unknown": "part"}
         invalid = await rpc_error(state, "permissions.validate", **preview)
         assert invalid["code"] == "domain_error"
         refused = await rpc_error(
-            state, "agent.update", **clear, expected_profile_rules=full_access["effective"]
+            state, "agent.update", **clear, expected_profile_rules=restricted["effective"]
         )
         assert refused["code"] == "settings_conflict"
         defaults["permission_rules"] = {"read": "work_area"}

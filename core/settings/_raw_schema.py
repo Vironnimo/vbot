@@ -50,6 +50,7 @@ from core.settings._rules import (
     SUBAGENT_SETTING_FIELDS as SUBAGENT_SETTING_FIELDS,
 )
 from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS
+from core.tools.availability import TOOL_ACCESS_FIELDS
 from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
 SETTINGS_FORMAT_VERSION = 1
@@ -166,6 +167,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
                     AGENT_DEFAULT_FIELDS,
                     {
                         "tool_loading": json_object(TOOL_LOADING_FIELDS),
+                        "tool_access": json_object(TOOL_ACCESS_FIELDS),
                         # An unknown part makes the default invalid instead of
                         # being left out, so the owner writes the whole set.
                         "permission_rules": OPAQUE,

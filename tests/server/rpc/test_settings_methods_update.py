@@ -23,6 +23,7 @@ from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord
 from core.extensions.settings_schema import parse_settings_fields
 from core.model_tasks import TASK_TEXT_TO_SPEECH, TaskModelService
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.settings.agent_defaults import SHIPPED_AGENT_TOOLS
 from core.storage import StorageError, StorageManager
 from core.utils.config import DEFAULT_PORT
 from server.rpc.methods import dispatch_rpc
@@ -253,6 +254,9 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "agent": {
             "model": "openai/gpt-4.1-mini",
             "permission_rules": {"read": "work_area", "allow": ["Edit(src/**)"]},
+            # Unset fields that always have a value show vBot's own.
+            "tool_access": {"mode": "selected", "allowed": list(SHIPPED_AGENT_TOOLS)},
+            "allowed_skills": ["*"],
         }
     }
     # A partial section merges with its defaults.

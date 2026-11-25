@@ -48,6 +48,8 @@ API 34 adds `await host.execution_usage_changes(after=0, ledger_id=None, limit=1
 
 API 40 adds `catalog().permission_profiles`, the exact names of built-in and custom Permission Profiles available to participants or as a group ceiling (`agent/temporary-agents.md`).
 
+API 42 adds `catalog().agent_defaults` `{tool_access, allowed_skills}`: what an Agent that sets no Tool access or Skills of its own inherits from the shared defaults (`defaults.agent`, `settings.md`; user decision: such Agents inherit when read, nothing is stamped in at creation). The host reads it on every call through `AgentResolver.agent_defaults()` and leaves out Tool names no registered Tool has. An Extension uses it where it resolves such a record and never copies it into the record: Swarm profiles without their own Tool access or Skills (`extensions/swarm.md`). Identity Agents an Extension creates without these fields inherit them in the Agent store, so the Factory needs nothing (`extensions/factory.md`); app chat profiles declare their own Tools.
+
 ## Native Decisions
 
 `host.review_context(context)` returns bounded canonical human requests, separate delegated evidence and a Permission summary for a prepared-shell review. It uses Session sender provenance and stamped Sub-Agent reply targets, includes live ancestors' human requests and masks known Agent Secrets. Full bounds and truncation behavior: `extensions/shell-review.md` -> Execution integration.

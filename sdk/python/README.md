@@ -7,11 +7,11 @@ managed dependency environment. Python 3.14 is the supported interpreter.
 
 ## Author outside the application
 
-Copy `resources/sdk/vbot_extension_sdk-41.0.0-py3-none-any.whl` from any installed
+Copy `resources/sdk/vbot_extension_sdk-42.0.0-py3-none-any.whl` from any installed
 vBot package into your authoring environment:
 
 ```bash
-python -m pip install --no-deps ./vbot_extension_sdk-41.0.0-py3-none-any.whl
+python -m pip install --no-deps ./vbot_extension_sdk-42.0.0-py3-none-any.whl
 ```
 
 The wheel contains no application Runtime and requires no third-party packages.
@@ -46,12 +46,14 @@ the host supplies private wiring. Other declared constructors remain callable.
 
 ## Version contract and migration from API 31
 
-The SDK version is `41.0.0`, and `API_VERSION` describes the SDK's server contract.
-Declare `"api_version": 41` in `extension.json` for Extensions using the new
+The SDK version is `42.0.0`, and `API_VERSION` describes the SDK's server contract.
+Declare `"api_version": 42` in `extension.json` for Extensions using the new
 contract; the host refuses newer requirements before registration. Existing API
 31 manifests and `core.extensions` imports remain supported. Change imports to
 the SDK without copying classes or adding adapter wrappers. The host and SDK
 must provide the same API generation when running separately installed SDK code.
+
+API 42 adds `host.catalog()["agent_defaults"]`: the Tool access (`tool_access`) and Skills (`allowed_skills`) an Agent inherits from the shared defaults while it sets none itself, read when you call it. Use it where an Agent-like record that sets no Tools or Skills of its own is resolved, such as when a participant's Session is created; do not copy it into the record, so later changes to the shared defaults reach it. An Identity Agent created without `tool_access` and `allowed_skills` already inherits them.
 
 API 41 adds `host.protected_data` to seal and open opaque bytes by Extension and record identity. Call these blocking methods on a worker and seal before opening a write transaction. A cached Computer capability checks the current Extension registration on use. `write_profile_assignment` coordinates Extension-owned Permission Profile assignments with profile deletion.
 

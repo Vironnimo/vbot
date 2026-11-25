@@ -689,6 +689,12 @@
         permissionRulesEditable={!agent?.builtin}
         permissionRulesDefault={agent?.permission_rules_default ?? null}
         permissionRulesNewAgent={formMode === AGENT_FORM_MODE_CREATE}
+        toolAccessDefault={agent?.builtin
+          ? null
+          : (agent?.tool_access_default ?? null)}
+        allowedSkillsDefault={agent?.builtin
+          ? null
+          : (agent?.allowed_skills_default ?? null)}
         bind:formValues
         {navigateToExtensions}
         {onToast}

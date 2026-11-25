@@ -30,6 +30,9 @@ from tests.core.chat.chat_loop_support import (
 )
 from tests.core.runs.runs_test_support import RunTimelines
 
+# These tests drive Tools of their own, beyond the shared default's working set.
+ALL_TOOLS = {"mode": "all"}
+
 
 def _ok_tool_handler(_context: Any, _arguments: JsonObject) -> JsonObject:
     return tool_success({"content": "ok"})
@@ -99,7 +102,9 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
     with start_runtime(adapter) as runtime:
         timelines = RunTimelines(runtime.chat_run_manager)
         reflection = RecordingReflection()
-        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        agent = runtime.agents.create(
+            "coder", "Coder Agent", model="fake-provider/fake-model-v1", tool_access=ALL_TOOLS
+        )
         Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
 
         assistant = await build_chat_loop(runtime, reflection_service=reflection).send(
@@ -201,7 +206,9 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
 
             runtime.tools.register("finish", "Finish the request", {"type": "object"}, finish)
         timelines = RunTimelines(runtime.chat_run_manager)
-        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        agent = runtime.agents.create(
+            "coder", "Coder Agent", model="fake-provider/fake-model-v1", tool_access=ALL_TOOLS
+        )
         workspace = Path(agent.workspace)
         tracker = runtime.change_tracker
         threads: dict[str, list[int]] = {"peek_run_stats": [], "take_run_stats": []}
@@ -296,7 +303,9 @@ async def test_a_librarian_session_works_on_the_skills_of_its_agent(
     )
 
     with start_runtime(adapter) as runtime:
-        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        runtime.agents.create(
+            "coder", "Coder Agent", model="fake-provider/fake-model-v1", tool_access=ALL_TOOLS
+        )
         agents_dir = runtime.storage.data_dir / "agents"
         _write_skill(agents_dir / "coder", "triage", "Sort new bugs")
         runtime.agents.update(LIBRARIAN_AGENT_ID, model="fake-provider/fake-model-v1")

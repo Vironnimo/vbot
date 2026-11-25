@@ -15,7 +15,11 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic
-from core.permissions import normalize_permission_rules
+from core.permissions import (
+    BUILTIN_PERMISSION_PROFILES,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.settings import (
     AGENT_DEFAULT_FIELDS,
     MAX_FALLBACK_MODELS,
@@ -29,6 +33,7 @@ from core.settings import (
 )
 from core.settings.agent_defaults import (
     INVALID_PERMISSION_RULES,
+    SHIPPED_AGENT_TOOLS,
     InvalidPermissionRulesDefaultError,
     agent_default_specs,
 )
@@ -70,6 +75,11 @@ def test_every_field_dispatches_through_all_three_surfaces(field: str) -> None:
     elif field == "permission_rules":
         value = {"read": "work_area", "deny": ["Read({workdir}/x)"]}
         assert parse_agent_default_value(field, value, label="l") == value
+    elif field == "tool_access":
+        value = {"mode": "selected", "allowed": ["read"]}
+        assert parse_agent_default_value(field, value, label="l") == value
+    elif field == "allowed_skills":
+        assert parse_agent_default_value(field, ["*"], label="l") == ["*"]
     else:
         assert parse_agent_default_value(field, "high", label="l") == "high"
 
@@ -98,11 +108,20 @@ def test_agent_defaults_round_trips_non_null_fields() -> None:
         "thinking_effort": "high",
         "tool_loading": {"on_demand": True},
         "permission_rules": {"write": "scratch"},
+        "tool_access": {"mode": "none"},
+        "allowed_skills": [],
     }
     assert AgentDefaults.from_dict(data).to_dict() == data
 
 
-def test_agent_defaults_absent_fields_are_none() -> None:
+def test_agent_defaults_absent_fields_take_vbots_own_values() -> None:
+    # Unset, Tool access, Skills and Permission Rules still give every inheriting
+    # Agent vBot's working set of Tools, all Skills and the restricted profile.
+    shipped = {
+        "permission_rules": permission_rules_to_dict(BUILTIN_PERMISSION_PROFILES["restricted"]),
+        "tool_access": {"mode": "selected", "allowed": list(SHIPPED_AGENT_TOOLS)},
+        "allowed_skills": ["*"],
+    }
     defaults = AgentDefaults.from_dict({})
     assert defaults.model is None
     assert defaults.fallback_models is None
@@ -110,8 +129,7 @@ def test_agent_defaults_absent_fields_are_none() -> None:
     assert defaults.top_p is None
     assert defaults.thinking_effort is None
     assert defaults.tool_loading is None
-    assert defaults.permission_rules is None
-    assert defaults.to_dict() == {}
+    assert defaults.to_dict() == shipped
 
 
 # --- fallback chain rules -----------------------------------------------------
@@ -203,9 +221,9 @@ def test_runtime_settings_never_drop_default_permission_rules(
 
 def test_valid_fallback_chain_is_stripped_by_normalize_and_bake() -> None:
     assert normalize_agent_default_value("fallback_models", [" openai/gpt "]) == ["openai/gpt"]
-    assert _bake_defaults({"fallback_models": [" openai/gpt "]}) == {
-        "fallback_models": ["openai/gpt"]
-    }
+    assert _bake_defaults({"fallback_models": [" openai/gpt "]})["fallback_models"] == [
+        "openai/gpt"
+    ]
 
 
 @pytest.mark.parametrize(

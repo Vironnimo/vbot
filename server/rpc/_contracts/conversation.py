@@ -145,7 +145,7 @@ AGENT_FIELDS = {
     "top_p": nullable(_TOP_P),
     "thinking_effort": nullable(_THINKING),
     "tool_access": nullable(TOOL_ACCESS),
-    "allowed_skills": _STRINGS,
+    "allowed_skills": nullable(_STRINGS),
     "excluded_skills": array({**_nonempty(), "not": {"const": "*"}}),
     "tools": _TOOLS,
     "custom_system_prompt_enabled": boolean(),

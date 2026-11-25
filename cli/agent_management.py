@@ -450,11 +450,13 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"project_memory_enabled: {_bool_text(agent.get('project_memory_enabled'))}",
         f"custom_system_prompt_enabled: {custom_prompt_text}",
         f"librarian_enabled: {_bool_text(agent.get('librarian_enabled'))}",
-        f"tool_access: {_json_text(agent.get('tool_access'))}",
+        f"tool_access: {_json_text(agent.get('tool_access'))}"
+        f"{_inherited_text(agent, 'tool_access')}",
         f"tool_loading: {_json_text(agent.get('tool_loading'))}",
         f"tool_loading_own: {_json_text(_own_config(agent).get('tool_loading'))}",
         *_permission_lines(agent),
-        f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
+        f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}"
+        f"{_inherited_text(agent, 'allowed_skills')}",
         f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
         f"context_window: {_value_text(agent.get('context_window'))}",
         f"created_at: {_string_or_default(agent.get('created_at'), '-')}",
@@ -563,6 +565,14 @@ def _permission_lines(agent: Mapping[str, Any]) -> list[str]:
         f"permission_rules_own: {_json_text(own)}",
         f"permission_rules_default: {_json_text(default)}",
     ]
+
+
+def _inherited_text(agent: Mapping[str, Any], field: str) -> str:
+    """Mark a value the Agent takes from ``defaults.agent`` instead of setting it."""
+    config = agent.get("config")
+    if isinstance(config, dict) and field in config and config[field] is None:
+        return " (shared default)"
+    return ""
 
 
 def _own_config(agent: Mapping[str, Any]) -> Mapping[str, Any]:

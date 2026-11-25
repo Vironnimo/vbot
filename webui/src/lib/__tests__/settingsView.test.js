@@ -50,6 +50,8 @@ import {
   isValidAccountId,
   normalizeAccountId,
   normalizeAgentDefaultsSettings,
+  normalizeAgentAccessDefaultSettings,
+  buildAgentAccessDefaultPayload,
   normalizeSessionTitleSettings,
   normalizeSubAgentSettings,
   normalizeTranscriptionAudio,
@@ -583,6 +585,31 @@ describe('agent defaults, sub-agents and session titles', () => {
       }),
     ).toEqual({
       session_titles: { enabled: true, model: 'openai/gpt-4.1-mini::api-key' },
+    });
+  });
+
+  it('reads the shared Tool access and Skills and saves both as whole values', () => {
+    const access = normalizeAgentAccessDefaultSettings({
+      defaults: {
+        agent: {
+          tool_access: { mode: 'selected', allowed: ['read', 'bash'] },
+          allowed_skills: ['*'],
+        },
+      },
+    });
+    expect(access).toEqual({
+      tool_access: { mode: 'selected', allowed: ['read', 'bash'] },
+      allowed_skills: ['*'],
+    });
+    expect(
+      buildAgentAccessDefaultPayload({ ...access, allowed_skills: [] }),
+    ).toEqual({
+      defaults: {
+        agent: {
+          tool_access: { mode: 'selected', allowed: ['read', 'bash'] },
+          allowed_skills: [],
+        },
+      },
     });
   });
 });

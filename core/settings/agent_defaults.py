@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import TYPE_CHECKING, Any
 
 from core.config_validation import JsonDiagnostic
@@ -37,6 +38,8 @@ AGENT_DEFAULT_FIELDS = frozenset(
         "top_p",
         "thinking_effort",
         "tool_loading",
+        "tool_access",
+        "allowed_skills",
         "permission_rules",
     }
 )
@@ -49,6 +52,8 @@ AGENT_DEFAULT_FIELD_ORDER = (
     "top_p",
     "thinking_effort",
     "tool_loading",
+    "tool_access",
+    "allowed_skills",
     "permission_rules",
 )
 
@@ -66,6 +71,57 @@ KIND_NULLABLE_NUMBER = "nullable_number"
 KIND_NULLABLE_ENUM = "nullable_enum"
 KIND_TOOL_LOADING = "tool_loading"
 KIND_PERMISSION_RULES = "permission_rules"
+KIND_TOOL_ACCESS = "tool_access"
+KIND_SKILL_LIST = "skill_list"
+
+# The Tools an Agent gets while neither it nor the user sets others: what Agents
+# mostly need to work in files and the shell, research the web, use and keep
+# their Skills and Memory, delegate, and load Project Context.
+SHIPPED_AGENT_TOOLS: tuple[str, ...] = (
+    "read",
+    "write",
+    "edit",
+    "apply_patch",
+    "bash",
+    "web_search",
+    "web_fetch",
+    "skill",
+    "skill_manage",
+    "memory",
+    "subagent",
+    "project",
+    "session_search",
+)
+
+# The fields that always have a value: a ``defaults.agent`` field of these the
+# user leaves unset takes vBot's own value (``shipped_agent_default``).
+SHIPPED_AGENT_DEFAULT_FIELDS = ("tool_access", "allowed_skills", "permission_rules")
+
+
+def shipped_agent_default(name: str) -> Any:
+    """Return vBot's own value of field ``name``, ``None`` when it has none.
+
+    The Permission Rules are the ``restricted`` Permission Profile's.
+    """
+    if name == "tool_access":
+        return {"mode": "selected", "allowed": list(SHIPPED_AGENT_TOOLS)}
+    if name == "allowed_skills":
+        return ["*"]
+    if name == "permission_rules":
+        from core.permissions import BUILTIN_PERMISSION_PROFILES, permission_rules_to_dict
+
+        return permission_rules_to_dict(BUILTIN_PERMISSION_PROFILES["restricted"])
+    return None
+
+
+def effective_agent_defaults(stored: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return ``defaults.agent`` as Agents inherit it: the stored values over the shipped ones."""
+    effective = {name: shipped_agent_default(name) for name in SHIPPED_AGENT_DEFAULT_FIELDS}
+    effective.update(
+        {name: copy.deepcopy(value) for name, value in (stored or {}).items() if value is not None}
+    )
+    return effective
+
 
 # Runtime-only stand-in for a stored ``defaults.agent.permission_rules`` that is
 # invalid: the runtime Settings loader keeps it in place of the value, so Agents
@@ -169,6 +225,44 @@ def _parse_permission_rules(value: Any, label: str) -> dict[str, Any]:
         raise SettingsValidationError(f"{label}: {error}") from error
 
 
+def _parse_tool_access(value: Any, label: str) -> dict[str, Any]:
+    from core.settings.settings import SettingsValidationError
+
+    try:
+        return _tool_access_value(value)
+    except ValueError as error:
+        raise SettingsValidationError(f"{label}: {error}") from error
+
+
+def _parse_allowed_skills(value: Any, label: str) -> list[str]:
+    from core.settings.settings import SettingsValidationError
+
+    try:
+        return _skill_list_value(value)
+    except ValueError as error:
+        raise SettingsValidationError(f"{label} {error}") from error
+
+
+def _tool_access_value(value: Any) -> dict[str, Any]:
+    """The one rule of a default Tool access: an Agent's ``tool_access`` without grants."""
+    from core.tools.availability import normalize_tool_access
+
+    if not isinstance(value, Mapping):
+        raise ValueError("must be an object")
+    access = normalize_tool_access(value)
+    if access.granted:
+        raise ValueError("granted belongs to one Agent, not to the default")
+    return access.to_dict()
+
+
+def _skill_list_value(value: Any) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError("must be a list of Skill names")
+    return list(dict.fromkeys(item.strip() for item in value))
+
+
 def _diagnose_model_binding(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     from core.config_validation import add_error
 
@@ -231,6 +325,42 @@ def _diagnose_permission_rules(diagnostics: list[JsonDiagnostic], path: str, val
         normalize_permission_rules(value)
     except ValueError as error:
         add_error(diagnostics, path, str(error))
+
+
+def _diagnose_tool_access(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    from core.config_validation import add_error
+
+    if value is None:
+        return
+    try:
+        _tool_access_value(value)
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
+
+
+def _diagnose_allowed_skills(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    from core.config_validation import add_error
+
+    if value is None:
+        return
+    try:
+        _skill_list_value(value)
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
+
+
+def _normalize_tool_access(value: Any) -> dict[str, Any]:
+    try:
+        return _tool_access_value(value)
+    except ValueError as error:
+        raise StorageError(f"Agent default tool_access {error}") from error
+
+
+def _normalize_allowed_skills(value: Any) -> list[str]:
+    try:
+        return _skill_list_value(value)
+    except ValueError as error:
+        raise StorageError(f"Agent default allowed_skills {error}") from error
 
 
 def _normalize_model_binding(value: Any) -> str:
@@ -370,11 +500,36 @@ _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
         value_type="object",
         description=(
             "Default Permission Rules {read, write, commands, web, allow, deny}; an Agent "
-            "inherits each part it does not set itself. Unset gives full access."
+            "inherits each part it does not set itself. Unset gives the restricted "
+            "Permission Profile's rules."
         ),
         parse=_parse_permission_rules,
         diagnose=_diagnose_permission_rules,
         normalize=_normalize_permission_rules,
+    ),
+    "tool_access": AgentDefaultSpec(
+        name="tool_access",
+        kind=KIND_TOOL_ACCESS,
+        value_type="object",
+        description=(
+            "Default Tool access {mode, allowed, denied} of every Agent that sets none "
+            "itself. Unset gives vBot's working set of Tools."
+        ),
+        parse=_parse_tool_access,
+        diagnose=_diagnose_tool_access,
+        normalize=_normalize_tool_access,
+    ),
+    "allowed_skills": AgentDefaultSpec(
+        name="allowed_skills",
+        kind=KIND_SKILL_LIST,
+        value_type="array",
+        description=(
+            'Default Skill names of every Agent that sets none itself; "*" allows all. '
+            "Unset allows all."
+        ),
+        parse=_parse_allowed_skills,
+        diagnose=_diagnose_allowed_skills,
+        normalize=_normalize_allowed_skills,
     ),
 }
 
@@ -463,13 +618,22 @@ class AgentDefaults:
     thinking_effort: str | None = None
     tool_loading: dict[str, Any] | None = None
     # Stored form, or ``INVALID_PERMISSION_RULES`` when the stored value is invalid.
-    permission_rules: dict[str, Any] | str | None = None
+    # This field and the two below always have a value: unset in settings.json,
+    # they take the shipped one (``shipped_agent_default``).
+    permission_rules: dict[str, Any] | str | None = dataclass_field(
+        default_factory=lambda: shipped_agent_default("permission_rules")
+    )
+    tool_access: dict[str, Any] = dataclass_field(
+        default_factory=lambda: shipped_agent_default("tool_access")
+    )
+    allowed_skills: list[str] = dataclass_field(
+        default_factory=lambda: shipped_agent_default("allowed_skills")
+    )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any] | None) -> AgentDefaults:
-        """Build from a raw ``defaults.agent`` mapping; missing keys are ``None``."""
-        if not data:
-            return cls()
+        """Build from a stored ``defaults.agent`` mapping (``effective_agent_defaults``)."""
+        data = effective_agent_defaults(data)
         fallback_models = data.get("fallback_models")
         tool_loading = data.get("tool_loading")
         permission_rules = data.get("permission_rules")
@@ -485,6 +649,8 @@ class AgentDefaults:
                 if isinstance(permission_rules, dict | str)
                 else None
             ),
+            tool_access=copy.deepcopy(data["tool_access"]),
+            allowed_skills=list(data["allowed_skills"]),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -504,6 +670,8 @@ class AgentDefaults:
             result["tool_loading"] = copy.deepcopy(self.tool_loading)
         if self.permission_rules is not None:
             result["permission_rules"] = copy.deepcopy(self.permission_rules)
+        result["tool_access"] = copy.deepcopy(self.tool_access)
+        result["allowed_skills"] = list(self.allowed_skills)
         return result
 
     def resolved_permission_rules(self) -> PermissionRules | None:
@@ -541,12 +709,15 @@ def bake_agent_defaults(
     tool_loading: Mapping[str, Any] | None,
     defaults: AgentDefaults,
     permission_rules: PermissionRules | None = None,
+    inherits: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Compute the fields changed by baking global defaults into one agent.
 
     Mirrors the resolver's identity-branch provenance exactly: a default applies
     only when the agent's own value is empty/absent, and ``tool_loading`` fills in each
-    part (``on_demand``, ``always_loaded``) the agent does not set. Every applied value passes
+    part (``on_demand``, ``always_loaded``) the agent does not set, and each field
+    named in ``inherits`` (``tool_access``, ``allowed_skills``) takes the default
+    whatever the agent's stand-in value is. Every applied value passes
     through the field's storage normalizer first, so a stale or hand-edited
     settings file cannot bake an invalid chain, range, or enum into agents.
     Returns the changed fields; an empty dict means nothing changed. Shared by
@@ -554,6 +725,12 @@ def bake_agent_defaults(
     lives in one place.
     """
     changes: dict[str, Any] = {}
+    if "tool_access" in inherits:
+        from core.tools.availability import normalize_tool_access
+
+        changes["tool_access"] = normalize_tool_access(_normalize_tool_access(defaults.tool_access))
+    if "allowed_skills" in inherits:
+        changes["allowed_skills"] = _normalize_allowed_skills(defaults.allowed_skills)
     if model == "" and defaults.model is not None:
         changes["model"] = _normalize_model_binding(defaults.model)
     if fallback_models == [] and defaults.fallback_models is not None:
