@@ -183,7 +183,7 @@ class CommandManager:
         self._output_host = output_host or command_output_host()
         self._checkpoints = (
             CommandCheckpoints(
-                checkpoint_store, retention_seconds=retention_seconds, secrets=secrets
+                checkpoint_store, retention_seconds=retention_seconds, secrets=secrets, sleep=sleep
             )
             if checkpoint_store
             else None
@@ -199,6 +199,7 @@ class CommandManager:
             announce=self._announce,
             checkpoint=self._checkpoint,
             flush=self.flush,
+            already_delivered=self._checkpoints.already_delivered if self._checkpoints else None,
         )
         self._records: dict[str, CommandRecord] = {}
         self._pending: dict[asyncio.Task[CommandRecord], _PendingLaunch] = {}
@@ -868,6 +869,7 @@ class CommandManager:
         record = CommandRecord(
             command_id,
             owner=owner,
+            generation_id=generation_id,
             process=process,
             command=command,
             description=description,
@@ -949,7 +951,10 @@ class CommandManager:
             for record in self._records.values()
             if record.finished_at is not None
             and now - record.finished_at >= self._retention_seconds
-            and not (self._checkpoints is not None and record.delivery_pending)
+            and not (
+                record.delivery_pending
+                and (self._checkpoints is not None or record.pending_tasks())
+            )
         ]
         for record in expired:
             del self._records[record.command_id]

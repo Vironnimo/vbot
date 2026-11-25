@@ -673,6 +673,12 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
         return None
     path = report.log_path
     capture = "Output capture ended before EOF. The final output may be incomplete"
+    if report.output_from_checkpoint:
+        capture = "Only the last saved output was recovered. Later output may be missing"
+        if loss is None:
+            if name_file and path is not None:
+                return f"{capture}. The recorded log path is {model_path(path)}"
+            return capture
     if loss is None:
         if not report.output_incomplete:
             return None

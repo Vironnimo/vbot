@@ -32,9 +32,11 @@ from pathlib import Path
 from typing import Any
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
+from core.sessions import SessionNotFoundError
 from core.storage.temp_files import TemporaryFileLease
 from core.utils.logging import get_logger
 
+from ._command_checkpoint import wait_for_delivery_retry
 from ._command_output import CommandOutput
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
@@ -87,6 +89,7 @@ class CommandServices:
     announce: Callable[[str], None]
     checkpoint: Callable[[str], None]
     flush: Callable[[str], Awaitable[None]]
+    already_delivered: Callable[[str, CommandOwner, str], Awaitable[bool]] | None
 
 
 @dataclass(slots=True)
@@ -107,6 +110,7 @@ class CommandRecord:
         command_id: str,
         *,
         owner: CommandOwner,
+        generation_id: str | None,
         process: CommandProcess,
         command: str,
         description: str | None,
@@ -124,6 +128,7 @@ class CommandRecord:
     ) -> None:
         self.command_id = command_id
         self.owner = owner
+        self._generation_id = generation_id
         self.origin_run_id = origin_run_id
         self.execution_owner = execution_owner
         self._process = process
@@ -379,6 +384,7 @@ class CommandRecord:
         if (
             sink is not None
             and body is not None
+            and self._handoff is None
             and self._delivered_to != target
             and self._withdraw_submitted()
         ):
@@ -921,11 +927,25 @@ class CommandRecord:
         self._services.checkpoint(self.command_id)
         handoff = self._handoff = object()
 
-        async def submit() -> None:
+        self._delivery_task = self._task(self._deliver_result(sink, body, handoff), "delivery")
+        # A submission cancelled before it began ends its handoff as well.
+        self._delivery_task.add_done_callback(lambda _task: self._end_handoff(handoff))
+
+    async def _deliver_result(self, sink: CompletionSink, body: str, handoff: object) -> None:
+        delay = 1.0
+        retry = False
+        while self._delivering:
             try:
-                # Persist the end before handing it over. A crash after Session
-                # persistence but before acknowledgement is deduplicated on restart.
+                if retry:
+                    # A failed write needs a fresh full checkpoint before resubmission.
+                    self._services.checkpoint(self.command_id)
                 await self._services.flush(self.command_id)
+                if (
+                    retry
+                    and self._services.already_delivered is not None
+                    and await self._services.already_delivered(self.command_id, self.owner, body)
+                ):
+                    break
                 if not self._delivering:
                     return
                 # A Session move can finish while the checkpoint is being saved.
@@ -939,15 +959,28 @@ class CommandRecord:
                     body=body,
                     execution_owner=self.execution_owner,
                     wake=True,
+                    expected_session_generation_id=self._generation_id,
                 )
-            finally:
-                # The sink holds the result now, or this submission ended without.
                 self._end_handoff(handoff)
-            await self._await_delivery(delivery)
-
-        self._delivery_task = self._task(submit(), "delivery")
-        # A submission cancelled before it began ends its handoff as well.
-        self._delivery_task.add_done_callback(lambda _task: self._end_handoff(handoff))
+                # Only the sink withdraws a claimed result.
+                await asyncio.shield(delivery)
+            except RunAdmissionBlockedError, SessionNotFoundError:
+                _LOGGER.debug(
+                    "Command result dropped for a closed target (command=%s)", self.command_id
+                )
+                break
+            except Exception:
+                if not self._delivering:
+                    return
+                if self._handoff is None:
+                    self._handoff = handoff
+                    self._announce()
+                delay = await wait_for_delivery_retry(self.command_id, delay, self._services.sleep)
+                retry = True
+            else:
+                break
+        self._deliver = False
+        self._services.checkpoint(self.command_id)
 
     def _end_handoff(self, handoff: object) -> None:
         if self._handoff is handoff:
@@ -961,7 +994,9 @@ class CommandRecord:
         once, as submitted.
         """
         task = self._delivery_task
-        if task is None or task.done() or not self._withdraw_submission():
+        if task is None or task.done():
+            return False
+        if self._handoff is None and not self._withdraw_submission():
             return False
         # Without a running Event Loop (Runtime stop), nothing is left to cancel.
         with contextlib.suppress(RuntimeError):
@@ -984,30 +1019,6 @@ class CommandRecord:
                 "Could not withdraw the result of command %s", self.command_id, exc_info=True
             )
             return False
-
-    async def _await_delivery(self, delivery: Awaitable[None]) -> None:
-        try:
-            # Only the sink withdraws a submitted result; stopping to follow
-            # the delivery leaves it alone.
-            await asyncio.shield(delivery)
-        except RunAdmissionBlockedError:
-            # The command's execution owner closed (for example its temporary
-            # group): an expected end of its lifecycle, not a delivery fault.
-            _LOGGER.debug(
-                "Command result dropped for a closed execution owner (command=%s)",
-                self.command_id,
-            )
-            self._deliver = False
-            self._services.checkpoint(self.command_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _LOGGER.warning(
-                "Delivering the result of command %s failed", self.command_id, exc_info=True
-            )
-        else:
-            self._deliver = False
-            self._services.checkpoint(self.command_id)
 
     # Helpers
 

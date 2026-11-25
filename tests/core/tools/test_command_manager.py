@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -995,6 +996,8 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
     "outcome",
     [
         "running",
+        "missing_log",
+        "empty_checkpoint",
         "ended",
         "delivered",
         "withdrawn",
@@ -1002,6 +1005,7 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
         "stop_after_restart",
         "ack_after_restart",
         "move_after_restart",
+        "retry_after_restart",
         "closed_execution",
         "replaced_session",
         "expired",
@@ -1033,7 +1037,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
         if outcome.startswith("owned_")
         else None
     )
-    running_outcomes = {"running", "moved", "owned_running"}
+    missing_logs = {"missing_log", "empty_checkpoint"}
+    running_outcomes = {"running", "moved", "owned_running", *missing_logs}
     expected_latest: dict[int, str] = {}
     restored_owner = OWNER
     secret_output = outcome in {"secret", "secret_delivered", "owned_secret"}
@@ -1049,6 +1054,11 @@ async def test_background_checkpoint_recovers_once_after_restart(
             if outcome == "moved_before_handoff":
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                 await sessions.move(OWNER, restored_owner)
+            if outcome == "missing_log":
+                process.write("saved line\n")
+                await eventually(
+                    lambda: harness.manager.latest_output(command_id, 1) == "saved line"
+                )
             await harness.manager.to_background_durably(command_id, deliver=True)
             if secret_output:
                 process.write(key + "\n")
@@ -1056,6 +1066,8 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 # Output after its last saved state reaches only the raw log.
                 prefix = {
                     "running": "x" * (COMMAND_HEAD_CHARS + 1),
+                    "missing_log": "uncheckpointed",
+                    "empty_checkpoint": "uncheckpointed",
                     "moved": "\n".join(map(str, range(COMMAND_RECENT_LINES + 1))),
                     "owned_running": "first\n" + "x" * (COMMAND_TAIL_CHARS + 1),
                 }[outcome]
@@ -1108,6 +1120,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
             # The previous server's last write to the raw log, 2 minutes 5 seconds in.
             last_write = parse_timestamp(checkpoint["started_at"]).timestamp() + 125
             os.utime(checkpoint["log_path"], (last_write, last_write))
+        if outcome in missing_logs:
+            Path(checkpoint["log_path"]).unlink()
+            saved = "saved line" if outcome == "missing_log" else ""
+            expected_latest = {1: saved}
         if outcome == "expired":
             checkpoint.update(pending=False, retained_until=0)
         if outcome == "replaced_session":
@@ -1151,6 +1167,11 @@ async def test_background_checkpoint_recovers_once_after_restart(
                     body = restored.sink.bodies[0]
                     assert "was stopped after at least 2 minutes 5 seconds: " in body
                     assert "compiled 3 files" in body
+                if outcome in missing_logs:
+                    body = restored.sink.bodies[0]
+                    assert "may be missing" in body and "uncheckpointed" not in body
+                    if outcome == "missing_log":
+                        assert "saved line" in body
                 if outcome == "old_pid_hint":
                     assert "Stop-Process" not in restored.sink.bodies[0]
                     assert command_id in restored.sink.bodies[0]
@@ -1166,6 +1187,12 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 elif outcome == "closed_execution":
                     restored.sink.futures[0].set_exception(RunAdmissionBlockedError("closed"))
                 else:
+                    if outcome == "retry_after_restart":
+                        restored.sink.futures[0].set_exception(OSError("delivery unavailable"))
+                        await restored.advance(2)
+                        await eventually(lambda: len(restored.sink.submissions) == 2)
+                        assert restored.sink.submissions[0] == restored.sink.submissions[1]
+                        submission_count = 2
                     if outcome == "move_after_restart":
                         target = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                         await sessions.move(restored_owner, target)
@@ -1190,6 +1217,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 assert len(notes) == 1
                 assert command_id in str(notes[0].content)
             report = restored.manager.report(command_id)
+            assert report.output_incomplete == (outcome in missing_logs)
             for count, expected in expected_latest.items():
                 assert restored.manager.latest_output(command_id, count) == expected
             if secret_output:
@@ -1233,6 +1261,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
         async with command_harness(tmp_path, checkpoint_store=sessions) as again:
             await again.manager.wait_recovered()
             assert again.sink.submissions == []
+            assert again.manager.report(command_id).output_incomplete == (outcome in missing_logs)
             if execution_owner is not None:
                 assert (
                     len(
@@ -1338,12 +1367,14 @@ async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
     try:
         async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
             await harness.manager.wait_recovered()
-            first, _process = await harness.launch()
+            first, process = await harness.launch()
             second, other_process = await harness.launch()
             fail.add(first)
             harness.manager.to_background(first, deliver=True)
             await harness.manager.to_background_durably(second, deliver=True)
             other_process.exit(0)
+            process.exit(0)
+            owed = await harness.finish(first)
             report = await harness.finish(second)
             await eventually(lambda: bool(harness.sink.bodies))
             assert harness.sink.bodies == [format_report(report)]
@@ -1351,11 +1382,77 @@ async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
                 await harness.manager.flush()
             assert [row["command_id"] for row in sessions.background_command_read()] == [second]
             fail.clear()
-            await harness.manager.to_background_durably(first, deliver=True)
+            await harness.advance(2)
+            await eventually(lambda: len(harness.sink.submissions) == 2)
+            assert harness.sink.bodies == [format_report(report), format_report(owed)]
             assert {row["command_id"] for row in sessions.background_command_read()} == {
                 first,
                 second,
             }
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["submit", "delivery", "already_saved", "withdraw", "closed"])
+async def test_background_delivery_retries_only_while_owed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    data = tmp_path / "sessions"
+    write_bootstrap_marker(data)
+    sessions = ChatSessionManager(data)
+    sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
+            submit = harness.sink.submit_completion
+            attempted = asyncio.Event()
+
+            def fail_first_submit(address: SessionAddress, **kwargs: Any) -> Awaitable[None]:
+                if not attempted.is_set():
+                    attempted.set()
+                    raise OSError("submission unavailable")
+                return submit(address, **kwargs)
+
+            if failure == "submit":
+                monkeypatch.setattr(harness.sink, "submit_completion", fail_first_submit)
+            command_id, process = await harness.launch()
+            await harness.manager.to_background_durably(command_id, deliver=True)
+            process.exit(0)
+            report = await harness.finish(command_id)
+            if failure == "submit":
+                await attempted.wait()
+            else:
+                await eventually(lambda: bool(harness.sink.futures))
+                if failure == "already_saved":
+                    await sessions.get(OWNER).add_note_async(harness.sink.bodies[0])
+                error = (
+                    RunAdmissionBlockedError("closed")
+                    if failure == "closed"
+                    else OSError("ack unavailable")
+                )
+                harness.sink.futures[0].set_exception(error)
+            if failure != "closed":
+                await eventually(lambda: harness.manager.pending_wakes(OWNER) == 1)
+            if failure == "withdraw":
+                harness.manager.acknowledge(command_id)
+            await harness.advance(2)
+            if failure in {"submit", "delivery"}:
+                count = 1 if failure == "submit" else 2
+                await eventually(lambda: len(harness.sink.submissions) == count)
+                assert harness.sink.submissions[0] == harness.sink.submissions[-1]
+                assert harness.sink.submissions[-1]["notice_id"] == f"command:{command_id}"
+                assert (
+                    harness.sink.submissions[-1]["expected_session_generation_id"]
+                    == sessions.get(OWNER).generation_id
+                )
+                assert harness.sink.bodies[-1] == format_report(report)
+                harness.sink.futures[-1].set_result(None)
+            else:
+                assert len(harness.sink.submissions) == 1
+            await eventually(
+                lambda: not sessions.background_command_read()[0]["checkpoint"]["pending"]
+            )
+            assert len(harness.launcher.processes) == 1
     finally:
         sessions.close()
 
@@ -1402,6 +1499,7 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
             "body": format_report(report),
             "execution_owner": None,
             "wake": True,
+            "expected_session_generation_id": None,
         }
     ]
     # Moved to the background, ended, handed to the sink, finished.

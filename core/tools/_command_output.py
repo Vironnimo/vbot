@@ -333,7 +333,7 @@ async def _clean_range(
                     _read_at, fd, offset, min(_RECOVERY_CHUNK_BYTES, end - offset)
                 )
                 if not data:
-                    break
+                    raise OSError("Command log ended before its recorded size")
                 offset += len(data)
                 # When cleaning fails, these bytes and the rest enter uncleaned.
                 with contextlib.suppress(Exception):

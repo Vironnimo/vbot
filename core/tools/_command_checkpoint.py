@@ -48,6 +48,21 @@ _LOGGER = get_logger("tools.command_manager")
 LogReader = Callable[[Path], Awaitable[LogSnapshot | None]]
 
 
+async def wait_for_delivery_retry(
+    command_id: str, delay: float, sleep: Callable[[float], Awaitable[None]]
+) -> float:
+    """Back off a failed command result without delaying other deliveries."""
+    log = _LOGGER.warning if delay == 1 else _LOGGER.debug
+    log(
+        "Command result delivery delayed (command=%s retry_in=%ss)",
+        command_id,
+        delay,
+        exc_info=True,
+    )
+    await sleep(delay)
+    return min(2 * delay, 60)
+
+
 class CommandCheckpointStore(Protocol):
     @property
     def data_dir(self) -> Path:
@@ -109,9 +124,11 @@ class CommandCheckpoints:
         *,
         retention_seconds: float,
         secrets: AgentSecrets | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.store = store
         self._secrets = secrets
+        self._sleep = sleep
         self._retention_seconds = retention_seconds
         self._retained_until: dict[str, float] = {}
         # When each command started, in seconds since the epoch.
@@ -141,6 +158,23 @@ class CommandCheckpoints:
         versions = await self.store.run_async(self.store.list_history_versions, [owner])
         version = versions.get(owner)
         return version[0] if version is not None else None
+
+    async def _protected_body(self, command_id: str, owner: SessionAddress, body: str) -> str:
+        if self._secrets is None:
+            return body
+        return await self.store.run_async(
+            self._secrets.protect_output,
+            owner,
+            body,
+            resolve_scope=partial(self.store.generation_scope, self._generations[command_id]),
+        )
+
+    async def already_delivered(self, command_id: str, owner: SessionAddress, body: str) -> bool:
+        """Check the body as it would appear in the original Session's history."""
+        protected = await self._protected_body(command_id, owner, body)
+        return await self.store.run_async(
+            self.store.background_command_delivered, command_id, protected
+        )
 
     def bind(self, command_id: str, generation_id: str, *, permissions: PermissionBoundary) -> None:
         """Bind a new command to its Session generation and the boundary it runs under."""
@@ -189,6 +223,7 @@ class CommandCheckpoints:
             "failed_programs": list(report.failed_programs),
             "jobs_ended": report.jobs_ended,
             "output_incomplete": report.output_incomplete,
+            "output_from_checkpoint": report.output_from_checkpoint,
             "log_loss": (
                 {"kept_bytes": report.log_loss.kept_bytes, "kept_lines": report.log_loss.kept_lines}
                 if report.log_loss is not None
@@ -424,6 +459,8 @@ class CommandCheckpoints:
             return report
         if log is not None:
             report = replace(report, transcript=log.transcript)
+        else:
+            report = replace(report, output_incomplete=True, output_from_checkpoint=True)
         if report.ended:
             return replace(report, finished=True)
         # Never attach to a reused PID. The old process tree belongs to the
@@ -449,59 +486,38 @@ class CommandCheckpoints:
         command_id = entry.report.command_id
         # A saved shell delivery can still recommend stopping an old PID.
         # Check the original Note for deduplication before refreshing the body.
-        refresh_processes = delivery_lists_processes(entry.body, command_id)
+        refresh_body = entry.report.output_from_checkpoint or delivery_lists_processes(
+            entry.body, command_id
+        )
+        delay = 1.0
         while entry.pending:
             try:
                 await self.flush(command_id)
-            except Exception:
-                # The write was logged; the final recovery flush reports it.
-                return
-            if not entry.pending:
-                return
-            if self._secrets is not None:
-                try:
-                    entry.body = await self.store.run_async(
-                        self._secrets.protect_output,
-                        entry.report.owner,
-                        entry.body,
-                        resolve_scope=partial(
-                            self.store.generation_scope,
-                            self._generations[entry.report.command_id],
+                if not entry.pending:
+                    return
+                entry.body = await self._protected_body(command_id, entry.report.owner, entry.body)
+                if await self.store.run_async(
+                    self.store.background_command_delivered, command_id, entry.body
+                ):
+                    break
+                if not entry.pending:
+                    return
+                if refresh_body:
+                    # Deduplicate the original before replacing stale output or process advice.
+                    entry.body = format_command_delivery(
+                        entry.report,
+                        permissions=_delivery_boundary(
+                            entry.report, self._ceilings[command_id], self.store.data_dir
                         ),
                     )
-                except SessionNotFoundError:
-                    entry.pending = False
                     self._save(entry)
+                    refresh_body = False
+                    continue
+                if entry.execution_owner is not None:
+                    await self._persist_owned_result(entry)
                     return
-            if await self.store.run_async(
-                self.store.background_command_delivered, entry.report.command_id, entry.body
-            ):
-                entry.pending = False
-                self._save(entry)
-                return
-            if not entry.pending:
-                return
-            if refresh_processes:
-                refresh_processes = False
-                # Rebuild from the restored report (which owns no live processes).
-                # Source and output remain content even if they resemble stop advice.
-                entry.body = format_command_delivery(
-                    entry.report,
-                    permissions=_delivery_boundary(
-                        entry.report, self._ceilings[command_id], self.store.data_dir
-                    ),
-                )
-                self._save(entry)
-                continue
-            if entry.execution_owner is not None:
-                # A restored execution epoch can never be admitted again. Keep
-                # its result in the same canonical Session without starting a
-                # Run or reviving the Extension's old group.
-                await self._persist_owned_result(entry)
-                return
-            target = entry.report.owner
-            entry.submitted_to = target
-            try:
+                target = entry.report.owner
+                entry.submitted_to = target
                 await asyncio.shield(
                     sink.submit_completion(
                         target,
@@ -510,6 +526,7 @@ class CommandCheckpoints:
                         body=entry.body,
                         execution_owner=entry.execution_owner,
                         wake=True,
+                        expected_session_generation_id=self._generations[command_id],
                     )
                 )
             except asyncio.CancelledError:
@@ -518,26 +535,24 @@ class CommandCheckpoints:
                     raise
                 # The sink withdrew an unclaimed result for Stop all or a
                 # Session move. A move retries at the new canonical address.
-                if entry.pending and entry.report.owner != target:
+                if entry.pending and entry.report.owner != entry.submitted_to:
                     continue
                 return
-            except RunAdmissionBlockedError:
-                entry.pending = False
-                self._save(entry)
-                return
+            except RunAdmissionBlockedError, SessionNotFoundError:
+                break
             except Exception:
-                if entry.pending and entry.report.owner != target:
+                if not entry.pending:
+                    return
+                delay = await wait_for_delivery_retry(command_id, delay, self._sleep)
+                if entry.pending:
+                    # A failed flush needs a new full write, not another wait on its error.
+                    self._save(entry)
                     continue
-                _LOGGER.warning(
-                    "Recovering command delivery failed (command=%s)",
-                    entry.report.command_id,
-                    exc_info=True,
-                )
                 return
             else:
-                entry.pending = False
-                self._save(entry)
-                return
+                break
+        entry.pending = False
+        self._save(entry)
 
     async def _persist_owned_result(self, entry: _Recovered) -> None:
         assert entry.body is not None
@@ -563,13 +578,6 @@ class CommandCheckpoints:
                 # A move between resolution and commit changed only the address.
                 # Resolve the same generation again; deletion ends it above.
                 continue
-            except Exception:
-                _LOGGER.warning(
-                    "Persisting recovered owned command failed (command=%s)",
-                    entry.report.command_id,
-                    exc_info=True,
-                )
-                return
             entry.pending = False
             self._save(entry)
             return
@@ -578,8 +586,7 @@ class CommandCheckpoints:
 async def _read_unfinished_log(
     row: dict[str, Any], read_log: LogReader | None
 ) -> LogSnapshot | None:
-    """The raw log of a command that was still running, unless its saved state
-    holds everything it wrote; None otherwise."""
+    """Read an unfinished command's raw log if it was keeping up with the transcript."""
     state = row["checkpoint"]
     path = state.get("log_path")
     if read_log is None or state["finished"] or not path or state.get("log_loss") is not None:
@@ -684,4 +691,5 @@ def _report(row: dict[str, Any]) -> CommandReport:
         ),
         jobs_ended=bool(state.get("jobs_ended", False)),
         output_incomplete=bool(state.get("output_incomplete", False)),
+        output_from_checkpoint=bool(state.get("output_from_checkpoint", False)),
     )

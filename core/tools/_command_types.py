@@ -184,8 +184,10 @@ class CommandReport:
     jobs_ended: bool = False
     # A bootstrap failure after Secret consumption needs fresh credentials for retry.
     consumed_once_secrets: bool = False
-    # Capture failed or an open pipe had to be closed after the process tree ended.
+    # Live capture or restart recovery could not establish the final output.
     output_incomplete: bool = False
+    # Only a potentially stale transcript was available at restart.
+    output_from_checkpoint: bool = False
 
     @property
     def status(self) -> CommandStatus:
@@ -239,6 +241,7 @@ class CompletionSink(Protocol):
         body: str,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
+        expected_session_generation_id: str | None = None,
         filter_body: Callable[[SessionAddress, str], Awaitable[str]] | None = None,
     ) -> Awaitable[None]: ...
 
