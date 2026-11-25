@@ -172,7 +172,10 @@ async def test_failed_browser_keeps_the_direct_failure_and_the_service_still_rec
 
 
 @pytest.mark.asyncio
-async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("manual_path", ["/docs/manual", "/docs/a;version=print", "/docs/a#manual"])
+async def test_rendered_static_app_path_expires_and_honors_access_checks(
+    tmp_path, monkeypatch, manual_path
+):
     now = [1.0]
     monkeypatch.setattr("core.tools.web_fetch._route_clock", lambda: now[0])
     shell = "<script type='module' src='/bundle.js'></script><div id='root'></div>"
@@ -181,7 +184,7 @@ async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_pat
     def answer(url):
         requests.append(url)
         content = (
-            _ARTICLE.format("A directly readable manual") if url.endswith("/manual") else shell
+            _ARTICLE.format("A directly readable manual") if url.endswith(manual_path) else shell
         )
         return make_result(headers={"content-type": "text/html"}, text=content, url=url)
 
@@ -196,7 +199,7 @@ async def test_rendered_static_app_path_expires_and_honors_access_checks(tmp_pat
     assert (await get("/docs/a"))["ok"]
     assert (await get("/docs/a"))["ok"] and len(requests) == 1
     browser.outcome = browser_module.BrowserAccessError("HTTP 403")
-    assert (await get("/docs/manual"))["ok"] and len(requests) == 2
+    assert (await get(manual_path))["ok"] and len(requests) == 2
     browser.outcome = _ARTICLE.format("Public app content")
     assert (await get("/news/a"))["ok"] and len(requests) == 3
     assert (await get("/docs/a?print=1"))["ok"] and len(requests) == 4

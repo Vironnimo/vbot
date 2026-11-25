@@ -10,7 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
-from urllib.parse import parse_qsl, unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urljoin, urlparse, urlsplit
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
@@ -471,10 +471,14 @@ _ACCESS_MARKER = re.compile(
 
 
 def _browser_scope(url: str) -> tuple[str, str, str] | None:
-    address = urlparse(url)
+    address = urlsplit(url)
     path = address.path or "/"
     name = path.rsplit("/", 1)[-1]
-    if address.query or ("." in name and not name.lower().endswith((".html", ".htm"))):
+    if (
+        address.query
+        or address.fragment
+        or ("." in name and not name.lower().endswith((".html", ".htm")))
+    ):
         return None
     return address.scheme, address.netloc.lower(), path
 
