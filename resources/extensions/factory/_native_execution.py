@@ -278,7 +278,7 @@ class NativeFactoryExecution:
         )
         return execution
 
-    async def schedule(self, limit: int) -> None:
+    async def schedule(self, limit: int | None) -> None:
         """Called only by the single Factory scheduler, under its lock."""
         if self.quiescing:
             return
@@ -288,16 +288,13 @@ class NativeFactoryExecution:
                 self.sessions._launch_later(execution)
         await self._schedule_topics(limit)
 
-    async def _capacity(self, factory: Json, member: Json, limit: int) -> bool:
-        total, factory_active, member_active = await self.store.active_execution_counts(
-            factory["id"], member["id"]
-        )
+    async def _capacity(self, factory: Json, member: Json, limit: int | None) -> bool:
+        _ = factory, member
+        if limit is None or limit <= 0:
+            return True
+        total, _, _ = await self.store.active_execution_counts()
         jobs_running = await self.service.job_execution.running_count()
-        return bool(
-            total + jobs_running < limit
-            and factory_active < factory.get("capacity", limit)
-            and member_active < member.get("capacity", 1)
-        )
+        return bool(total + jobs_running < limit)
 
     @staticmethod
     def _model_allowed(model: str, allowed: list[str]) -> bool:
@@ -357,5 +354,5 @@ class NativeFactoryExecution:
                 elif execution["runtime"].get("pending"):
                     self.sessions._launch_later(execution)
 
-    async def _schedule_topics(self, limit: int) -> None:
+    async def _schedule_topics(self, limit: int | None) -> None:
         await self.discussions.schedule(limit)

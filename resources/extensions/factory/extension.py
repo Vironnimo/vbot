@@ -127,17 +127,18 @@ class FactoryExtension:
             self._schedule_requested = False
             await self.schedule()
 
-    def wip_limit(self) -> int:
+    def wip_limit(self) -> int | None:
         config = self.api.get_config()
-        value = config.get("wip_limit", 2)
-        return (
-            max(1, min(int(value), 10000))
-            if isinstance(value, (int, float))
+        value = config.get("wip_limit", 0)
+        if (
+            isinstance(value, (int, float))
             and not isinstance(value, bool)
             and value == value
             and abs(value) < float("inf")
-            else 2
-        )
+        ):
+            parsed = int(value)
+            return min(parsed, 10000) if parsed > 0 else None
+        return None
 
     async def schedule(self) -> None:
         """Schedule native Leader chat and queued Job Runs within the WIP limit."""

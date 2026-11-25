@@ -165,9 +165,6 @@ async def test_schedule_admits_queued_runs_respecting_wip_limit(
     assert engine.owns("fjob.jrun_123")
     assert not engine.owns("native.fex_123")
 
-    await store.native.update_member(
-        worker["id"], {"capacity": 3}, actor="user", expected_revision=worker["revision"]
-    )
     job = await store.jobs.create_job(
         factory["id"], name="Nightly", prompt="Run tests", agent_member_id=worker["id"]
     )
@@ -385,20 +382,22 @@ async def test_cancel_via_management_does_not_deadlock_when_close_triggers_run_f
     assert (run["group_id"], "cancelled") in groups.closed
 
 
-async def test_schedule_enforces_factory_and_member_capacity_and_dismiss_clears_badge(
+async def test_schedule_default_unlimited_and_dismiss_clears_badge(
     tmp_path: Path, factory_store: FactoryStore
 ) -> None:
     engine, store, _, _groups, _, factory, worker = await _setup(tmp_path, factory_store)
-    # Member default capacity is 1; queueing 2 runs starts only 1 even when wip_limit=4.
+    # Default wip_limit=None (0) admits all queued runs with no per-factory/member cap.
     job = await store.jobs.create_job(
-        factory["id"], name="Serial", prompt="Do work", agent_member_id=worker["id"]
+        factory["id"], name="Parallel", prompt="Do work", agent_member_id=worker["id"]
     )
     r1 = await store.jobs.create_run(factory["id"], job["id"], origin="manual")
     r2 = await store.jobs.create_run(factory["id"], job["id"], origin="manual")
+    r3 = await store.jobs.create_run(factory["id"], job["id"], origin="manual")
 
-    await engine.schedule(wip_limit=4)
+    await engine.schedule(wip_limit=None)
     assert (await store.jobs.get_run(r1["id"]))["state"] == "running"
-    assert (await store.jobs.get_run(r2["id"]))["state"] == "queued"
+    assert (await store.jobs.get_run(r2["id"]))["state"] == "running"
+    assert (await store.jobs.get_run(r3["id"]))["state"] == "running"
 
     # Dismissing a failed run clears it from attention_count.
     await store.jobs.transition_run(r1["id"], "failed", reason="Boom")

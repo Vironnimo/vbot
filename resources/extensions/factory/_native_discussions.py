@@ -34,7 +34,7 @@ class NativeDiscussions:
     def __init__(self, native: Any) -> None:
         self.native = native
 
-    async def schedule(self, limit: int) -> None:
+    async def schedule(self, limit: int | None) -> None:
         native = self.native
         for topic in await native._all("list_topics"):
             if topic["state"] != "open" or not topic.get("direct_member_id"):

@@ -12,8 +12,8 @@
   const identity = untrack(() => record.id);
   const fields = untrack(() =>
     kind === 'factory'
-      ? ['name', 'remit', 'capacity', 'config']
-      : ['role', 'instructions', 'capacity', 'config'],
+      ? ['name', 'remit', 'config']
+      : ['role', 'instructions', 'config'],
   );
 
   const listKeys = [
@@ -43,8 +43,7 @@
                   ]),
                 ),
               }
-            : row[key]) ??
-            (key === 'config' ? {} : key === 'capacity' ? 1 : ''),
+            : row[key]) ?? (key === 'config' ? {} : ''),
         ]),
       ),
     normalize: (draft) => ({
@@ -68,7 +67,6 @@
             ),
           }
         : {}),
-      capacity: Number(draft.capacity),
     }),
     validate: () => '',
     save: async (values, revision, baseline) => {
@@ -154,17 +152,6 @@
       onInput={(value) => (editor.draft.instructions = value)}
     />
   {/if}
-
-  <label for={`${kind}-capacity-${identity}`}
-    >{t('factory.settings.capacity')}</label
-  >
-  <TextField
-    id={`${kind}-capacity-${identity}`}
-    type="number"
-    min="1"
-    value={editor.draft.capacity}
-    onInput={(value) => (editor.draft.capacity = value)}
-  />
 
   <details>
     <summary>{t('factory.settings.boundaries')}</summary>

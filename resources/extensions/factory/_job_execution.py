@@ -129,30 +129,21 @@ class FactoryJobExecution:
                 count += len(result.get("requests", ()))
         return count
 
-    async def schedule(self, wip_limit: int) -> None:
-        if self._quiescing or wip_limit <= 0:
+    async def schedule(self, wip_limit: int | None = None) -> None:
+        if self._quiescing:
             return
+        limit = wip_limit if wip_limit is not None and wip_limit > 0 else None
         active_runs = await self.jobs.list_active_runs()
-        running_runs = [run for run in active_runs if run["state"] == "running"]
-        running = len(running_runs)
-        if running >= wip_limit:
+        running = sum(1 for run in active_runs if run["state"] == "running")
+        if limit is not None and running >= limit:
             return
         queued = [run for run in active_runs if run["state"] == "queued"]
         if not queued:
             return
 
-        factory_running: dict[str, int] = {}
-        member_running: dict[str, int] = {}
-        for active in running_runs:
-            fid = active["factory_id"]
-            mid = active["member_id"]
-            factory_running[fid] = factory_running.get(fid, 0) + 1
-            member_running[mid] = member_running.get(mid, 0) + 1
-
         factories: dict[str, Json] = {}
-        members: dict[str, Json] = {}
         for run in queued:
-            if running >= wip_limit:
+            if limit is not None and running >= limit:
                 break
             factory_id = run["factory_id"]
             factory = factories.get(factory_id)
@@ -164,25 +155,9 @@ class FactoryJobExecution:
                 factories[factory_id] = factory
             if factory.get("state") != "active":
                 continue
-            factory_cap = factory.get("capacity", wip_limit)
-            if factory_running.get(factory_id, 0) >= factory_cap:
-                continue
-            member_id = run["member_id"]
-            member = members.get(member_id)
-            if member is None:
-                try:
-                    member = await self.native_store.get_member(member_id)
-                except FactoryError:
-                    member = None
-                if member is not None:
-                    members[member_id] = member
-            if member is not None and member_running.get(member_id, 0) >= member.get("capacity", 1):
-                continue
             try:
                 await self.start_run(run)
                 running += 1
-                factory_running[factory_id] = factory_running.get(factory_id, 0) + 1
-                member_running[member_id] = member_running.get(member_id, 0) + 1
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

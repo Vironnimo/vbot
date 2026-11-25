@@ -37,9 +37,12 @@ def register(api: ExtensionAPI) -> None:
             {
                 "key": "wip_limit",
                 "type": "number",
-                "label": "WIP limit",
-                "description": "Maximum Factory runs working at once.",
-                "default": 2,
+                "label": "Max concurrent runs",
+                "description": (
+                    "Maximum Factory runs working at once across all Factories. "
+                    "Set to 0 for unlimited."
+                ),
+                "default": 0,
             },
         ]
     )

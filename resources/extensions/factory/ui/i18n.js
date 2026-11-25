@@ -158,7 +158,6 @@ export default {
   'factory.team.required': 'Complete the required fields.',
 
   'factory.settings.name': 'Factory name',
-  'factory.settings.capacity': 'Capacity',
   'factory.settings.boundaries': 'Configuration boundaries',
   'factory.settings.boundaryHelp':
     'Enter comma-separated identifiers. Skills accept * for all. Existing Permission Rules remain in force.',
