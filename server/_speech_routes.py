@@ -28,6 +28,7 @@ from server._http_dependencies import (
     Response,
     StreamingResponse,
 )
+from server._media_transfers import until_disconnect
 from server._request_bodies import (
     _parse_upload_file_with_limit,
     _read_json_payload_with_limit,
@@ -65,21 +66,22 @@ def register_speech_routes(app: FastAPIType) -> None:
     async def transcribe_speech(request: Request) -> Any:
         runtime = request.app.state.runtime
         speech_service = runtime.speech
-        file = await _parse_upload_file_with_limit(
-            request,
-            max_size_bytes=runtime.speech_upload_max_size_bytes,
-            upload_kind="Speech audio",
-        )
-        filename = file.filename or "recording.webm"
-        media_type = file.content_type or "application/octet-stream"
-        try:
-            audio = await _read_upload_file_with_limit(
-                file,
+        with request.app.state.media_transfers.receiving(request, "transcription") as transfer:
+            file = await _parse_upload_file_with_limit(
+                request,
                 max_size_bytes=runtime.speech_upload_max_size_bytes,
                 upload_kind="Speech audio",
             )
-        finally:
-            await file.close()
+            filename = file.filename or "recording.webm"
+            media_type = file.content_type or "application/octet-stream"
+            try:
+                audio = await _read_upload_file_with_limit(
+                    file,
+                    max_size_bytes=runtime.speech_upload_max_size_bytes,
+                    upload_kind="Speech audio",
+                )
+            finally:
+                await file.close()
 
         async def transcribe(progress: SpeechProgress | None = None) -> Any:
             try:
@@ -91,14 +93,31 @@ def register_speech_routes(app: FastAPIType) -> None:
                 # event, including standalone Dictation without a Chat Run.
                 publish_resource_changed(request.app.state, RESOURCE_KIND_DEBUG_TRACES)
 
+        progress = SpeechProgress()
+        if transfer is not None:
+
+            async def record() -> JsonObject:
+                try:
+                    result = await transcribe(progress)
+                except SpeechError as exc:
+                    raise _speech_http_exception(exc) from exc
+                return cast(JsonObject, result.to_dict())
+
+            transfer.start(record)
+
         if "application/x-ndjson" in request.headers.get("accept", ""):
             return _SpeechStreamingResponse(
-                _stream_speech(transcribe),
+                _stream_speech(
+                    transcribe if transfer is None else lambda _progress: transfer.result(),
+                    progress=progress,
+                ),
                 media_type="application/x-ndjson",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
+        if transfer is not None:
+            return await until_disconnect(request, transfer.result())
         try:
-            result = await _speech_until_disconnect(
+            result = await until_disconnect(
                 request,
                 transcribe(),
             )
@@ -150,7 +169,7 @@ def register_speech_routes(app: FastAPIType) -> None:
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             )
         try:
-            result = await _speech_until_disconnect(request, speech_service.synthesize(text))
+            result = await until_disconnect(request, speech_service.synthesize(text))
         except SpeechError as exc:
             raise _speech_http_exception(exc) from exc
         return Response(content=result.audio, media_type=result.media_type)
@@ -180,40 +199,14 @@ def register_speech_routes(app: FastAPIType) -> None:
         )
 
 
-async def _speech_until_disconnect[Result](
-    request: Request, operation: Awaitable[Result]
-) -> Result:
-    """Run speech after the upload, cancelling and settling it when the client leaves."""
-
-    async def disconnected() -> None:
-        while True:
-            if (await request.receive())["type"] == "http.disconnect":
-                return
-
-    task = asyncio.ensure_future(operation)
-    disconnect = asyncio.create_task(disconnected(), name="speech-disconnect")
-    try:
-        done, _pending = await asyncio.wait({task, disconnect}, return_when=asyncio.FIRST_COMPLETED)
-        if task in done:
-            return task.result()
-        disconnect.result()
-        # Nothing reaches the departed client; finish the request without an
-        # unhandled cancellation or an internal-error log.
-        raise HTTPException(status_code=499, detail="Client disconnected")
-    finally:
-        if not task.done():
-            task.cancel()
-        disconnect.cancel()
-        await finish_despite_cancel(asyncio.gather(task, disconnect, return_exceptions=True))
-
-
 async def _stream_speech(
     operation: Callable[[SpeechProgress], Awaitable[Any]],
     *,
     updates: asyncio.Queue[JsonObject] | None = None,
+    progress: SpeechProgress | None = None,
 ) -> AsyncGenerator[str]:
     """Request-local progress heartbeats followed by one terminal result."""
-    progress = SpeechProgress()
+    progress = progress or SpeechProgress()
     task = asyncio.ensure_future(operation(progress))
     update_task: asyncio.Task[JsonObject] | None = None
     try:
@@ -237,8 +230,8 @@ async def _stream_speech(
                 yield json.dumps(updates.get_nowait()) + "\n"
         try:
             result = task.result()
-        except SpeechError as exc:
-            error = _speech_http_exception(exc)
+        except (SpeechError, HTTPException) as exc:
+            error = _speech_http_exception(exc) if isinstance(exc, SpeechError) else exc
             yield (
                 json.dumps({"type": "error", "detail": error.detail, "status": error.status_code})
                 + "\n"
@@ -250,7 +243,8 @@ async def _stream_speech(
                 + "\n"
             )
         else:
-            yield json.dumps({"type": "result", "result": result.to_dict()}) + "\n"
+            payload = result if isinstance(result, dict) else result.to_dict()
+            yield json.dumps({"type": "result", "result": payload}) + "\n"
     finally:
         if not task.done():
             task.cancel()

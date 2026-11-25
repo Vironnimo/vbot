@@ -463,7 +463,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
 - `POST /api/speech/transcribe` accepts multipart file upload, enforces the runtime upload limit before reading into `SpeechService`, and returns `SpeechTranscriptionResult.to_dict()`.
 - With `Accept: application/x-ndjson`, the same upload streams request-local
   progress heartbeats and one terminal result/error. `server/_speech_routes.py` owns this
-  transport and cancels/reaps work on disconnect; local worker cancellation
+  transport. Ordinary requests cancel and reap work on disconnect; a ticketed browser recording can rejoin the inference (`webui/chat.md` -> Browser media transfers). Local worker cancellation
   waits for the running engine call, bounded for worker children (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - Status and install of every local speech target go through the generic

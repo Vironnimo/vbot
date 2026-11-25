@@ -102,6 +102,29 @@ def test_upload_limit_rejects_before_storing(tmp_path: Path) -> None:
     assert store.stored == ["exact.txt"]
 
 
+def test_attachment_ticket_can_only_publish_once_and_recovers_the_original_result(
+    tmp_path: Path,
+) -> None:
+    store = _RecordingAttachmentStore(tmp_path / "data", max_size_bytes=1024)
+    url = "/api/media/transfers/attachment"
+    with _client(tmp_path, store) as client:
+        headers = {"X-Vbot-Media-Transfer": client.post(url).json()["ticket"]}
+        assert client.get(url, headers=headers).status_code == 204
+        files = {"file": ("note.txt", b"one upload", "text/plain")}
+        original = client.post("/api/upload", headers=headers, files=files)
+        duplicate = client.post("/api/upload", headers=headers, files=files)
+        replay = client.get(url, headers=headers)
+        assert client.get("/api/media/transfers/transcription", headers=headers).status_code == 410
+        assert client.delete(url, headers=headers).status_code == 204
+        expired = client.get(url, headers=headers)
+        assert client.post("/api/upload", headers=headers, files=files).status_code == 410
+    assert store.stored == ["note.txt"]
+    assert duplicate.status_code == 409
+    assert replay.json() == original.json()
+    assert expired.status_code == 410
+    assert replay.headers["cache-control"] == expired.headers["cache-control"] == "no-store"
+
+
 @pytest.mark.asyncio
 async def test_upload_stops_consuming_chunked_body_after_file_limit() -> None:
     # TestClient buffers request bodies, so consumption is observed on the parser.

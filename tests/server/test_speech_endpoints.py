@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, override
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.requests import ClientDisconnect  # type: ignore[import-not-found]
 
+import server._media_transfers as media_transfers
 import server._speech_routes as speech_routes
 from core.debug import SpeechDebugStore
 from core.model_tasks import (
@@ -31,10 +33,113 @@ from core.model_tasks.speech_types import SpeechAudioChunk, SpeechBusyError
 from server._request_bodies import JSON_REQUEST_BODY_MAX_BYTES
 from server._speech_routes import _stream_speech, _stream_synthesis
 from server.app import create_app
+from server.events import ServerEventBus
 from tests.server.app_test_support import ServerStubRuntime
 
 _AUDIO_FILE = {"file": ("clip.webm", b"audio", "audio/webm")}
 _NDJSON = {"Accept": "application/x-ndjson"}
+
+
+def test_transcription_ticket_recovers_stream_result_without_another_inference(
+    tmp_path: Path,
+) -> None:
+    speech = _Speech()
+    url = "/api/media/transfers/transcription"
+    with _client(tmp_path, speech) as client:
+        headers = {"X-Vbot-Media-Transfer": client.post(url).json()["ticket"]}
+        streamed = client.post(
+            "/api/speech/transcribe", files=_AUDIO_FILE, headers={**headers, **_NDJSON}
+        )
+        replay = client.get(url, headers=headers)
+        assert (
+            client.post("/api/speech/transcribe", files=_AUDIO_FILE, headers=headers).status_code
+            == 409
+        )
+    assert speech.transcribe_calls == 1
+    events = [json.loads(line) for line in streamed.text.splitlines()]
+    assert events[-1] == {"type": "result", "result": replay.json()}
+    assert replay.json()["text"] == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["complete", "discard", "expire"])
+async def test_browser_can_resume_or_discard_transcription_after_disconnect(
+    tmp_path: Path, outcome: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = asyncio.get_running_loop()
+    call_later = loop.call_later
+    expiries: list[tuple[asyncio.TimerHandle, Callable[[], None]]] = []
+
+    def capture_timer(
+        delay: float, callback: Callable[..., Any], *args: Any, **kw: Any
+    ) -> asyncio.TimerHandle:
+        handle = call_later(delay, callback, *args, **kw)
+        if delay == media_transfers._LIFETIME:
+            expiries.append((handle, callback))
+        return handle
+
+    def elapse_idle_lifetime() -> None:
+        assert expiries
+        for handle, callback in expiries:
+            if not handle.cancelled():
+                handle.cancel()
+                callback()
+
+    monkeypatch.setattr(loop, "call_later", capture_timer)
+    entered, finish, ended = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class PendingSpeech(_Speech):
+        @override
+        async def transcribe(
+            self, _audio: bytes, *, filename: str, media_type: str, progress: Any = None
+        ) -> SpeechTranscriptionResult:
+            self.transcribe_calls += 1
+            entered.set()
+            try:
+                await finish.wait()
+                return SpeechTranscriptionResult(text="recovered")
+            finally:
+                ended.set()
+
+    speech = PendingSpeech()
+    runtime = ServerStubRuntime(tmp_path / "data", speech=speech, speech_upload_max_size_bytes=1024)
+    app = create_app(runtime=runtime)
+    app.state.runtime = runtime
+    app.state.event_bus = ServerEventBus()
+    url = "/api/media/transfers/transcription"
+    transport = httpx.ASGITransport(app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        reservation = await client.post(url)
+        headers = {"X-Vbot-Media-Transfer": reservation.json()["ticket"]}
+        request = asyncio.create_task(
+            client.post("/api/speech/transcribe", files=_AUDIO_FILE, headers=headers)
+        )
+        try:
+            async with asyncio.timeout(1):
+                await entered.wait()
+                elapse_idle_lifetime()
+                assert not ended.is_set()
+                request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
+                assert not ended.is_set()
+                if outcome == "discard":
+                    assert (await client.delete(url, headers=headers)).status_code == 204
+                elif outcome == "expire":
+                    elapse_idle_lifetime()
+                else:
+                    finish.set()
+                await ended.wait()
+                replay = await client.get(url, headers=headers)
+                if outcome != "complete":
+                    assert replay.status_code == 410
+                else:
+                    assert replay.json()["text"] == "recovered"
+                    elapse_idle_lifetime()
+                    assert (await client.get(url, headers=headers)).status_code == 410
+                assert speech.transcribe_calls == 1
+        finally:
+            finish.set()
+            await app.state.media_transfers.aclose()
 
 
 @pytest.mark.asyncio

@@ -226,7 +226,7 @@
         ? t('chat.sendUnavailableSending')
         : media.hasUploadingAttachments
           ? t('chat.sendUnavailableUploading')
-          : media.voiceBusy || media.isRecording
+          : media.voiceBusy || media.isRecording || media.retryRecording
             ? t('chat.sendUnavailableVoice')
             : !content.trim() && media.pendingAttachments.length === 0
               ? t('chat.sendUnavailableEmpty')
@@ -255,9 +255,10 @@
     if (key === lastDraftKey) {
       return;
     }
+    media.leaveDraft(lastDraftKey);
     lastDraftKey = key;
-    media.cancelActiveRecording();
     media.hydratePendingAttachments(key);
+    media.restoreMedia(key);
     historyCursor = -1;
     navWorkingCopies = {};
     inputOrigin = '';
@@ -652,7 +653,7 @@
       variant="tertiary"
       icon
       class={media.isRecording ? 'btn-icon--active' : ''}
-      disabled={disabled || media.voiceBusy}
+      disabled={disabled || media.voiceBusy || media.retryRecording}
       loading={media.voiceBusy}
       ariaLabel={media.microphoneLabel}
       onClick={media.handleMicrophoneClick}
@@ -796,6 +797,22 @@
       variant="tertiary"
       disabled={disabled || Boolean(sendDisabledReason)}
       onClick={() => submission.submit()}>{t('common.retry')}</Button
+    >
+  </Banner>
+{/if}
+
+{#if media.retryRecording}
+  <Banner variant="warn" role="status">
+    <span
+      >{media.recordingOutcomeUnknown
+        ? t('chat.voice.recordingUnknown')
+        : t('chat.voice.recordingRetained')}</span
+    >
+    <Button variant="tertiary" onClick={() => media.transcribeRecording(true)}
+      >{t('common.retry')}</Button
+    >
+    <Button variant="tertiary" onClick={media.discardRecording}
+      >{t('common.discard')}</Button
     >
   </Banner>
 {/if}
@@ -995,7 +1012,15 @@
               use:tooltip={{ text: attachment.filename, whenTruncated: true }}
               >{attachment.filename}</span
             >
-            {#if attachment.uploading}
+            {#if attachment.retryAvailable}
+              <Button
+                variant="tertiary"
+                title={attachment.error}
+                onClick={() => media.uploadFile(attachment.local_id, true)}
+              >
+                {t('chat.attachment.retryUpload')}
+              </Button>
+            {:else if attachment.uploading}
               <span class="attachment-status">
                 {t('chat.attachment.uploading')}
               </span>

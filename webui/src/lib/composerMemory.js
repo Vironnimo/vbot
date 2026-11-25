@@ -28,6 +28,10 @@
 
 import { holdsSecretArgument } from './agentSecrets.js';
 import { containsPotentialApiKey } from './secretDetection.js';
+import {
+  ACCESS_LOSS_DEVICES_UNAVAILABLE,
+  onAccessLoss,
+} from './api/accessLoss.js';
 
 const DRAFTS_STORAGE_KEY = 'vbot.composer.drafts.v1';
 const HISTORY_STORAGE_KEY = 'vbot.composer.history.v1';
@@ -46,6 +50,47 @@ let attachments = readStore(ATTACHMENTS_STORAGE_KEY) ?? {};
 const dirtyDrafts = new Set();
 const draftListeners = new Set();
 const attachmentListeners = new Set();
+// Native File/Blob objects and their server tickets stay in this tab.
+const parkedMedia = new Map();
+let mediaGeneration = 0;
+export function currentMediaGeneration() {
+  return mediaGeneration;
+}
+export function parkDraftMedia(key, entry, generation) {
+  if (!key || generation !== mediaGeneration) {
+    entry.transfer.cancel();
+    return;
+  }
+  const items = parkedMedia.get(key) ?? [];
+  items.push(entry);
+  parkedMedia.set(key, items);
+  notifyPendingAttachments({ mediaKey: key });
+}
+export function takeDraftMedia(key, acceptRecording) {
+  const entries = parkedMedia.get(key) ?? [];
+  const taken = [];
+  const remaining = [];
+  for (const entry of entries) {
+    if (entry.kind === 'recording' && !acceptRecording) {
+      remaining.push(entry);
+      continue;
+    }
+    taken.push(entry);
+    if (entry.kind === 'recording') acceptRecording = false;
+  }
+  if (remaining.length) parkedMedia.set(key, remaining);
+  else parkedMedia.delete(key);
+  return taken;
+}
+function forgetDraftMedia() {
+  mediaGeneration++;
+  for (const entries of parkedMedia.values())
+    for (const entry of entries) entry.transfer.cancel();
+  parkedMedia.clear();
+}
+onAccessLoss((reason) => {
+  if (reason !== ACCESS_LOSS_DEVICES_UNAVAILABLE) forgetDraftMedia();
+});
 // Only additions and explicit removals belong to this tab. An unchanged file
 // in a dirty Session must not return after another tab removed or sent it.
 let pendingAttachmentChanges = [];
@@ -504,6 +549,14 @@ export function renameComposerAgent(oldAgentId, newAgentId) {
     return;
   }
   drafts = withRenamedSessionKeys(drafts, oldAgentId, newAgentId, dirtyDrafts);
+  const prefix = `${oldAgentId}::`;
+  for (const [key, entries] of [...parkedMedia]) {
+    if (key.startsWith(prefix)) {
+      const next = `${newAgentId}::${key.slice(prefix.length)}`;
+      parkedMedia.set(next, [...(parkedMedia.get(next) ?? []), ...entries]);
+      parkedMedia.delete(key);
+    }
+  }
   notifyDrafts();
   attachments = withRenamedSessionKeys(attachments, oldAgentId, newAgentId);
   pendingAttachmentChanges.push({
@@ -552,6 +605,7 @@ function withRenamedHistory(store, oldAgentId, newAgentId) {
 
 // Test support: drop all in-memory and persisted composer memory.
 export function resetComposerMemory() {
+  forgetDraftMedia();
   drafts = {};
   histories = {};
   attachments = {};

@@ -100,6 +100,7 @@ export function createComposerSubmission(context) {
     inFlight ||
     media.hasUploadingAttachments ||
     media.voiceBusy ||
+    media.retryRecording ||
     media.isRecording ||
     (!snapshot.trimmedContent && snapshot.attachments.length === 0);
 

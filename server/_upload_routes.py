@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from core.attachments.attachments import (
     AttachmentError,
@@ -13,6 +13,7 @@ from core.attachments.attachments import (
 )
 from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from server._http_dependencies import FastAPIType, FileResponse, HTTPException, Request
+from server._media_transfers import until_disconnect
 from server._request_bodies import _parse_upload_file_with_limit, _read_upload_file_with_limit
 from server.rpc.errors import RpcError
 from server.rpc.skill_methods import install_skill_upload
@@ -56,32 +57,40 @@ def register_upload_routes(app: FastAPIType) -> None:
     @app.post("/api/upload")
     async def upload_attachment(request: Request) -> JsonObject:
         attachment_store = request.app.state.runtime.attachment_store
-        file = await _parse_upload_file_with_limit(
-            request,
-            max_size_bytes=attachment_store.max_size_bytes,
-            upload_kind="Attachment",
-        )
-        filename = file.filename or "upload"
-        try:
-            data = await _read_upload_file_with_limit(
-                file,
+        with request.app.state.media_transfers.receiving(request, "attachment") as transfer:
+            file = await _parse_upload_file_with_limit(
+                request,
                 max_size_bytes=attachment_store.max_size_bytes,
                 upload_kind="Attachment",
             )
-            record = await attachment_store.store_async(filename, data)
-        except AttachmentTooLargeError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except AttachmentTypeNotAllowedError as exc:
-            raise HTTPException(status_code=415, detail=str(exc)) from exc
-        finally:
-            await file.close()
+            filename = file.filename or "upload"
+            try:
+                data = await _read_upload_file_with_limit(
+                    file,
+                    max_size_bytes=attachment_store.max_size_bytes,
+                    upload_kind="Attachment",
+                )
+            finally:
+                await file.close()
 
-        return {
-            "attachment_id": record.id,
-            "filename": record.filename,
-            "media_type": record.media_type,
-            "size_bytes": record.size_bytes,
-        }
+        async def store() -> JsonObject:
+            try:
+                record = await attachment_store.store_async(filename, data)
+            except AttachmentTooLargeError as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
+            except AttachmentTypeNotAllowedError as exc:
+                raise HTTPException(status_code=415, detail=str(exc)) from exc
+            return {
+                "attachment_id": record.id,
+                "filename": record.filename,
+                "media_type": record.media_type,
+                "size_bytes": record.size_bytes,
+            }
+
+        if transfer is None:
+            return await store()
+        transfer.start(store)
+        return cast(JsonObject, await until_disconnect(request, transfer.result()))
 
     @app.get("/api/attachments/{attachment_id}")
     async def get_attachment(request: Request, attachment_id: str) -> FileResponse:
