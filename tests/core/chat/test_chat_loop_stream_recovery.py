@@ -594,3 +594,28 @@ async def test_remote_provider_chunk_stalls_end_in_a_bounded_interruption(
     assert persisted_roles(messages) == ["user", "assistant"] + ["note", "assistant"] * 8
     assert messages[-1].role == "run_summary"
     assert messages[-1].status == "interrupted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first",
+    [
+        {"type": "reasoning_delta", "text": "already started"},
+        {"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [{"id": "r"}]}},
+        {"type": "tool_call_delta", "index": 0, "id": "c", "name": "read", "arguments_delta": "{"},
+        {"type": "finish", "reason": "stop"},
+    ],
+)
+async def test_completed_mode_never_replays_a_request_after_model_output(tmp_path: Path, first):
+    unsupported = ProviderStreamingUnsupportedError("streaming unsupported")
+    adapter = StubAdapter(
+        [{"content": "must not replay", "tool_calls": None}],
+        stream_responses=[[first, unsupported], answer("fresh continuation")],
+    )
+    runtime = stream_runtime(tmp_path, adapter)
+    if first["type"] in {"tool_call_delta", "finish"}:
+        with pytest.raises(ProviderStreamingUnsupportedError):
+            await send_streaming(runtime)
+    else:
+        assert (await send_streaming(runtime)).content == "fresh continuation"
+    assert not adapter.requests

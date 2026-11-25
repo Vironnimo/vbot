@@ -21,7 +21,7 @@ import pytest_asyncio
 import core.channels.email as email_module
 from core.attachments import AttachmentStore
 from core.channels._email_state import MailboxWatermark, MailThread
-from core.channels._email_transport import FolderStatus, ImapMailbox, send_smtp
+from core.channels._email_transport import FolderStatus, IdleRejectedError, ImapMailbox, send_smtp
 from core.channels.adapter import ConversationFacts, FileData
 from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError, EmailSettings
 from core.channels.email import EmailChannelAdapter
@@ -199,10 +199,11 @@ def make_adapter(
     *,
     require_sender_authentication: bool = True,
     mailbox: FakeMailbox | None = None,
+    engine: FakeEngine | None = None,
 ) -> tuple[EmailChannelAdapter, ChannelStateStore, FakeMailbox, FakeEngine, FakeSink, list[Any]]:
     state = channel_state(tmp_path, _CHANNEL)
     mailbox = mailbox or FakeMailbox({"INBOX": FakeFolder()}, supports_idle=False)
-    engine = FakeEngine()
+    engine = engine or FakeEngine()
     sink = FakeSink()
     sent: list[EmailMessage] = []
     config = ChannelConfig(
@@ -630,6 +631,53 @@ async def test_idle_mailboxes_leave_shared_workers_available_for_sending(tmp_pat
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refused", [True, False], ids=["server-denied", "two-immediate-aborts"])
+async def test_idle_downgrade_receives_mail_and_probes_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refused: bool
+) -> None:
+    mailbox = FakeMailbox({"INBOX": FakeFolder()}, supports_idle=True)
+    engine = FakeEngine()
+    polls = Clock()
+    now = 1000.0
+    monkeypatch.setattr(email_module, "_sleep", polls.sleep)
+    monkeypatch.setattr(email_module, "monotonic", lambda: now)
+    attempts = 0
+
+    def idle(_seconds: float) -> None:
+        nonlocal attempts
+        attempts += 1
+        if now > 1000:
+            raise ChannelConfigError("probe reached")
+        if refused:
+            raise IdleRejectedError
+        raise imaplib.IMAP4.abort("connection reset by peer")
+
+    monkeypatch.setattr(mailbox, "idle", idle)
+    if not refused:
+        for _ in range(2):
+            adapter, *_rest = make_adapter(tmp_path, mailbox=mailbox, engine=engine)
+            with pytest.raises(ChannelError, match="connection lost"):
+                await adapter.start()
+    adapter, *_rest = make_adapter(tmp_path, mailbox=mailbox, engine=engine)
+    task = asyncio.create_task(adapter.start())
+    try:
+        await wait_until(lambda: len(polls.delays) == 1)
+        assert attempts == (1 if refused else 2)
+        mailbox.folders["INBOX"].add(make_mail())
+        await polls.tick()
+        assert len(engine.inbound) == 1
+        assert polls.delays == [email_module.POLL_SECONDS] * 2
+        now += email_module._IDLE_PROBE_SECONDS
+        polls._wakes.put_nowait(None)
+        with pytest.raises(ChannelConfigError, match="probe reached"):
+            await task
+        assert attempts == (2 if refused else 3)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 class FakeImapClient:
     capabilities = ("IMAP4REV1", "IDLE")
     size = 10
@@ -678,6 +726,12 @@ def imap_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_imap_mailbox_reads_without_changing_the_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
     mailbox = ImapMailbox(_SETTINGS, "secret")
 
+    def refuse_idle(*, duration: float) -> None:
+        raise imaplib.IMAP4.error("idle denied: [b'not supported']")
+
+    monkeypatch.setattr(FakeImapClient.last, "idle", refuse_idle, raising=False)
+    with pytest.raises(IdleRejectedError):
+        mailbox.idle(15)
     assert mailbox.status("Entwürfe") == FolderStatus(uid_validity=3, uid_next=8)
     mailbox.select("Entwürfe")
     assert mailbox.uids_after(7) == []

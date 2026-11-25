@@ -132,7 +132,7 @@ class ChannelService:
         self._held_config_leases: set[str] = set()
         # A drained Telegram migration must leave a replacement platform alone,
         # but its new chat id still belongs in Telegram if the switch rolls back.
-        self._rollback_chat_migrations: dict[str, list[tuple[str, str]]] = {}
+        self._rollback_chat_migrations: dict[str, list[tuple[str, str, str | None]]] = {}
         self._connections = ChannelConnections(
             self._storage,
             get_channel=self.get_channel,
@@ -697,7 +697,21 @@ class ChannelService:
                 return
             await self._change_config(config, replace(config, enabled=False))
 
-    def record_chat_id_migration(self, channel_id: str, old_chat_id: str, new_chat_id: str) -> None:
+    def _telegram_migration_account_is_current(self, previous: ChannelConfig, token: str) -> bool:
+        current = self._storage.cached(previous.id)
+        # A platform switch drains the previous bot before resetting its state.
+        # Its verified migrations remain eligible if that switch rolls back.
+        source = current if current.platform == "telegram" else previous
+        return self._credential_resolver(source.token_env_var) == token
+
+    def record_chat_id_migration(
+        self,
+        channel_id: str,
+        old_chat_id: str,
+        new_chat_id: str,
+        *,
+        expected_token: str | None = None,
+    ) -> None:
         """Persist a platform-side chat-id migration into allowlist and group access.
 
         Moves the group's admins and participants to the new chat id, swaps the old
@@ -715,7 +729,12 @@ class ChannelService:
             if config.platform != "telegram":
                 rollback = self._rollback_chat_migrations.get(normalized_id)
                 if rollback is not None:
-                    rollback.append((old_chat_id, new_chat_id))
+                    rollback.append((old_chat_id, new_chat_id, expected_token))
+                return
+            if (
+                expected_token is not None
+                and self._credential_resolver(config.token_env_var) != expected_token
+            ):
                 return
             self._state.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
             if old_chat_id not in config.allowed_chat_ids:
@@ -785,6 +804,7 @@ class ChannelService:
             state=self._state,
             channel_root=self._channel_root,
             chat_migration_persister=self.record_chat_id_migration,
+            migration_account_is_current=self._telegram_migration_account_is_current,
             interaction_dispatcher=self._interaction_dispatcher,
             mail_sink=lambda: self._mail_sink,
         )
@@ -1110,7 +1130,14 @@ class ChannelService:
         def restore() -> None:
             nonlocal restored
             with nullcontext() if holds_lease else self._config_lease(channel_id):
-                for old_chat_id, new_chat_id in self._rollback_chat_migrations.get(channel_id, ()):
+                for old_chat_id, new_chat_id, token in self._rollback_chat_migrations.get(
+                    channel_id, ()
+                ):
+                    if (
+                        token is not None
+                        and self._credential_resolver(restored.token_env_var) != token
+                    ):
+                        continue
                     # Cancellation can restore Telegram before the first
                     # platform reset, so its existing group access still needs
                     # the migration. After a reset this is an empty-state no-op.

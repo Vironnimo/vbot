@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from core.debug import SpeechDebugStore
@@ -30,7 +33,7 @@ from core.model_tasks.speech_local import (
     LocalSpeechSetup,
 )
 from core.model_tasks.speech_playback import SpeechPlaybackStore
-from core.model_tasks.speech_providers import ProviderSpeechClient
+from core.model_tasks.speech_providers import ProviderSpeechClient, rejects_transcription_format
 from core.model_tasks.speech_types import (
     SpeechAudioCallback,
     SpeechAudioChunk,
@@ -46,8 +49,8 @@ from core.model_tasks.task_execution import (
     TaskUsage,
     TaskUsageContext,
 )
-from core.providers.errors import ProviderOutcomeUnknownError
-from core.providers.task_client import TaskClientRuntime
+from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.providers.task_client import TaskClientRuntime, TaskRequestRoute
 from core.settings import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.storage.layout import DataDirectoryLayout
 from core.usage import UsageRecorder
@@ -78,7 +81,7 @@ class SpeechExecutionError(SpeechError):
 
 
 class SpeechOutcomeUnknownError(SpeechExecutionError):
-    """Raised when speech synthesis may have completed at the provider."""
+    """Raised when a speech request may have completed at the provider."""
 
     code = ProviderOutcomeUnknownError.code
 
@@ -132,6 +135,9 @@ class SpeechService:
         self._max_input_bytes = max_input_bytes
         self._transcriptions = asyncio.Semaphore(_MAX_CONCURRENT_TRANSCRIPTIONS)
         self._pending_transcriptions = 0
+        self._rejected_formats: dict[
+            tuple[str, TaskRequestRoute | None, str], dict[str, float]
+        ] = {}
         self._input_workers = BoundedWorkerPool(name="speech_input", max_workers=2)
         self._closed = False
         self.playbacks = SpeechPlaybackStore()
@@ -236,23 +242,14 @@ class SpeechService:
                 provider_client = await ProviderSpeechClient.from_runtime_async(
                     self._runtime, target_ref, usage_observer=usage
                 )
-                if progress is not None:
-                    progress.update("preparing")
-                prepared = await self._prepare_input(
-                    audio, provider_client.transcription_input_policy()
-                )
-                if self._closed:
-                    raise SpeechConfigurationError("Speech service is closed")
-                if progress is not None:
-                    progress.update("transcribing")
-                return await provider_client.transcribe(
-                    prepared.audio,
-                    filename=prepared.filename,
-                    media_type=prepared.media_type,
-                    options=options,
-                )
+                return await self._transcribe_provider(provider_client, attempt, audio, progress)
             except SpeechError:
                 raise
+            except ProviderOutcomeUnknownError as exc:
+                _LOGGER.warning(
+                    "Speech transcription outcome unknown for target=%s", target_ref.target
+                )
+                raise SpeechOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
             except VBotError as exc:
                 # ProviderError / NetworkError / ProviderAuthError / … are
                 # expected provider failures, not crashes.
@@ -272,6 +269,55 @@ class SpeechService:
         except SpeechConfigurationError as exc:
             _LOGGER.warning("Speech transcription unavailable: %s", exc)
             raise
+
+    async def _transcribe_provider(
+        self,
+        provider_client: ProviderSpeechClient,
+        attempt: TaskAttempt,
+        audio: bytes,
+        progress: SpeechProgress | None,
+    ) -> SpeechTranscriptionResult:
+        policy = provider_client.transcription_input_policy()
+        route = (
+            attempt.target.target,
+            policy.route,
+            sha256(json.dumps(attempt.options, sort_keys=True).encode()).hexdigest(),
+        )
+        known = self._rejected_formats.get(route, {})
+        rejected = {name for name, expiry in known.items() if expiry > monotonic()}
+        newly_rejected: set[str] = set()
+        while True:
+            if progress is not None:
+                progress.update("preparing")
+            prepared = await self._prepare_input(
+                audio, replace(policy, rejected_formats=frozenset(rejected))
+            )
+            if self._closed:
+                raise SpeechConfigurationError("Speech service is closed")
+            if progress is not None:
+                progress.update("transcribing")
+            try:
+                result = await provider_client.transcribe(
+                    prepared.audio,
+                    filename=prepared.filename,
+                    media_type=prepared.media_type,
+                    options=attempt.options,
+                )
+            except ProviderError as exc:
+                sent = prepared.filename.rsplit(".", 1)[-1]
+                if not rejects_transcription_format(exc, sent) or not (
+                    {"wav", "flac"} & policy.accepted_formats - rejected - {sent}
+                ):
+                    raise
+                rejected.add(sent)
+                newly_rejected.add(sent)
+                continue
+            if newly_rejected:
+                if route not in self._rejected_formats and len(self._rejected_formats) >= 256:
+                    del self._rejected_formats[next(iter(self._rejected_formats))]
+                observations = self._rejected_formats.setdefault(route, {})
+                observations.update(dict.fromkeys(newly_rejected, monotonic() + 3600))
+            return result
 
     async def _prepare_input(
         self, audio: bytes, policy: TranscriptionInputPolicy

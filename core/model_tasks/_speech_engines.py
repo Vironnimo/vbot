@@ -30,6 +30,7 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
+from core.model_tasks.speech_worker import SpeechDeviceError, device_failure, runtime_options
 
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
 _LOAD_DEADLINE_S = 900.0
@@ -104,6 +105,14 @@ class _WorkerProcess(JsonLineWorker):
             with closing(self.exchange(request, deadline, read_limit=4096)) as events:
                 for event in events:
                     if event.get("error"):
+                        if (
+                            event.get("code") in {"gpu_oom", "gpu_precision", "gpu_kernel"}
+                            and event.get("device") in {"cuda", "mps"}
+                            and event.get("precision") in {"", "float16", "bfloat16", "float32"}
+                        ):
+                            raise SpeechDeviceError(
+                                event["code"], event["device"], event["precision"]
+                            )
                         raise RuntimeError(event["error"])
                     if on_event is not None:
                         on_event(event)
@@ -294,13 +303,8 @@ class _TransformersEngine:
         self._torch = torch
         self._model: Any = None
         self._processor: Any = None
-        device = options.get("device") or "auto"
-        if device == "auto":
-            device = (
-                "cuda"
-                if torch.cuda.is_available()
-                else ("mps" if torch.backends.mps.is_available() else "cpu")
-            )
+        self.device_options = runtime_options(dict(options), precision=True)
+        device = self.device_options["device"]
         if device == "cuda" and not torch.cuda.is_available():
             raise LocalSpeechExecutionError(
                 "The selected GPU is unavailable to PyTorch. "
@@ -311,11 +315,7 @@ class _TransformersEngine:
                 "The selected Apple GPU is unavailable to PyTorch. "
                 "Select CPU or a supported device in the speech-to-text options."
             )
-        precision = options.get("dtype") or "auto"
-        if precision == "auto":
-            precision = "float32"
-            if device == "cuda":
-                precision = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+        precision = self.device_options["dtype"]
         # The executor supplies the installed model's directory unless the binding names one.
         path = Path((options.get("model_path") or "").strip()).expanduser()
         if not str(path) or str(path) == "." or not path.is_dir():
@@ -339,8 +339,10 @@ class _TransformersEngine:
                 .to(device)
                 .eval()
             )
-        except Exception:
+        except Exception as error:
             self.close()
+            if failure := device_failure(error, device, precision):
+                raise failure from error
             raise
 
     def close(self) -> None:

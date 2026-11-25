@@ -306,6 +306,12 @@ def _parse_thread_id(thread_id: str | None) -> int | None:
         raise ChannelConfigError("thread_id must be an integer Telegram topic id") from error
 
 
+def telegram_binding_target(platform_target: str, thread_id: str | None) -> tuple[str, str | None]:
+    """Use the same decimal IDs for bindings that the Bot API returns on a tap."""
+    topic = _parse_thread_id(thread_id)
+    return str(_parse_platform_target(platform_target)), None if topic is None else str(topic)
+
+
 def _is_integer(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 

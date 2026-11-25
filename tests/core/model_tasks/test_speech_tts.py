@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import subprocess
 import sys
 import threading
 import wave
@@ -284,6 +285,97 @@ async def test_synthesis_substitution_cache_voice_changes_and_stt_switch():
         assert _PROGRESS.get() is None
     finally:
         await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivered", [False, True])
+async def test_synthesis_can_change_gpu_profile_only_before_delivering_pcm(delivered):
+    devices = []
+    frames = []
+
+    class Model:
+        def __init__(self, options):
+            devices.append(options["device"])
+            self.device_options = {
+                "device": "cuda" if options["device"] == "auto" else options["device"],
+                "dtype": "",
+            }
+
+        def synthesize(self, text, options):
+            if delivered or options["device"] == "cpu":
+                _AUDIO.get()(SpeechAudioChunk(b"ab", 24000))
+            if options["device"] == "auto":
+                raise RuntimeError("CUDA out of memory")
+            assert "dtype" not in options  # Chatterbox's SDK accepts only a device.
+            return SpeechSynthesisResult(b"wav", "audio/wav", "wav")
+
+        def close(self):
+            pass
+
+    definition = SpeechEngineDefinition(
+        LocalTaskTargetDescriptor(
+            id="chat",
+            label="Chatterbox",
+            task_types=(TASK_TEXT_TO_SPEECH,),
+            availability=lambda: True,
+            option_fields=(TaskModelOptionField("device", "text", "Device", default="auto"),),
+        ),
+        Model,
+        ("device",),
+        environment="chatterbox",
+    )
+    executor = LocalSpeechExecutor(engines=[definition])
+
+    async def hear(chunk):
+        frames.append(chunk.audio)
+
+    try:
+        if delivered:
+            with pytest.raises(LocalSpeechExecutionError):
+                await executor.synthesize("chat", "hello", options={}, on_audio=hear)
+            assert devices == ["auto"]
+        else:
+            await executor.synthesize("chat", "hello", options={}, on_audio=hear)
+            assert devices == ["auto", "cpu"]
+        assert frames == [b"ab"]
+        await executor.synthesize("chat", "next", options={}, on_audio=hear)
+        assert devices == ["auto", "cpu"]
+        assert frames == [b"ab", b"ab"]
+    finally:
+        await executor.aclose()
+
+
+def test_standalone_tts_worker_reports_a_sanitized_gpu_load_failure():
+    # The deployed child starts in isolated Python without the vBot package.
+    # Its SDK substitute fails in model loading on the effective CUDA device.
+    script = """
+import runpy,sys
+from types import SimpleNamespace as NS
+def fail(*args,**kwargs):
+    raise RuntimeError("CUDA out of memory: sensitive allocator context")
+cuda = NS(is_available=lambda: True, is_bf16_supported=lambda: True)
+sys.modules["torch"] = NS(cuda=cuda, bfloat16="bf16")
+sys.modules["huggingface_hub.constants"] = NS(HF_HUB_OFFLINE=False)
+sys.modules["qwen_tts"] = NS(Qwen3TTSModel=NS(from_pretrained=fail))
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", script, speech_worker.__file__, "qwen3-tts"],
+        input=json.dumps({"load": True, "options": {"device": "auto", "model_path": "installed"}})
+        + "\n",
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    error = json.loads(result.stdout.splitlines()[-1])
+    assert error == {
+        "error": "RuntimeError",
+        "code": "gpu_oom",
+        "device": "cuda",
+        "precision": "bfloat16",
+    }
 
 
 @pytest.mark.asyncio

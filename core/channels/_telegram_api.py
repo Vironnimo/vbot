@@ -361,6 +361,10 @@ def _loggable_telegram_error_text(telegram_error_module: Any, error: Any) -> str
     return _EXTERNAL_ID_PATTERN.sub("<id>", str(error))
 
 
+class _PhotoRejectedError(ChannelError):
+    """The Bot API rejected the photo bytes or their dimensions before posting."""
+
+
 def _classify_telegram_error(
     channel_id: str,
     telegram_error_module: Any,
@@ -376,13 +380,23 @@ def _classify_telegram_error(
     server error Telegram may already have posted the message, and a repeat
     would duplicate it.
     """
-    channel_error = ChannelError(
+    bad_request = getattr(telegram_error_module, "BadRequest", None)
+    rejected_photo = (
+        bad_request is not None
+        and isinstance(error, bad_request)
+        and re.search(
+            r"\b(?:photo invalid dimensions|photo content type invalid|image process failed|"
+            r"photo invalid|file (?:is )?too (?:big|large))\b",
+            text.casefold().replace("_", " "),
+        )
+    )
+    error_type = _PhotoRejectedError if rejected_photo else ChannelError
+    channel_error = error_type(
         f"Telegram request failed (channel={channel_id} error_type={type(error).__name__}): {text}",
         user_message=text,
     )
     # PTB's permanent BadRequest also inherits NetworkError. Reject it before
     # classifying actual transport failures, or invalid requests retry unchanged.
-    bad_request = getattr(telegram_error_module, "BadRequest", None)
     if bad_request is not None and isinstance(error, bad_request):
         return channel_error
     network_error = getattr(telegram_error_module, "NetworkError", None)

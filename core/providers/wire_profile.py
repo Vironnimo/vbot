@@ -339,7 +339,7 @@ class RequestRules:
     and the smallest positive value wins.
     """
 
-    input_token_limit: int | None = None
+    input_token_limit: int | None = field(default=None, kw_only=True)
     output_limit_field: OutputLimitField | None = "max_tokens"
     output_limit_default: int | None = None
     output_limit_cap: int | None = None
@@ -701,7 +701,7 @@ class WireProfile:
     media: MediaRules = field(default_factory=MediaRules)
     decision: DecisionWire = field(default_factory=DecisionWire)
     known_model: bool = True
-    catalog_sampling: Mapping[str, bool] = field(default_factory=lambda: _EMPTY)
+    catalog_sampling: Mapping[str, bool] = field(default_factory=lambda: _EMPTY, kw_only=True)
     provenance: Mapping[str, str] = field(default_factory=lambda: _EMPTY)
 
     def effective_parameters(self, advertised: Collection[str]) -> tuple[str, ...]:

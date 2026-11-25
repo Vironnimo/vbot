@@ -30,6 +30,8 @@ A family entry's `set.protocol` proposes its fallback route and scopes its other
 
 ## Wire reads and learned facts
 
+Request compatibility facts use the Provider, Connection, endpoint fingerprint, account, protocol and bare Model. Optional structure and equivalent output-field substitutions expire after 30 days, MIME conversion after seven days and transient service-tier, streaming and upload thresholds after 15 minutes. The facts share the bounded observations store and its scoped reset. Confirmed local load settings stay process-local.
+
 Resolved-profile caches revalidate the Adapter's current protocol sequence as well as Model identity, file generation and observations. Replacing an Extension Provider can therefore change its wire defaults immediately without a Model catalog reload; the cache never carries the former Adapter's protocol into its replacement.
 
 Wire profile reads for accessors go through `core/providers/runtime.py::ProviderRuntime`. `wire_profile(provider, local_connection, model)` returns the resolved profile requests use, including learned facts. `wire_status(...)` returns just its status and verification, and `learned_wire_facts(...)` returns the observations live traffic recorded.

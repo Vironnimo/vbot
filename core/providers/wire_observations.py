@@ -43,6 +43,20 @@ _LOGGER = get_logger("providers.wire_observations")
 OBSERVATIONS_FORMAT_VERSION = 2
 OBSERVATIONS_FILE_NAME = "wire-observations.json"
 REJECTION_TTL = timedelta(days=30)
+# Route-specific rejection evidence. Temporary service policies and gateway size
+# limits get a fresh probe soon. Model-load pressure stays in this process.
+ROUTE_FACT_TTL = {
+    "output_field": timedelta(days=30),
+    "stream_options": timedelta(days=30),
+    "think": timedelta(days=30),
+    "image/webp": timedelta(days=7),
+    "image/gif": timedelta(days=7),
+    "service_tier": timedelta(minutes=15),
+    "stream": timedelta(minutes=15),
+    "body_bytes": timedelta(minutes=15),
+    "load_window": timedelta(minutes=15),
+}
+type RouteFactKey = tuple[str, str, str, str, str, str]
 EXCLUSIVE_GROUP_SEPARATOR = "+"
 _DEFAULT_SAVE_DELAY_SECONDS = 2.0
 _MAX_LIST_ENTRIES = 16
@@ -137,6 +151,7 @@ class WireObservations:
         self._save_delay = save_delay
         self._logger = logger if logger is not None else _LOGGER
         self._clock: Clock = clock if clock is not None else _utc_now
+        self._route_facts: dict[RouteFactKey, tuple[int, datetime]] = {}
         self._facts: dict[str, ObservedFacts] = {}
         self._learned_at: _RejectionTimes = {}
         self._next_expiry: datetime | None = None
@@ -156,7 +171,9 @@ class WireObservations:
     ) -> WireObservations:
         store = cls(path, save_delay=save_delay, logger=logger, clock=clock)
         if path is not None:
-            store._facts, store._learned_at = _read(path, store._logger, store._clock())
+            store._facts, store._learned_at = _read(
+                path, store._logger, store._clock(), store._route_facts
+            )
             store._next_expiry = _next_expiry(store._learned_at)
             store._expire()
         return store
@@ -178,6 +195,24 @@ class WireObservations:
             return dict(self._facts)
 
     # -- recording -------------------------------------------------------------
+
+    def route_fact(self, key: RouteFactKey) -> int | None:
+        with self._lock:
+            stored = self._route_facts.get(key)
+            if stored is None:
+                return None
+            if self._clock() >= stored[1]:
+                self._route_facts.pop(key)
+                return None
+            return stored[0]
+
+    def remember_route(self, key: RouteFactKey, value: int) -> None:
+        with self._lock:
+            self._route_facts[key] = (value, self._clock() + ROUTE_FACT_TTL[key[-1]])
+            if len(self._route_facts) > 512:
+                del self._route_facts[next(iter(self._route_facts))]
+            self._dirty = True
+        self._schedule_save()
 
     def record_reasoning_field(
         self, provider_id: str, connection_id: str, model_id: str, field: str
@@ -349,7 +384,16 @@ class WireObservations:
 
         with self._lock:
             removed = [key for key in self._facts if selected(key)]
-            if not removed:
+            route_targets = set()
+            for target in tuple(self._route_facts):
+                if (
+                    target[0] == provider_id
+                    and connection_id in (None, target[1])
+                    and bare_model in (None, target[4])
+                ):
+                    del self._route_facts[target]
+                    route_targets.add(_key(target[0], target[1], target[4]))
+            if not removed and not route_targets:
                 return 0
             for key in removed:
                 del self._facts[key]
@@ -362,10 +406,10 @@ class WireObservations:
             provider_id,
             connection_id or "*",
             bare_model or "*",
-            len(removed),
+            len(set(removed) | route_targets),
         )
         self._schedule_save()
-        return len(removed)
+        return len(set(removed) | route_targets)
 
     def _expire(self) -> None:
         """Drop every rejection learned ``REJECTION_TTL`` or longer ago."""
@@ -473,6 +517,13 @@ class WireObservations:
             if not self._dirty or self._path is None:
                 return
             document = _document(self._facts, self._learned_at)
+            routes = [
+                [*key, value, expiry.isoformat()]
+                for key, (value, expiry) in self._route_facts.items()
+                if key[-1] != "load_window" and expiry > self._clock()
+            ]
+            if routes:
+                document["routes"] = routes
             self._dirty = False
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -554,7 +605,7 @@ def _stamp(value: datetime | None) -> str:
 
 
 def _read(
-    path: Path, logger: Any, now: datetime
+    path: Path, logger: Any, now: datetime, route_facts: dict[RouteFactKey, tuple[int, datetime]]
 ) -> tuple[dict[str, ObservedFacts], _RejectionTimes]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -566,6 +617,30 @@ def _read(
     if not isinstance(raw, Mapping) or raw.get("format_version") != OBSERVATIONS_FORMAT_VERSION:
         logger.warning("Ignoring wire observations %s with an unknown format", path)
         return {}, {}
+    routes = raw.get("routes")
+    if isinstance(routes, list):
+        for item in routes[-512:]:
+            if not isinstance(item, list) or len(item) != 8:
+                continue
+            provider, connection, endpoint, account, model, name, value, stamp = item
+            if (
+                not all(isinstance(part, str) for part in item[:6])
+                or name not in ROUTE_FACT_TTL
+                or name == "load_window"
+                or type(value) is not int
+                or value < 1
+                or not isinstance(stamp, str)
+            ):
+                continue
+            try:
+                expiry = datetime.fromisoformat(stamp)
+            except ValueError:
+                continue
+            if expiry.tzinfo is not None and now < expiry <= now + ROUTE_FACT_TTL[name]:
+                route_facts[(provider, connection, endpoint, account, model, name)] = (
+                    value,
+                    expiry,
+                )
     targets = raw.get("targets")
     if not isinstance(targets, Mapping):
         return {}, {}

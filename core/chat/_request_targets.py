@@ -27,6 +27,7 @@ from core.chat.streaming import stream_stall_timeout
 from core.chat.usage import latest_session_context_usage
 from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS, account_model_routes
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
+from core.providers.adapter import ProviderAdapter
 from core.providers.providers import context_capacity
 from core.runs import Run
 from core.utils.errors import ConfigError, ProviderError, VBotError
@@ -278,6 +279,8 @@ class RequestTargets:
                 )
             )
         try:
+            if isinstance(target.adapter, ProviderAdapter):
+                await target.adapter.refresh_admission_context(target.model_id)
             return await self.resolve_context_capacity_async(agent, target)
         finally:
             await _close_adapter(target.adapter)
@@ -298,7 +301,7 @@ class RequestTargets:
         """The Context window a request to the target fills.
 
         A window the Provider reported for the route wins
-        (``ProviderAdapter.reported_context_window``: one a rejection stated, or
+        (``ProviderAdapter.admission_context_window``: one a rejection stated, or
         the one a loaded local instance serves). Otherwise the route's effective
         window (:func:`resolve_route_context_window`): the Connection's catalog
         window through the read-side chain, with local-Model policy (the user's
@@ -307,7 +310,11 @@ class RequestTargets:
         Reads Settings, so callers run it off the Event Loop.
         """
         del agent  # The target carries the resolved Model and Connection.
-        reported = target.adapter.reported_context_window(target.model_id)
+        reported = (
+            target.adapter.admission_context_window(target.model_id)
+            if isinstance(target.adapter, ProviderAdapter)
+            else target.adapter.reported_context_window(target.model_id)
+        )
         if reported is not None:
             return reported
         return resolve_route_context_window(

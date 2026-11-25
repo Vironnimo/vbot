@@ -179,6 +179,12 @@ class RequestImageBudget:
         self._unsaved_delivery = False
         return {"images": [list(key) for key in sorted(self._delivered)]}
 
+    def can_retire(self, messages: list[JsonObject]) -> bool:
+        return any(
+            image.key in self._delivered and image.address not in self._retired
+            for image in _request_images(messages)
+        )
+
     def record_delivered(self, messages: list[JsonObject]) -> None:
         delivered = {image.key for image in _request_images(messages) if image.key}
         retained = retain_delivery_pin({"images": [list(key) for key in self._delivered]}, messages)

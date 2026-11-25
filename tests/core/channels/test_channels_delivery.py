@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram.error import ChatMigrated
 
-from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
+from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError, ChannelStorage
 from core.channels.adapter import RouteFacts, parse_bound_run_callback_data
 from core.channels.channels import ChannelService
 from core.channels.state import ChannelStateStore
+from core.channels.telegram import TelegramChannelAdapter
 from core.chat import ReplySurface
 from core.database import DatabaseUnavailableError
 from core.extensions import InteractionButton
@@ -20,9 +23,12 @@ from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.channels.channels_test_support import (
     BlockingAdapter,
+    make_config,
+    make_service,
     start_with_adapter,
 )
 from tests.core.channels.engine_test_support import connect, settle_replies
+from tests.core.channels.telegram_test_support import make_bot
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -276,6 +282,74 @@ async def test_channel_service_persists_and_rewrites_origin_bound_run_buttons(
     assert claimed.binding is not None
     assert claimed.binding.origin_session_id == "origin-session"
     assert claimed.binding.original_button_data == ("run:done",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed", ["-500", "-100500"], ids=["first-migration", "after-restart"])
+async def test_run_button_delivery_tracks_the_confirmed_group_before_the_keyboard_is_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: str
+) -> None:
+    config = make_config(allowed_chat_ids=[allowed])
+    monkeypatch.setenv(config.token_env_var, "test-token")
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path, chat_sessions=_origin_sessions(tmp_path))
+    bot = make_bot()
+    monkeypatch.setattr(TelegramChannelAdapter, "_require_bot", lambda _self: bot)
+    adapter = service._create_adapter(config)
+    monkeypatch.setattr(service._connections, "active_adapter", lambda _id: adapter)
+
+    async def send(**payload: Any) -> None:
+        if payload["chat_id"] == -500:
+            # Creation must store the wire IDs before the first refusal or tap
+            # has any opportunity to repair a binding from an older release.
+            with service.database.read() as connection:
+                assert tuple(
+                    connection.execute(
+                        "SELECT platform_target, thread_id FROM channel_run_buttons "
+                        "WHERE channel_id = ?",
+                        (config.id,),
+                    ).fetchone()
+                ) == ("-500", "7")
+            raise ChatMigrated(-100500)
+        assert (payload["chat_id"], payload["message_thread_id"]) == (-100500, 7)
+        parsed = parse_bound_run_callback_data(
+            payload["reply_markup"].inline_keyboard[0][0].callback_data
+        )
+        assert parsed is not None
+        binding_id, _index = parsed
+        claim = service._state.claim_run_button_binding
+        assert (
+            claim(config.id, binding_id, platform_target="-500", thread_id="7").status
+            == "target_mismatch"
+        )
+        assert (
+            claim(config.id, binding_id, platform_target="-100500", thread_id="8").status
+            == "target_mismatch"
+        )
+        claimed = claim(config.id, binding_id, platform_target="-100500", thread_id="7")
+        assert claimed.status == "claimed" and claimed.binding is not None
+        assert claimed.binding.origin_session_id == _ORIGIN.session_id
+        service._state.finish_run_button_claim(config.id, binding_id)
+
+    bot.send_message.side_effect = send
+    try:
+        for message in ("first", "known alias"):
+            await service.send(
+                config.id,
+                message,
+                "-0500",
+                thread_id="07",
+                buttons=[[InteractionButton("Done", "run:done")]],
+                run_origin=_ORIGIN,
+            )
+        assert [c.kwargs["chat_id"] for c in bot.send_message.await_args_list] == [
+            -500,
+            -100500,
+            -100500,
+        ]
+    finally:
+        await service.aclose()
+        service.close()
 
 
 @pytest.mark.asyncio

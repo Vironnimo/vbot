@@ -630,21 +630,91 @@ def _release_identity(client: httpx.Client, url: str) -> dict[str, Any]:
     return value
 
 
+def _resumed_size(
+    response: httpx.Response, offset: int, previous_size: int | None, etag: str | None
+) -> int | None:
+    """Validate the suffix before appending to the existing representation."""
+    match = re.fullmatch(
+        r"bytes ([0-9]{1,19})-([0-9]{1,19})/([0-9]{1,19})",
+        response.headers.get("Content-Range", ""),
+    )
+    if response.status_code != 206 or not match:
+        return None
+    start, end, total = map(int, match.groups())
+    if (
+        start == offset
+        and start <= end == total - 1
+        and previous_size in (None, total)
+        and response.headers.get("Content-Length", str(total - start)) == str(total - start)
+        and response.headers.get("ETag", etag) == etag
+        and response.headers.get("Content-Encoding", "identity").lower() == "identity"
+    ):
+        return total
+    return None
+
+
 def _download(client: httpx.Client, url: str, target: Path, limit: int) -> None:
+    """Resume a broken transfer within this operation when its bytes are identifiable."""
+    import httpx
+
     count = 0
-    with client.stream("GET", url) as stream:
-        if stream.status_code == 404:
-            raise ApplicationError(
-                f"No matching signed application package in this release ({target.name})"
-            )
-        stream.raise_for_status()
-        if stream.url.scheme != "https":
-            raise ApplicationError("Release download redirected to an insecure URL")
-        with target.open("wb") as output:
-            for chunk in stream.iter_bytes():
-                count += len(chunk)
-                if count > limit:
+    total: int | None = None
+    etag: str | None = None
+    for attempt in range(3):
+        headers = {"Accept-Encoding": "identity"}
+        resume = count > 0 and etag is not None
+        if resume and etag is not None:
+            headers.update({"Range": f"bytes={count}-", "If-Range": etag})
+        try:
+            with client.stream("GET", url, headers=headers) as stream:
+                if stream.url.scheme != "https":
+                    raise ApplicationError("Release download redirected to an insecure URL")
+                if stream.status_code == 404:
+                    raise ApplicationError(
+                        f"No matching signed application package in this release ({target.name})"
+                    )
+                identity = stream.headers.get("Content-Encoding", "identity").lower() == "identity"
+                length = stream.headers.get("Content-Length", "")
+                size = int(length) if identity and re.fullmatch(r"[0-9]{1,19}", length) else None
+                if resume and stream.status_code in (206, 416):
+                    total = _resumed_size(stream, count, total, etag)
+                    if total is None:
+                        if attempt == 2:
+                            raise ApplicationError(
+                                "Release download returned an invalid byte range"
+                            )
+                        count, etag, total = 0, None, None
+                        continue
+                else:
+                    stream.raise_for_status()
+                    if stream.status_code != 200:
+                        raise ApplicationError("Release download returned an incomplete response")
+                    count, total = 0, size
+                    tag = stream.headers.get("ETag", "")
+                    etag = tag if identity and re.fullmatch(r'"[!#-~\x80-\xff]*"', tag) else None
+                if total is not None and total > limit:
                     raise ApplicationError("Release download exceeds the size limit")
-                output.write(chunk)
-            output.flush()
-            os.fsync(output.fileno())
+                with target.open("ab" if count else "wb") as output:
+                    for chunk in stream.iter_bytes():
+                        if count + len(chunk) > limit:
+                            raise ApplicationError("Release download exceeds the size limit")
+                        if total is not None and count + len(chunk) > total:
+                            raise ApplicationError("Release download exceeds its declared size")
+                        output.write(chunk)
+                        count += len(chunk)
+                    if total is not None and count != total:
+                        raise httpx.RemoteProtocolError(
+                            "Release download ended before its declared size"
+                        )
+                    output.flush()
+                    os.fsync(output.fileno())
+                    return
+        except (
+            httpx.ReadError,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+        ):
+            if attempt == 2:
+                raise

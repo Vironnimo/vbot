@@ -12,6 +12,7 @@ import pytest
 from core.database import read_marker
 from core.model_tasks import TaskModelService
 from core.models.models import ModelRegistry
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.sessions.store import SessionStore
 from core.storage import StorageManager
@@ -449,14 +450,15 @@ def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_pa
     storage = StorageManager(tmp_path, resources_dir=resources_path)
     module.seed_worktree_settings(storage.settings_path, server_port=8422)
     custom_providers = storage.load_custom_providers_settings()
+    providers = ProviderRegistry.load(resources_path, custom_providers=custom_providers)
     model_tasks = TaskModelService(
-        ProviderRegistry.load(resources_path, custom_providers=custom_providers),
+        providers,
         ModelRegistry.load(
             resources_path,
             runtime_models_dir=storage.layout.models,
             custom_providers=custom_providers,
         ),
-        None,
+        ProviderCredentialResolver(providers, process_env={}),
         storage,
     )
     fixture = json.loads(

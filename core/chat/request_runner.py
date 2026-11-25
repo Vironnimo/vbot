@@ -54,6 +54,7 @@ from core.providers.errors import (
     NetworkError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderRouteStreamingUnsupportedError,
     ProviderTimeoutError,
 )
 from core.runs import (
@@ -256,7 +257,11 @@ class WireRequestRunner:
             {"state": "waiting", "model": response_model, "context_usage": request_context_usage},
         )
         budget = recovery if recovery is not None else RecoveryBudget()
-        use_streaming = True
+        use_streaming = not (
+            isinstance(adapter, ProviderAdapter)
+            and adapter.wire.route_fact(model_id, "stream") == 1
+        )
+        learn_plain = False
         try:
             while True:
                 run.raise_if_cancelled()
@@ -344,9 +349,14 @@ class WireRequestRunner:
                                 raise ProviderTimeoutError(
                                     "Model recovery time budget exhausted"
                                 ) from exc
+                            if learn_plain and isinstance(adapter, ProviderAdapter):
+                                adapter.wire.remember_route(model_id, "stream")
                             preserve_after_cancel = False
                 except _StreamRestartNeeded as restart:
                     if restart.non_streaming:
+                        learn_plain = isinstance(
+                            restart.cause, ProviderRouteStreamingUnsupportedError
+                        )
                         use_streaming = False
                     else:
                         budget.failed(restart.cause, response_model)

@@ -54,6 +54,7 @@ from core.providers.adapter import (
 from core.providers.errors import (
     NetworkError,
     ProviderError,
+    ProviderStreamingUnsupportedError,
 )
 from core.runs import (
     PROVIDER_HEARTBEAT_EVENT,
@@ -257,12 +258,28 @@ async def consume_stream_response(
     ) as exc:
         delta_emitter.flush()
         tools_started = accumulator.has_taken_tool_calls
+        if (
+            isinstance(exc, ProviderStreamingUnsupportedError)
+            and accumulator.has_model_output
+            and not tools_started
+        ):
+            fields = accumulator.finalize_partial_fields()
+            if not (
+                fields.content or fields.reasoning or fields.reasoning_meta or fields.tool_calls
+            ):
+                # An incomplete Tool fragment or a bare finish cannot be
+                # persisted as an Assistant turn or safely replayed.
+                raise
         # One provider-agnostic owner decides what a stream break means; the
         # action stays here (the chat loop owns side effects, not the policy).
         action = decide_stream_recovery(
             exc,
             can_restart=can_restart,
-            has_partial_content=bool((accumulator.partial_content or "").strip()),
+            has_partial_content=(
+                accumulator.has_model_output
+                if isinstance(exc, ProviderStreamingUnsupportedError)
+                else bool((accumulator.partial_content or "").strip())
+            ),
             finish_received=(
                 accumulator.finish_reason is not None
                 and not isinstance(exc, IncompleteResponseError)
@@ -282,8 +299,6 @@ async def consume_stream_response(
             )
             assistant_fields = accumulator.finalize_assistant_fields()
         elif action is StreamRecoveryAction.FALLBACK:
-            if accumulator.partial_reasoning is not None or accumulator.has_partial_tool_call:
-                run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
             raise _StreamRestartNeeded(exc, non_streaming=True) from exc
         elif action is StreamRecoveryAction.RESTART:
             run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)

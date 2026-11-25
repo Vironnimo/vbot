@@ -33,6 +33,7 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderRateLimitError,
+    ProviderRouteStreamingUnsupportedError,
     ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
     ProviderUsageLimitError,
@@ -571,6 +572,18 @@ class StreamingAccumulator:
         return _joined_or_none(self._reasoning_parts)
 
     @property
+    def has_model_output(self) -> bool:
+        """Any Model output that rules out replaying the request in completed mode."""
+        return bool(
+            self.partial_content
+            or self.partial_reasoning
+            or self._reasoning_meta
+            or self.has_partial_tool_call
+            or self.has_taken_tool_calls
+            or self.finish_reason is not None
+        )
+
+    @property
     def partial_content(self) -> str | None:
         """Return accumulated visible content so far, or None if empty."""
         return _joined_or_none(self._content_parts)
@@ -1001,6 +1014,16 @@ async def stream_model_response(
             else (messages, request_options)
         )
 
+    async def plain() -> JsonObject:
+        shown_messages, shown_options = attempt()
+        raw = await adapter.send(shown_messages, model_id=model_id, **shown_options)
+        normalized = finalize_model_response(adapter.normalize_response(raw, model_id=model_id))
+        if on_tool_calls is not None and normalized.get("tool_calls"):
+            on_tool_calls(list(normalized["tool_calls"]))
+        return normalized
+
+    if isinstance(adapter, ProviderAdapter) and adapter.wire.route_fact(model_id, "stream") == 1:
+        return await plain()
     shown_messages, shown_options = attempt()
     source = adapter.stream(shown_messages, model_id=model_id, **shown_options)
     awaiting_delta = True
@@ -1033,19 +1056,15 @@ async def stream_model_response(
             raise StreamBrokenAfterToolCallsError(
                 exc, accumulator.finalize_partial_fields().to_response_dict()
             ) from exc
-        if accumulator.has_partial_tool_call or accumulator.partial_content is not None:
-            raise
-        if accumulator.partial_reasoning is not None:
+        if accumulator.has_model_output:
             raise
         if isinstance(adapter, ProviderAdapter):
             adapter.ensure_available()
-        shown_messages, shown_options = attempt()
-        response = await adapter.send(shown_messages, model_id=model_id, **shown_options)
-        normalized = finalize_model_response(
-            adapter.normalize_response(response, model_id=model_id)
-        )
-        if on_tool_calls is not None and normalized.get("tool_calls"):
-            on_tool_calls(list(normalized["tool_calls"]))
+        normalized = await plain()
+        if isinstance(exc, ProviderRouteStreamingUnsupportedError) and isinstance(
+            adapter, ProviderAdapter
+        ):
+            adapter.wire.remember_route(model_id, "stream")
         completed_response = True
         return normalized
     except Exception as exc:

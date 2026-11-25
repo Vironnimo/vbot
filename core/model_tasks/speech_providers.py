@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import math
+import re
 import wave
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Mapping
 from pathlib import Path
@@ -54,6 +55,90 @@ _GOOGLE_TRANSCRIPTION_MEDIA_TYPES = {
 }
 
 
+def rejects_transcription_format(error: ProviderError, sent_format: str) -> bool:
+    """Only a definitive input-container rejection can repair a billable request."""
+    if type(error) is not ProviderError or error.status_code not in {400, 415, 422}:
+        return False
+    message = str(error)
+    # Prefer the Provider's diagnostic over fields which may echo user input.
+    start = message.find("{")
+    if start >= 0:
+        try:
+            payload = json.loads(message[start:])
+        except ValueError, RecursionError:
+            return False
+        detail = payload.get("error", payload.get("detail")) if isinstance(payload, dict) else None
+        if isinstance(detail, dict):
+            if detail.get("param") not in (
+                None,
+                "file",
+                "audio",
+                "input_audio",
+                "input_audio.format",
+                "mime_type",
+                "format",
+            ):
+                return False
+            detail = detail.get("message")
+        if not isinstance(detail, str):
+            return False
+        message = detail
+    message = message.lower().strip()
+    if re.search(
+        r"\b(?:(?:response|output)[ _-]format|time(?:d? out|out)|forbidden|unauthorized"
+        r"|access (?:is )?denied|permission denied)\b",
+        message,
+    ):
+        return False
+    message = re.sub(
+        r"^(?:provider error:\s*)?(?:(?:http\s+)?(?:400|415|422)\b\s*(?:bad request|"
+        r"unsupported media type|unprocessable entity)?\s*[:\-]?\s*)?",
+        "",
+        message,
+    )
+    # A list of accepted values is advice, never evidence that its entries were rejected.
+    diagnostic = (
+        re.split(
+            r"[.,;]\s*(?:(?:supported|accepted|allowed)\s+(?:audio\s+)?(?:file\s+)?"
+            r"(?:formats?|types?)\b|please (?:use|upload)\b)",
+            message,
+            maxsplit=1,
+        )[0]
+        .strip()
+        .rstrip(".")
+    )
+    subject = (
+        r"(?:(?:input )?audio (?:file )?(?:format|type|codec|encoding)"
+        r"|(?:input |file )format|(?:input )?mime[ _-]?type)"
+    )
+    sent = sent_format.lower()
+    if not sent:
+        return False
+    values = {sent, f"audio/{sent}", f"video/{sent}"}
+    values.update(
+        {
+            "wav": ("audio/x-wav",),
+            "mp3": ("audio/mpeg",),
+            "m4a": ("audio/mp4",),
+            "flac": ("audio/x-flac",),
+        }.get(sent, ())
+    )
+    fmt = r"""[`'"]?(?:""" + "|".join(map(re.escape, sorted(values))) + r""")[`'"]?"""
+    value_after = rf"(?:\s*[:=]\s*|\s+){fmt}"
+    input_format = rf"(?:{subject}(?:{value_after})?|{fmt}(?: (?:files?|format))?)"
+    rejected = r"(?:unsupported|invalid|unrecognized|not (?:supported|accepted)|does not support)"
+    return (
+        re.fullmatch(
+            rf"(?:(?:the|this|provided) )?(?:(?:model )?{rejected}\s+"
+            rf"(?:(?:input|provided|requested)\s+)?"
+            rf"{input_format}|{input_format}\s+(?:(?:is|are) )?{rejected}(?:{value_after})?)"
+            rf"(?: (?:by|for) (?:this|the) (?:model|endpoint))?",
+            diagnostic,
+        )
+        is not None
+    )
+
+
 class ProviderSpeechClient(ProviderTaskClient):
     """Speech HTTP client bound to one target: OpenAI-compatible, Mistral or Google."""
 
@@ -71,11 +156,13 @@ class ProviderSpeechClient(ProviderTaskClient):
             # Google accepts 100 MB of inline data per request; the 25 MB
             # ceiling keeps the Base64 body well below it.
             return TranscriptionInputPolicy(
-                accepted_formats=frozenset(_GOOGLE_TRANSCRIPTION_MEDIA_TYPES)
+                accepted_formats=frozenset(_GOOGLE_TRANSCRIPTION_MEDIA_TYPES),
+                route=self.request_route,
             )
         if self._provider.id == "openai":
             # OpenAI Audio Transcriptions API reference, reviewed 2026-10-09.
             return TranscriptionInputPolicy(
+                route=self.request_route,
                 accepted_formats=frozenset(
                     {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"}
                 ),
@@ -84,12 +171,15 @@ class ProviderSpeechClient(ProviderTaskClient):
             # OpenRouter's STT guide lists these input formats; individual
             # upstreams may still reject a format they do not support.
             return TranscriptionInputPolicy(
+                route=self.request_route,
                 accepted_formats=frozenset({"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}),
                 max_request_bytes=36_000_000,
             )
         # Keep the existing WAV/FLAC conversion path for unverified compatible
         # Providers rather than inferring OpenAI's full media contract.
-        return TranscriptionInputPolicy(accepted_formats=frozenset({"wav", "flac"}))
+        return TranscriptionInputPolicy(
+            accepted_formats=frozenset({"wav", "flac"}), route=self.request_route
+        )
 
     async def transcribe(
         self,
@@ -172,6 +262,7 @@ class ProviderSpeechClient(ProviderTaskClient):
         inline["data"] = base64.b64encode(audio).decode("ascii")
         return await self.post_and_parse(
             self._google_endpoint("generateContent"),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
             timeout=GOOGLE_SPEECH_TIMEOUT,
             parse=lambda response: _google_transcription_result(response.json()),
             json=payload,
@@ -291,6 +382,7 @@ class ProviderSpeechClient(ProviderTaskClient):
                     data[key] = value
         return await self.post_and_parse(
             OPENAI_TRANSCRIPTIONS_ENDPOINT,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
             timeout=DEFAULT_SPEECH_TIMEOUT,
             parse=lambda response: _transcription_result(response.json()),
             data=data,
@@ -394,6 +486,7 @@ class ProviderSpeechClient(ProviderTaskClient):
 
         return await self.post_and_parse(
             OPENROUTER_TRANSCRIPTIONS_ENDPOINT,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
             timeout=DEFAULT_SPEECH_TIMEOUT,
             parse=lambda response: _transcription_result(response.json()),
             json=payload,
@@ -421,6 +514,7 @@ class ProviderSpeechClient(ProviderTaskClient):
 
         return await self.post_and_parse(
             OPENAI_TRANSCRIPTIONS_ENDPOINT,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
             timeout=DEFAULT_SPEECH_TIMEOUT,
             parse=_parse,
             data=data,

@@ -10,10 +10,13 @@ from __future__ import annotations
 import io
 from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
-from typing import Any, cast, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 from core.model_tasks.constants import DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS
 from core.model_tasks.speech_types import SpeechError
+
+if TYPE_CHECKING:
+    from core.providers.task_client import TaskRequestRoute
 
 MAX_TRANSCRIPTION_SECONDS = 30 * 60
 _MAX_FRAME_BYTES = 16 * 1024 * 1024
@@ -32,6 +35,8 @@ class TranscriptionInputPolicy:
     accepted_formats: frozenset[str]
     max_audio_bytes: int = 25_000_000
     max_request_bytes: int | None = None
+    route: TaskRequestRoute | None = None
+    rejected_formats: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -241,7 +246,8 @@ def prepare_transcription_audio(
     try:
         with av.open(io.BytesIO(audio), mode="r") as container:
             source_format = _source_format(container, audio)
-            if source_format in policy.accepted_formats and len(audio) <= policy.max_audio_bytes:
+            accepted = policy.accepted_formats - policy.rejected_formats
+            if source_format in accepted and len(audio) <= policy.max_audio_bytes:
                 for _frame in _validated_frames(container, check_cancel):
                     pass
                 return PreparedTranscriptionAudio(
@@ -252,10 +258,12 @@ def prepare_transcription_audio(
             if not isinstance(profile, Mapping):
                 profile = DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS
             output_format = profile.get("format", DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["format"])
+            if output_format in policy.rejected_formats:
+                output_format = "flac" if output_format == "wav" else "wav"
             rate = profile.get(
                 "sample_rate_hz", DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["sample_rate_hz"]
             )
-            if output_format not in {"wav", "flac"} or output_format not in policy.accepted_formats:
+            if output_format not in {"wav", "flac"} or output_format not in accepted:
                 raise SpeechInputError(
                     "Transcription conversion format is not supported by the target"
                 )

@@ -35,6 +35,7 @@ from core.chat.wire_shaping import (
 )
 from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
+    ProviderAdapter,
     TerminalOutcome,
 )
 from core.runs import (
@@ -160,6 +161,8 @@ class ModelStepBoundary:
                     agent_model=target.model_reference,
                 )
 
+        if isinstance(target.adapter, ProviderAdapter):
+            await target.adapter.refresh_admission_context(target.model_id)
         messages_for_request, request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
             _prepare_request_context,
             messages_for_request,

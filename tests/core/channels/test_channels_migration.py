@@ -48,6 +48,15 @@ async def test_chat_id_migration_swaps_the_allowlist_entry_and_moves_group_acces
         # An adapter that admitted the migration before a concurrent edit removed
         # the chat from its allowlist still migrates the group's stored access.
         await service._state.grant_group_admin(config.id, "-500", "owner")
+        await asyncio.to_thread(
+            service.record_chat_id_migration,
+            config.id,
+            "-500",
+            "-100500",
+            expected_token="other-bot",
+        )
+        assert storage.get(config.id).allowed_chat_ids == allowed
+        assert service._state.role_for(config.id, "-100500", "owner") == "member"
         await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100500")
 
         assert storage.get(config.id).allowed_chat_ids == migrated

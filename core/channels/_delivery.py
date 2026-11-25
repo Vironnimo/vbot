@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from core.channels._telegram_messages import telegram_binding_target
 from core.channels.adapter import (
     FileData,
     ReplyPlanFacts,
@@ -375,6 +376,8 @@ def _bind_run_buttons(
         raise ChannelConfigError(
             f"Run-button origin agent {run_origin.agent_id} does not own Channel {channel_id}"
         )
+    if config.platform == "telegram":
+        platform_target, thread_id = telegram_binding_target(platform_target, thread_id)
     outbound_buttons, binding = _bind_outbound_run_buttons(
         buttons,
         platform_target=platform_target,

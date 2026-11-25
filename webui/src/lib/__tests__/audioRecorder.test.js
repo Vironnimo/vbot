@@ -36,6 +36,79 @@ class FakeMediaRecorder {
 }
 
 describe('audioRecorder', () => {
+  it('restores a confirmed browser default after a reload and respects microphone refusal', async () => {
+    const attempts = [];
+    class Recorder extends FakeMediaRecorder {
+      constructor(stream, options) {
+        super(stream, options);
+        attempts.push(options);
+      }
+      start() {
+        throw new DOMException('denied', 'NotAllowedError');
+      }
+    }
+    const storage = { getItem: vi.fn(() => ''), setItem: vi.fn() };
+    vi.stubGlobal('MediaRecorder', Recorder);
+    vi.stubGlobal('sessionStorage', storage);
+    const track = { stop: vi.fn() };
+    try {
+      const handle = await createAudioRecorder({
+        navigator: navigatorWithTrack(track),
+      });
+      expect(() => handle.start()).toThrow('denied');
+      expect(attempts).toEqual([{}]);
+      expect(storage.setItem).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['construct', 'start', 'before start event'])(
+    'tries the browser default after a codec fails at %s and remembers its confirmed start',
+    async (phase) => {
+      const attempts = [];
+      let rejected;
+      class Recorder extends FakeMediaRecorder {
+        constructor(stream, options) {
+          super(stream, options);
+          attempts.push(options.mimeType ?? 'default');
+          if (options.mimeType) {
+            rejected = this;
+            if (phase === 'construct')
+              throw new DOMException('codec', 'NotSupportedError');
+          }
+        }
+        start() {
+          if (this.options.mimeType && phase === 'start')
+            throw new DOMException('codec', 'NotSupportedError');
+          super.start();
+        }
+      }
+      const track = { stop: vi.fn() };
+      const navigator = navigatorWithTrack(track);
+      for (let i = 0; i < 2; i++) {
+        const handle = await createAudioRecorder({
+          navigator,
+          MediaRecorder: Recorder,
+        });
+        handle.start();
+        if (phase === 'before start event' && i === 0)
+          rejected.emit('error', {
+            error: new DOMException('codec', 'NotSupportedError'),
+          });
+        const current = FakeMediaRecorder.lastInstance;
+        current.emit('start', {});
+        rejected?.emit('stop', {});
+        expect(track.stop).toHaveBeenCalledTimes(i);
+        handle.cancel();
+      }
+      expect(attempts).toEqual(['audio/webm', 'default', 'default']);
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+      expect(track.stop).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(['chunk', 'recorder'])(
     'records in a supported format and names the file after the %s MIME type',
     async (source) => {

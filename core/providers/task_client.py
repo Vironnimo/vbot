@@ -45,6 +45,7 @@ from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+type TaskRequestRoute = tuple[str, str, ProviderHTTPTransportScope | None]
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 
 
@@ -310,6 +311,11 @@ class ProviderTaskClient:
             usage_observer=usage_observer,
             debug_context=debug_context,
         )
+
+    @property
+    def request_route(self) -> TaskRequestRoute:
+        """The effective endpoint, Model and authenticated transport of this client."""
+        return self._base_url, self._model_id, self._http_transport
 
     def http_client(self, timeout: float) -> httpx.AsyncClient:
         """Return an isolated client borrowing this target's reusable HTTP transport."""

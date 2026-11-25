@@ -545,7 +545,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             lambda request: self._post_json(
                 RESPONSES_POLICY_ENDPOINT, request, request_headers=request_headers
             ),
-            self._request_plan(messages, model_id, build),
+            replace(self._request_plan(messages, model_id, build), may_compress=True),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -728,14 +728,26 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 states.append(state)
             return self._stream_responses(
                 request,
-                request_headers=request_headers,
+                request_headers=(
+                    request_headers
+                    if request.payload.get("service_tier") == "priority"
+                    else {
+                        k: v
+                        for k, v in request_headers.items()
+                        if k.lower() != "x-codex-routing-hint"
+                    }
+                ),
                 cache_scope_id=cache_scope_id,
                 conversation_id=conversation_id,
                 state=state,
                 handle_error_status=handle_error_status,
             )
 
-        plan = self._request_plan(messages, model_id, build)
+        plan = replace(
+            self._request_plan(messages, model_id, build),
+            plain_available=self._connection_mode != CODEX_RESPONSES_MODE,
+            may_compress=True,
+        )
         if self._tries_websocket(cache_scope_id, conversation_id):
             plan = replace(plan, lazy_body=True, digest=responses_request_digest)
         return stream_learning_from_rejections(

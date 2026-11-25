@@ -22,6 +22,95 @@ from pathlib import Path
 from typing import Any
 
 
+class SpeechDeviceError(RuntimeError):
+    """Sanitized device facts shared by in-process engines and the child wire."""
+
+    def __init__(self, code: str, device: str, precision: str) -> None:
+        super().__init__(f"{device} speech execution failed ({code})")
+        self.code, self.device, self.precision = code, device, precision
+
+
+def device_failure(error: Exception, device: str, precision: str) -> SpeechDeviceError | None:
+    # Managed STT imports the engine via the app package, whereas this child
+    # runs this module as __main__. Do not depend on shared class identity.
+    code, origin = getattr(error, "code", None), getattr(error, "device", None)
+    if (
+        type(error).__name__ == "SpeechDeviceError"
+        and code in {"gpu_oom", "gpu_precision", "gpu_kernel"}
+        and origin in {"mps", "cuda"}
+    ):
+        return SpeechDeviceError(code, origin, getattr(error, "precision", ""))
+    if device not in {"cuda", "mps"} or not isinstance(
+        error, (RuntimeError, TypeError, NotImplementedError)
+    ):
+        return None
+    message = str(error).lower()
+    if any(
+        term in message
+        for term in (
+            "cuda out of memory",
+            "cuda error: out of memory",
+            "mps backend out of memory",
+            "hip out of memory",
+            "hip error: out of memory",
+        )
+    ):
+        return SpeechDeviceError("gpu_oom", device, precision)
+    if any(word in message for word in ("bfloat16", "bf16", "float16", "'half'")) and any(
+        term in message
+        for term in (
+            "not supported",
+            "does not support",
+            "not implemented",
+            "unsupported",
+            "doesn't support",
+            "only supports",
+        )
+    ):
+        return SpeechDeviceError("gpu_precision", device, precision)
+    if any(
+        term in message
+        for term in (
+            "no kernel image is available",
+            "no kernel image was found",
+            "invalid device function",
+            "hiperrornobinaryforgpu",
+        )
+    ):
+        return SpeechDeviceError("gpu_kernel", device, precision)
+    return None
+
+
+def runtime_options(
+    options: dict[str, Any], *, precision: bool, mps_half: bool = False
+) -> dict[str, Any]:
+    torch = importlib.import_module("torch")
+    device = options.get("device", "auto")
+    if device == "auto":
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else ("mps" if torch.backends.mps.is_available() else "cpu")
+        )
+    result = {**options, "device": device}
+    if precision and options.get("dtype", "auto") == "auto":
+        dtype = "float32"
+        if device == "cuda":
+            dtype = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+        elif device == "mps" and mps_half:
+            dtype = "float16"
+        result["dtype"] = dtype
+    return result
+
+
+def failure_frame(error: Exception, options: dict[str, Any]) -> dict[str, Any]:
+    failure = device_failure(error, options.get("device", ""), options.get("dtype", ""))
+    event = {"error": type(error).__name__}
+    if failure:
+        event.update(code=failure.code, device=failure.device, precision=failure.precision)
+    return event
+
+
 def sdk(engine: str) -> Any:
     if engine == "qwen3-tts":
         return importlib.import_module("qwen_tts").Qwen3TTSModel
@@ -45,13 +134,8 @@ def verify(engine: str, device: str) -> None:
 
 def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
     torch = importlib.import_module("torch")
-    device = options.get("device", "auto")
-    if device == "auto":
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+    options = runtime_options(options, precision=engine == "qwen3-tts", mps_half=True)
+    device = options["device"]
     source = options["model_path"]
     # SDK internals may probe the Hub even when given local paths. The installed
     # model holds every required file, so keep this child offline.
@@ -61,9 +145,7 @@ def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
     cls = sdk(engine)
     progress("loading")
     if engine == "qwen3-tts":
-        dtype = torch.float32 if device == "cpu" else torch.float16
-        if device == "cuda" and torch.cuda.is_bf16_supported():
-            dtype = torch.bfloat16
+        dtype = getattr(torch, options["dtype"])
         return cls.from_pretrained(
             source,
             device_map=device,
@@ -158,6 +240,7 @@ def main() -> None:
         verify(sys.argv[2], sys.argv[3])
         return
     engine = sys.argv[1]
+    effective: dict[str, Any] = {}
     model = None
 
     def emit(event: dict[str, Any]) -> None:
@@ -171,7 +254,10 @@ def main() -> None:
         try:
             request = json.loads(line)
             if model is None:
-                model = load(engine, request["options"], progress)
+                effective = runtime_options(
+                    request["options"], precision=engine == "qwen3-tts", mps_half=True
+                )
+                model = load(engine, effective, progress)
             if request.get("load"):
                 emit({"loaded": True})
                 continue
@@ -190,7 +276,7 @@ def main() -> None:
             )
             emit({"done": True})
         except Exception as error:
-            emit({"error": type(error).__name__})
+            emit(failure_frame(error, effective))
             return
 
 
@@ -246,7 +332,7 @@ def run_stt(wire: Any, engine_id: str, app_root: str) -> None:
             result = model.transcribe(samples, request["options"])
             emit({"result": result.to_dict()})
         except Exception as error:
-            emit({"error": type(error).__name__})
+            emit(failure_frame(error, getattr(model, "device_options", {})))
             return
 
 

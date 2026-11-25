@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ from core.chat.streaming import (
     StreamingAccumulator,
     StreamRecoveryAction,
     decide_stream_recovery,
+    finalize_model_response,
     iter_with_chunk_timeout,
     stream_stall_timeout,
 )
@@ -27,10 +28,16 @@ from core.compaction._workers import COMPACTION_WORKERS
 from core.compaction.errors import CompactionIncompleteError, CompactionLimitError
 from core.providers.adapter import (
     TERMINAL_OUTCOME_STOP,
+    ProviderAdapter,
     estimate_wire_request_input_tokens,
     request_input_budget,
+    terminal_outcome_from_response,
 )
-from core.providers.errors import ProviderContextOverflowError
+from core.providers.errors import (
+    ProviderContextOverflowError,
+    ProviderRouteStreamingUnsupportedError,
+    ProviderStreamingUnsupportedError,
+)
 from core.providers.providers import RequestInput
 from core.usage import last_request_usage
 from core.utils.logging import get_logger
@@ -93,6 +100,10 @@ async def _send_streaming_model_request(
     """
     model = model_reference or str(request_options.get("model_id") or "unknown")
     model_id = str(request_options.get("model_id") or model)
+    plain = bool(
+        isinstance(adapter, ProviderAdapter) and adapter.wire.route_fact(model_id, "stream") == 1
+    )
+    remember_plain = False
     original_messages = messages
     original_estimate = input_estimate
     recovery_budget: RequestInput | None = None
@@ -185,6 +196,7 @@ async def _send_streaming_model_request(
                             messages,
                             request_options,
                             budget=budget,
+                            plain=plain,
                             model=model,
                             usage_recorder=usage_recorder,
                             calibration=(
@@ -199,9 +211,16 @@ async def _send_streaming_model_request(
                         )
                     if _budget_exhausted(budget):
                         raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
+                    if remember_plain and isinstance(adapter, ProviderAdapter):
+                        adapter.wire.remember_route(model_id, "stream")
                     if omitted_exchanges:
                         response["_compaction_omitted_exchanges"] = omitted_exchanges
                     return response
+                except ProviderStreamingUnsupportedError as error:
+                    if plain:
+                        raise
+                    plain = True
+                    remember_plain = isinstance(error, ProviderRouteStreamingUnsupportedError)
                 except ProviderContextOverflowError:
                     while reduction < len(OVERFLOW_TOOL_CHARACTERS):
                         characters = OVERFLOW_TOOL_CHARACTERS[reduction]
@@ -265,7 +284,11 @@ def _reported_input_capacity(adapter: Any, model_id: str, options: dict[str, Any
     input_limit = getattr(adapter, "input_token_limit", None)
     reported_limit = input_limit(model_id) if callable(input_limit) else None
     limit = reported_limit if isinstance(reported_limit, int) and reported_limit > 0 else None
-    reported = getattr(adapter, "reported_context_window", None)
+    reported = (
+        adapter.admission_context_window
+        if isinstance(adapter, ProviderAdapter)
+        else getattr(adapter, "reported_context_window", None)
+    )
     window = reported(model_id) if callable(reported) else None
     if not isinstance(window, int) or window <= 0:
         return limit
@@ -279,12 +302,29 @@ def _reported_input_capacity(adapter: Any, model_id: str, options: dict[str, Any
     return window_limit if limit is None else min(limit, window_limit)
 
 
+async def _completed_summary(
+    adapter: Any, messages: list[dict[str, Any]], options: dict[str, Any]
+) -> AsyncGenerator[dict[str, Any]]:
+    raw = await adapter.send(messages, **options)
+    response = finalize_model_response(
+        adapter.normalize_response(raw, model_id=options["model_id"])
+    )
+    if usage := response.get("usage"):
+        yield {"type": "usage", **usage}
+    if response.get("tool_calls"):
+        raise CompactionIncompleteError("Summary requested Tools instead of completing its summary")
+    if content := response.get("content"):
+        yield {"type": "content_delta", "text": content}
+    yield {"type": "finish", "reason": terminal_outcome_from_response(response)}
+
+
 async def _stream_attempt(
     adapter: Any,
     messages: list[dict[str, Any]],
     request_options: dict[str, Any],
     *,
     budget: asyncio.Timeout,
+    plain: bool,
     model: str,
     usage_recorder: UsageRecorder | None,
     calibration: tuple[str, int] | None,
@@ -316,12 +356,17 @@ async def _stream_attempt(
     try:
         # Close the Provider iterator before recording failure or cancellation;
         # an output limit can stop consumption between two stream reads.
-        source = adapter.stream(messages, **request_options)
+        source = (
+            _completed_summary(adapter, messages, request_options)
+            if plain
+            else adapter.stream(messages, **request_options)
+        )
         chunk_timeout_seconds = stream_stall_timeout(adapter)
         try:
             stream_failed = False
             try:
                 summary_characters = 0
+                model_output = False
                 async for delta in iter_with_chunk_timeout(
                     source,
                     timeout_seconds=chunk_timeout_seconds,
@@ -333,6 +378,8 @@ async def _stream_attempt(
                 ):
                     if _budget_exhausted(budget):
                         raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
+                    if delta.get("type") not in ("heartbeat", "usage"):
+                        model_output = True
                     if delta.get("type") != "heartbeat":
                         if delta.get("type") == "content_delta" and isinstance(
                             delta.get("text"), str
@@ -363,6 +410,12 @@ async def _stream_attempt(
                             model,
                             type(error).__name__,
                         )
+        except ProviderStreamingUnsupportedError as error:
+            if model_output:
+                raise CompactionIncompleteError(
+                    "Summary stream failed after Model output"
+                ) from error
+            raise
         except Exception as error:
             if (
                 decide_stream_recovery(

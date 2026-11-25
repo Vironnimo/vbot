@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from core.utils.http_status import parse_retry_after
 from core.utils.tls import shared_ssl_context
 
 _MAX_BYTES = 12 * 1024 * 1024
@@ -23,6 +24,10 @@ _MARKDOWN_LINK = re.compile(r"!?\[([^\[\]]*)\]\(https?://[^\s)\[]*\)")
 
 class FetchServiceError(Exception):
     """A service failed without a usable page; never expose credential-bearing bodies."""
+
+    def __init__(self, message: str, *, cooldown: float | None = None) -> None:
+        super().__init__(message)
+        self.cooldown = cooldown
 
 
 def clean_service_text(text: str, *, include_links: bool = True) -> str:
@@ -114,7 +119,12 @@ async def _post(
                     if status in {402, 429}
                     else "Try another source or try later."
                 )
-                raise FetchServiceError(f"{provider} returned HTTP {status}. {hint}")
+                cooldown = None
+                if status in {402, 429} or 500 <= status < 600:
+                    cooldown = max(30.0, parse_retry_after(response.headers) or 0.0)
+                raise FetchServiceError(
+                    f"{provider} returned HTTP {status}. {hint}", cooldown=cooldown
+                )
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 if len(body) + len(chunk) > _MAX_BYTES:
@@ -124,7 +134,10 @@ async def _post(
     except (httpx.RequestError, TimeoutError) as error:
         raise FetchServiceError(
             f"{provider} request failed or timed out. It was not automatically repeated; "
-            "a retry may be billed again."
+            "a retry may be billed again.",
+            cooldown=30.0
+            if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout))
+            else None,
         ) from error
     except ValueError as error:
         raise FetchServiceError(f"{provider} returned invalid JSON.") from error

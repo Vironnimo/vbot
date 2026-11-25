@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import threading
 import wave
@@ -12,7 +13,9 @@ from types import SimpleNamespace
 from typing import Any, cast, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 from core.debug import SpeechDebugStore
 from core.model_tasks import (
@@ -607,6 +610,111 @@ async def test_transcribe_preserves_accepted_compressed_audio_and_detects_its_fo
         assert client.audio == audio
         assert client.filename == "recording.webm"
         assert client.media_type == "audio/webm"
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("rejection", [400, 415, 422])
+async def test_transcription_learns_confirmed_formats_per_target_and_probes_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rejection: int
+) -> None:
+    from core.model_tasks import TaskModelBinding
+    from core.providers.http import ProviderHTTPTransports
+    from tests.core.model_tasks.test_speech_providers import OPENROUTER_BASE, _client
+    from tests.core.model_tasks.test_task_execution import _StubModelTasks
+
+    now = [100.0]
+    monkeypatch.setattr("core.model_tasks.speech.monotonic", lambda: now[0])
+    target = "openrouter/first::api-key"
+    bindings = _StubModelTasks(TaskModelBinding(TASK_SPEECH_TO_TEXT, target))
+    client = _client("openrouter", "first")
+    service = SpeechService(bindings, cast(Any, object()), tmp_path)
+    formats = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)["input_audio"]
+        formats.append(sent["format"])
+        if sent["format"] != "flac":
+            return httpx.Response(
+                rejection, json={"error": {"message": "Unsupported input audio format"}}
+            )
+        import base64
+
+        assert base64.b64decode(sent["data"]).startswith(b"fLaC")
+        return httpx.Response(200, json={"text": "recovered"})
+
+    respx.post(f"{OPENROUTER_BASE}/audio/transcriptions").mock(side_effect=respond)
+    audio = _webm_audio_bytes()
+    try:
+        with patch(
+            "core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client
+        ):
+            assert (await service.transcribe(audio)).text == "recovered"
+            assert (await service.transcribe(audio)).text == "recovered"
+            assert formats == ["webm", "wav", "flac", "flac"]
+            # The same binding now selects a different default Account.
+            transports = ProviderHTTPTransports()
+            monkeypatch.setattr(
+                type(client),
+                "request_route",
+                property(
+                    lambda _: (
+                        OPENROUTER_BASE,
+                        "first",
+                        transports.scope("openrouter", "api-key", "second"),
+                    )
+                ),
+            )
+            await service.transcribe(audio)
+            assert formats[-3:] == ["webm", "wav", "flac"]
+            bindings._binding = TaskModelBinding(TASK_SPEECH_TO_TEXT, "openrouter/other::api-key")
+            await service.transcribe(audio)
+            assert formats[-3:] == ["webm", "wav", "flac"]
+            bindings._binding = TaskModelBinding(TASK_SPEECH_TO_TEXT, target)
+            now[0] += 3601
+            await service.transcribe(audio)
+            assert formats[-3:] == ["webm", "wav", "flac"]
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("failure", ["response_format", "language", "other_container", "ambiguous"])
+async def test_unrelated_and_ambiguous_stt_failures_do_not_reencode_or_fail_over(
+    tmp_path: Path, failure: str
+) -> None:
+    from core.model_tasks import TaskModelBinding
+    from tests.core.model_tasks.test_speech_providers import OPENROUTER_BASE, _client
+    from tests.core.model_tasks.test_task_execution import _StubModelTasks
+
+    targets = _StubModelTasks(
+        TaskModelBinding(
+            TASK_SPEECH_TO_TEXT,
+            "openrouter/first::api-key",
+            fallbacks=(TaskModelBinding(TASK_SPEECH_TO_TEXT, "openrouter/second::api-key"),),
+        )
+    )
+    service = SpeechService(targets, cast(Any, object()), tmp_path)
+    client = _client("openrouter", "first")
+    route = respx.post(f"{OPENROUTER_BASE}/audio/transcriptions")
+    if failure == "ambiguous":
+        route.mock(side_effect=httpx.ReadError("response lost"))
+    elif failure == "other_container":
+        route.respond(400, json={"error": {"message": "Unsupported audio format: WMA"}})
+    else:
+        route.respond(422, json={"error": {"message": f"Invalid {failure} for webm audio"}})
+    try:
+        with (
+            patch("core.model_tasks.speech.ProviderSpeechClient.from_runtime", return_value=client),
+            pytest.raises(
+                SpeechOutcomeUnknownError if failure == "ambiguous" else SpeechExecutionError
+            ),
+        ):
+            await service.transcribe(_webm_audio_bytes())
+        assert route.call_count == 1
     finally:
         await service.aclose()
 

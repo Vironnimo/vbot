@@ -13,6 +13,7 @@ from itertools import batched
 from typing import Any, override
 
 from core.attachments import AttachmentStore
+from core.channels._discord_uploads import DiscordUploads
 from core.channels._group_attachments import store_inbound_attachment
 from core.channels._message_chunks import split_message
 from core.channels.adapter import (
@@ -63,6 +64,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._config = config
         self._attachment_store = attachment_store
         self._engine = engine
+        self._uploads = DiscordUploads()
 
         token = credential_resolver(config.token_env_var)
         if not isinstance(token, str) or not token.strip():
@@ -589,8 +591,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         with DeliveryProgress() as progress:
             for index in range(send_count):
                 try:
-                    await retry_async(
-                        self._send_payload,
+                    await self._deliver_payload(
                         target,
                         chunks[index] if index < len(chunks) else None,
                         file_batches[index] if index < len(file_batches) else (),
@@ -600,6 +601,42 @@ class DiscordChannelAdapter(ChannelAdapter):
                     # Retrying the whole message would resend earlier acknowledged chunks.
                     error.retryable = False
                     raise
+                progress.delivered()
+
+    async def _deliver_payload(
+        self, target: Any, content: str | None, files: Sequence[FileData], *, reference: Any | None
+    ) -> None:
+        prepared = [
+            await self._uploads.fit(file, self._uploads.learned_budget(target, len(file.data)))
+            for file in files
+        ]
+        try:
+            await retry_async(self._send_payload, target, content, prepared, reference=reference)
+            return
+        except _DiscordPayloadTooLargeError:
+            if not files:
+                raise
+            if len(files) == 1:
+                file = files[0]
+                size = len(prepared[0].data)
+                budget = self._uploads.fallback_budget(target, size)
+                copy = await self._uploads.fit(file, budget)
+                if len(copy.data) >= size:
+                    raise
+                await retry_async(self._send_payload, target, content, [copy], reference=reference)
+                self._uploads.remember(target, size, budget)
+                return
+
+        # A rejected multipart request does not identify an offending file.
+        # Separate the batch without altering originals that fit individually.
+        with DeliveryProgress() as progress:
+            for index, file in enumerate(files):
+                await self._deliver_payload(
+                    target,
+                    content if index == 0 else None,
+                    [file],
+                    reference=reference if index == 0 else None,
+                )
                 progress.delivered()
 
     async def _send_payload(
@@ -842,6 +879,10 @@ def _load_discord() -> Any:
         ) from error
 
 
+class _DiscordPayloadTooLargeError(ChannelError):
+    """Discord refused the whole request with HTTP 413."""
+
+
 def _classify_discord_send_error(error: Exception, *, write: bool = False) -> ChannelError:
     """Translate one raw discord.py failure into a retry-classified error.
 
@@ -876,6 +917,8 @@ def _classify_discord_send_error(error: Exception, *, write: bool = False) -> Ch
     if not isinstance(status, int) or isinstance(status, bool):
         channel_error.possibly_delivered = write
         return channel_error
+    if status == 413 and write:
+        return _DiscordPayloadTooLargeError(str(channel_error))
     channel_error.possibly_delivered = write and status >= 500
     if status == 429 or (status >= 500 and not write):
         channel_error.retryable = True

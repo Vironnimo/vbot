@@ -64,6 +64,14 @@ sources, mixed audio/video containers, and originals over the target's byte budg
 use the configured WAV/FLAC fallback in one decode-and-encode pass. No HTTP request
 is sent if validation or conversion fails.
 
+When HTTP 400, 415 or 422 explicitly rejects the prepared audio format, the same
+STT target can receive the configured WAV/FLAC conversion and then the remaining
+supported lossless format. Each rejected format is tried once. A successful repair
+remembers the rejected inputs for one hour, keyed by target, account, endpoint and
+options. Unrelated validation errors, rejected output formats and ambiguous
+responses never authorize resubmission. STT POSTs use the non-idempotent request
+policy, including before a configured fallback.
+
 Local STT bypasses this Provider conversion and does not read the fallback profile.
 Its existing engine worker decodes the original once to mono float32 at 16 kHz,
 feeding bounded inference chunks as samples arrive. Both paths validate actual
@@ -125,6 +133,18 @@ optional load-affecting option names, and its pinned `model` (plus `environment`
 TTS environment it runs in; empty means the STT stack). Its synchronous `LocalTranscriptionEngine` or `LocalSynthesisEngine`
 implements `transcribe` or `synthesize`, plus `close`; callers and accessors remain unchanged.
 Unspecified load-option names mean every option participates in cache identity.
+With automatic device selection, a confirmed GPU allocation failure moves the
+engine to CPU for five minutes before probing its original profile. A GPU kernel
+or precision incompatibility is remembered for the runtime lifetime in a bounded
+cache keyed by the engine's load options. For Qwen TTS and the Transformers STT
+engines, an incompatible automatic BF16 precision first tries FP16 on the same GPU;
+CPU uses FP32. Chatterbox only takes a device. Explicit GPU selections and fixed
+half precisions are preserved. All load, preload and inference paths use the same
+selection, including packaged worker children, which report only the failure code
+and effective device/precision. STT retries the current chunk. TTS can repair a
+subsequent request after partial playback but cannot regenerate the current speech
+once it has published any PCM.
+
 Each engine has its own cached model and bounded worker, serializing its loading,
 inference and unloading outside the Event Loop. Other engines remain independent:
 STT can be unloaded while TTS is busy. Changing load options replaces only that

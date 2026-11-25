@@ -19,6 +19,7 @@ import respx
 
 from core.model_tasks.embeddings_providers import (
     DEFAULT_EMBEDDING_TIMEOUT,
+    EmbeddingEncodingPreference,
     EmbeddingUsage,
     ProviderEmbeddingClient,
 )
@@ -95,6 +96,40 @@ async def test_embed_sends_the_expected_request(
     assert json.loads(request.content) == {**_BASE_BODY, "input": inputs, **expected_fields}
     assert request.headers["Authorization"] == "Bearer sk-test"
     assert request.extensions["timeout"]["read"] == DEFAULT_EMBEDDING_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        {"error": {"message": "Unsupported parameter: encoding_format"}},
+        {"detail": [{"loc": ["body", "encoding_format"], "type": "extra_forbidden"}]},
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_explicitly_rejected_encoding_uses_the_validated_default_across_clients(
+    detail: dict[str, Any],
+) -> None:
+    pref = EmbeddingEncodingPreference()
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
+        side_effect=[
+            httpx.Response(422, json=detail),
+            httpx.Response(200, json=_vectors_for(["x"])),
+            httpx.Response(200, json=_vectors_for(["x"])),
+            httpx.Response(400, json={"error": {"message": "encoding_format is required"}}),
+            httpx.Response(200, json=_vectors_for(["x"])),
+        ]
+    )
+    for _ in range(3):
+        answer = await _client().embed(["x"], options={}, encoding_preference=pref)
+        assert answer.vectors == ([0.1],)
+    assert [json.loads(call.request.content).get("encoding_format") for call in route.calls] == [
+        "float",
+        None,
+        None,
+        None,
+        "float",
+    ]
 
 
 @pytest.mark.parametrize(

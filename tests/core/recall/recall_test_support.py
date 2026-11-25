@@ -70,6 +70,7 @@ class StubEmbeddings:
         self.local = False
         # Texts per document request the target prefers; ``None`` means no preference.
         self.batch_size_hint: int | None = None
+        self.endpoint = "https://test.invalid"
         self.embed_calls: list[list[str]] = []
         self.embed_purposes: list[str | None] = []
 
@@ -95,6 +96,9 @@ class StubEmbeddings:
             local=self.local,
         )
 
+    def document_batch_route(self) -> tuple[str, str, None]:
+        return self.endpoint, self.model_id, None
+
     def document_batch_size(self) -> int | None:
         return self.batch_size_hint
 
@@ -108,6 +112,7 @@ class StubEmbeddings:
             dimension=self.dimension,
             space_fingerprint=self.space_fingerprint,
             response_model_id=self.response_model_id,
+            request_route=self.document_batch_route(),
         )
 
     def vector_for(self, text: str) -> list[float]:

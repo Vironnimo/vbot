@@ -36,7 +36,11 @@ from core.model_tasks.embeddings_local import (
     LocalEmbeddingSetup,
     LocalEmbeddingUnavailableError,
 )
-from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
+from core.model_tasks.embeddings_providers import (
+    EmbeddingEncodingPreference,
+    EmbeddingUsage,
+    ProviderEmbeddingClient,
+)
 from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_target_id
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
@@ -45,7 +49,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.task_client import TaskClientRuntime
+from core.providers.task_client import TaskClientRuntime, TaskRequestRoute
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
@@ -71,6 +75,8 @@ class EmbeddingUnsupportedTargetError(EmbeddingError):
 
 class EmbeddingExecutionError(EmbeddingError):
     """Raised when a provider embedding request fails."""
+
+    request_route: TaskRequestRoute | None = None
 
 
 class EmbeddingInputTooLongError(EmbeddingExecutionError):
@@ -121,6 +127,7 @@ class EmbeddingResult:
     space_fingerprint: str = ""
     response_model_id: str = ""
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
+    request_route: TaskRequestRoute | None = None
 
     @property
     def actual_model_id(self) -> str:
@@ -134,6 +141,8 @@ class _EmbeddingAvailability:
     """Transport outage of the active remote binding, shared by indexing and searches."""
 
     space: str
+    route: TaskRequestRoute
+    encoding: EmbeddingEncodingPreference = field(default_factory=EmbeddingEncodingPreference)
     failures: int = 0
     revision: int = 0
     retry_at: float = 0
@@ -240,12 +249,10 @@ class EmbeddingService:
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
-        availability = self._availability
-        if availability is None or availability.space != identity.fingerprint:
-            availability = self._availability = _EmbeddingAvailability(identity.fingerprint)
-        availability.begin()
-        probing = availability.probing
-        revision = availability.revision
+        availability: _EmbeddingAvailability | None = None
+        route: TaskRequestRoute | None = None
+        probing = False
+        revision = 0
         try:
             try:
                 provider_client = await ProviderEmbeddingClient.from_runtime_async(
@@ -257,15 +264,29 @@ class EmbeddingService:
                 # Settings can change after binding validation and before the
                 # factory resolves the Provider, Connection and credentials.
                 raise EmbeddingConfigurationError(str(exc)) from exc
+            route = provider_client.request_route
+            availability = self._availability
+            if availability is None or (availability.space, availability.route) != (
+                identity.fingerprint,
+                route,
+            ):
+                availability = self._availability = _EmbeddingAvailability(
+                    identity.fingerprint, route
+                )
+            availability.begin()
+            probing = availability.probing
+            revision = availability.revision
             response = await provider_client.embed(
                 request.inputs,
                 options=options,
                 input_type=request.input_type,
+                encoding_preference=availability.encoding,
             )
         except EmbeddingError:
             raise
         except VBotError as exc:
-            availability.failed(exc)
+            if availability is not None:
+                availability.failed(exc)
             # ProviderError / NetworkError / ProviderAuthError / …
             # are expected provider failures and surface as execution failures.
             _LOGGER.warning(
@@ -274,7 +295,9 @@ class EmbeddingService:
                 target_ref.model_id,
                 exc,
             )
-            raise EmbeddingExecutionError(str(exc)) from exc
+            failure = EmbeddingExecutionError(str(exc))
+            failure.request_route = route
+            raise failure from exc
         except Exception as exc:
             _LOGGER.error(
                 "Embedding request raised unexpected error for provider=%s model=%s",
@@ -284,7 +307,7 @@ class EmbeddingService:
             )
             raise EmbeddingExecutionError(str(exc)) from exc
         finally:
-            if probing:
+            if probing and availability is not None:
                 availability.probing = False
         if not response.vectors:
             raise EmbeddingExecutionError(
@@ -292,7 +315,7 @@ class EmbeddingService:
             )
 
         # An earlier accepted request can finish after a newer throttling response.
-        if probing and revision == availability.revision:
+        if probing and availability is not None and revision == availability.revision:
             availability.failures = 0
             availability.retry_at = 0
         dimension = len(response.vectors[0])
@@ -304,6 +327,7 @@ class EmbeddingService:
             space_fingerprint=identity.fingerprint,
             response_model_id=response.model_id or target_ref.model_id,
             usage=response.usage,
+            request_route=route,
         )
 
     def resolve_space(self) -> EmbeddingSpaceIdentity:
@@ -321,6 +345,14 @@ class EmbeddingService:
         if target_ref.kind == "local":
             return self._local_space_identity(target_ref)
         return self._space_identity(target_ref, options)
+
+    def document_batch_route(self) -> TaskRequestRoute | None:
+        """Resolve the current target without an HTTP request before reusing a batch hint."""
+        with suppress(KeyError, VBotError):
+            _binding, _options, target = self._resolver.resolve(TASK_TEXT_EMBEDDING)
+            if target.kind != "local":
+                return ProviderEmbeddingClient.from_runtime(self._runtime, target).request_route
+        return None
 
     def document_batch_size(self) -> int | None:
         """Texts per document request the configured target handles well.

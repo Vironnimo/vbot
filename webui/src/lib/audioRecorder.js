@@ -9,16 +9,56 @@ const AUDIO_MIME_CANDIDATES = Object.freeze([
   'audio/mp4',
 ]);
 
-function chooseAudioMimeType(MediaRecorderClass) {
-  if (typeof MediaRecorderClass.isTypeSupported !== 'function') {
-    return '';
-  }
+// The winning constructor option belongs to this browser implementation/tab.
+const preferredTypes = new WeakMap();
+const mimeStorageKey = 'vbot:recorder-mime';
 
-  return (
-    AUDIO_MIME_CANDIDATES.find((mimeType) =>
-      MediaRecorderClass.isTypeSupported(mimeType),
-    ) ?? ''
-  );
+function preferredType(Recorder) {
+  if (preferredTypes.has(Recorder)) return preferredTypes.get(Recorder);
+  if (Recorder === globalThis.MediaRecorder) {
+    try {
+      return globalThis.sessionStorage?.getItem(mimeStorageKey);
+    } catch {
+      // Private browsing may disable storage.
+    }
+  }
+}
+
+function confirmType(Recorder, type) {
+  if (preferredTypes.get(Recorder) === type) return;
+  preferredTypes.set(Recorder, type);
+  if (Recorder === globalThis.MediaRecorder) {
+    try {
+      globalThis.sessionStorage?.setItem(mimeStorageKey, type);
+    } catch {
+      // The in-memory preference still serves this page.
+    }
+  }
+}
+
+function audioMimeCandidates(Recorder) {
+  const choices =
+    typeof Recorder.isTypeSupported === 'function'
+      ? [
+          ...AUDIO_MIME_CANDIDATES.filter((type) =>
+            Recorder.isTypeSupported(type),
+          ),
+          '',
+        ]
+      : ['', ...AUDIO_MIME_CANDIDATES];
+  const preferred = preferredType(Recorder);
+  return choices.includes(preferred)
+    ? [preferred, ...choices.filter((type) => type !== preferred)]
+    : choices;
+}
+
+function formatFailure(error) {
+  return [
+    'NotSupportedError',
+    'EncodingError',
+    'UnknownError',
+    'TypeError',
+  ].includes(error?.name);
 }
 
 function audioExtensionFromMimeType(mimeType) {
@@ -93,23 +133,86 @@ export async function createAudioRecorder(options = {}) {
     mimeType ||
     'audio/webm';
   const recordedBlob = () => new Blob(chunks, { type: recordedMimeType() });
-  try {
-    mimeType = chooseAudioMimeType(MediaRecorderClass);
-    const recorderOptions = mimeType ? { mimeType } : {};
-    recorder = new MediaRecorderClass(stream, recorderOptions);
-    recorder.addEventListener('start', () => {
-      nativeMimeType = recorder.mimeType || nativeMimeType;
-    });
-    recorder.addEventListener('dataavailable', (event) => {
-      if (event.data && event.data.size > 0) {
+  let candidates;
+  function construct() {
+    while (candidates.length) {
+      mimeType = candidates.shift();
+      try {
+        recorder = new MediaRecorderClass(stream, mimeType ? { mimeType } : {});
+        return;
+      } catch (error) {
+        if (!candidates.length || !formatFailure(error)) throw error;
+      }
+    }
+  }
+  function listen(native) {
+    let confirmed = false;
+    const confirm = () => {
+      if (native !== recorder || released) return;
+      confirmed = true;
+      nativeMimeType = native.mimeType || nativeMimeType;
+      confirmType(MediaRecorderClass, mimeType);
+    };
+    native.addEventListener('start', confirm);
+    native.addEventListener('dataavailable', (event) => {
+      if (native === recorder && event.data?.size > 0) {
+        confirm();
         chunks.push(event.data);
       }
     });
-    recorder.addEventListener('stop', finish, { once: true });
-    recorder.addEventListener('error', (event) => {
-      recordingError = event.error ?? new Error(t('audioRecording.failed'));
+    native.addEventListener(
+      'stop',
+      () => {
+        if (native === recorder) finish();
+      },
+      { once: true },
+    );
+    native.addEventListener('error', (event) => {
+      if (native !== recorder || released) return;
+      let error = event.error ?? new Error(t('audioRecording.failed'));
+      if (
+        !confirmed &&
+        !stopPromise &&
+        formatFailure(error) &&
+        candidates.length
+      ) {
+        try {
+          recorder = null;
+          if (native.state !== 'inactive') native.stop();
+          construct();
+          startCandidate();
+          return;
+        } catch (failure) {
+          error = failure;
+        }
+      }
+      recordingError = error;
       finish();
     });
+  }
+  function startCandidate() {
+    while (true) {
+      listen(recorder);
+      try {
+        recorder.start();
+        started = true;
+        nativeMimeType = recorder.mimeType || nativeMimeType;
+        return;
+      } catch (error) {
+        if (
+          !formatFailure(error) ||
+          recorder.state !== 'inactive' ||
+          !candidates.length
+        )
+          throw error;
+        recorder = null;
+        construct();
+      }
+    }
+  }
+  try {
+    candidates = audioMimeCandidates(MediaRecorderClass);
+    construct();
   } catch (error) {
     stopTracks();
     throw error;
@@ -117,14 +220,12 @@ export async function createAudioRecorder(options = {}) {
 
   return {
     get state() {
-      return recorder.state;
+      return recorder?.state ?? 'inactive';
     },
     start() {
-      if (released) return;
+      if (released || started) return;
       try {
-        recorder.start();
-        started = true;
-        nativeMimeType = recorder.mimeType || nativeMimeType;
+        startCandidate();
       } catch (error) {
         recordingError = error;
         finish();

@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
-from urllib.parse import parse_qsl, unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urljoin, urlparse, urlsplit
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
@@ -29,6 +30,7 @@ from core.tools._web_fetch_arguments import (
     normalize_web_fetch_arguments,
 )
 from core.tools._web_fetch_browser import (
+    BrowserAccessError,
     BrowserFetchError,
     LocalBrowser,
     PageBrowser,
@@ -85,7 +87,7 @@ _BINARY_DETECTION_BYTES = 8192
 
 # Direct failures a real browser can still read: bot checks, JavaScript pages and
 # redirect loops that wait for something only a browser does.
-_BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
+_BROWSER_CODES = frozenset({"no_content", "redirect_loop"})
 # A tag, comment or doctype: what a body labelled HTML must show to be read as HTML.
 _MARKUP = re.compile(r"<(?:!doctype|!--|/?[a-z][a-z0-9-]*(?:\s[^<>]*)?/?>)", re.I)
 # Several URLs in one call share roughly two single-page results of Context.
@@ -93,6 +95,7 @@ _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
 # Conversations whose last read page the handler remembers (Site paths below).
 _REMEMBERED_CONVERSATIONS = 1024
+_route_clock = time.monotonic
 _MAX_FIND_TERMS = 12
 # The name of a page that stands in for a missing one: not-found and login pages
 # (``page-not-found``, ``seite-nicht-gefunden``, ``404``, ``sign_in``).
@@ -430,21 +433,54 @@ async def _direct_fetch(
     attachment_store: Any,
     hosts: HostSlots,
     permissions: PermissionBoundary,
-) -> tuple[JsonObject, bool]:
-    """Return the direct result and whether another fetcher may recover it."""
+) -> tuple[JsonObject, bool, bool]:
+    """Return the direct result, recovery eligibility, and positive static app-shell evidence."""
     try:
         result = await fetch_public(
             url, accept=_accept(output_mode), hosts=hosts, permissions=permissions
         )
     except PermissionDenied as error:
-        return _refused(error.refusal), False
+        return _refused(error.refusal), False, False
     except PublicFetchError as error:
-        return error.failure(), error.recoverable
+        return error.failure(), error.recoverable, False
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
     if not shaped["ok"] and shaped["error"]["code"] == "rate_limited":
         # Full HTML extraction can recognize a firewall title beyond the transport's prefix.
         hosts.firewall_blocked(urlparse(result.url).hostname or result.url)
-    return shaped, not shaped["ok"] and shaped["error"]["code"] in _BROWSER_CODES
+    code = shaped["error"]["code"] if not shaped["ok"] else None
+    shell = (
+        code == "no_content"
+        and result.url == url
+        and len(result.content) <= 131072
+        and bool(_APP_MOUNT.search(result.text))
+        and bool(_APP_SCRIPT.search(result.text))
+        and not _ACCESS_MARKER.search(result.text)
+    )
+    return shaped, code in _BROWSER_CODES, shell
+
+
+_APP_MOUNT = re.compile(r"""<(?:div|main)\s+id=["'](?:app|root)["']\s*>\s*</(?:div|main)>""", re.I)
+_APP_SCRIPT = re.compile(
+    r"""<script\b(?=[^<>]*\btype=["']module["'])(?=[^<>]*\bsrc=["'][^<>"']+["'])[^<>]*>""", re.I
+)
+_ACCESS_MARKER = re.compile(
+    r"captcha|challenge|verify.{0,30}human|checking your browser|access denied|"
+    r"login|sign[ -]?in|<form\b|http-equiv\s*=\s*[\"']?refresh",
+    re.I,
+)
+
+
+def _browser_scope(url: str) -> tuple[str, str, str] | None:
+    address = urlsplit(url)
+    path = address.path or "/"
+    name = path.rsplit("/", 1)[-1]
+    if (
+        address.query
+        or address.fragment
+        or ("." in name and not name.lower().endswith((".html", ".htm")))
+    ):
+        return None
+    return address.scheme, address.netloc.lower(), path
 
 
 _PAGE_NOT_FETCHED = "The page was not fetched"
@@ -702,6 +738,8 @@ def make_web_fetch_handler(
     # One bound per host across all calls and Agents: the Runtime registers this
     # handler once, so it is the process's bound without a module global.
     hosts = HostSlots()
+    browser_paths: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+    service_pauses: OrderedDict[tuple[str, int], tuple[float, str]] = OrderedDict()
 
     def estimate_factor(context: ToolContext) -> float:
         if input_estimate_factor is None or not context.agent_model:
@@ -727,40 +765,87 @@ def make_web_fetch_handler(
         """
         assert browser is not None
         try:
-            response = await browser.fetch(url)
+            response = await browser.fetch(url, host_paused=hosts.is_paused)
+        except BrowserAccessError as error:
+            if error.pause is not None:
+                hosts.pause(*error.pause)
+            return tool_failure(
+                "rate_limited" if error.rate_limited else "access_denied",
+                str(error),
+                retryable=error.rate_limited,
+            )
         except BrowserFetchError as error:
             return str(error)
         if (refused := hop_refusal(permissions, url, response.url)) is not None:
             return _refused(refused)
         shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, response, output)
         if not shaped["ok"]:
-            return (
-                "it showed a bot check or login wall"
-                if shaped["error"]["code"] == "access_denied"
-                else "the page has no readable content"
-            )
+            if shaped["error"]["code"] == "rate_limited":
+                hosts.firewall_blocked(urlparse(response.url).hostname or response.url)
+            if shaped["error"]["code"] in {"access_denied", "rate_limited"}:
+                return shaped
+            return "the page has no readable content"
         shaped["data"]["source"] = "browser"
         return shaped
 
     async def direct(
         url: str,
+        host: str,
         output: WebFetchOutput,
         settings: Mapping[str, Any],
         permissions: PermissionBoundary,
     ) -> tuple[JsonObject, bool]:
-        """Read directly; the local browser retries a bot check or JavaScript page."""
-        result, recoverable = await _direct_fetch(url, output, attachment_store, hosts, permissions)
+        """Render an established app path or read directly and identify a JavaScript shell."""
+        scope = _browser_scope(url)
+        can_render = (
+            browser is not None and output != "raw" and settings.get("browser") is not False
+        )
+        preferred = scope is not None and browser_paths.get(scope, 0) > _route_clock()
+        attempted = False
+        if (
+            preferred
+            and scope is not None
+            and can_render
+            and browser is not None
+            and not hosts.needs_probe(host)
+            and browser.available()
+        ):
+            try:
+                async with hosts.hold(host) as probe:
+                    if probe is None:
+                        attempted = True
+                        rendered = await render(url, output, permissions)
+                        if not isinstance(rendered, str) and rendered["ok"]:
+                            return rendered, False
+                        browser_paths.pop(scope, None)
+                        if not isinstance(rendered, str):
+                            return rendered, False
+            except PublicFetchError as error:
+                return error.failure(), False
+        result, recoverable, shell = await _direct_fetch(
+            url, output, attachment_store, hosts, permissions
+        )
         if (
             result["ok"]
             or result["error"]["code"] not in _BROWSER_CODES
+            or attempted
+            or not can_render
             or browser is None
-            or output == "raw"
-            or settings.get("browser") is False
             or not browser.available()
         ):
             return result, recoverable
         rendered = await render(url, output, permissions)
         if not isinstance(rendered, str):
+            if (
+                shell
+                and scope is not None
+                and rendered["ok"]
+                and rendered["data"].get("url") == url
+            ):
+                browser_paths[scope] = _route_clock() + 300
+                browser_paths.move_to_end(scope)
+                if len(browser_paths) > 256:
+                    browser_paths.popitem(last=False)
             return rendered, False
         result["error"]["message"] += f" The local browser could not read it either: {rendered}."
         return result, recoverable
@@ -779,6 +864,12 @@ def make_web_fetch_handler(
                 "under Web page reading, or set the service back to Direct there.",
                 retryable=False,
             )
+        account = provider, hash(key)
+        pause = service_pauses.get(account)
+        if pause is not None and _route_clock() < pause[0]:
+            return tool_failure(
+                "extraction_error", f"Recent service failure: {pause[1]}", retryable=False
+            )
         try:
             data = await fetch_service(provider, key, url, output)
             final = urlparse(data["url"])
@@ -795,6 +886,14 @@ def make_web_fetch_handler(
             data["content"] = clean_service_text(data["content"], include_links=output != "text")
             return tool_success(data)
         except (FetchServiceError, PublicFetchError, ValueError) as error:
+            if isinstance(error, FetchServiceError) and error.cooldown is not None:
+                until = _route_clock() + error.cooldown
+                current = service_pauses.get(account)
+                if not current or until >= current[0]:
+                    service_pauses[account] = (until, str(error))
+                    service_pauses.move_to_end(account)
+                    if len(service_pauses) > 32:
+                        service_pauses.popitem(last=False)
             return tool_failure("extraction_error", str(error), retryable=False)
 
     async def fetch_one(
@@ -838,9 +937,9 @@ def make_web_fetch_handler(
             result = await service(url, output, provider, permissions)
             if not result["ok"]:
                 service_failure = result["error"]["message"]
-                result, _ = await direct(url, output, settings, permissions)
+                result, _ = await direct(url, host, output, settings, permissions)
         else:
-            result, recoverable = await direct(url, output, settings, permissions)
+            result, recoverable = await direct(url, host, output, settings, permissions)
             if enabled and recoverable and not hosts.is_paused(host):
                 recovered = await service(url, output, provider, permissions)
                 if recovered["ok"]:

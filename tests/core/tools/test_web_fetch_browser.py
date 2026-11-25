@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import respx
@@ -17,7 +19,9 @@ from core.tools._web_fetch_browser import BrowserFetchError
 from tests.core.tools.web_fetch_test_support import (
     fetch,
     install_http_get,
+    make_context,
     make_result,
+    web_fetch_registry,
 )
 from tests.core.tools.web_fetch_test_support import stub_dns_resolution as stub_dns_resolution
 from tests.core.tools.web_fetch_test_support import stub_http_session as stub_http_session
@@ -42,7 +46,7 @@ class FakeBrowser:
     def available(self) -> bool:
         return self.installed
 
-    async def fetch(self, url: str) -> PublicResponse:
+    async def fetch(self, url: str, **_options: Any) -> PublicResponse:
         self.urls.append(url)
         if isinstance(self.outcome, BrowserFetchError):
             raise self.outcome
@@ -61,7 +65,6 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
 @pytest.mark.parametrize(
     "direct",
     [
-        make_result(status_code=403, url=URL),
         make_result(
             headers={"content-type": "text/html"},
             text="<html><body><div id='root'></div></body></html>",
@@ -81,26 +84,12 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
             "</body></html>",
             url=URL,
         ),
-        make_result(
-            headers={"content-type": "text/html"},
-            text="<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
-            "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>",
-            url=URL,
-        ),
-        # A client error at a challenge address the request was sent to.
-        make_result(
-            status_code=400,
-            url="https://example.com/.enodia/challenge?redirect=%2Farticle",
-        ),
     ],
     ids=[
-        "bot-check",
         "javascript-shell",
         "redirect-loop",
         "meta-refresh",
         "redirect-link",
-        "localized-captcha",
-        "challenge",
     ],
 )
 async def test_browser_reads_what_direct_reading_could_not_before_any_service(
@@ -162,22 +151,11 @@ async def test_redirect_page_names_its_destination_without_hiding_readable_pages
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("outcome", "reason"),
-    [
-        (BrowserFetchError("the site answered HTTP 403 in the browser too"), "HTTP 403"),
-        (
-            "<html><head><title>Just a moment...</title></head><body>Wait</body></html>",
-            "it showed a bot check or login wall",
-        ),
-    ],
-    ids=["browser-error", "browser-wall"],
-)
 async def test_failed_browser_keeps_the_direct_failure_and_the_service_still_recovers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: Any, reason: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
-    browser = FakeBrowser(outcome)
+    install_http_get(monkeypatch, lambda url: make_result(text="", url=url))
+    browser = FakeBrowser(BrowserFetchError("the browser did not start"))
 
     failed = await fetch(tmp_path, {"url": URL}, **_options(browser))
     with respx.mock() as router:
@@ -186,11 +164,122 @@ async def test_failed_browser_keeps_the_direct_failure_and_the_service_still_rec
         )
         recovered = await fetch(tmp_path, {"url": URL}, **_options(browser, provider="tavily"))
 
-    assert failed["error"]["code"] == "access_denied"
+    assert failed["error"]["code"] == "no_content"
     assert "The local browser could not read it either" in failed["error"]["message"]
-    assert reason in failed["error"]["message"]
+    assert "the browser did not start" in failed["error"]["message"]
     assert recovered["ok"] and recovered["data"]["content"] == "Service text"
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual_path", ["/docs/manual", "/docs/a;version=print", "/docs/a#manual"])
+async def test_rendered_static_app_path_expires_and_honors_access_checks(
+    tmp_path, monkeypatch, manual_path
+):
+    now = [1.0]
+    monkeypatch.setattr("core.tools.web_fetch._route_clock", lambda: now[0])
+    shell = "<script type='module' src='/bundle.js'></script><div id='root'></div>"
+    requests = []
+
+    def answer(url):
+        requests.append(url)
+        content = (
+            _ARTICLE.format("A directly readable manual") if url.endswith(manual_path) else shell
+        )
+        return make_result(headers={"content-type": "text/html"}, text=content, url=url)
+
+    install_http_get(monkeypatch, answer)
+    browser = FakeBrowser(_ARTICLE.format("Public app content"))
+    tool = web_fetch_registry(**_options(browser))
+    context = make_context(tmp_path)
+
+    async def get(path):
+        return await tool.dispatch(context, {"url": f"https://example.com{path}"})
+
+    assert (await get("/docs/a"))["ok"]
+    assert (await get("/docs/a"))["ok"] and len(requests) == 1
+    browser.outcome = browser_module.BrowserAccessError("HTTP 403")
+    assert (await get(manual_path))["ok"] and len(requests) == 2
+    browser.outcome = _ARTICLE.format("Public app content")
+    assert (await get("/news/a"))["ok"] and len(requests) == 3
+    assert (await get("/docs/a?print=1"))["ok"] and len(requests) == 4
+    now[0] += 301
+    assert (await get("/docs/a"))["ok"] and len(requests) == 5
+    browser.outcome = browser_module.BrowserAccessError("the site answered HTTP 403 in the browser")
+    assert (await get("/docs/a"))["error"]["code"] == "access_denied"
+    assert len(requests) == 5
+    browser.outcome = _ARTICLE.format("Public app content")
+    assert (await get("/docs/a"))["ok"] and len(requests) == 6
+
+    events = asyncio.Queue()
+    events.put_nowait(
+        {
+            "method": "Network.responseReceived",
+            "params": {
+                "frameId": "main",
+                "type": "Document",
+                "response": {
+                    "url": URL,
+                    "status": 429,
+                    "headers": {"Retry-After": "7200", "X-RateLimit-Global": "true"},
+                },
+            },
+        }
+    )
+    with pytest.raises(browser_module.BrowserAccessError) as limited:
+        await browser_module._settle(AsyncMock(), "session", events, "main", float("inf"))
+    browser.outcome = limited.value
+    assert (await get("/docs/a"))["error"]["code"] == "rate_limited"
+    assert (await get("/news/b"))["error"]["code"] == "rate_limited"
+    assert len(requests) == 6
+
+
+@pytest.mark.asyncio
+async def test_browser_tries_installed_candidates_and_remembers_the_working_one(
+    tmp_path, monkeypatch
+):
+    first = browser_module.LocalBrowser("First", "first")
+    second = browser_module.LocalBrowser("Second", "second")
+    browser = browser_module.PageBrowser(tmp_path, find=lambda: [first, second])
+    launched = []
+    process = SimpleNamespace(returncode=0)
+
+    async def launch(candidate, profile, port):
+        launched.append(candidate)
+        if candidate == first:
+            raise OSError("cannot start")
+        return process
+
+    monkeypatch.setattr(browser_module, "_launch", launch)
+    monkeypatch.setattr(browser_module, "_connect", AsyncMock(return_value=AsyncMock()))
+    monkeypatch.setattr(browser_module, "wait_for_exit", AsyncMock())
+    monkeypatch.setattr(browser_module, "_render", AsyncMock(return_value=make_result(url=URL)))
+    try:
+        await browser.fetch(URL)
+        await browser.aclose()
+        await browser.fetch(URL)
+        assert launched == [first, second, second]
+    finally:
+        await browser.aclose()
+
+
+@pytest.mark.asyncio
+async def test_browser_launch_keeps_the_sandbox_even_as_root(tmp_path, monkeypatch):
+    started = AsyncMock()
+    monkeypatch.setattr(browser_module.sys, "platform", "linux")
+    monkeypatch.setattr(browser_module.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(browser_module, "create_subprocess_exec", started)
+    monkeypatch.setattr(
+        browser_module,
+        "guarded_process_launch",
+        lambda argv, **_env: SimpleNamespace(argv=argv, pass_fds=()),
+    )
+    await browser_module._launch(
+        browser_module.LocalBrowser("Chromium", "chromium"), tmp_path, 1234
+    )
+    args = started.await_args.args
+    assert "--no-sandbox" not in args
+    assert "--proxy-server=http://127.0.0.1:1234" in args
 
 
 @pytest.mark.asyncio
@@ -201,11 +290,34 @@ async def test_failed_browser_keeps_the_direct_failure_and_the_service_still_rec
         (URL, {"status_code": 403}, {}, {}, False),
         (URL, {"status_code": 403}, {"output": "raw"}, {}, True),
         (URL, {"status_code": 404}, {}, {}, True),
+        (URL, {"status_code": 403}, {}, {}, True),
+        (URL, {"status_code": 400, "text": "<title>Just a moment...</title>"}, {}, {}, True),
+        (
+            URL,
+            {
+                "headers": {"content-type": "text/html"},
+                "text": "<title>Ihr Browser wird geprüft – reCAPTCHA</title>"
+                "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>",
+            },
+            {},
+            {},
+            True,
+        ),
         ("http://127.0.0.1/", {}, {}, {}, True),
         # The browser shares this machine's address, which the firewall blocks.
         (URL, {"headers": {"content-type": "text/html"}, "text": _FIREWALL_BLOCK}, {}, {}, True),
     ],
-    ids=["turned-off", "not-installed", "raw", "missing-page", "private-address", "firewall"],
+    ids=[
+        "turned-off",
+        "not-installed",
+        "raw",
+        "missing-page",
+        "forbidden",
+        "challenge",
+        "captcha",
+        "private-address",
+        "firewall",
+    ],
 )
 async def test_browser_stays_out_where_it_cannot_help_or_is_not_wanted(
     tmp_path: Path,
@@ -250,10 +362,12 @@ def upstream(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int, bytes]]:
 
 
 async def _through_proxy(
-    request: bytes, follow_up: bytes = b""
+    request: bytes, follow_up: bytes = b"", *, paused_host: str | None = None
 ) -> tuple[bytes, tuple[str, str] | None]:
     """Send a request through a fresh proxy; return its answer and its last refusal."""
     proxy = browser_module._GuardProxy()
+    if paused_host:
+        proxy.pause_checks.append(lambda host: host == paused_host)
     await proxy.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
@@ -284,8 +398,9 @@ async def _through_proxy(
         (b"CONNECT [::1]:443 HTTP/1.1\r\n\r\n", 403, "blocked_url"),
         # A bot check's challenge host that does not resolve is not a private address.
         (b"CONNECT validate.bot-check.invalid:443 HTTP/1.1\r\n\r\n", 502, "host_not_found"),
+        (b"CONNECT example.com.:443 HTTP/1.1\r\n\r\n", 429, "rate_limited"),
     ],
-    ids=["loopback", "localhost", "private-http", "ipv6-loopback", "unresolvable"],
+    ids=["loopback", "localhost", "private-http", "ipv6-loopback", "unresolvable", "paused-host"],
 )
 async def test_guard_proxy_refuses_private_local_and_unresolvable_addresses(
     upstream: list[tuple[str, int, bytes]],
@@ -303,7 +418,7 @@ async def test_guard_proxy_refuses_private_local_and_unresolvable_addresses(
 
     monkeypatch.setattr(public_http, "_resolve_host_addresses", resolve_or_fail)
 
-    answer, refused = await _through_proxy(request_head)
+    answer, refused = await _through_proxy(request_head, paused_host="example.com")
 
     assert answer.startswith(f"HTTP/1.1 {status}".encode())
     assert refused is not None and refused[1] == reason

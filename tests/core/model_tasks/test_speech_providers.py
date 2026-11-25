@@ -24,7 +24,11 @@ import pytest
 import respx
 
 from core.model_tasks.speech_input import SpeechInputError
-from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
+from core.model_tasks.speech_providers import (
+    ProviderSpeechClient,
+    audio_format_from,
+    rejects_transcription_format,
+)
 from core.model_tasks.speech_types import SpeechAudioChunk
 from core.providers.errors import (
     ProviderContentRefusedError,
@@ -42,6 +46,29 @@ GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 def test_audio_format_from_prefers_browser_mime_type() -> None:
     assert audio_format_from(filename="clip.bin", media_type="audio/webm;codecs=opus") == "webm"
     assert audio_format_from(filename="clip.wav", media_type="") == "wav"
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "sent", "expected"),
+    [
+        ("Unsupported audio format: WMA", "flac", False),
+        ("Invalid audio format: MP3", "flac", False),
+        ("Unsupported audio format: WMA. Supported formats: FLAC, WAV.", "flac", False),
+        ("WMA audio format is not supported", "flac", False),
+        ("Audio format is not supported: WMA", "flac", False),
+        ("Unsupported audio format: FLAC", "flac", True),
+        ("The input audio format 'audio/x-wav' is not accepted.", "wav", True),
+        ("This model does not support audio/mpeg.", "mp3", True),
+        ("Invalid file format. Supported formats: ['wav', 'flac'].", "webm", True),
+        ("Unsupported input audio format", "ogg", True),
+        ("Access denied. Unsupported input audio format", "flac", False),
+        ("Unsupported audio format: FLAC. Request timed out.", "flac", False),
+    ],
+)
+def test_transcription_format_rejection_identifies_the_actual_input(diagnostic, sent, expected):
+    error = ProviderError(f"Provider error: 400: {diagnostic}")
+    error.status_code = 400
+    assert rejects_transcription_format(error, sent) is expected
 
 
 @pytest.mark.parametrize(

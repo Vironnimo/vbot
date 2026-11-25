@@ -79,6 +79,7 @@ class ProviderError(VBotError):
     retryable: bool
     retry_after: float | None = None
     status_code: int | None = None
+    _in_band_request_rejection: bool = False
 
     def __init__(self, message: str = "", retryable: bool = False) -> None:
         super().__init__(message)

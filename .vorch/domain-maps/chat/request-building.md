@@ -125,6 +125,8 @@ Assistant Tool Calls carry the canonical arguments Provider intake produced: pla
 
 After Chat completes canonical history shaping and dangling-cycle repair, an Adapter with an explicit target-wire Tool-call-id profile may normalize paired call/result ids for its wire on a copy-on-write request view. This transform is Provider-owned, request-only, and correlation-scoped to each Assistant batch; it never changes the canonical ids persisted in the Session or reused by Chat events.
 
+A gateway 413 threshold from a successful image-retirement retry may preflight later requests on the same route for 15 minutes. The wire measures the exact serialized request, and Chat enables that check only when the request can retire previously acknowledged image data (providers/request-policy.md).
+
 ## Source and tests
 
 `ChatLoop.preview_tool_definitions` applies the same Bash and image-Tool routing

@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
+from time import monotonic
 from typing import Any, cast, override
 from urllib.parse import quote
 
@@ -39,7 +41,7 @@ from core.model_tasks.options import (
     validate_text_embedding_options,
 )
 from core.providers.errors import ProviderError
-from core.providers.task_client import ProviderTaskClient, merge_extra_options
+from core.providers.task_client import ProviderTaskClient, TaskRequestRoute, merge_extra_options
 
 JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
@@ -97,6 +99,52 @@ class ProviderEmbeddingResponse:
     usage: EmbeddingUsage
 
 
+@dataclass
+class EmbeddingEncodingPreference:
+    """Last endpoint and authenticated transport to accept its default vector encoding."""
+
+    route: TaskRequestRoute | None = None
+    expires: float = 0
+
+
+_ENCODING_REJECTION = re.compile(
+    r"""(?:unknown|unsupported|unrecognized|unexpected|extra|unrecognised)\s+"""
+    r"""(?:request\s+)?(?:parameter|field|argument|key)\s*[:=]?\s*['"`]?encoding_format\b"""
+    r"""|\bencoding_format\b['"`]?\s+(?:parameter\s+)?(?:is\s+)?"""
+    r"""(?:not supported|unsupported|not allowed|not permitted)""",
+    re.IGNORECASE,
+)
+
+
+def _rejects_encoding_format(error: ProviderError, *, omitted: bool) -> bool:
+    if error.status_code not in (400, 415, 422):
+        return False
+    message = str(error)
+    if omitted:
+        if re.search(
+            r"""(?:missing|required) (?:parameter|field)[: ]+['"`]?encoding_format\b"""
+            r"""|\bencoding_format\b['"`]? (?:is )?required""",
+            message,
+            re.IGNORECASE,
+        ):
+            return True
+    elif _ENCODING_REJECTION.search(message):
+        return True
+    # FastAPI/Pydantic reports the field path and reason in one validation entry.
+    detail = message[message.find("{") :]
+    try:
+        body, _ = json.JSONDecoder().raw_decode(detail)
+    except ValueError:
+        return False
+    errors = body.get("detail") if isinstance(body, dict) else None
+    return isinstance(errors, list) and any(
+        isinstance(entry, dict)
+        and entry.get("type") == ("missing" if omitted else "extra_forbidden")
+        and entry.get("loc") in (["body", "encoding_format"], ["encoding_format"])
+        for entry in errors
+    )
+
+
 class ProviderEmbeddingClient(ProviderTaskClient):
     """Embedding HTTP client bound to one target.
 
@@ -112,6 +160,7 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         *,
         options: JsonObject,
         input_type: str | None = None,
+        encoding_preference: EmbeddingEncodingPreference | None = None,
     ) -> ProviderEmbeddingResponse:
         """Call the provider's OpenAI-compatible ``/embeddings`` endpoint.
 
@@ -133,14 +182,39 @@ class ProviderEmbeddingClient(ProviderTaskClient):
             options,
             input_type=input_type,
         )
-        return await self.post_and_parse(
-            EMBEDDINGS_ENDPOINT,
-            timeout=DEFAULT_EMBEDDING_TIMEOUT,
-            parse=lambda response: _parse_embeddings_response(
-                response.json(), expected_count=len(inputs)
-            ),
-            json=payload,
+        route = self.request_route
+        omitted = (
+            encoding_preference is not None
+            and encoding_preference.route == route
+            and encoding_preference.expires > monotonic()
         )
+        if omitted:
+            del payload["encoding_format"]
+
+        async def send() -> ProviderEmbeddingResponse:
+            return await self.post_and_parse(
+                EMBEDDINGS_ENDPOINT,
+                timeout=DEFAULT_EMBEDDING_TIMEOUT,
+                parse=lambda response: _parse_embeddings_response(
+                    response.json(), expected_count=len(inputs)
+                ),
+                json=payload,
+            )
+
+        try:
+            return await send()
+        except ProviderError as error:
+            if not _rejects_encoding_format(error, omitted=omitted):
+                raise
+        if omitted:
+            payload["encoding_format"] = "float"
+        else:
+            del payload["encoding_format"]
+        result = await send()
+        if encoding_preference is not None:
+            encoding_preference.route = None if omitted else route
+            encoding_preference.expires = monotonic() + 24 * 60 * 60
+        return result
 
     async def _embed_google(
         self,

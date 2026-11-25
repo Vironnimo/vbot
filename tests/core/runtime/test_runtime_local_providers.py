@@ -15,13 +15,18 @@ import respx
 
 import core.models.discovery as discovery_module
 import core.providers._catalog_refresh as provider_runtime_module
+from core.chat._model_step import ModelStepBoundary
+from core.chat._request_images import RequestImageBudget
+from core.chat._request_targets import RequestTargets
 from core.chat.streaming import stream_stall_timeout
 from core.models.database import read_model_database_manifest
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.accounts import ConnectionRef
+from core.providers.adapter import request_input_budget
 from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
+from core.providers.providers import RequestInput
 from core.providers.token_getter import StaticTokenGetter
 from core.runtime.runtime import Runtime
 from core.storage.layout import DataDirectoryLayout
@@ -136,7 +141,7 @@ async def test_lm_studio_served_window_replaces_the_local_setting_while_loaded(
 
     # Loaded by someone else at 8192; then unloaded and loaded again by vBot.
     respx.get("http://localhost:1234/api/v1/models").mock(
-        side_effect=[listing(8192), listing(), listing(12288)]
+        side_effect=[listing(8192), listing(8192), listing(), listing(), listing(12288)]
     )
     load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
         return_value=httpx.Response(200, json={"instance_id": "gemma"})
@@ -152,9 +157,33 @@ async def test_lm_studio_served_window_replaces_the_local_setting_while_loaded(
         # The served window is the live window for Chat, Compaction and /status.
         await adapter.send([{"role": "user", "content": "Hello"}], model_id="gemma")
         assert runtime.local_context_windows()["lmstudio/gemma"] == 8192
+    finally:
+        await adapter.aclose()
 
-        # Once the instance is gone, the setting decides the window vBot loads with.
-        await adapter.send([{"role": "user", "content": "Hello"}], model_id="gemma")
+    # A fresh Run must confirm the old reading before it can compact a larger
+    # prompt. The server still serves 8192 on the first check, then unloads it.
+    adapter = runtime.get_adapter(ConnectionRef("lmstudio", "lmstudio:local"))
+    deps = Mock(models=runtime.models, providers=runtime.providers)
+    deps.get_local_context_windows = runtime.local_context_windows
+    deps.get_extension_registry.return_value = None
+    target = Mock(
+        adapter=adapter,
+        provider_id="lmstudio",
+        connection_id="local",
+        model_id="gemma",
+        max_request_images=None,
+    )
+    targets = RequestTargets(deps, max_image_bytes=None)
+    step = ModelStepBoundary(deps, Mock())
+    context = Mock(image_budget=RequestImageBudget(), prompt_cache_affinity_id="test")
+    state = Mock(messages=[{"role": "user", "content": "long " * 9000}], tools=[])
+    try:
+        await step._prepare_model_request(context, target, state)
+        assert targets.resolve_context_window(None, target) == 8192
+        await step._prepare_model_request(context, target, state)
+        assert targets.resolve_context_window(None, target) == 16384
+        with request_input_budget("gemma", RequestInput.measured(9000)):
+            await adapter.send(state.messages, model_id="gemma", max_tokens=512)
     finally:
         await adapter.aclose()
     assert json.loads(load_route.calls.last.request.content)["context_length"] == 16384

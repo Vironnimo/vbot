@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, override
 
 from core.providers._wire_profile_files import (
     PROFILE_SCHEMA,
@@ -103,6 +103,49 @@ class WireBinding:
     profiles: WireProfiles
     observations: WireObservations | None = None
 
+    def for_route(self, endpoint: str, account_id: str) -> WireBinding:
+        return _RoutedBinding(
+            self.provider_id,
+            self.connection_id,
+            self.profiles,
+            self.observations,
+            endpoint,
+            account_id,
+        )
+
+    def _route_scope(self) -> tuple[str, str]:
+        return "", ""
+
+    def _route_key(
+        self, model_id: str, name: str, protocol: str | None, setting: int | None
+    ) -> tuple[str, str, str, str, str, str]:
+        protocol = protocol or self.profile(model_id).protocol
+        endpoint, account = self._route_scope()
+        route = f"{endpoint}|{protocol}"
+        if setting is not None:
+            route += f"|{setting}"
+        return (
+            self.provider_id,
+            self.connection_id,
+            route,
+            account,
+            model_id.split("::", 1)[0],
+            name,
+        )
+
+    def route_fact(
+        self, model_id: str, name: str, *, protocol: str | None = None, setting: int | None = None
+    ) -> int | None:
+        if self.observations is None:
+            return None
+        return self.observations.route_fact(self._route_key(model_id, name, protocol, setting))
+
+    def remember_route(
+        self, model_id: str, name: str, value: int = 1, *, setting: int | None = None
+    ) -> None:
+        if self.observations is not None:
+            self.observations.remember_route(self._route_key(model_id, name, None, setting), value)
+
     def profile(self, model_id: str) -> WireProfile:
         return self.profiles.resolve(self.provider_id, self.connection_id, model_id)
 
@@ -172,6 +215,16 @@ class WireBinding:
         return self.observations.facts_for(
             self.provider_id, self.connection_id, model_id
         ).context_window
+
+
+@dataclass(frozen=True)
+class _RoutedBinding(WireBinding):
+    endpoint: str = ""
+    account_id: str = ""
+
+    @override
+    def _route_scope(self) -> tuple[str, str]:
+        return self.endpoint, self.account_id
 
 
 @dataclass(frozen=True)
