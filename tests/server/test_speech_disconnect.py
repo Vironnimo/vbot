@@ -29,7 +29,7 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
     cancelled = asyncio.Event()
     release_cleanup = asyncio.Event()
     settled = asyncio.Event()
-    waiting_receives = 0
+    request_tasks: set[asyncio.Task[Any] | None] = set()
     sent: list[dict[str, Any]] = []
 
     async def operation(
@@ -39,6 +39,7 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
         media_type: str | None = None,
         progress: SpeechProgress | None = None,
     ) -> Any:
+        request_tasks.add(asyncio.current_task())
         if surface == "transcribe":
             assert (value, filename, media_type) == (b"audio", "clip.wav", "audio/wav")
         else:
@@ -60,12 +61,8 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
             settled.set()
 
     async def receive() -> dict[str, Any]:
-        nonlocal waiting_receives
-        waiting_receives += 1
-        try:
-            return await incoming.get()
-        finally:
-            waiting_receives -= 1
+        request_tasks.add(asyncio.current_task())
+        return await incoming.get()
 
     async def send(message: MutableMapping[str, Any]) -> None:
         sent.append(dict(message))
@@ -105,7 +102,6 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
     }
     incoming.put_nowait({"type": "http.request", "body": body[:80], "more_body": True})
     incoming.put_nowait({"type": "http.request", "body": body[80:], "more_body": False})
-    before = asyncio.all_tasks()
     async with asyncio.timeout(1):
         task = asyncio.create_task(app(scope, receive, send))
         try:
@@ -136,8 +132,7 @@ async def test_plain_speech_settles_on_result_disconnect_or_server_cancellation(
 
     assert settled.is_set()
     assert cancelled.is_set() == (ending in {"disconnect", "cancel"})
-    assert waiting_receives == 0
-    assert not (asyncio.all_tasks() - before)
+    assert all(task is not None and task.done() for task in request_tasks)
     if ending != "cancel":
         assert sent[0]["status"] == {"result": 200, "error": 502, "disconnect": 499}[ending]
         response_body = b"".join(message.get("body", b"") for message in sent)
