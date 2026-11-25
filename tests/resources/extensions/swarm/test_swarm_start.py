@@ -209,6 +209,74 @@ async def test_run_leaves_out_vanished_skills_and_tools_but_not_models(lifecycle
 
 
 @pytest.mark.asyncio
+async def test_profile_without_tool_access_or_skills_follows_the_shared_defaults(
+    lifecycle, tmp_path, monkeypatch
+):
+    """Each participant gets the shared defaults current when its Session is created."""
+    defaults = {
+        "tool_access": {"mode": "selected", "allowed": ["read"], "denied": ["bash"]},
+        "allowed_skills": ["first-skill"],
+    }
+    catalog = lifecycle.service.host.catalog
+
+    async def with_defaults():
+        return {**await catalog(), "agent_defaults": json.loads(json.dumps(defaults))}
+
+    lifecycle.service.host = replace(lifecycle.service.host, catalog=with_defaults)
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Inheriting",
+            "participants": [{"model": "fixture/model", "count": 2}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+        },
+        expected_revision=None,
+    )
+    assert "tool_access" not in profile and "allowed_skills" not in profile
+    # Start creates only the first participant's Session; Resume creates the second.
+    create = lifecycle.groups.create
+    created: list[str] = []
+
+    async def first_only(group_id, participant_id, config, **kwargs):
+        if created:
+            raise OSError("the second Session was not created")
+        created.append(participant_id)
+        return await create(group_id, participant_id, config, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle.groups, "create", first_only)
+        with pytest.raises(OSError):
+            await lifecycle.service.management.operation(
+                "swarms.start",
+                {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"},
+            )
+    swarm_id = (await lifecycle.service.store.list_swarms()).entries[0]["id"]
+    # Mode none would also switch off the Swarm's own Tools, so it arrives as no ordinary Tools.
+    defaults = {"tool_access": {"mode": "none"}, "allowed_skills": []}
+    resumed = await lifecycle.service.management.operation(
+        "swarms.resume", {"swarm_id": swarm_id, "request_id": "resume"}
+    )
+    for run in resumed["runs"]:
+        await lifecycle.runtime.chat_run_manager.get(run["run_id"]).wait()
+
+    bindings = {item.participant_id: item.config for item in await lifecycle.groups.list(swarm_id)}
+    first = bindings.pop(created[0])
+    (second,) = bindings.values()
+    # Every route delivers at once, so swarm_inbox stays off in both.
+    assert first["tool_access"]["allowed"] == ["read"]
+    assert set(first["tool_access"]["denied"]) == {"bash", "swarm_inbox"}
+    assert first["allowed_skills"] == ["first-skill"]
+    assert second["tool_access"] == {"mode": "selected", "allowed": [], "denied": ["swarm_inbox"]}
+    assert second["allowed_skills"] == []
+    requests = lifecycle.runtime.adapter.requests
+    assert len(requests) >= 2
+    assert all(
+        "swarm_board" in {tool["name"] for tool in request["kwargs"].get("tools", [])}
+        for request in requests
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy",
     [
@@ -275,7 +343,8 @@ async def test_profile_compaction_policy_reaches_every_participant(lifecycle, tm
         key: value for key, value in swarm["profile_snapshot"].items() if key != "compaction_policy"
     }
     participant = swarm["participants"][0]
-    assert _participant_config(legacy, participant, tmp_path).compaction_policy is None
+    catalog = await lifecycle.service.host.catalog()
+    assert _participant_config(legacy, participant, tmp_path, catalog).compaction_policy is None
 
 
 @pytest.mark.asyncio

@@ -169,21 +169,23 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     cwd_key = "project_id" if cwd["kind"] == "project" else "path"
     if set(cwd) != {"kind", cwd_key} or not isinstance(cwd.get(cwd_key), str) or not cwd[cwd_key]:
         raise SwarmStoreError("invalid_arguments", field="working_directory")
-    access = profile.get("tool_access")
-    try:
-        normalized_access = normalize_tool_access(access)
-    except ValueError as error:
-        raise SwarmStoreError("invalid_arguments", field="tool_access") from error
-    if normalized_access.mode != "selected":
-        raise SwarmStoreError("invalid_arguments", field="tool_access")
-    profile["tool_access"] = normalized_access.to_dict()
+    # Without its own Tool access or Skills a profile inherits the shared
+    # defaults whenever a participant is created (``_participant_config``).
+    if "tool_access" in profile:
+        try:
+            normalized_access = normalize_tool_access(profile["tool_access"])
+        except ValueError as error:
+            raise SwarmStoreError("invalid_arguments", field="tool_access") from error
+        if normalized_access.mode != "selected":
+            raise SwarmStoreError("invalid_arguments", field="tool_access")
+        profile["tool_access"] = normalized_access.to_dict()
     tools = profile.get("tools", {})
     if not isinstance(tools, dict) or any(
         not isinstance(name, str) or not name or not isinstance(settings, dict)
         for name, settings in tools.items()
     ):
         raise SwarmStoreError("invalid_arguments", field="tools")
-    allowed_skills = profile.get("allowed_skills", ["*"])
+    allowed_skills = profile.get("allowed_skills", [])
     if not isinstance(allowed_skills, list) or any(
         not isinstance(skill, str) or not skill for skill in allowed_skills
     ):
@@ -217,7 +219,6 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
     if profile.get("permission_ceiling_profile") is not None:
         _profile_name(profile["permission_ceiling_profile"], "permission_ceiling_profile")
     profile.setdefault("tools", {})
-    profile.setdefault("allowed_skills", ["*"])
     profile.setdefault("instructions", "")
     if "revision" in profile:
         _revision(profile["revision"], "revision", allow_zero=True)

@@ -31,14 +31,13 @@ Every abbreviated command below starts with `vbot extensions run swarm`. Use nam
     "schema_version": 1,
     "name": "<profile-name>",
     "participants": [{"model": "<model-id>", "count": 2}],
-    "working_directory": {"kind": "directory", "path": "<absolute-server-directory>"},
-    "tool_access": {"mode": "selected", "allowed": []}
+    "working_directory": {"kind": "directory", "path": "<absolute-server-directory>"}
   },
   "expected_revision": null
 }
 ```
 
-Replace the name, Model id and server directory for the requested task; Model ids come from `catalog`. The empty `allowed` list grants no ordinary Tools; set the Tool and Skill access the work needs from the same catalog. To use a Project, replace `working_directory` with `{"kind":"project","project_id":"<project-id>"}` from the catalog; this also supplies its Project Context.
+Replace the name, Model id and server directory for the requested task; Model ids come from `catalog`. Without `tool_access` and `allowed_skills`, participants get the Tools and Skills that `catalog` shows as `agent_defaults`. Add them only when the work needs others, with names from the same catalog: `"tool_access": {"mode": "selected", "allowed": [<tool-names>]}`. To use a Project, replace `working_directory` with `{"kind":"project","project_id":"<project-id>"}` from the catalog; this also supplies its Project Context.
 
 Write the argument object to a UTF-8 file `<arguments-file>` on the CLI's computer, then send it through stdin:
 

@@ -26,10 +26,12 @@ _PROFILE_INPUT = {
         "temperature, top_p, fallback_models, and repository_profile (a "
         "Team agent id from the selected Project in catalog; omit to use "
         "participant settings). A row without a Team agent can select its own permission_profile "
-        "from catalog.permission_profiles. Optional profile fields: slug, tools (per-Tool "
-        "settings), allowed_skills, instructions, prompt_blocks, reminders, delivery, and "
-        "compaction_policy. compaction_policy is null to use the global Compaction settings, "
-        "or one complete Policy for every participant: {enabled (automatic Compaction), "
+        "from catalog.permission_profiles. Optional profile fields: slug, tool_access "
+        "({mode: selected, allowed: [...]}), tools (per-Tool settings), allowed_skills, "
+        "instructions, prompt_blocks, reminders, delivery, and compaction_policy. Omit "
+        "tool_access and allowed_skills to use catalog.agent_defaults. compaction_policy is "
+        "null to use the global Compaction settings, or one complete Policy for every "
+        "participant: {enabled (automatic Compaction), "
         "trigger: {type: context_ratio, threshold in (0, 1], optional tokens} or "
         "{type: input_tokens, tokens}, strategy: {type: summary_tail, tail_tokens, "
         "summary_model (null uses the participant's Model)} or {type: continuation}}. "
@@ -49,7 +51,6 @@ _PROFILE_INPUT = {
             "name": "Review",
             "participants": [{"model": "<model-id-from-catalog>", "count": 2}],
             "working_directory": {"kind": "directory", "path": "<absolute-server-directory>"},
-            "tool_access": {"mode": "selected", "allowed": []},
         }
     ],
 }

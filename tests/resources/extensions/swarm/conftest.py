@@ -142,6 +142,16 @@ async def board(
     tools = ToolRegistry()
     registry.apply_tools(tools)
     databases = ExtensionDatabases(tmp_path)
+
+    async def catalog() -> dict[str, Any]:
+        # Resume reads the shared defaults when it creates a missing participant.
+        return {
+            "agent_defaults": {
+                "tool_access": {"mode": "selected", "allowed": []},
+                "allowed_skills": ["*"],
+            }
+        }
+
     host = ExtensionHost(
         data_dir=tmp_path,
         sample=None,  # type: ignore[arg-type]
@@ -152,6 +162,7 @@ async def board(
         set_credential=None,  # type: ignore[arg-type]
         state_dir=tmp_path,
         temporary_agents=groups,
+        catalog=catalog,
         open_database=databases.opener(ExtensionRegistrationIdentity("swarm", "registration")),
     )
     await api.operations.startup[0](host)
@@ -307,6 +318,10 @@ async def lifecycle(
             "tools": [],
             "skills": [],
             "permission_profiles": ["restricted", "full_access"],
+            "agent_defaults": {
+                "tool_access": {"mode": "selected", "allowed": []},
+                "allowed_skills": ["*"],
+            },
         }
 
     databases = ExtensionDatabases(tmp_path)

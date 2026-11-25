@@ -731,7 +731,7 @@ class SwarmExtension:
                     binding = await group.create(
                         snapshot["id"],
                         participant["id"],
-                        _participant_config(profile, participant, cwd),
+                        _participant_config(profile, participant, cwd, catalog),
                         project_id=project_id,
                     )
                     bindings[participant["id"]] = binding
@@ -790,13 +790,18 @@ class SwarmExtension:
             profile = snapshot["profile_snapshot"]
             cwd = Path(snapshot["effective_configuration"]["cwd"])
             project_id = snapshot["effective_configuration"].get("project_id")
+            catalog: Json | None = None
             for participant in snapshot["participants"]:
                 binding = existing.get(participant["id"])
                 if binding is None:
+                    if catalog is None:
+                        if host.catalog is None:
+                            raise SwarmStoreError("swarm_closed")
+                        catalog = await host.catalog()
                     binding = await group.create(
                         swarm_id,
                         participant["id"],
-                        _participant_config(profile, participant, cwd),
+                        _participant_config(profile, participant, cwd, catalog),
                         project_id=project_id,
                     )
                     existing[participant["id"]] = binding
