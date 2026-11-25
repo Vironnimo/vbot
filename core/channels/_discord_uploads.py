@@ -36,9 +36,11 @@ class DiscordUploads:
     def _destination(target: Any) -> tuple[int, int]:
         guild = getattr(target, "guild", None)
         limit = getattr(guild, "filesize_limit", None)
-        if type(limit) is not int or limit <= 0:
+        # discord.py derives this value from a bundled boost-tier table; older
+        # versions still report 10 MiB for tiers whose standard is now 20 MiB.
+        if type(limit) is not int:
             limit = _DEFAULT_FILE_LIMIT
-        return (guild or target).id, min(limit, _REQUEST_FILE_BUDGET)
+        return (guild or target).id, min(max(limit, _DEFAULT_FILE_LIMIT), _REQUEST_FILE_BUDGET)
 
     def learned_budget(self, target: Any, size: int) -> int | None:
         key, advertised = self._destination(target)
@@ -57,11 +59,9 @@ class DiscordUploads:
 
     def remember(self, target: Any, rejected_size: int, budget: int) -> None:
         key, advertised = self._destination(target)
-        # A 413 by itself gives no exact byte count. Use the advertised ceiling
-        # if it explains the refusal; otherwise only fit files at least as large
-        # as the one actually rejected, and probe again after an hour.
-        threshold = advertised + 1 if rejected_size > advertised else rejected_size
-        self._fits[key] = _UploadFit(advertised, threshold, budget, time.monotonic() + 3600)
+        # Neither the SDK's tier estimate nor one successful smaller copy
+        # proves intermediate file sizes will fail.
+        self._fits[key] = _UploadFit(advertised, rejected_size, budget, time.monotonic() + 3600)
         self._fits.move_to_end(key)
         if len(self._fits) > 256:
             self._fits.popitem(last=False)

@@ -7,6 +7,7 @@ import io
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from random import Random
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from PIL import Image
 
+import core.channels._discord_uploads as discord_uploads
 import core.channels.discord as discord_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels import ChannelConfigError, ChannelError
@@ -168,12 +170,20 @@ async def test_upload_fits_a_copy_only_after_413_and_expires_on_a_guild_limit_ch
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _fake_discord_errors(monkeypatch)
-    guild = SimpleNamespace(id=1, filesize_limit=800)
+    # Model a stale 10 MiB SDK tier and a real 20 MiB limit on a small scale.
+    monkeypatch.setattr(discord_uploads, "_DEFAULT_FILE_LIMIT", 2000)
+    guild = SimpleNamespace(id=1, filesize_limit=1000)
     target = FakeChannel(100, guild=guild)
     harness = make_adapter(tmp_path, target=target)
     original = io.BytesIO()
-    Image.new("RGB", (40, 40), "blue").save(original, format="BMP")
+    # The lossless PNG is between the old and the current standard limits.
+    rows = Random(42).randbytes(40 * 3 * 11)
+    Image.frombytes("RGB", (40, 40), (rows * 4)[: 40 * 40 * 3]).save(original, format="BMP")
     file = FileData("map.bmp", "image/bmp", original.getvalue())
+    smaller = io.BytesIO()
+    Image.new("RGB", (22, 22), "red").save(smaller, format="BMP")
+    medium = FileData("smaller.bmp", "image/bmp", smaller.getvalue())
+    assert 1000 < len(medium.data) < 2000 < len(file.data)
     attempts: list[tuple[str, bytes]] = []
 
     async def send(**payload: Any) -> None:
@@ -181,17 +191,25 @@ async def test_upload_fits_a_copy_only_after_413_and_expires_on_a_guild_limit_ch
         data = upload.fp.read()
         attempts.append((upload.filename, data))
         assert payload["content"] == "map"
-        if len(data) > guild.filesize_limit:
+        if len(data) > max(guild.filesize_limit, 2000):
             raise _FakeHTTPError(413)
 
     monkeypatch.setattr(target, "send", send)
     try:
         await harness.adapter.send("map", "100", files=[file])
         await harness.adapter.send("map", "100", files=[file])
+        await harness.adapter.send("map", "100", files=[medium])
         guild.filesize_limit = 8192
         await harness.adapter.send("map", "100", files=[file])
-        assert [name for name, _ in attempts] == ["map.bmp", "map.png", "map.png", "map.bmp"]
-        assert len(attempts[1][1]) <= 800
+        assert [name for name, _ in attempts] == [
+            "map.bmp",
+            "map.png",
+            "map.png",
+            "smaller.bmp",
+            "map.bmp",
+        ]
+        assert attempts[3][1] == medium.data
+        assert 1000 < len(attempts[1][1]) <= 2000
         assert attempts[0][1] == attempts[-1][1] == original.getvalue() == file.data
     finally:
         await harness.adapter.stop()
