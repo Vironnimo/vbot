@@ -28,11 +28,18 @@ class _FakeJobExecution:
         self.replied: list[tuple[str, str]] = []
         self.cancelled: list[str] = []
 
+    async def wait_for_turn_settle(self, run_id: str, *, timeout: float = 3.0) -> None:
+        _ = run_id, timeout
+
+    async def close_group_safe(self, group_id: str, reason: str = "cancelled") -> None:
+        _ = group_id, reason
+
     async def reply_run(self, run_id: str, text: str) -> Json:
         self.replied.append((run_id, text))
         return await self.store.jobs.transition_run(run_id, "running", question="", reason="")
 
-    async def cancel_run(self, run_id: str) -> Json:
+    async def cancel_run(self, run_id: str, *, close_inline: bool = True) -> Json:
+        _ = close_inline
         self.cancelled.append(run_id)
         return await self.store.jobs.transition_run(run_id, "cancelled")
 

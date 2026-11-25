@@ -142,7 +142,6 @@ PUBLIC_PARAMETERS: Json = {
                     "schedule": {"type": "string"},
                     "enabled": {"type": "boolean"},
                 },
-                "additionalProperties": False,
             },
             "description": (
                 "For create_job or update_job: schedule (cron expression) or webhook triggers. "
@@ -232,10 +231,10 @@ class FactoryPublicTool:
             input_authority = getattr(host, "input_authority", None) if host is not None else None
             if input_authority is not None:
                 authority = await input_authority(context)
-                if authority not in {"user", "automation"}:
+                if authority not in {"user", "authorized_task"}:
                     return tool_failure(
                         "forbidden",
-                        "Mutating Factory actions require user or automation authority.",
+                        "Mutating Factory actions require user or authorized task authority.",
                     )
 
         try:

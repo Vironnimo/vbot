@@ -118,8 +118,7 @@ def _validate_triggers(value: Any) -> list[Json]:
         if not isinstance(enabled, bool):
             raise _error("invalid_job", "Trigger enabled must be a boolean.")
 
-        entry = dict(item)
-        entry.update(
+        normalized.append(
             {
                 "id": trigger_id,
                 "type": trigger_type,
@@ -128,7 +127,6 @@ def _validate_triggers(value: Any) -> list[Json]:
                 "enabled": enabled,
             }
         )
-        normalized.append(entry)
     return normalized
 
 
@@ -427,6 +425,8 @@ class FactoryJobsStore:
         factory = _get_factory(connection, factory_id)
         if factory["state"] == "archived":
             raise _error("factory_archived", "This Factory is archived.")
+        if factory["state"] != "active":
+            raise _error("factory_paused", "This Factory is paused.")
 
         job: Json | None = None
         if job_id:

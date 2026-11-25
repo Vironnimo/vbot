@@ -440,3 +440,15 @@ async def test_public_tool_refuses_factory_sessions_and_unauthorized_mutations(
     )
     assert mut_denied["ok"] is False
     assert mut_denied["error"]["code"] == "forbidden"
+
+    harness.host.authority = "authorized_task"
+    mut_allowed = await tool.handle(
+        harness.context(tool_call_id="sec-4"),
+        {
+            "action": "create_factory",
+            "project_id": "project",
+            "leader_name": "Auto Leader",
+            "leader_model": "test/worker",
+        },
+    )
+    assert mut_allowed["ok"] is True

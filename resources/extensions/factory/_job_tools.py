@@ -105,7 +105,9 @@ class FactoryJobTools:
             return tool_failure(error.code, str(error))
 
         context.request_turn_end()
-        await self._notify_run_change(updated, status=status, question=question or "")
+        await self._notify_run_change(
+            updated, status=status, question=question or "", reason=reason or ""
+        )
         return tool_success(
             {
                 "text": f"Job run {updated['id']} marked {status}.",
@@ -113,7 +115,9 @@ class FactoryJobTools:
             }
         )
 
-    async def _notify_run_change(self, run: Json, *, status: str, question: str) -> None:
+    async def _notify_run_change(
+        self, run: Json, *, status: str, question: str, reason: str = ""
+    ) -> None:
         host = self.service.host
         if host is None:
             return
@@ -122,10 +126,17 @@ class FactoryJobTools:
         job_execution = getattr(self.service, "job_execution", None)
         if job_execution is not None and hasattr(job_execution, "_refresh_badge"):
             await job_execution._refresh_badge()
-        if status == "needs_attention" and host.notify is not None:
+        if status in {"needs_attention", "failed"} and host.notify is not None:
             label = str(run.get("job_name") or run["id"]).strip()
-            title = f"Job needs attention: {label}"[:200]
-            body = (question or "This job run needs your attention.").splitlines()[0][:2000]
+            prefix = "Job needs attention: " if status == "needs_attention" else "Job failed: "
+            fallback = (
+                "This job run needs your attention."
+                if status == "needs_attention"
+                else "This job run failed."
+            )
+            detail = question if status == "needs_attention" else reason
+            title = f"{prefix}{label}"[:200]
+            body = (detail or fallback).splitlines()[0][:2000]
             try:
                 await host.notify(
                     title,
@@ -364,11 +375,36 @@ class FactoryJobTools:
             name_filter = optional_string(arguments.get("name"), field_name="name")
             if name_filter:
                 job_id = (await self._resolve_job(factory_id, {"name": name_filter}))["id"]
+        state_filter = optional_string(arguments.get("state"), field_name="state")
         limit = optional_int(
             arguments.get("limit"), field_name="limit", default=20, minimum=1, maximum=100
         )
-        runs = await jobs_store.list_runs(factory_id, job_id=job_id or None, limit=limit)
-        return tool_success({"text": f"{len(runs)} job run(s).", "runs": runs})
+        runs = await jobs_store.list_runs(
+            factory_id,
+            state=state_filter or None,
+            job_id=job_id or None,
+            limit=limit,
+        )
+        compact_runs = [
+            {
+                key: run.get(key)
+                for key in (
+                    "id",
+                    "job_id",
+                    "job_name",
+                    "member_id",
+                    "state",
+                    "origin",
+                    "summary",
+                    "question",
+                    "reason",
+                    "created_at",
+                    "finished_at",
+                )
+            }
+            for run in runs
+        ]
+        return tool_success({"text": f"{len(compact_runs)} job run(s).", "runs": compact_runs})
 
     async def _resolve_job(
         self, factory_id: str, arguments: Json, *, allow_name: bool = True

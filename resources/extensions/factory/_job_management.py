@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.tools.arguments import optional_int
 from core.tools.contracts import ToolContractError
+from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
 from ._jobs_store import _validate_name, _validate_triggers
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from .extension import FactoryExtension
 
 type Json = dict[str, Any]
+_LOGGER = get_logger("extensions.factory")
 
 _S = {"type": "string"}
 _B = {"type": "boolean"}
@@ -185,8 +187,27 @@ class FactoryJobManagement:
     async def operation(self, name: str, arguments: Json) -> Json | None:
         if name not in JOB_OPERATION_SCHEMAS:
             return None
+        if name == "job.secret" and bool(arguments.get("rotate")):
+            async with self.service.lock:
+                return await settle_before_cancelling(self._read_operation(name, arguments))
         if name in _READ_OPERATIONS:
             return await self._read_operation(name, arguments)
+        if name == "job_run.reply":
+            run_id = _require_id(arguments, "run_id")
+            await self._execution.wait_for_turn_settle(run_id)
+        if name == "job_run.cancel":
+            run_id = _require_id(arguments, "run_id")
+            group_to_close: str | None = None
+            async with self.service.lock:
+                existing = await self.service.records().jobs.get_run(run_id)
+                if existing["state"] in {"running", "needs_attention"}:
+                    group_to_close = existing["group_id"]
+                run = await settle_before_cancelling(
+                    self._execution.cancel_run(run_id, close_inline=False)
+                )
+            if group_to_close is not None:
+                await self._execution.close_group_safe(group_to_close, reason="cancelled")
+            return {"run": run}
         async with self.service.lock:
             return await settle_before_cancelling(self._mutate_operation(name, arguments))
 
@@ -409,6 +430,12 @@ class FactoryJobManagement:
             )
             self._publish_change("job_runs", [run["id"]], run["revision"])
             self.service.request_schedule()
+            _LOGGER.info(
+                "Factory job triggered manually (factory=%s, job=%s, run=%s)",
+                job["factory_id"],
+                job_id,
+                run["id"],
+            )
             return {"run": run}
 
         if name == "job_run.reply":

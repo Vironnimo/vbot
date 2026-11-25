@@ -19,6 +19,8 @@ export function failureText(cause) {
       return t('factory.error.conflict');
     case 'factory_archived':
       return t('factory.error.factoryArchived');
+    case 'factory_paused':
+      return t('factory.error.factoryPaused');
     case 'member_unavailable':
       return cause?.message || t('factory.error.memberUnavailable');
     case 'trigger_not_found':

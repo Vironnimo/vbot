@@ -205,6 +205,10 @@ async def test_factory_job_status_transitions_and_refusals(
     assert failed["data"]["run"]["state"] == "failed"
     assert failed["data"]["run"]["reason"] == "Database migration failed."
     assert ctx2._turn_end_requested is True
+    assert any(
+        n["key"] == run2["id"] and "Database migration failed." in n["body"]
+        for n in harness.host.notifications
+    )
 
     # done with summary.
     run3 = await jobs_store.create_run(factory["id"], job["id"], origin="manual")

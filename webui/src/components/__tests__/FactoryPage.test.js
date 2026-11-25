@@ -222,13 +222,19 @@ describe('FactoryPage', () => {
     });
     expect(document.body.textContent).toContain('Tester');
 
-    // Settings tab & Archive
+    // Settings tab & Archive (requires confirmation)
     button(t('factory.tabs.settings')).click();
     await settle();
     expect(document.getElementById('factory-settings-name')?.value).toBe(
       'Alpha Factory',
     );
     button(t('factory.settings.archive')).click();
+    await settle();
+    expect(calls(operation, 'factory.archive')).toHaveLength(0);
+    button(
+      t('factory.settings.archive'),
+      document.querySelector('[role="dialog"]'),
+    ).click();
     await settle();
     expect(calls(operation, 'factory.archive')[0][1]).toMatchObject({
       id: 'fac-one',

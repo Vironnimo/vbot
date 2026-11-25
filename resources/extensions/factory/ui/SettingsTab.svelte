@@ -1,12 +1,15 @@
 <script>
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
   import RecordEditor from './RecordEditor.svelte';
 
   let { model } = $props();
   let editor = $state(null);
+  let archiveOpen = $state(false);
 
-  async function archiveFactory() {
+  async function confirmArchiveFactory() {
+    archiveOpen = false;
     if (editor && !(await editor.flush())) return;
     await model.mutate('factory.archive', {
       id: model.factory.id,
@@ -30,11 +33,28 @@
       <Button
         variant="danger"
         disabled={Boolean(model.pending)}
-        onClick={archiveFactory}>{t('factory.settings.archive')}</Button
+        onClick={() => {
+          archiveOpen = true;
+        }}>{t('factory.settings.archive')}</Button
       >
     </div>
   {/if}
 </section>
+
+{#if archiveOpen}
+  <ConfirmDialog
+    title={t('factory.settings.archiveTitle')}
+    body={t('factory.settings.archiveConfirm', {
+      name: model.factory?.name || model.factory?.id || '',
+    })}
+    confirmLabel={t('factory.settings.archive')}
+    danger={true}
+    onConfirm={confirmArchiveFactory}
+    onCancel={() => {
+      archiveOpen = false;
+    }}
+  />
+{/if}
 
 <style>
   .factory-settings {

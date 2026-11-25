@@ -60,7 +60,7 @@ A Job's `schedule` or `webhook` that queues Job Runs automatically; Cron owns sc
   - Calling `factory_job_status` with `needs_attention` (requires `question`), `failed` (requires `reason`), or `done` (optional `summary`) transitions the run, ends the turn (`context.request_turn_end()`), and publishes the change.
   - Ending normally without calling `factory_job_status` settles the run to `done`, extracting the final assistant answer (up to 4000 chars) as `summary`. Cancelled or non-success Run outcomes settle to `cancelled` or `failed`.
 - `before_model_request` refuses calls on runs already in a final state (`done`, `failed`, `cancelled`).
-- `job_run.reply` sends an operator message directly into the run's canonical Session (`TemporaryRunInput("continuation", ...)`), transitioning `needs_attention`, `failed`, or `done` runs back to `running` (cancelled runs cannot be resumed). `job_run.cancel` closes active `fjob.*` groups and marks the run `cancelled`.
+- `job_run.reply` sends an operator message directly into the run's canonical Session (`TemporaryRunInput("continuation", ...)`), transitioning `needs_attention` or `failed` runs back to `running` (`done` and `cancelled` runs cannot be resumed). `job_run.cancel` closes active `fjob.*` groups outside the service lock and marks the run `cancelled`.
 - On startup, `reconcile` marks any persisted `running` Job Run whose host Run is no longer live as `failed` ("Interrupted by server restart.").
 
 ## Public `factory` Tool

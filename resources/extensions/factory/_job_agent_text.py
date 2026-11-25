@@ -113,10 +113,10 @@ _LEADER_JOBS_PARAMETERS: Json = {
                     "schedule": {"type": "string"},
                     "enabled": {"type": "boolean"},
                 },
-                "additionalProperties": False,
             },
             "description": (
-                "Schedule (cron expression) or webhook triggers for this job. Omit for no triggers."
+                "Schedule (5-field cron, every <duration>, in <duration>, or ISO timestamp) "
+                "or webhook triggers for this job. Omit for no triggers."
             ),
         },
         "enabled": {
@@ -128,8 +128,14 @@ _LEADER_JOBS_PARAMETERS: Json = {
         "input_note": {
             "type": "string",
             "description": (
-                "For trigger: extra context or parameters passed to this run. Omit if none."
+                "For trigger: extra context or parameters passed to this run. Each job run "
+                "starts in a fresh session without chat history, so include needed context here."
             ),
+        },
+        "state": {
+            "type": "string",
+            "enum": ["queued", "running", "needs_attention", "done", "failed", "cancelled"],
+            "description": "For runs: filter by run state. Omit to include all states.",
         },
         "limit": {
             "type": "integer",

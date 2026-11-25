@@ -211,8 +211,10 @@ class FactoryJobExecution:
 
     async def _ensure_participant(self, run: Json) -> tuple[Any, Any]:
         factory = await self.native_store.get_factory(run["factory_id"])
+        if factory.get("state") == "archived":
+            raise FactoryError("factory_archived", "This Factory is archived.")
         if factory.get("state") != "active":
-            raise FactoryError("factory_archived", "This Factory is not active.")
+            raise FactoryError("factory_paused", "This Factory is paused.")
         member = await self.native_store.get_member(run["member_id"])
         if member.get("factory_id") != factory["id"] or member.get("state") != "active":
             raise FactoryError("member_unavailable", "Selected member is not active.")
@@ -281,8 +283,10 @@ class FactoryJobExecution:
             if run["state"] in FINAL_JOB_RUN_STATES:
                 raise FactoryError("stale_run", "This Job Run is already finished.")
             factory = await self.native_store.get_factory(run["factory_id"])
+            if factory.get("state") == "archived":
+                raise FactoryError("factory_archived", "This Factory is archived.")
             if factory.get("state") != "active":
-                raise FactoryError("factory_archived", "This Factory is not active.")
+                raise FactoryError("factory_paused", "This Factory is paused.")
             member = await self.native_store.get_member(run["member_id"])
             if member.get("factory_id") != factory["id"] or member.get("state") != "active":
                 raise FactoryError("member_unavailable", "Selected member is not active.")
@@ -425,6 +429,26 @@ class FactoryJobExecution:
             except Exception:
                 _LOGGER.warning("Failed to close job group %s during quiesce", group_id)
 
+    async def wait_for_turn_settle(self, run_id: str, *, timeout: float = 3.0) -> None:
+        """Wait outside service.lock for a finishing turn to clear _active_run_ids."""
+        try:
+            run = await self.jobs.get_run(run_id)
+        except FactoryError:
+            return
+        group_id = run["group_id"]
+        if group_id not in self._active_run_ids:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while group_id in self._active_run_ids and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+
+    async def close_group_safe(self, group_id: str, reason: str = "cancelled") -> None:
+        try:
+            await self.groups.close_group(group_id, reason=reason)
+        except Exception:
+            _LOGGER.warning("Failed to close job group %s (%s)", group_id, reason)
+
     async def reply_run(self, run_id: str, text: str) -> Json:
         if not isinstance(text, str) or not text.strip():
             raise FactoryError("invalid_job", "Reply text must be a non-empty string.")
@@ -478,21 +502,25 @@ class FactoryJobExecution:
             await self._publish_run(failed, notify_attention=True)
             raise
         self._active_run_ids[updated["group_id"]] = admission.run_id
+        _LOGGER.info("Factory job run resumed (run=%s, job=%s)", updated["id"], updated["job_id"])
         return updated
 
-    async def cancel_run(self, run_id: str) -> Json:
+    async def cancel_run(self, run_id: str, *, close_inline: bool = True) -> Json:
         run = await self.jobs.get_run(run_id)
         if run["state"] in FINAL_JOB_RUN_STATES:
             return run
-        self._active_run_ids.pop(run["group_id"], None)
-        if run["state"] in {"running", "needs_attention"}:
-            try:
-                await self.groups.close_group(run["group_id"], reason="cancelled")
-            except Exception:
-                _LOGGER.warning("Failed to close job group %s on cancel", run["group_id"])
+        prev_state = run["state"]
+        group_id = run["group_id"]
+        self._active_run_ids.pop(group_id, None)
         updated = await self.jobs.transition_run(run["id"], "cancelled")
         await self._publish_run(updated)
         self.service.request_schedule()
+        _LOGGER.info("Factory job run cancelled (run=%s, prev=%s)", updated["id"], prev_state)
+        if prev_state in {"running", "needs_attention"}:
+            if close_inline and not self.service.lock.locked():
+                await self.close_group_safe(group_id, reason="cancelled")
+            elif close_inline and hasattr(self.service, "spawn"):
+                self.service.spawn(self.close_group_safe(group_id, reason="cancelled"))
         return updated
 
     async def reconcile(self) -> None:

@@ -3,6 +3,7 @@
   import { t } from '@vbot/extension-sdk/lib/i18n.js';
   import Banner from '@vbot/extension-sdk/ui/Banner.svelte';
   import Button from '@vbot/extension-sdk/ui/Button.svelte';
+  import ConfirmDialog from '@vbot/extension-sdk/ui/ConfirmDialog.svelte';
   import Dropdown from '@vbot/extension-sdk/ui/Dropdown.svelte';
   import Modal from '@vbot/extension-sdk/ui/Modal.svelte';
   import SearchableDropdown from '@vbot/extension-sdk/ui/SearchableDropdown.svelte';
@@ -19,6 +20,7 @@
   let { model } = $props();
   let editor = $state(null);
   let editingMemberId = $state('');
+  let retireTarget = $state(null);
   let addOpen = $state(false);
   let showAllModels = $state(false);
   let formError = $state('');
@@ -121,7 +123,10 @@
     editingMemberId = editingMemberId === memberId ? '' : memberId;
   }
 
-  async function retireMember(member) {
+  async function confirmRetireMember() {
+    const member = retireTarget;
+    retireTarget = null;
+    if (!member) return;
     if (editor && !(await editor.flush())) return;
     await model.mutate('member.retire', {
       id: member.id,
@@ -209,8 +214,9 @@
               <Button
                 variant="tertiary"
                 disabled={Boolean(model.pending)}
-                onClick={() => retireMember(member)}
-                >{t('factory.team.retire')}</Button
+                onClick={() => {
+                  retireTarget = member;
+                }}>{t('factory.team.retire')}</Button
               >
             {/if}
           </div>
@@ -326,6 +332,21 @@
       >
     {/snippet}
   </Modal>
+{/if}
+
+{#if retireTarget}
+  <ConfirmDialog
+    title={t('factory.team.retireTitle')}
+    body={t('factory.team.retireConfirm', {
+      name: agentName(retireTarget),
+    })}
+    confirmLabel={t('factory.team.retire')}
+    danger={true}
+    onConfirm={confirmRetireMember}
+    onCancel={() => {
+      retireTarget = null;
+    }}
+  />
 {/if}
 
 <style>

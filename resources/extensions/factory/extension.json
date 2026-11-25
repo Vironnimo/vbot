@@ -7,7 +7,7 @@
     {
       "path": "docs/usage.md",
       "title": "Software Factory",
-      "description": "Manage Project Factories, team members, tasks and discussions, plus global Workflows, Cards, triggers and execution budgets through the CLI."
+      "description": "Manage Project Factories, Leaders, specialist Agents, Jobs, triggers, and Job Runs."
     }
   ]
 }

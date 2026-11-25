@@ -90,9 +90,9 @@ export default {
   'factory.trigger.type': 'Trigger type',
   'factory.trigger.schedule': 'Schedule',
   'factory.trigger.webhook': 'Webhook',
-  'factory.trigger.when': 'Cron schedule',
+  'factory.trigger.when': 'Schedule',
   'factory.trigger.whenHelp':
-    '5-field cron expression in the app timezone (e.g. 0 9 * * 1-5).',
+    '5-field cron (e.g. 0 9 * * 1-5), every <duration>, in <duration>, or ISO timestamp.',
   'factory.trigger.title': 'Label (optional)',
   'factory.trigger.url': 'Webhook URL',
   'factory.trigger.secret': 'Secret',
@@ -102,7 +102,7 @@ export default {
   'factory.trigger.rotateHelp':
     'Rotating invalidates the previous secret immediately.',
   'factory.trigger.webhookHelp':
-    'Send POST requests with X-Vbot-Signature-256.',
+    'Send POST requests with X-Hub-Signature-256: sha256=<hmac> or Authorization: Bearer <secret>.',
   'factory.trigger.saveForUrl':
     'Save this Job to generate its webhook URL and secret.',
   'factory.trigger.next': 'Next: {time}',
@@ -142,6 +142,9 @@ export default {
   'factory.team.makeLeader': 'Make Leader',
   'factory.team.editMembership': 'Edit role & limits',
   'factory.team.retire': 'Retire',
+  'factory.team.retireTitle': 'Retire team member',
+  'factory.team.retireConfirm':
+    'Retire "{name}"? Active Job Runs assigned to this member will be cancelled.',
   'factory.team.retired': 'Retired',
   'factory.team.createdAgent': 'Factory-created Agent',
   'factory.team.linkedAgent': 'Linked existing Agent',
@@ -164,6 +167,9 @@ export default {
   'factory.settings.existingPermissionLimit':
     'An additional permission limit is configured for this Factory.',
   'factory.settings.archive': 'Archive Factory',
+  'factory.settings.archiveTitle': 'Archive Factory',
+  'factory.settings.archiveConfirm':
+    'Archive "{name}"? All active Job Runs will be cancelled and scheduled/webhook triggers will stop.',
   'factory.settings.saveConflict':
     'Updated from the server while editing; conflicting fields kept your changes.',
   'factory.settings.recordDeleted': 'This record was deleted.',
@@ -175,6 +181,7 @@ export default {
   'factory.error.conflict':
     'This record changed elsewhere. Reload and try again.',
   'factory.error.factoryArchived': 'This Factory is archived.',
+  'factory.error.factoryPaused': 'This Factory is paused.',
   'factory.error.memberUnavailable': 'Selected team member is unavailable.',
   'factory.error.triggerMissing':
     'Save the Job with the webhook trigger first.',

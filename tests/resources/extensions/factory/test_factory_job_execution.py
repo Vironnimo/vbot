@@ -346,3 +346,37 @@ async def test_tool_access_overlap_and_reply_run_edge_cases(
     after_boom = await store.jobs.get_run(run["id"])
     assert after_boom["state"] == "failed"
     assert "start boom" in after_boom["reason"]
+
+
+async def test_cancel_via_management_does_not_deadlock_when_close_triggers_run_finished(
+    tmp_path: Path, factory_store: FactoryStore
+) -> None:
+    from resources.extensions.factory._job_management import FactoryJobManagement
+
+    engine, store, _, groups, service, factory, worker = await _setup(tmp_path, factory_store)
+    service.job_execution = engine  # type: ignore[attr-defined]
+    service.job_triggers = SimpleNamespace()  # type: ignore[attr-defined]
+    management = FactoryJobManagement(service)  # type: ignore[arg-type]
+
+    job = await store.jobs.create_job(
+        factory["id"], name="Deadlock Check", prompt="Long task", agent_member_id=worker["id"]
+    )
+    run = await store.jobs.create_run(factory["id"], job["id"], origin="manual")
+    await engine.schedule(wip_limit=1)
+
+    # Simulate host close_group synchronously invoking run_finished (which acquires service.lock).
+    original_close = groups.close_group
+
+    async def _draining_close(group_id: str, reason: str = "extension") -> Json:
+        await engine.run_finished(_request_context(group_id, "run-1"), outcome="cancelled")
+        return await original_close(group_id, reason)
+
+    groups.close_group = _draining_close  # type: ignore[method-assign]
+
+    result = await asyncio.wait_for(
+        management.operation("job_run.cancel", {"run_id": run["id"]}),
+        timeout=2.0,
+    )
+    assert result is not None
+    assert result["run"]["state"] == "cancelled"
+    assert (run["group_id"], "cancelled") in groups.closed
