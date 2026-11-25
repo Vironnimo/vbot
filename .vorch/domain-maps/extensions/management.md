@@ -120,6 +120,8 @@ context pipelines and callbacks queued behind an owner's workers).
 
 ## Provider and Channel integrations
 
+The Python SDK preserves the positional constructor and pattern-matching order of `RequestRules` and `WireProfile`. The read-side `input_token_limit` and `catalog_sampling` fields are keyword-only; their distributed declarations match the host.
+
 `core/extensions/_integrations.py` applies Provider declarations to the existing `ProviderRegistry` and Channel platform factories to `ChannelService`; these domains keep execution, state and persistence. Collisions diagnose only the skipped declaration. Exact registration identities fence use and withdrawal, so releasing an old epoch cannot remove a replacement. Channel factories remain unavailable until Extension startup has completed; `resume_channels` then resumes enabled Channels.
 
 Reload, disable and shutdown release integrations before owner shutdown. Provider withdrawal shares the catalog publication admission; Channel drain runs outside that admission through the bounded lifecycle callback owner. A drain past its deadline continues uncancelled after admission is withdrawn, and `ChannelService` keeps its replacement waiting for the old drain. Source: `_integrations.py`, `core/extensions/runtime.py`; domain contracts: `providers.md`, `channels.md`.

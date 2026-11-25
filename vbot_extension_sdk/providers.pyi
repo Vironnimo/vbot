@@ -9,7 +9,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import (
     Any,
@@ -282,6 +282,7 @@ class WireProfile:
     media: MediaRules = ...
     decision: DecisionWire = ...
     known_model: bool = True
+    catalog_sampling: Mapping[str, bool] = field(default_factory=dict, kw_only=True)
     provenance: Mapping[str, str] = ...
 
     def source_of(self, path: str) -> str | None: ...
@@ -331,6 +332,7 @@ class ParameterRule:
 
 @dataclass(frozen=True)
 class RequestRules:
+    input_token_limit: int | None = field(default=None, kw_only=True)
     output_limit_field: OutputLimitField | None = "max_tokens"
     output_limit_default: int | None = None
     output_limit_cap: int | None = None
