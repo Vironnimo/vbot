@@ -45,6 +45,8 @@ export {
   buildToolLoadingDefaultPayload,
   normalizePermissionRulesDefaultSettings,
   buildPermissionRulesDefaultPayload,
+  normalizeAgentAccessDefaultSettings,
+  buildAgentAccessDefaultPayload,
   normalizeSessionTitleSettings,
   buildSessionTitleSettingsPayload,
   normalizeSubAgentSettings,

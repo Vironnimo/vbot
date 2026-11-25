@@ -559,6 +559,11 @@ export default Object.freeze({
   'agents.form.toolAccess': 'Tool access',
   'agents.form.toolAccessHelp':
     'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
+  'agents.form.sharedDefault': 'Shared default',
+  'agents.form.sharedDefaultFollowed':
+    'Follows the Shared defaults. Changing the selection gives this Agent its own.',
+  'agents.form.ownSetting': 'Own setting',
+  'agents.form.useSharedDefault': 'Use shared default',
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.librarian': 'Librarian',
   'agents.form.librarianDescription':
@@ -1178,6 +1183,13 @@ export default Object.freeze({
     'Choose the common starting point. Individual Agents can override it.',
   'agents.shared.compactionDescription':
     'The inherited policy for keeping long conversations within the Model context.',
+  'agents.shared.toolAccessTitle': 'Tools and Skills',
+  'agents.shared.toolAccessDescription':
+    'The Tools and Skills of every Agent that does not set its own, including Project Agents, Factory members and Swarm Agents. Changes apply to those Agents right away and to every Agent created later.',
+  'agents.shared.skills': 'Skills',
+  'agents.shared.skillsAll': 'All Skills',
+  'agents.shared.skillsNone': 'No Skills',
+  'agents.shared.skillsSelected': 'Selected Skills ({count})',
   'agents.shared.toolLoadingTitle': 'On-demand Tools',
   'agents.shared.toolLoadingDescription':
     'Whether Agents load Tools on demand, and which Tools they always load. Agents and Project Agents can override either part.',

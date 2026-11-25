@@ -25,7 +25,7 @@
 
   // The shared Permission Rules default (`defaults.agent.permission_rules`):
   // Identity Agents and Project Agents inherit each part they do not set themselves.
-  // Without it, Agents have full access.
+  // Unset, it is the restricted profile's rules (settings.get reports them).
   let { settings = null, onCommit = noop, onError = noop } = $props();
 
   let form = $state(

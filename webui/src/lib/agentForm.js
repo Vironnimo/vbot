@@ -62,7 +62,9 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'workspace',
   'root_project_id',
   'tool_access',
+  'tool_access_inherited',
   'allowed_skills',
+  'allowed_skills_inherited',
   'excluded_skills',
   'context_commands',
   'tools',
@@ -102,10 +104,14 @@ export function createAgentFormValues(agent = {}) {
       agent.project_memory_enabled ??
       normalizeMemoryPromptMode(agent.memory_prompt_mode) !== 'off',
     tool_access: normalizeToolAccess(agent.tool_access),
+    // True while the Agent follows the shared default (its raw value is null,
+    // or a new Agent sets none); `tool_access` then shows that default.
+    tool_access_inherited: raw.tool_access == null,
     allowed_skills: normalizeArrayList(
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
+    allowed_skills_inherited: raw.allowed_skills == null,
     excluded_skills: normalizeArrayList(agent.excluded_skills, []),
     // Edited as text, one command per line.
     context_commands: normalizeArrayList(agent.context_commands, []).join('\n'),
@@ -323,7 +329,9 @@ function normalizeValues(values = {}) {
       values.project_memory_enabled ??
       normalizeMemoryPromptMode(values.memory_prompt_mode) !== 'off',
     tool_access: normalizeToolAccess(values.tool_access),
+    tool_access_inherited: values.tool_access_inherited === true,
     allowed_skills: normalizeArrayList(values.allowed_skills),
+    allowed_skills_inherited: values.allowed_skills_inherited === true,
     excluded_skills: normalizeArrayList(values.excluded_skills, []),
     context_commands: distinctLines(values.context_commands),
     tools: normalizeAgentTools(values.tools),
@@ -385,8 +393,13 @@ function buildAgentPayload(normalized, sampling, options = {}) {
     thinking_effort: normalized.thinking_effort || null,
     memory_prompt_mode: normalized.memory_prompt_mode,
     project_memory_enabled: normalized.project_memory_enabled,
-    tool_access: normalized.tool_access,
-    allowed_skills: normalized.allowed_skills,
+    // null leaves the field to the shared default.
+    tool_access: normalized.tool_access_inherited
+      ? null
+      : normalized.tool_access,
+    allowed_skills: normalized.allowed_skills_inherited
+      ? null
+      : normalized.allowed_skills,
     excluded_skills: normalized.excluded_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,

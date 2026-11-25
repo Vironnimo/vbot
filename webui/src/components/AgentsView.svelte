@@ -34,6 +34,7 @@
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import SettingsToolLoadingPanel from './settings/SettingsToolLoadingPanel.svelte';
   import SettingsPermissionRulesPanel from './settings/SettingsPermissionRulesPanel.svelte';
+  import SettingsAgentAccessPanel from './settings/SettingsAgentAccessPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -832,6 +833,11 @@
               >
               <Button
                 variant="tertiary"
+                onClick={() => jumpToDefaultsSection('tool_access')}
+                >{t('agents.shared.toolAccessTitle')}</Button
+              >
+              <Button
+                variant="tertiary"
                 onClick={() => jumpToDefaultsSection('tool_loading')}
                 >{t('agents.shared.toolLoadingTitle')}</Button
               >
@@ -876,6 +882,32 @@
                   onCommit={commitSharedSettings}
                   onError={sharedSettingsFailure}
                   {modelsRefreshToken}
+                />
+              </div>
+            </section>
+
+            <section
+              class="s-section"
+              data-settings-section="tool_access"
+              aria-labelledby="agent-shared-tool-access-title"
+            >
+              <header class="s-section__head">
+                <h3
+                  class="s-section__title"
+                  id="agent-shared-tool-access-title"
+                >
+                  {t('agents.shared.toolAccessTitle')}
+                </h3>
+              </header>
+              <p class="s-section__desc">
+                {t('agents.shared.toolAccessDescription')}
+              </p>
+              <div class="s-section__body">
+                <SettingsAgentAccessPanel
+                  settings={sharedSettings}
+                  tools={availableTools}
+                  onCommit={commitSharedSettings}
+                  onError={sharedSettingsFailure}
                 />
               </div>
             </section>
