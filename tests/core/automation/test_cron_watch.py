@@ -125,6 +125,37 @@ async def test_a_watching_job_runs_only_when_its_check_output_changed(
 
 
 @pytest.mark.asyncio
+async def test_a_transient_url_outage_keeps_the_schedule_and_baseline_across_restart(
+    tmp_path: Path, clock: _Clock
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    failure = WatchCheckError("HTTP 429", transient=True, retry_after=120)
+    checks = FakeChecks(["before", failure])
+    job_id = await _watching_job(
+        service, checks, watch=CronWatch.parse("url", "https://example.org")
+    )
+    await service._watcher.fire(service.get_job(job_id))
+    await service._watcher.fire(service.get_job(job_id))
+    recovered, trigger = make_service(tmp_path)
+    responses: list[str | Exception] = [failure] * 5
+    next_checks = FakeChecks([*responses, "after"])
+    recovered.set_watch_checks(next_checks)
+    await recovered._watcher.fire(recovered.get_job(job_id))
+    assert next_checks.calls == []
+    pending = recovered.get_job(job_id)
+    assert recovered.next_fire_at(pending) == (clock.now + timedelta(hours=1)).isoformat()
+    scripted_runs(trigger, (RunStatus.COMPLETED, "changed"))
+    for _ in range(6):
+        pending = recovered.get_job(job_id)
+        assert pending.status == "active" and pending.watch_retry_at
+        clock.now = datetime.fromisoformat(pending.watch_retry_at)
+        await recovered._watcher.fire(pending)
+    assert trigger.trigger_run.await_count == 1
+    assert recovered.get_job(job_id).watch_retry_at is None
+    assert _baseline(recovered, job_id)["output"] == "after"
+
+
+@pytest.mark.asyncio
 async def test_an_always_watch_starts_every_run_with_the_output_and_any_change(
     tmp_path: Path, clock: _Clock
 ) -> None:

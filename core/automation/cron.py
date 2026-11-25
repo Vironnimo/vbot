@@ -71,6 +71,7 @@ from core.automation._cron_jobs import (
     _as_utc,
     _derive_cron_job_name,
     _load_cron_jobs_payload,
+    _parse_utc_timestamp,
     _resolve_timezone,
     _target_validation_error,
     _validate_cron_job_data,
@@ -761,7 +762,12 @@ class CronService:
         """
         reference = reference_time or _timing._utc_now()
         if job.schedule_type != "event":
-            return _schedule.next_fire_at(self._timezone, reference, job)
+            next_fire = _schedule.next_fire_at(self._timezone, reference, job)
+            if next_fire and job.watch_retry_at and job.watch is not None:
+                due_at = _parse_utc_timestamp(next_fire, field_name="next_fire_at")
+                retry_at = _parse_utc_timestamp(job.watch_retry_at, field_name="watch_retry_at")
+                return max(due_at, retry_at).isoformat()
+            return next_fire
         if job.status != "active":
             return None
         event = self._event_binding._bound_event(job)
@@ -1327,6 +1333,9 @@ class CronService:
             candidate.last_checked_at = None
             candidate.last_changed_at = None
             candidate.last_check_error = None
+        if job.watch_retry_at and (watch_changed or job.status != candidate.status):
+            candidate.watch_retry_at = None
+            candidate.consecutive_failures = 0
         if candidate.status == "active" and (
             job.status != "active"
             or watch_changed

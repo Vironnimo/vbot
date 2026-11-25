@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ssl
 from collections.abc import Callable, Container, Iterable, Sequence
 from functools import partial
 from pathlib import Path
@@ -70,6 +71,7 @@ from core.tools.shell import (
 )
 from core.tools.shell_environment import unattended_command_environment
 from core.tools.web_fetch import is_html_page, is_textual_content_type, looks_binary
+from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
@@ -279,7 +281,11 @@ class WatchCheckRunner:
                 client.stream("GET", url) as response,
             ):
                 if not 200 <= response.status_code < 300:
-                    raise WatchCheckError(f"The watched URL answered HTTP {response.status_code}")
+                    raise WatchCheckError(
+                        f"The watched URL answered HTTP {response.status_code}",
+                        transient=is_retryable_status(response.status_code, idempotent=True),
+                        retry_after=parse_retry_after(response.headers),
+                    )
                 content_type = response.headers.get("content-type", "")
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -289,11 +295,14 @@ class WatchCheckRunner:
                 final_url = str(response.url)
         except TimeoutError, httpx.TimeoutException:
             raise WatchCheckError(
-                f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds"
+                f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds",
+                transient=True,
             ) from None
         except httpx.HTTPError as error:
             raise WatchCheckError(
-                f"The watched URL could not be fetched: {str(error) or type(error).__name__}"
+                f"The watched URL could not be fetched: {str(error) or type(error).__name__}",
+                transient=isinstance(error, (httpx.NetworkError, httpx.RemoteProtocolError))
+                and not _certificate_failure(error),
             ) from error
         return await _WORKERS.run(_page_text, bytes(body), content_type, final_url)
 
@@ -310,13 +319,16 @@ class WatchCheckRunner:
                 )
         except TimeoutError:
             raise WatchCheckError(
-                f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds"
+                f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds",
+                transient=True,
             ) from None
         except PermissionDenied as error:
             raise WatchCheckError(_refused(error.refusal)) from error
         except PublicFetchError as error:
             raise WatchCheckError(
-                f"The watched URL could not be fetched: {str(error).rstrip('.')}"
+                f"The watched URL could not be fetched: {str(error).rstrip('.')}",
+                transient=error.retryable,
+                retry_after=error.retry_after,
             ) from error
         content_type = response.headers.get("content-type", "")
         return await _WORKERS.run(_page_text, response.content, content_type, response.url)
@@ -501,6 +513,16 @@ def _whole_characters(content: bytes) -> bytes:
         if error.reason == "unexpected end of data":
             return content[: error.start]
     return content
+
+
+def _certificate_failure(error: BaseException) -> bool:
+    while True:
+        if isinstance(error, ssl.SSLCertVerificationError):
+            return True
+        cause = error.__cause__ or error.__context__
+        if cause is None or cause is error:
+            return False
+        error = cause
 
 
 def _page_text(content: bytes, content_type: str, url: str) -> str:

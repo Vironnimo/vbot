@@ -63,6 +63,11 @@ class WatchCheckError(Exception):
     puts it into failure alerts.
     """
 
+    def __init__(self, message: str, *, transient: bool = False, retry_after: float | None = None):
+        super().__init__(message)
+        self.transient = transient
+        self.retry_after = retry_after
+
 
 class WatchChecks(Protocol):
     """What Cron needs to run a watch check; the Runtime wires the implementation.

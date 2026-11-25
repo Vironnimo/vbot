@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ from core.automation._cron_jobs import (
     CronJob,
     CronStorageError,
     CronWatch,
+    _parse_utc_timestamp,
     _truncate_error,
 )
 from core.automation._cron_watch import (
@@ -178,6 +180,10 @@ class CronWatcher:
             ):
                 return None
             watch = job.watch
+            if job.watch_retry_at and _timing._utc_now() < _parse_utc_timestamp(
+                job.watch_retry_at, field_name="watch_retry_at"
+            ):
+                return None
             target = watch_execution_target(job)
             checked_at = _timing._utc_now_iso()
             baseline = await self._owner._writer.call_async(
@@ -212,6 +218,8 @@ class CronWatcher:
                     job_id,
                     watch,
                     str(error),
+                    transient=watch.kind == "url" and error.transient,
+                    retry_after=error.retry_after,
                     checked_at=checked_at,
                     counts=not first,
                     target=target,
@@ -340,6 +348,7 @@ class CronWatcher:
         if job.last_check_error is not None:
             # The check works again: its failure streak ends.
             job.last_check_error = None
+            job.watch_retry_at = None
             job.consecutive_failures = 0
             end_failure_alert(job)
         await self._owner._execution._save_jobs_after_fire(job_id)
@@ -353,15 +362,27 @@ class CronWatcher:
         checked_at: str,
         counts: bool,
         target: str | None,
+        transient: bool = False,
+        retry_after: float | None = None,
     ) -> None:
         job = self._owner._jobs.get(job_id)
         if job is None or not self._still_watching(job_id, watch, target):
             return
+        if (job.watch_retry_at is not None) != transient:
+            job.consecutive_failures = 0
         baseline = self._owner._execution._failure_baseline(job_id)
         job.last_checked_at = checked_at
         job.last_check_error = _truncate_error(self._owner._secret_masker().mask(message))
-        if counts:
-            _count_consecutive_failure(job)
+        if transient:
+            job.consecutive_failures += int(counts)
+            delay = max(
+                _timing._once_retry_delay(job.consecutive_failures), min(retry_after or 0, 86400)
+            )
+            job.watch_retry_at = (_timing._utc_now() + timedelta(seconds=delay)).isoformat()
+        else:
+            job.watch_retry_at = None
+            if counts:
+                _count_consecutive_failure(job)
         _LOGGER.warning(
             "Cron watch check failed (job=%s failures=%d first=%s)",
             job_id,

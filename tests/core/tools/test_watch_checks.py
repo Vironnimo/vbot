@@ -276,26 +276,29 @@ async def test_a_watched_url_answers_with_its_main_text(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("transport", "problem"),
+    ("transport", "problem", "transient"),
     [
-        pytest.param(_page(503, "text/plain", b"down"), "answered HTTP 503", id="status"),
+        pytest.param(_page(503, "text/plain", b"down"), "answered HTTP 503", True, id="status"),
         pytest.param(
             _page(200, "image/png", b"\x89PNG\r\n\x1a\n\x00"),
             "answered with image/png, not text",
+            False,
             id="binary",
         ),
         pytest.param(
             httpx.MockTransport(_refuse),
             "could not be fetched: refused",
+            True,
             id="unreachable",
         ),
     ],
 )
 async def test_a_watched_url_fails_with_what_went_wrong(
-    tmp_path: Path, transport: httpx.MockTransport, problem: str
+    tmp_path: Path, transport: httpx.MockTransport, problem: str, transient: bool
 ) -> None:
-    with pytest.raises(WatchCheckError, match=problem):
+    with pytest.raises(WatchCheckError, match=problem) as failed:
         await _runner(tmp_path, transport=transport).fetch_url("https://status.example/")
+    assert failed.value.transient is transient
 
 
 @pytest.mark.asyncio
