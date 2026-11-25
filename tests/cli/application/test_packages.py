@@ -551,6 +551,68 @@ def _active_install(tmp_path: Path, channel: str, active: dict[str, str]) -> Ins
 
 
 @pytest.mark.parametrize(
+    "recovery", ["range", "replaced", "invalid-range", "weak-validator", "unsatisfiable"]
+)
+def test_interrupted_release_download_resumes_only_a_matching_asset(
+    tmp_path: Path, recovery: str
+) -> None:
+    respx = pytest.importorskip("respx")
+    install = _active_install(tmp_path, "release", {"version": "0.9.0", "channel": "release"})
+    archive = package_name("server")
+    base = f"{_DOWNLOADS}/download/v1.0.0"
+    requests: list[tuple[str | None, str | None]] = []
+
+    class BrokenBody(httpx.SyncByteStream):
+        @override
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"abc"
+            raise httpx.ReadError("connection dropped")
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        requests.append((request.headers.get("range"), request.headers.get("if-range")))
+        assert request.headers["accept-encoding"] == "identity"
+        if len(requests) == 1:
+            tag = 'W/"old"' if recovery == "weak-validator" else '"old"'
+            return httpx.Response(
+                200, headers={"ETag": tag, "Content-Length": "6"}, stream=BrokenBody()
+            )
+        if len(requests) == 2 and recovery == "unsatisfiable":
+            return httpx.Response(416)
+        if len(requests) == 2 and recovery in ("range", "invalid-range"):
+            return httpx.Response(
+                206,
+                headers={
+                    "ETag": '"old"',
+                    "Content-Range": "bytes 3-5/6" if recovery == "range" else "bytes 2-4/6",
+                },
+                content=b"def",
+            )
+        return httpx.Response(200, headers={"ETag": '"new"'}, content=b"new file")
+
+    with respx.mock() as router:
+        router.get(f"{install.download_base}/{RELEASE_IDENTITY_ASSET}").respond(
+            json={
+                "schema_version": 1,
+                "version_id": "rel_newer",
+                "version": "1.0.0",
+                "channel": "release",
+            }
+        )
+        router.get(f"{base}/{archive}").mock(side_effect=serve)
+        router.get(f"{base}/{archive}.sig").respond(content=b"signature")
+        path = download_release(install, "upd_resume")
+    assert path is not None
+    assert path.read_bytes() == (b"abcdef" if recovery == "range" else b"new file")
+    expected = [
+        (None, None),
+        (None, None) if recovery == "weak-validator" else ("bytes=3-", '"old"'),
+    ]
+    if recovery in ("invalid-range", "unsatisfiable"):
+        expected.append((None, None))
+    assert requests == expected
+
+
+@pytest.mark.parametrize(
     ("channel", "identity_channel", "published", "version", "package_published"),
     [
         pytest.param("release", "release", "rel_active", "1.0.0", True, id="already-active"),
