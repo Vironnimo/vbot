@@ -53,6 +53,7 @@ export default Object.freeze({
   'approvals.need.write': 'Write to',
   'approvals.need.startDir': 'Work in',
   'approvals.need.command': 'Run',
+  'approvals.need.credential': 'Use credential',
   'approvals.need.connect': 'Connect to',
   'approvals.need.web': 'Open',
   'approvals.need.url': 'Open',

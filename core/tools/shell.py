@@ -317,14 +317,18 @@ class ShellTool:
             withheld=withheld,
             secret_targets=secret_targets,
         )
-        secret_names = {
-            *(name for key in call.secret_keys for name in secret_targets[key.upper()]),
-            *(name for name, _ in call.secret_variables),
-        }
-        opaque_names = secret_names.union(call.credential_names)
+        credential_sources = {name: name for name in call.credential_names}
+        for key in call.secret_keys:
+            for name, labels in secret_targets[key.upper()].items():
+                credential_sources[name] = "{{secret:" + labels[0] + "}}"
+        credential_sources.update(call.secret_variables)
+        opaque_names = set(credential_sources)
         if confined:
             _check_environment_names(call.variables, opaque_names)
         scratch = await self._scratch(context)
+        if scratch is not None:
+            call = call.with_scratch(scratch, opaque_names)
+        object.__setattr__(context, "shell_credential_sources", tuple(credential_sources.items()))
         uses_cli = False
         if confined:
             # Before any Agent Secret is used and before a command grant exists.

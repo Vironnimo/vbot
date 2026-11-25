@@ -348,10 +348,36 @@ async def test_agent_secrets_reach_only_the_command_environment(
     )
     analyzer = FakeAnalyzer(plan("login"))
     permissions = restricted(tmp_path) if confined else PermissionBoundary.UNRESTRICTED
+    scratch = ScratchAreas(
+        tmp_path,
+        identity=lambda _addr: "generation",
+        ancestors=lambda _addr: (),
+        busy_sessions=lambda: (),
+    )
+    reviewed: list[dict[str, str]] = []
+
+    async def review(context: ToolContext, _arguments: JsonObject, **_prepared: Any) -> bool:
+        # The reviewer cannot clear the source bindings later shown by the approval card.
+        clear = getattr(context.shell_credential_sources, "clear", None)
+        if clear:
+            clear()
+        reviewed.append(dict(context.shell_credential_sources))
+        assert secrets.recent_uses(secret.id) == []
+        return True
+
     async with started_shell(
-        tmp_path, secrets=secrets, analyzer=analyzer, permissions=permissions
+        tmp_path,
+        secrets=secrets,
+        analyzer=analyzer,
+        permissions=permissions,
+        review_shell=review,
+        scratch_areas=scratch,
     ) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        shadowed = await shell.call(
+            {"command": "login", "env": {"TMPDIR": "{{secret:GITHUB.password}}"}}
+        )
+        assert shadowed["error"]["code"] == "invalid_arguments"
         conflicts = [("API_TOKEN", "API_TOKEN"), ("GITHUB_USERNAME", "GITHUB")]
         if sys.platform == "win32":
             conflicts.append(("api_token", "API_TOKEN"))
@@ -438,6 +464,14 @@ async def test_agent_secrets_reach_only_the_command_environment(
         "hunter2-very-secret",
     )
     assert env["DOC"] == "{{secret:A}} b"
+    assert reviewed == [
+        {
+            "API_TOKEN": "API_TOKEN",
+            "GITHUB_USERNAME": "{{secret:GITHUB.username}}",
+            "GITHUB_PASSWORD": "{{secret:GITHUB}}",
+            "PGPASSWORD": "{{secret:GITHUB.password}}",
+        }
+    ]
     # A credential a command received is masked from then on, like a Secret.
     assert secrets.masker.mask("value-of-API_TOKEN") == "[redacted]"
 
@@ -599,12 +633,17 @@ async def test_each_command_launch_ensures_its_sessions_scratch_tmp(
         busy_sessions=lambda: (),
     )
     ordinary_environment = terminal_environment()
+    temp_name = "Temp" if sys.platform == "win32" else "TEMP"
+    variable = {temp_name: "requested-tmp"}
     async with started_shell(tmp_path, scratch_areas=scratch_areas) as shell:
         for count in (1, 2):
-            result = data(await shell.call({"command": "build", "run_in_background": True}))
+            result = data(
+                await shell.call({"command": "build", "env": variable, "run_in_background": True})
+            )
             assert result["status"] == "running"
             _command, environment = launched(shell.launcher, count - 1)
             if scratch_available:
+                assert any(temp_name in note for note in result["notes"])
                 own = Path(environment["VBOT_SCRATCH_DIR"])
                 for name in ("TEMP", "TMP", "TMPDIR"):
                     assert Path(environment[name]) == own / "tmp"
@@ -613,7 +652,9 @@ async def test_each_command_launch_ensures_its_sessions_scratch_tmp(
                 (own / "tmp").rmdir()
             else:
                 assert "VBOT_SCRATCH_DIR" not in environment
-                for name in ("TEMP", "TMP", "TMPDIR"):
+                assert environment["TEMP"] == "requested-tmp"
+                assert not result.get("notes")
+                for name in ("TMP", "TMPDIR"):
                     assert environment.get(name) == ordinary_environment.get(name)
             if sys.platform == "win32":
                 assert "VBOT_SCRATCH_DIR" not in shell.launcher.envs[-1]

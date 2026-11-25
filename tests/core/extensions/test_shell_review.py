@@ -50,10 +50,12 @@ async def test_review_cannot_rewrite_the_command_or_its_one_time_approval(tmp_pa
         (
             "request['command'] = 'changed-command'\n"
             "request['evidence']['environment']['PUBLIC_PATH'] = 'changed-path'\n"
+            "request['evidence']['credential_sources'].clear()\n"
             "return {'decision': 'ask'}"
         ),
     )
     context = SimpleNamespace(
+        shell_credential_sources=(("API_TOKEN", "API_TOKEN"),),
         invocation_approved=Mock(return_value=False),
         request_approval=AsyncMock(return_value=True),
         revalidate_permissions=AsyncMock(),
@@ -63,6 +65,7 @@ async def test_review_cannot_rewrite_the_command_or_its_one_time_approval(tmp_pa
     target = json.loads(call.args[1][0].target)
     assert target["command"] == "original-command"
     assert target["evidence"]["environment"] == {"PUBLIC_PATH": "original-path"}
+    assert target["evidence"]["credential_sources"] == {"API_TOKEN": "API_TOKEN"}
     assert call.kwargs["arguments"]["command"] == "original-command"
     context.revalidate_permissions.assert_awaited_once()
 
@@ -84,6 +87,7 @@ async def test_no_unusable_or_retired_judgment_can_bypass_confirmation(
 ) -> None:
     registry = _registry(tmp_path, body)
     context = SimpleNamespace(
+        shell_credential_sources={},
         invocation_approved=Mock(return_value=False),
         registry=registry,
         request_approval=AsyncMock(return_value=False),
@@ -108,6 +112,7 @@ async def test_inactive_reviewers_and_valid_allows_need_no_confirmation(
 ) -> None:
     registry = _registry(tmp_path, body, active=active)
     context = SimpleNamespace(
+        shell_credential_sources={},
         invocation_approved=Mock(return_value=False),
         request_approval=AsyncMock(),
         revalidate_permissions=AsyncMock(),
@@ -134,6 +139,7 @@ async def test_caller_cancellation_never_becomes_a_confirmation_request(tmp_path
         ),
     )
     context = SimpleNamespace(
+        shell_credential_sources={},
         invocation_approved=Mock(return_value=False),
         entered=asyncio.Event(),
         finished=asyncio.Event(),

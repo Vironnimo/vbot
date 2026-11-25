@@ -180,6 +180,15 @@
     {/if}
   </div>
   <ul class="approval-card__needs">
+    {#each Object.entries(request.shell_credential_sources ?? {}) as [name, source] (name)}
+      <li>
+        <span class="approval-card__verb">{t('approvals.need.credential')}</span
+        >
+        <code class="approval-card__target"
+          >{name === source ? name : `${name} ← ${source}`}</code
+        >
+      </li>
+    {/each}
     {#each request.requirements ?? [] as requirement, index (index)}
       <li>
         {#if requirement.permission_profile}

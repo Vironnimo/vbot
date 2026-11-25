@@ -40,13 +40,15 @@ async def review_shell(
     if context.invocation_approved(arguments, cwd=cwd):
         await context.revalidate_permissions()
         return True
-    prepared = {
+    prepared: dict[str, Any] = {
         "platform": "windows" if sys.platform == "win32" else "linux",
         "shell": shell,
         "cwd": cwd.as_posix(),
         "command": command,
         "evidence": {"environment": dict(environment)},
     }
+    if context.shell_credential_sources:
+        prepared["evidence"]["credential_sources"] = dict(context.shell_credential_sources)
     needs_approval = False
     reviewed = False
     for record in registry.records():

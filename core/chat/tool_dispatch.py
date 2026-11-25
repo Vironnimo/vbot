@@ -142,6 +142,8 @@ class ToolRound:
                 "session_grant": suggestion.to_dict() if suggestion is not None else None,
             }
 
+            if tool_context.shell_credential_sources:
+                payload["shell_credential_sources"] = dict(tool_context.shell_credential_sources)
             safe_payload = _leaving_call(
                 self._registry.secret_masker_for(tool_context),
                 tool_context.mask_prepared_secrets(payload),

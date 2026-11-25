@@ -18,7 +18,7 @@ import re
 import shlex
 import sys
 from collections.abc import Container, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -48,8 +48,10 @@ from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
+from core.tools.scratch_areas import ScratchFolder
 from core.tools.shell_environment import (
     inherited_value,
+    scratch_environment,
 )
 from core.tools.tools import (
     JsonObject,
@@ -684,6 +686,24 @@ class _ShellCall:
     secret_keys: tuple[str, ...] = ()
     secret_variables: tuple[tuple[str, str], ...] = ()
     inherited_variables: tuple[str, ...] = ()
+
+    def with_scratch(self, scratch: ScratchFolder, opaque_names: set[str]) -> _ShellCall:
+        reserved = scratch_environment(scratch)
+        for name in sorted(opaque_names):
+            if environment_name(name) in reserved:
+                raise _call_error(
+                    f"the Session's Scratch folder sets {name}. "
+                    "Use a different variable name for the credential or Secret."
+                )
+        overrides = {
+            name: reserved[key]
+            for name, value in self.variables.items()
+            if (key := environment_name(name)) in reserved and value != reserved[key]
+        }
+        if not overrides:
+            return self
+        note = f"The Session's Scratch folder overrides env for {', '.join(overrides)}."
+        return replace(self, variables=self.variables | overrides, notes=(*self.notes, note))
 
 
 def _call_error(problem: str) -> ToolContractError:
