@@ -51,6 +51,7 @@ from core.model_tasks import (
 )
 from core.models.pricing import TokenPricing
 from core.providers.errors import ProviderAuthError
+from core.providers.task_client import TaskRequestRoute
 from core.recall.canonical import RecallScope
 from core.recall.passage_index import (
     IndexCounts,
@@ -213,9 +214,18 @@ class _SpaceMovedError(Exception):
 class _BatchOutcome:
     embedded: int = 0
     largest_request: int = 0
+    routes: set[TaskRequestRoute | None] = field(default_factory=set)
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
     rejected: dict[str, str] = field(default_factory=dict)
     first_rejection: _Classified | None = None
+
+
+@dataclass(frozen=True)
+class _BatchHint:
+    binding: VectorHeader
+    route: TaskRequestRoute
+    limit: int
+    expires: float
 
 
 @dataclass
@@ -276,7 +286,7 @@ class SemanticIndexer:
         self._run_debounce_s = run_debounce_s
         self._sweep_interval_s = sweep_interval_s
         self._batch_size = batch_size
-        self._batch_hint: tuple[VectorHeader, int, float] | None = None
+        self._batch_hint: _BatchHint | None = None
         self._enabled = False
         self._pass_revision = 0
         self._rebuild_lock = asyncio.Lock()
@@ -628,8 +638,16 @@ class SemanticIndexer:
         while self._enabled and not self._closed:
             hint = self._batch_hint
             limit = batch_size
-            if hint and hint[0] == binding and hint[2] > self._monotonic():
-                limit = min(limit, hint[1])
+            if (
+                hint
+                and self._embeddings is not None
+                and hint.binding == binding
+                and hint.expires > self._monotonic()
+            ):
+                if hint.route == await asyncio.to_thread(self._embeddings.document_batch_route):
+                    limit = min(limit, hint.limit)
+                else:
+                    self._batch_hint = None
             batch = await self._index.pending_texts(limit=limit)
             self._require_current_pass(totals.revision)
             if not batch:
@@ -663,9 +681,13 @@ class SemanticIndexer:
                         ):
                             raise _SpaceMovedError()
                     totals.skipped += len(outcome.rejected)
-                elif not totals.local and outcome.largest_request < len(batch):
-                    # All texts from the rejected batch succeeded in smaller requests.
-                    self._batch_hint = (binding, outcome.largest_request, self._monotonic() + 86400)
+                elif outcome.largest_request < len(batch) and len(outcome.routes) == 1:
+                    # All texts from the rejected batch succeeded on the very same endpoint/account.
+                    route = next(iter(outcome.routes))
+                    if route is not None:
+                        self._batch_hint = _BatchHint(
+                            binding, route, outcome.largest_request, self._monotonic() + 86400
+                        )
             except _SpaceMovedError:
                 totals.moved_space()
                 header = await self._pinned(binding)
@@ -763,6 +785,7 @@ class SemanticIndexer:
                 if outcome.first_rejection is None:
                     outcome.first_rejection = classified
                 return header
+            outcome.routes.add(getattr(error, "request_route", None))
             middle = len(items) // 2
             header = await self._embed(binding, header, items[:middle], outcome, totals)
             return await self._embed(binding, header, items[middle:], outcome, totals)
@@ -799,6 +822,7 @@ class SemanticIndexer:
                 header, vectors, usage=result.usage, characters=characters
             ):
                 raise _SpaceMovedError()
+        outcome.routes.add(result.request_route)
         outcome.largest_request = max(outcome.largest_request, len(items))
         outcome.embedded += len(items)
         return header

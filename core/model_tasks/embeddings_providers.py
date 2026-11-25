@@ -41,8 +41,7 @@ from core.model_tasks.options import (
     validate_text_embedding_options,
 )
 from core.providers.errors import ProviderError
-from core.providers.http import ProviderHTTPTransportScope
-from core.providers.task_client import ProviderTaskClient, merge_extra_options
+from core.providers.task_client import ProviderTaskClient, TaskRequestRoute, merge_extra_options
 
 JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
@@ -104,7 +103,7 @@ class ProviderEmbeddingResponse:
 class EmbeddingEncodingPreference:
     """Last endpoint and authenticated transport to accept its default vector encoding."""
 
-    route: tuple[str, str, ProviderHTTPTransportScope | None] | None = None
+    route: TaskRequestRoute | None = None
     expires: float = 0
 
 
@@ -183,7 +182,7 @@ class ProviderEmbeddingClient(ProviderTaskClient):
             options,
             input_type=input_type,
         )
-        route = (self._base_url, self._model_id, self._http_transport)
+        route = self.request_route
         omitted = (
             encoding_preference is not None
             and encoding_preference.route == route

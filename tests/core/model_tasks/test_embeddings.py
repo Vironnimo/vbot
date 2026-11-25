@@ -70,6 +70,8 @@ class _ModelTasks:
 class _FakeProviderClient:
     """Records every ``embed`` call and returns or raises the configured result."""
 
+    request_route = ("https://test.invalid", "embedding-model", None)
+
     def __init__(
         self,
         *,

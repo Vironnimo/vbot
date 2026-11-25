@@ -92,6 +92,8 @@ class _Embeddings(StubEmbeddings):
             if failure is not None:
                 self.embed_calls.append(list(texts))
                 self.embed_purposes.append(purpose)
+                if isinstance(failure, EmbeddingExecutionError):
+                    failure.request_route = self.document_batch_route()
                 raise failure
             result = await super().embed(texts, purpose=purpose)
         finally:
@@ -508,6 +510,12 @@ async def test_accepted_halves_set_size_for_later_batches_and_passes(
     embeddings.embed_calls.clear()
     await indexer.run_pass()
     assert [len(call) for call in embeddings.embed_calls] == [2, 2]
+    embeddings.endpoint = "https://new.invalid"
+    embeddings.reject = None
+    for day in range(17, 21):
+        _conversation(sessions, f"day-{day}", f"fruit {day}", day)
+    await indexer.run_pass()
+    assert len(embeddings.embed_calls[-1]) == 4
 
 
 async def test_batch_whose_every_text_fails_alone_stops_without_skipping(
@@ -548,6 +556,8 @@ async def test_an_inflight_failure_cannot_change_a_new_pass(
                 sent.set()
                 await release.wait()
             if attempts == 1 or (change == "repin" and attempts == 2):
+                if isinstance(failure, EmbeddingExecutionError):
+                    failure.request_route = self.document_batch_route()
                 raise failure
             return await super().embed(texts, purpose=purpose)
 

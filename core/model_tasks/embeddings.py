@@ -49,7 +49,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.task_client import TaskClientRuntime
+from core.providers.task_client import TaskClientRuntime, TaskRequestRoute
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
@@ -75,6 +75,8 @@ class EmbeddingUnsupportedTargetError(EmbeddingError):
 
 class EmbeddingExecutionError(EmbeddingError):
     """Raised when a provider embedding request fails."""
+
+    request_route: TaskRequestRoute | None = None
 
 
 class EmbeddingInputTooLongError(EmbeddingExecutionError):
@@ -125,6 +127,7 @@ class EmbeddingResult:
     space_fingerprint: str = ""
     response_model_id: str = ""
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
+    request_route: TaskRequestRoute | None = None
 
     @property
     def actual_model_id(self) -> str:
@@ -249,6 +252,7 @@ class EmbeddingService:
         if availability is None or availability.space != identity.fingerprint:
             availability = self._availability = _EmbeddingAvailability(identity.fingerprint)
         availability.begin()
+        route: TaskRequestRoute | None = None
         probing = availability.probing
         revision = availability.revision
         try:
@@ -262,6 +266,7 @@ class EmbeddingService:
                 # Settings can change after binding validation and before the
                 # factory resolves the Provider, Connection and credentials.
                 raise EmbeddingConfigurationError(str(exc)) from exc
+            route = provider_client.request_route
             response = await provider_client.embed(
                 request.inputs,
                 options=options,
@@ -280,7 +285,9 @@ class EmbeddingService:
                 target_ref.model_id,
                 exc,
             )
-            raise EmbeddingExecutionError(str(exc)) from exc
+            failure = EmbeddingExecutionError(str(exc))
+            failure.request_route = route
+            raise failure from exc
         except Exception as exc:
             _LOGGER.error(
                 "Embedding request raised unexpected error for provider=%s model=%s",
@@ -310,6 +317,7 @@ class EmbeddingService:
             space_fingerprint=identity.fingerprint,
             response_model_id=response.model_id or target_ref.model_id,
             usage=response.usage,
+            request_route=route,
         )
 
     def resolve_space(self) -> EmbeddingSpaceIdentity:
@@ -327,6 +335,14 @@ class EmbeddingService:
         if target_ref.kind == "local":
             return self._local_space_identity(target_ref)
         return self._space_identity(target_ref, options)
+
+    def document_batch_route(self) -> TaskRequestRoute | None:
+        """Resolve the current target without an HTTP request before reusing a batch hint."""
+        with suppress(KeyError, VBotError):
+            _binding, _options, target = self._resolver.resolve(TASK_TEXT_EMBEDDING)
+            if target.kind != "local":
+                return ProviderEmbeddingClient.from_runtime(self._runtime, target).request_route
+        return None
 
     def document_batch_size(self) -> int | None:
         """Texts per document request the configured target handles well.
