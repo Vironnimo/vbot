@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from PIL import Image
 
 import core.channels.discord as discord_module
 from core.attachments import AttachmentStore, AttachmentTooLargeError
@@ -157,6 +159,82 @@ async def test_file_retry_recreates_consumed_sdk_file_handles(
         assert len(uploads) == 2
         assert uploads[0] is not uploads[1]
         assert all(uploaded.fp.closed for uploaded in uploads)
+    finally:
+        await h.adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_upload_fits_a_copy_only_after_413_and_expires_on_a_guild_limit_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_discord_errors(monkeypatch)
+    guild = SimpleNamespace(id=1, filesize_limit=800)
+    target = FakeChannel(100, guild=guild)
+    harness = make_adapter(tmp_path, target=target)
+    original = io.BytesIO()
+    Image.new("RGB", (40, 40), "blue").save(original, format="BMP")
+    file = FileData("map.bmp", "image/bmp", original.getvalue())
+    attempts: list[tuple[str, bytes]] = []
+
+    async def send(**payload: Any) -> None:
+        upload = payload["files"][0]
+        data = upload.fp.read()
+        attempts.append((upload.filename, data))
+        assert payload["content"] == "map"
+        if len(data) > guild.filesize_limit:
+            raise _FakeHTTPError(413)
+
+    monkeypatch.setattr(target, "send", send)
+    try:
+        await harness.adapter.send("map", "100", files=[file])
+        await harness.adapter.send("map", "100", files=[file])
+        guild.filesize_limit = 8192
+        await harness.adapter.send("map", "100", files=[file])
+        assert [name for name, _ in attempts] == ["map.bmp", "map.png", "map.png", "map.bmp"]
+        assert len(attempts[1][1]) <= 800
+        assert attempts[0][1] == attempts[-1][1] == original.getvalue() == file.data
+    finally:
+        await harness.adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_rejected_discord_batch_preserves_animation_and_never_replays_a_posted_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_discord_errors(monkeypatch)
+    target = FakeChannel(100, guild=SimpleNamespace(id=1, filesize_limit=4096))
+    h = make_adapter(tmp_path, target=target)
+    original = io.BytesIO()
+    Image.new("RGB", (20, 20), "red").save(
+        original,
+        "GIF",
+        save_all=True,
+        append_images=[Image.new("RGB", (20, 20), "blue")],
+        duration=100,
+    )
+    animated = original.getvalue()
+    calls: list[tuple[Any, Any]] = []
+
+    async def send(**payload: Any) -> None:
+        files = [(f.filename, f.fp.read()) for f in payload["files"]]
+        calls.append((payload.get("content"), files))
+        if len(files) > 1 or files[0][0] == "movie.gif":
+            raise _FakeHTTPError(413)
+
+    monkeypatch.setattr(target, "send", send)
+    files = [
+        FileData("notes.txt", "text/plain", b"hi"),
+        FileData("movie.gif", "image/gif", animated),
+    ]
+    try:
+        with pytest.raises(ChannelError) as failure:
+            await h.adapter.send("caption", "100", files=files)
+        assert failure.value.possibly_delivered
+        assert calls == [
+            ("caption", [("notes.txt", b"hi"), ("movie.gif", animated)]),
+            ("caption", [("notes.txt", b"hi")]),
+            (None, [("movie.gif", animated)]),
+        ]
     finally:
         await h.adapter.stop()
 
