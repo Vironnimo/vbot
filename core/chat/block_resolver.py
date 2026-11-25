@@ -703,7 +703,9 @@ class ContentBlockResolver:
         self, attachment_id: str, generation_id: str | None = None
     ) -> AttachmentRecord | None:
         try:
-            return self._attachment_store.get(attachment_id, generation_id=generation_id)
+            if generation_id is None:
+                return self._attachment_store.get(attachment_id)
+            return self._attachment_store.get_for_session(attachment_id, generation_id)
         except (AttachmentError, OSError) as exc:
             if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
                 raise AttachmentResolveError(

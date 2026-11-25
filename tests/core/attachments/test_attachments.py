@@ -585,7 +585,7 @@ def test_session_attachment_paths_refuse_a_redirected_generation(tmp_path: Path)
     except OSError:
         pytest.skip("symlink creation is unavailable")
     with pytest.raises(OSError):
-        store.get(record.id, generation_id="second")
+        store.get_for_session(record.id, "second")
     assert first.read_bytes() == b"session report"
 
 

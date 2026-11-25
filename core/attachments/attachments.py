@@ -322,14 +322,14 @@ class AttachmentStore:
 
         return await _STORE_WORKERS.run(self.store, filename, data)
 
-    def get(self, attachment_id: str, *, generation_id: str | None = None) -> AttachmentRecord:
-        """Load a record, presenting a Session-readable copy when a Session is given."""
-        record = self._get_record(attachment_id, require_blob=True)
-        if generation_id is not None:
-            return replace(
-                record, file_path=str(record.session_path(self._data_dir, generation_id))
-            )
-        return record
+    def get(self, attachment_id: str) -> AttachmentRecord:
+        """Load the canonical attachment record and verify its blob."""
+        return self._get_record(attachment_id, require_blob=True)
+
+    def get_for_session(self, attachment_id: str, generation_id: str) -> AttachmentRecord:
+        """Return the record with a file path readable by the receiving Session."""
+        record = self.get(attachment_id)
+        return replace(record, file_path=str(record.session_path(self._data_dir, generation_id)))
 
     async def get_async(self, attachment_id: str) -> AttachmentRecord:
         """Event-Loop-safe :meth:`get`, run on the ``attachments`` worker pool."""
