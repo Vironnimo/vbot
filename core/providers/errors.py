@@ -163,6 +163,10 @@ def context_overflow_error(
     return None
 
 
+class ProviderInBandError(ProviderError):
+    """The wire reported a rejected request inside a successful HTTP exchange."""
+
+
 class ProviderStreamingUnsupportedError(ProviderError):
     """The provider/model cannot serve this request as a stream.
 
@@ -175,6 +179,10 @@ class ProviderStreamingUnsupportedError(ProviderError):
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=False)
+
+
+class ProviderRouteStreamingUnsupportedError(ProviderStreamingUnsupportedError):
+    """An unconditional refusal to stream on this account and route."""
 
 
 class ProviderRateLimitError(ProviderError):
@@ -446,6 +454,11 @@ def classify_in_band_error_type(
 
     def _build(retryable: bool) -> ProviderError:
         provider_error = ProviderError(message, retryable=retryable)
+        if (
+            classifier in {"invalid_request_error", "invalid_argument", "invalid_request"}
+            and numeric_code is None
+        ):
+            provider_error._in_band_request_rejection = True
         # A router can report a rejected HTTP-like request inside a successful
         # stream. Preserve that evidence for request repair, even when router
         # leniency otherwise allows retrying this unclassified error.

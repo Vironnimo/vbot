@@ -32,13 +32,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import aclosing
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
 from core.models.models import Model
+from core.providers._chat_completions_constants import OUTPUT_LIMIT_PARAMETER_NAMES
+from core.providers._local_load import learned_window, request_floor
 from core.providers._ollama_catalog import (
     _capability_names,
     _enrich_from_show,
@@ -67,18 +71,21 @@ from core.providers._ollama_wire import (
     _extract_ollama_usage,
     _find_ollama_reasoning,
     _normalize_ollama_done_reason,
-    _ollama_image_count,
     _ollama_openai_base_url,
     _ollama_stream_tool_calls,
     _to_ollama_messages,
 )
-from core.providers._wire_learning import learn_image_limit
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import NetworkError, ProviderError, ProviderInBandError
 from core.providers.http import (
+    PreparedRequest,
     RequestPlan,
     build_async_client,
     classify_http_status,
@@ -87,7 +94,6 @@ from core.providers.http import (
     iter_stream_lines,
     json_body_headers,
     parse_sse_json_data,
-    prepare_request,
     wrap_network_error,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -388,7 +394,14 @@ class OllamaAdapter(ProviderAdapter):
         options: dict[str, Any] = {}
         merged_defaults = dict(self._config.defaults or {})
         merged_defaults.update(request_kwargs)
-        if request_kwargs.get("max_tokens") is None and rules.output_limit_default is not None:
+        explicit_limits = [
+            request_kwargs[key]
+            for key in OUTPUT_LIMIT_PARAMETER_NAMES
+            if type(request_kwargs.get(key)) is int
+        ]
+        if explicit_limits:
+            merged_defaults["max_tokens"] = min(explicit_limits)
+        elif rules.output_limit_default is not None:
             merged_defaults["max_tokens"] = rules.output_limit_default
         for kwarg_name, option_name in _OPTION_KWARG_MAP.items():
             value = merged_defaults.get(kwarg_name)
@@ -427,7 +440,24 @@ class OllamaAdapter(ProviderAdapter):
             payload["stream"] = stream
             return payload
 
-        return RequestPlan(build=build, body_limit=self.request_body_limit(model_id))
+        return RequestPlan(
+            build=build,
+            body_limit=self.request_body_limit(model_id),
+            local_load_floor=lambda rendered: request_floor(
+                self, model_id, messages, kwargs, rendered
+            ),
+        )
+
+    @override
+    def reported_context_window(self, model_id: str) -> int | None:
+        known = learned_window(self.wire, model_id, self._resolve_enforced_context(model_id))
+        stated = super().reported_context_window(model_id)
+        return min(known, stated) if known and stated else known or stated
+
+    @override
+    def admission_context_window(self, model_id: str) -> int | None:
+        # Ollama can renegotiate num_ctx with the next request.
+        return super().reported_context_window(model_id)
 
     def _resolve_enforced_context(self, model_id: str) -> int | None:
         """Return the enforced ``num_ctx`` for flagged-local models, else ``None``."""
@@ -494,12 +524,9 @@ class OllamaAdapter(ProviderAdapter):
         """
 
         request_headers = self._stable_request_headers(model_id, kwargs)
-        request = await prepare_request(
-            self._request_plan(messages, model_id, kwargs, stream=False)
-        )
         reasoning_fields = self._reasoning_fields(model_id)
 
-        async def _do_request() -> dict[str, Any]:
+        async def _do_request(request: PreparedRequest) -> dict[str, Any]:
             headers = await self._build_headers()
             headers.update(request_headers)
             try:
@@ -517,6 +544,8 @@ class OllamaAdapter(ProviderAdapter):
                     response_headers=response.headers,
                 )
             parsed = dict(decode_response_json(response, "Ollama provider"))
+            if error := parsed.get("error"):
+                raise ProviderInBandError(str(error), retryable=False)
             message = parsed.get("message")
             found = (
                 _find_ollama_reasoning(message, reasoning_fields)
@@ -527,14 +556,16 @@ class OllamaAdapter(ProviderAdapter):
                 self.wire.observe_reasoning_field(model_id, found[0])
             return parsed
 
-        try:
-            return await retry_async(_do_request)
-        except ProviderError as error:
-            image_count = _ollama_image_count(request.payload)
-            learned = learn_image_limit(error, image_count, wire=self.wire, model_id=model_id)
-            if learned is not None:
-                raise learned from error
-            raise
+        async def attempt(request: PreparedRequest) -> dict[str, Any]:
+            return await retry_async(partial(_do_request, request))
+
+        return await execute_learning_from_rejections(
+            attempt,
+            self._request_plan(messages, model_id, kwargs, stream=False),
+            wire=self.wire,
+            model_id=model_id,
+            provider_label="Ollama",
+        )
 
     # ------------------------------------------------------------------
     # stream() — NDJSON streaming
@@ -556,7 +587,22 @@ class OllamaAdapter(ProviderAdapter):
         """
 
         request_headers = self._stable_request_headers(model_id, kwargs)
-        request = await prepare_request(self._request_plan(messages, model_id, kwargs, stream=True))
+        plan = self._request_plan(messages, model_id, kwargs, stream=True)
+        async with aclosing(
+            stream_learning_from_rejections(
+                lambda request: self._stream_request(request, model_id, request_headers),
+                plan,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label="Ollama",
+            )
+        ) as events:
+            async for event in events:
+                yield event
+
+    async def _stream_request(
+        self, request: PreparedRequest, model_id: str, request_headers: Mapping[str, str]
+    ) -> AsyncGenerator[dict[str, Any]]:
 
         async def _build_headers() -> dict[str, str]:
             headers = await self._build_headers()
@@ -575,30 +621,19 @@ class OllamaAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        image_count = _ollama_image_count(request.payload)
-        try:
-            response = await connect_streaming_with_retry(
-                self._client,
-                CHAT_ENDPOINT,
-                request.body,
-                build_headers=_build_headers,
-                handle_error_status=_handle_error_status,
-                wrap_transport_error=self._wrap_transport_error,
-            )
-        except ProviderError as error:
-            learned = learn_image_limit(error, image_count, wire=self.wire, model_id=model_id)
-            if learned is not None:
-                raise learned from error
-            raise
-        # The established stream never sends the request again.
-        request.release()
-
+        response = await connect_streaming_with_retry(
+            self._client,
+            CHAT_ENDPOINT,
+            request.body,
+            build_headers=_build_headers,
+            handle_error_status=_handle_error_status,
+            wrap_transport_error=self._wrap_transport_error,
+        )
         reasoning_fields = self._reasoning_fields(model_id)
         observed_reasoning_field = False
         has_tool_calls = False
         tool_call_count = 0
         seen_done = False
-        emitted_output = False
         try:
             async for line in iter_stream_lines(response):
                 if not line.strip():
@@ -608,35 +643,23 @@ class OllamaAdapter(ProviderAdapter):
                     continue
                 error_message = parsed.get("error")
                 if error_message:
-                    stream_error = ProviderError(
-                        f"Provider stream error: {error_message}", retryable=False
-                    )
-                    if not emitted_output:
-                        learned = learn_image_limit(
-                            stream_error, image_count, wire=self.wire, model_id=model_id
-                        )
-                        if learned is not None:
-                            raise learned from stream_error
-                    raise stream_error
+                    raise ProviderInBandError(str(error_message), retryable=False)
 
                 message = parsed.get("message")
                 if isinstance(message, dict):
                     found = _find_ollama_reasoning(message, reasoning_fields)
                     if found is not None:
-                        emitted_output = True
                         if not observed_reasoning_field:
                             self.wire.observe_reasoning_field(model_id, found[0])
                             observed_reasoning_field = True
                         yield {"type": "reasoning_delta", "text": found[1]}
                     content = message.get("content")
                     if isinstance(content, str) and content:
-                        emitted_output = True
                         yield {"type": "content_delta", "text": content}
                     for tool_call in _ollama_stream_tool_calls(
                         message.get("tool_calls"), start_index=tool_call_count
                     ):
                         tool_call_count += 1
-                        emitted_output = True
                         has_tool_calls = True
                         yield {
                             "type": "tool_call_delta",

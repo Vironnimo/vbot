@@ -157,6 +157,22 @@ def is_request_context_message(message: Mapping[str, Any]) -> bool:
     return message.get("role") == "user" and isinstance(message.get("content"), RequestContextText)
 
 
+_SOFT_BODY_LIMIT: ContextVar[tuple[str, int] | None] = ContextVar(
+    "provider_soft_body_limit", default=None
+)
+
+
+@contextmanager
+def request_body_recovery(model_id: str, limit: int | None) -> Iterator[None]:
+    with _SOFT_BODY_LIMIT.set((model_id, limit) if limit else None):
+        yield
+
+
+def recoverable_body_limit(model_id: str) -> int | None:
+    scoped = _SOFT_BODY_LIMIT.get()
+    return scoped[1] if scoped and scoped[0] == model_id else None
+
+
 _REQUEST_INPUT_BUDGET: ContextVar[tuple[str, RequestInput] | None] = ContextVar(
     "provider_request_input_budget", default=None
 )
@@ -537,22 +553,30 @@ class ProviderAdapter(ABC):
 
         The window a Provider rejection stated (a learned wire fact); an
         Adapter whose server reports the window it serves (a loaded local
-        instance) overrides this. ``None`` when nothing was reported. A
-        reported window wins over catalog values and estimates: the Adapter's
-        output clamp and Chat's Context capacity both budget against it.
+        instance) overrides this. Local Adapters can also report a previously
+        successful load size. Admission and output clamping use
+        :meth:`admission_context_window` to exclude negotiable load sizes.
         """
         return self.wire.learned_context_window(model_id)
+
+    async def refresh_admission_context(self, model_id: str) -> None:
+        """Refresh a mutable served window before Chat uses it to admit a request."""
+        return None
+
+    def admission_context_window(self, model_id: str) -> int | None:
+        """The hard window that may refuse or compact an input before sending it."""
+        return self.reported_context_window(model_id)
 
     def _request_context_window(self, model_id: str) -> int:
         """The Context window a request for ``model_id`` must fit on this Adapter's wire.
 
         Output clamping and the local overflow check budget against it: the
-        reported window (``reported_context_window``), else the catalog window
+        hard window (``admission_context_window``), else the catalog window
         through the read-side chain (``resolve_context_window``).
         """
         from core.providers.providers import resolve_context_window
 
-        reported = self.reported_context_window(model_id)
+        reported = self.admission_context_window(model_id)
         if reported is not None:
             return reported
         return resolve_context_window(
@@ -780,7 +804,11 @@ class ProviderAdapter(ABC):
         if not enabled:
             return {}
         profile = self.wire_profile(model_id)
-        if profile.protocol == "responses" and profile.request.fast_mode:
+        if (
+            profile.protocol == "responses"
+            and profile.request.fast_mode
+            and self.wire.route_fact(model_id, "service_tier", protocol=profile.protocol) != 1
+        ):
             return {"service_tier": "priority"}
         return {}
 

@@ -1115,3 +1115,64 @@ async def test_compaction_summary_limit_rejects_without_retry_and_closes(
     assert [call["status"] for call in recorder.calls] == [expected_status]
     assert recorder.calls[0]["failure_class"] == (None if characters == 100_000 else "limit")
     assert recorder.calls[0]["usage"]["input_tokens"] == 75
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", [False, True])
+async def test_completed_summary_retries_only_before_model_output(partial):
+    import httpx
+    import respx
+
+    from core.compaction.errors import CompactionIncompleteError
+    from core.providers.errors import ProviderRouteStreamingUnsupportedError
+    from tests.core.providers import wire_paths_test_support as paths
+
+    adapter = paths.CHAT.adapter()
+    cutoff = ProviderRouteStreamingUnsupportedError("unsupported")
+    attempts = []
+
+    async def stream(messages, **options):
+        attempts.append("stream")
+        yield {"type": "heartbeat"}
+        if partial:
+            yield {"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [{"id": "r"}]}}
+        raise cutoff
+
+    adapter.stream = stream
+    messages = [
+        user("u1", "old request"),
+        assistant("a1", "old answer"),
+        user("u2", "new request"),
+        assistant("a2", "new answer"),
+    ]
+    with respx.mock:
+        route = respx.post(paths.CHAT.url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "stored summary"}, "finish_reason": "stop"}]
+                },
+            )
+        )
+
+        async def run():
+            return await compact(
+                messages,
+                summary_adapter=adapter,
+                summary_model_id=paths.CHAT.model_id,
+                settings=CompactionSettings(strategy="summary_tail", tail_tokens=1),
+                request_messages=provider_request(messages),
+                active_adapter=adapter,
+                active_model_id=paths.CHAT.model_id,
+            )
+
+        if partial:
+            with pytest.raises(CompactionIncompleteError):
+                await run()
+            assert not route.called
+        else:
+            for _ in range(2):
+                assert "stored summary" in str((await run()).content)
+            assert route.call_count == 2
+        assert attempts == ["stream"]
+    await adapter.aclose()

@@ -407,6 +407,11 @@ class RequestPlan:
     payload_headers: Callable[[Mapping[str, Any]], dict[str, str]] | None = None
     lazy_body: bool = False
     digest: Callable[[Mapping[str, Any]], object] | None = None
+    plain_available: bool = True
+    # A proxy can enforce either compressed or uncompressed bytes.
+    may_compress: bool = False
+    # Minimum safe local load window for this complete rendered payload, if knowable.
+    local_load_floor: Callable[[Mapping[str, Any]], int | None] | None = None
 
 
 ZSTD_BODY_LEVEL = 3

@@ -1143,3 +1143,30 @@ def test_exclusive_parameter_groups_send_one_parameter_of_each_group(
     rules.shape_parameters(payload, reasoning_active=False)
 
     assert payload == sent
+
+
+def test_route_observations_expire_and_reset_with_endpoint_account_and_protocol_scope(tmp_path):
+    from dataclasses import replace
+
+    now = [datetime(2026, 10, 1, tzinfo=UTC)]
+    path = tmp_path / "wire-observations.json"
+    store = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    profiles, _ = _profiles(None, {"m": _model("m")})
+    profiles.set_observations(store)
+    binding = profiles.bind("acme", "api-key").for_route("endpoint", "account")
+    binding.remember_route("m", "stream")
+    binding.remember_route("m", "image/gif")
+    binding.remember_route("m", "load_window", 2048, setting=4096)
+    assert binding.for_route("new", "account").route_fact("m", "stream") is None
+    assert binding.for_route("endpoint", "new").route_fact("m", "stream") is None
+    assert binding.route_fact("m", "stream", protocol="messages") is None
+    assert binding.route_fact("m::label", "stream") == 1
+    store.flush()
+    loaded = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    after = replace(binding, observations=loaded)
+    assert after.route_fact("m", "load_window", setting=4096) is None
+    assert after.route_fact("m", "stream") == 1
+    now[0] += timedelta(minutes=15)
+    assert after.route_fact("m", "stream") is None and after.route_fact("m", "image/gif") == 1
+    assert loaded.forget("acme", "api-key", "m") == 1
+    assert after.route_fact("m", "image/gif") is None

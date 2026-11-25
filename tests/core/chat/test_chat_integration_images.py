@@ -944,3 +944,47 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
                 assert envelope["error"]["code"] == "permission_denied"
             assert len(asked) == (0 if allowed else 1)
             asked.clear()
+
+
+@pytest.mark.asyncio
+async def test_learned_gateway_body_threshold_spares_uploads_and_preserves_fresh_images(
+    resources_dir: Path, start_runtime: StartRuntime
+):
+    from core.providers.adapter import recoverable_body_limit
+
+    _isolate_from_compaction(resources_dir)
+    uploads = []
+
+    class Gateway(FakeAdapter):
+        @override
+        async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            images = sum(
+                isinstance(msg.get("content"), list)
+                and sum(part.get("type") == "media" for part in msg["content"])
+                or 0
+                for msg in messages
+            )
+            large = any(
+                msg.get("role") == "user" and msg.get("content") == "follow-up" for msg in messages
+            ) and bool(images)
+            if large and recoverable_body_limit(model_id) == 999:
+                raise ProviderRequestTooLargeError(1000, 999)
+            uploads.append(images)
+            if large:
+                error = ProviderRequestTooLargeError(detail="HTTP request too large")
+                error.size_bytes = 1000
+                error.status_code = 413
+                raise error
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = Gateway({"content": "done", "tool_calls": None})
+    with start_runtime(adapter) as runtime:
+        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
+        image: list[ContentBlock] = [
+            MediaBlock("media", record.id, record.filename, record.media_type)
+        ]
+        for session in ("first", "second"):
+            await runtime.chat_loop.send("coder", image, session_id=session)
+            await runtime.chat_loop.send("coder", "follow-up", session_id=session)
+        assert uploads == [1, 1, 0, 1, 0]

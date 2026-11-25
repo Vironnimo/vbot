@@ -16,6 +16,7 @@ from core.models.models import (
     ReasoningCapabilities,
     text_embedding_capabilities,
 )
+from core.providers._local_load import learned_window, load_oom, request_floor
 from core.providers.adapter import ModelLookup
 from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.http import (
@@ -57,6 +58,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         http_transport: ProviderHTTPTransportScope | None = None,
         local_context_resolver: Callable[[str], int | None] | None = None,
         loaded_context_reporter: Callable[[str, int | None], None] | None = None,
+        has_loaded_context: Callable[[str], bool] | None = None,
     ) -> None:
         """Bind the Connection; ``local_context_resolver`` and ``loaded_context_reporter`` are DI.
 
@@ -70,6 +72,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         self._native_base_url = _native_base_url(resolved_base_url)
         self._local_context_resolver = local_context_resolver
         self._loaded_context_reporter = loaded_context_reporter
+        self._has_loaded_context = has_loaded_context
         self._loaded_context_windows: dict[str, int] = {}
         self._model_load_lock = asyncio.Lock()
         super().__init__(
@@ -166,7 +169,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        await self._ensure_model_loaded(model_id)
+        await self._ensure_model_loaded(model_id, messages, kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
     @override
@@ -177,7 +180,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, Any]]:
-        await self._ensure_model_loaded(model_id)
+        await self._ensure_model_loaded(model_id, messages, kwargs)
         async with aclosing(
             cast(
                 AsyncGenerator[dict[str, Any]],
@@ -189,18 +192,47 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
 
     @override
     def reported_context_window(self, model_id: str) -> int | None:
-        """The window the Model's loaded instance serves, else one a rejection stated."""
+        """The served window, else the cold-load recommendation or the stated hard limit."""
 
         loaded = self._loaded_context_windows.get(model_id.split("::", 1)[0])
         if loaded is not None:
             return loaded
-        return super().reported_context_window(model_id)
+        configured = (
+            self._local_context_resolver(model_id.split("::", 1)[0])
+            if self._local_context_resolver
+            else None
+        )
+        learned = learned_window(self.wire, model_id.split("::", 1)[0], configured)
+        stated = super().reported_context_window(model_id)
+        return min(learned, stated) if learned and stated else learned or stated
+
+    @override
+    async def refresh_admission_context(self, model_id: str) -> None:
+        """Verify a previous native reading before it can compact a new Chat request."""
+        bare = model_id.split("::", 1)[0]
+        if bare not in self._loaded_context_windows and not (
+            self._has_loaded_context and self._has_loaded_context(bare)
+        ):
+            return
+        async with self._model_load_lock:
+            try:
+                model = await self._native_model(bare)
+            except ProviderError:
+                # Keep the last confirmed value. The normal request handles an
+                # unavailable server through the Model-step error/fallback path.
+                return
+            self._record_loaded_context_window(bare, _loaded_context_length(model))
+
+    @override
+    def admission_context_window(self, model_id: str) -> int | None:
+        loaded = self._loaded_context_windows.get(model_id.split("::", 1)[0])
+        return loaded if loaded is not None else super().reported_context_window(model_id)
 
     @override
     def _request_context_window(self, model_id: str) -> int:
         """The reported window, else the one vBot loads the Model with."""
 
-        reported = self.reported_context_window(model_id)
+        reported = self.admission_context_window(model_id)
         if reported is not None:
             return reported
         if self._local_context_resolver is not None:
@@ -209,7 +241,9 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
                 return configured
         return super()._request_context_window(model_id)
 
-    async def _ensure_model_loaded(self, model_id: str) -> None:
+    async def _ensure_model_loaded(
+        self, model_id: str, messages: list[dict[str, Any]], options: Mapping[str, Any]
+    ) -> None:
         """Reuse a loaded instance, or load one; then record the window it reports.
 
         A loaded instance is used as it is, whatever the local setting says:
@@ -218,6 +252,11 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         the new instance is read back for the window LM Studio applied.
         """
         bare_model_id = model_id.split("::", 1)[0]
+
+        def estimate_floor() -> int | None:
+            payload = self._build_payload(messages, model_id, **options)
+            return request_floor(self, model_id, messages, options, payload)
+
         async with self._model_load_lock:
             model = await self._native_model(bare_model_id)
             loaded_instances = model.get("loaded_instances")
@@ -226,12 +265,52 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
                 # the one to load with, so the local setting decides again.
                 self._record_loaded_context_window(bare_model_id, None)
                 payload: dict[str, Any] = {"model": bare_model_id}
-                if self._local_context_resolver is not None:
-                    context_length = self._local_context_resolver(bare_model_id)
-                    if context_length is not None:
-                        payload["context_length"] = context_length
-                await self._load_native_model(payload)
+                configured = (
+                    self._local_context_resolver(bare_model_id)
+                    if self._local_context_resolver
+                    else None
+                )
+                learned = learned_window(self.wire, bare_model_id, configured)
+                floor = None
+                if configured:
+                    payload["context_length"] = configured
+                if configured and learned and learned < configured:
+                    floor = await asyncio.to_thread(estimate_floor)
+                    if floor is not None and learned >= floor:
+                        payload["context_length"] = learned
+                for attempt in range(3):
+                    try:
+                        await self._load_native_model(payload)
+                        break
+                    except ProviderError as error:
+                        if (
+                            not configured
+                            or attempt == 2
+                            or not load_oom(error, load_endpoint=True)
+                        ):
+                            raise
+                        if floor is None:
+                            floor = await asyncio.to_thread(estimate_floor)
+                        if floor is None:
+                            raise
+                        current = payload["context_length"]
+                        candidate = max(current // 2, floor)
+                        if candidate >= current:
+                            raise
+                        payload["context_length"] = candidate
                 model = await self._native_model(bare_model_id)
+                served = _loaded_context_length(model)
+                if floor is not None and (served is None or served < floor):
+                    self._record_loaded_context_window(bare_model_id, served)
+                    raise ProviderError(
+                        f"LM Studio's loaded instance of '{bare_model_id}' "
+                        f"reports {served!r} tokens for a request needing {floor}",
+                        retryable=False,
+                    )
+                if configured and attempt and served and served < configured:
+                    self.wire.remember_route(
+                        bare_model_id, "load_window", served, setting=configured
+                    )
             self._record_loaded_context_window(bare_model_id, _loaded_context_length(model))
 
     def _record_loaded_context_window(self, model_id: str, window: int | None) -> None:

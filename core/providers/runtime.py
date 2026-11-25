@@ -395,12 +395,13 @@ class ProviderRuntime:
         config, account_id = self._connection_config(
             self._providers.get(connection.provider_id), connection.connection_id
         )
-        return self._prepare_http(connection, config, account_id)
+        return self._prepare_http(
+            connection, config, self._http_account_id(connection.provider_id, config, account_id)
+        )
 
     def _prepare_http(
-        self, connection: ConnectionRef, config: ConnectionConfig, account_id: str | None
+        self, connection: ConnectionRef, config: ConnectionConfig, account_id: str
     ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
-        account_id = self._http_account_id(connection.provider_id, config, account_id)
         return (
             self._token_getter(connection, config, account_id),
             self._http_transports.scope(connection.provider_id, config.id, account_id),
@@ -432,6 +433,7 @@ class ProviderRuntime:
                 f"Provider connection '{provider_id}:{connection_config.id}' is disabled — "
                 "enable it in Settings → Providers or via the provider CLI"
             )
+        account_id = self._http_account_id(provider_id, connection_config, account_id)
         token_getter, http_transport = self._prepare_http(connection, connection_config, account_id)
         adapter_class = adapter_type_for_config(provider_config)
         if adapter_class is None:
@@ -447,6 +449,9 @@ class ProviderRuntime:
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
         if adapter_class is LMStudioAdapter:
             extra_kwargs["loaded_context_reporter"] = self._loaded_context_reporter(provider_id)
+            extra_kwargs["has_loaded_context"] = lambda model: self._has_loaded_context(
+                provider_id, model
+            )
         if adapter_class is OpenRouterAdapter:
             extra_kwargs["routing"] = self._storage.load_openrouter_routing_settings()
         if adapter_class is OpenAIAdapter:
@@ -463,7 +468,12 @@ class ProviderRuntime:
                 base_url = copilot_endpoint
 
         # Resolve fallible Settings/profile reads before constructing an owned client.
-        wire_profiles = self._wire_profiles.bind(provider_id, connection_config.id)
+        from hashlib import sha256
+
+        wire_profiles = self._wire_profiles.bind(provider_id, connection_config.id).for_route(
+            endpoint=sha256((base_url or provider_config.base_url or "").encode()).hexdigest(),
+            account_id=account_id,
+        )
         display_timezone = self._display_timezone()
         adapter = cast(Any, adapter_class)(
             provider_config,
@@ -870,6 +880,10 @@ class ProviderRuntime:
             )
 
         return resolve
+
+    def _has_loaded_context(self, provider_id: str, model_id: str) -> bool:
+        with self._loaded_context_lock:
+            return f"{provider_id}/{model_id}" in self._loaded_context_windows
 
     def _loaded_context_reporter(self, provider_id: str) -> Callable[[str, int | None], None]:
         def report(model_id: str, window: int | None) -> None:

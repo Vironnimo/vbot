@@ -518,3 +518,48 @@ async def test_refused_connection_names_the_mode_specific_cause(cloud: bool) -> 
     # Cloud failures never suggest starting a local daemon.
     assert ("service running" in str(caught.value)) is not cloud
     await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_thinking_failure_keeps_subsequent_explicit_reasoning_intent():
+    adapter = local_adapter()
+    detail = {"error": "this model does not support thinking"}
+    route = respx.post(LOCAL_CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(400, json=detail),
+            httpx.Response(200, json=TEXT_RESPONSE),
+            httpx.Response(400, json=detail),
+        ]
+    )
+    await adapter.send(SAMPLE_MESSAGES, model_id="thinking-model", thinking_effort="none")
+    with pytest.raises(ProviderError):
+        await adapter.send(SAMPLE_MESSAGES, model_id="thinking-model", thinking_effort="high")
+    assert [json.loads(call.request.content).get("think") for call in route.calls] == [
+        False,
+        None,
+        True,
+    ]
+    await adapter.aclose()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_native_in_band_refusal_preserves_its_transport_status(streaming):
+    adapter = local_adapter()
+    route = respx.post(LOCAL_CHAT_URL).mock(
+        return_value=httpx.Response(200, json={"error": "this model does not support thinking"})
+    )
+    with pytest.raises(ProviderError) as failure:
+        if streaming:
+            _ = [
+                d
+                async for d in adapter.stream(
+                    SAMPLE_MESSAGES, model_id="thinking-model", thinking_effort="high"
+                )
+            ]
+        else:
+            await adapter.send(SAMPLE_MESSAGES, model_id="thinking-model", thinking_effort="high")
+    assert failure.value.status_code is None and route.call_count == 1
+    await adapter.aclose()

@@ -317,6 +317,38 @@ async def test_image_limit_learning_requires_an_exceeded_count_before_output(
     ("path", "kwargs", "rejection", "field", "expected"),
     [
         pytest.param(
+            paths.CHAT.streaming(paths.chat_sse),
+            {},
+            "Unsupported parameter: 'stream_options'",
+            ("stream_options",),
+            [{"include_usage": True}, ABSENT, ABSENT],
+            id="usage-only-stream-options",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 87},
+            "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead.",
+            ("max_completion_tokens",),
+            [ABSENT, 87, 87],
+            id="equivalent-output-allowance",
+        ),
+        pytest.param(
+            paths.CODEX,
+            {"service_tier": "priority"},
+            "Priority service tier is not available",
+            ("service_tier",),
+            ["priority", ABSENT, ABSENT],
+            id="default-after-priority-refusal",
+        ),
+        pytest.param(
+            replace(paths.OLLAMA, model_id="thinking-model"),
+            {"thinking_effort": "none"},
+            "this model does not support thinking",
+            ("think",),
+            [False, ABSENT, ABSENT],
+            id="ollama-already-off",
+        ),
+        pytest.param(
             paths.CHAT,
             {"thinking_effort": "high"},
             "invalid value for 'reasoning_effort': 'high'",
@@ -1013,3 +1045,161 @@ async def test_reasoning_despite_off_teaches_effort_none_to_send_the_lowest_leve
         effort,
         "low" if ignored else effort,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("detail", "streams", "status"),
+    [
+        ("This model does not support streaming.", [True, False, False], 400),
+        ("Streaming is not supported", [True, False, False], 400),
+        ("Your organization must be verified to stream this model.", [True, False, False], 403),
+        ("Streaming is not supported for audio responses.", [True, False, True], 400),
+    ],
+)
+async def test_stream_fallback_only_remembers_unconditional_refusals(detail, streams, status):
+    from core.chat.streaming import stream_model_response
+
+    adapter = paths.CHAT.adapter()
+    results = [
+        _rejection(
+            status,
+            detail if detail == "Streaming is not supported" or status == 403 else _error(detail),
+        ),
+        paths.CHAT.success(),
+        paths.chat_sse() if streams[-1] else paths.CHAT.success(),
+    ]
+    with respx.mock:
+        route = respx.post(paths.CHAT.url).mock(side_effect=results)
+        for _ in range(2):
+            response = await stream_model_response(
+                adapter, paths.HELLO, model_id=paths.CHAT.model_id
+            )
+            assert response["content"]
+        assert [
+            bool(json.loads(call.request.content).get("stream")) for call in route.calls
+        ] == streams
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_learned_image_format_preserves_pixels_animation_and_source_messages():
+    import base64
+    import io
+
+    from PIL import Image
+
+    path = paths.CHAT
+    adapter = path.adapter()
+
+    def gif(*colors):
+        frames = [Image.new("RGBA", (3, 4), color) for color in colors]
+        dest = io.BytesIO()
+        frames[0].save(dest, format="GIF", save_all=True, append_images=frames[1:])
+        return base64.b64encode(dest.getvalue()).decode()
+
+    still = gif("red")
+    animated = gif("black", "white")
+
+    def messages(data):
+        return [
+            {
+                "role": "user",
+                "content": [{"type": "media", "media_type": "image/gif", "base64": data}],
+            }
+        ]
+
+    refusal = _error("Unsupported image format: image/gif")
+    with respx.mock:
+        route = respx.post(path.url).mock(
+            side_effect=[
+                _rejection(415, refusal),
+                path.success(),
+                path.success(),
+                path.success(),
+                _rejection(415, refusal),
+            ]
+        )
+        original = messages(still)
+        for _ in range(2):
+            await paths.request(adapter, path, {}, original)
+        assert original == messages(still)
+        await paths.request(adapter, path, {}, messages(animated))
+        with pytest.raises(ProviderError):
+            await paths.request(adapter, path, {}, messages(animated))
+        urls = [
+            _sent(call.request, ("messages", 0, "content", 0, "image_url", "url"))
+            for call in route.calls
+        ]
+        assert urls[0] == "data:image/gif;base64," + still
+        assert urls[1] == urls[2] and urls[1].startswith("data:image/png;base64,")
+        with Image.open(io.BytesIO(base64.b64decode(urls[1].split(",", 1)[1]))) as result:
+            assert result.size == (3, 4) and result.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+        assert urls[3:] == ["data:image/gif;base64," + animated] * 2
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_413_measures_the_uploaded_body_and_only_preflights_recoverable_requests():
+    from core.providers.adapter import request_body_recovery
+    from core.providers.errors import ProviderRequestTooLargeError
+
+    path = paths.CHAT
+    adapter = path.adapter()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}],
+        }
+    ]
+    with respx.mock:
+        route = respx.post(path.url).mock(
+            side_effect=[_rejection(413, "size exceeded"), path.success()]
+        )
+        with pytest.raises(ProviderRequestTooLargeError) as failure:
+            await paths.request(adapter, path, {}, messages)
+        size = len(route.calls[0].request.content)
+        assert failure.value.size_bytes == size and failure.value.max_bytes is None
+        with (
+            request_body_recovery(path.model_id, size - 1),
+            pytest.raises(ProviderRequestTooLargeError),
+        ):
+            await paths.request(adapter, path, {}, messages)
+        assert route.call_count == 1
+        await paths.request(adapter, path, {}, messages)
+        assert route.call_count == 2
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired", [False, True])
+async def test_heartbeats_keep_wire_recovery_open_and_cannot_confirm_a_repaired_shape(repaired):
+    path = paths.CHAT.streaming(paths.chat_sse)
+    adapter = path.adapter()
+    rejection = _error("Unsupported parameter: 'stream_options'")
+
+    def preamble_error(body):
+        return httpx.Response(200, text=": ping\n\n" + compatible.sse(body))
+
+    with respx.mock:
+        route = respx.post(path.url).mock(
+            side_effect=[
+                preamble_error(rejection),
+                path.success() if repaired else preamble_error(_error("some other error")),
+                path.success(),
+            ]
+        )
+        stream = adapter.stream(paths.HELLO, model_id=path.model_id)
+        assert (await anext(stream))["type"] == "heartbeat"
+        if repaired:
+            assert any(delta["type"] == "finish" for delta in [event async for event in stream])
+        else:
+            with pytest.raises(ProviderError, match="some other error"):
+                _ = [event async for event in stream]
+        await paths.request(adapter, path, {})
+        assert [("stream_options" in json.loads(call.request.content)) for call in route.calls] == [
+            True,
+            False,
+            not repaired,
+        ]
+    await adapter.aclose()

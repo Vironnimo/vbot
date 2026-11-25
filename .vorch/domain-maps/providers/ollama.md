@@ -4,6 +4,9 @@ Two Providers share Ollama-native catalog discovery but use different Chat trans
 
 **The `local` Connection is disabled by default** (keyless Connections need an explicit opt-in - `providers.md` -> Terms -> Usable and `providers/connections.md`). Until the user enables it (Settings -> Providers toggle, `vbot provider enable ollama --connection ollama:local`, or the `connection.set_enabled` RPC), vBot never probes localhost, lists no Ollama Models, and refuses Adapter creation with a clear "connection is disabled" error. Enabling an auto-refresh Connection forces an immediate catalog probe so the caller gets live reachability feedback; "enabled but not running" is a valid state - the enable sticks and the Models appear on the next successful probe.
 
+
+Native `/api/chat` uses the shared pre-output Wire learner for HTTP and explicit NDJSON rejections. A Model explicitly reporting that it cannot think satisfies a requested Off even without the rejected `think: false` field. The route may remember that equivalent omission; later explicit On or effort values still reach the Model. An error object in a completed or streamed HTTP 200 response remains an in-band error.
+
 ## Wire protocol
 
 - Native Decision execution uses the independent wire profile `system_one` route at `POST /v1/systemone` for both Providers. Only the local Connection declares `keep_alive`; direct Cloud exposes no task controls (`model_tasks/decisions.md`). Chat protocol selection does not route a Decision request.
@@ -169,7 +172,9 @@ The usable `ollama-cloud:api-key` Connection participates in Provider Usage thro
 
 ## Effective context window / num_ctx enforcement
 
-Ollama reports a local Model's *theoretical* max (262144 for an 8B model) and **silently truncates** the prompt when the loaded context is smaller. vBot therefore budgets flagged-local Models against the effective window (user knob or `min(32768, max)` - `resolve_effective_context_window`) **and enforces exactly that window on the wire**: the runtime injects `local_context_resolver` (keyword-only constructor arg, DI like `model_lookup`) into the adapter, which sets `options.num_ctx` on every send/stream for flagged-local Models. Direct `ollama-cloud`, locally proxied `:cloud`, and unknown Models are remote/non-local and receive no local cap or `num_ctx`. Settings are read live per call; verified via `GET /api/ps` -> `context_length` of the loaded local Model. Assumption == reality.
+Ollama reports a local Model's *theoretical* max (262144 for an 8B model) and **silently truncates** the prompt when the loaded context is smaller. vBot therefore budgets flagged-local Models against the effective window (user knob or `min(32768, max)` - `resolve_effective_context_window`) and requests that window on the native wire: the runtime injects `local_context_resolver` (keyword-only constructor arg, DI like `model_lookup`) into the adapter, which sets `options.num_ctx` on every send/stream for flagged-local Models. Direct `ollama-cloud`, locally proxied `:cloud`, and unknown Models are remote/non-local and receive no local cap or `num_ctx`. Settings are read live per call; verified via `GET /api/ps` -> `context_length` of the loaded local Model.
+
+An explicit accelerator allocation failure during local Model loading can retry at most twice with a smaller `num_ctx` that still fits the original input and output. The successful size is a preference for that route and configured window. Chat and Compaction still admit later inputs at the configured window because Ollama negotiates `num_ctx` with each request. The Adapter applies the preference after sizing that request (`providers/request-policy.md` -> Request limits and context).
 
 ## Constraints & Gotchas
 

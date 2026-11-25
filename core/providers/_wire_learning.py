@@ -28,8 +28,8 @@ Native Ollama borrows this image learner without enabling parameter learning.
 
 Every request path learns the same way. A request
 (:func:`execute_learning_from_rejections`) is established when its reply
-arrives; a stream (:func:`stream_learning_from_rejections`) when its first
-delta arrives, so a rejection that a wire reports as an in-band stream event
+arrives; a stream (:func:`stream_learning_from_rejections`) when Model output or a valid finish
+arrives, so a rejection that a wire reports as an in-band stream event
 (the Codex WebSocket) is learned like an HTTP rejection. A stream also records
 that the Model returned reasoning, and that it ignores reasoning off when it
 reasons although the request turned reasoning off.
@@ -42,18 +42,25 @@ decides whether a rebuild changed anything.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
+from operator import ne
 from typing import Any, Literal
 
 from core.models.pricing import billing_details
+from core.providers._local_load import learned_window, load_oom
+from core.providers._wire_compatibility import apply_shape, cached_shapes, rejected_shape
+from core.providers.adapter import recoverable_body_limit
 from core.providers.errors import (
     ProviderAuthError,
     ProviderContextOverflowError,
     ProviderError,
     ProviderImageLimitError,
+    ProviderRequestTooLargeError,
 )
 from core.providers.http import (
     PreparedRequest,
@@ -345,15 +352,106 @@ async def execute_learning_from_rejections[T](
     unchanged.
     """
 
+    async with aclosing(
+        _wire_attempts(plan, wire=wire, model_id=model_id, provider_label=provider_label)
+    ) as attempts:
+        request = await anext(attempts)
+        while True:
+            try:
+                result = await execute_attempt(request)
+            except ProviderError as error:
+                request = await attempts.athrow(error)
+            else:
+                await anext(attempts, None)
+                return result
+
+
+async def _wire_attempts(
+    plan: RequestPlan, *, wire: WireBinding, model_id: str, provider_label: str
+) -> AsyncGenerator[PreparedRequest]:
+    """Yield wire attempts. Throw a rejection back, advance to accept, close to abandon."""
+    original_build = plan.build
+    profile = wire.profile(model_id)
+    changes = cached_shapes(wire, model_id, profile.protocol)
+    pending: dict[str, int] = {}
+    reduced_window: int | None = None
+    configured: int | None = None
+    floor: int | None = None
+
+    def build() -> dict[str, Any]:
+        nonlocal configured, floor
+        payload = original_build()
+        payload = apply_shape(payload, profile.protocol, changes, profile.media.types)
+        options = payload.get("options")
+        if (
+            plan.local_load_floor
+            and isinstance(options, dict)
+            and type(options.get("num_ctx")) is int
+        ):
+            configured = options["num_ctx"]
+            window = reduced_window or learned_window(wire, model_id, configured)
+            if window and configured and window < configured:
+                if floor is None:
+                    floor = plan.local_load_floor(payload)
+                if floor is not None and window >= floor:
+                    options["num_ctx"] = window
+        return payload
+
+    soft_limit = None if plan.lazy_body or plan.may_compress else recoverable_body_limit(model_id)
+    body_limit = (
+        min(soft_limit, plan.body_limit)
+        if soft_limit and plan.body_limit
+        else soft_limit or plan.body_limit
+    )
+    plan = replace(plan, build=build, body_limit=body_limit)
+
     request = await prepare_request(plan)
     rejected_parameters: set[str] = set()
     exclusive_groups: list[tuple[str, ...]] = []
-    for _ in range(_MAX_LESSONS):
+    for attempt in range(_MAX_LESSONS + 1):
         try:
-            return await execute_attempt(request)
+            yield request
         except ProviderError as error:
-            if isinstance(error, ProviderAuthError):
+            if (
+                isinstance(error, ProviderRequestTooLargeError)
+                and error.status_code == 413
+                and not plan.lazy_body
+                and not plan.may_compress
+                and _request_image_count(request.payload, profile.protocol)
+            ):
+                error.size_bytes = len(request.body)
+            if attempt == _MAX_LESSONS:
                 raise
+            if isinstance(error, ProviderAuthError):
+                rejected_shape(
+                    error, request.payload, profile.protocol, plain_available=plan.plain_available
+                )
+                raise
+            if plan.local_load_floor and configured and load_oom(error, load_endpoint=False):
+                if floor is None:
+                    floor = await asyncio.to_thread(plan.local_load_floor, request.payload)
+                if floor is None:
+                    raise
+                current = request.payload["options"]["num_ctx"]
+                candidate = max(current // 2, floor)
+                if candidate >= current:
+                    raise
+                reduced_window = candidate
+                request = await prepare_request(plan)
+                continue
+            shape = rejected_shape(
+                error, request.payload, profile.protocol, plain_available=plan.plain_available
+            )
+            if shape is not None:
+                name, value = shape
+                if name in pending or changes.get(name) == value:
+                    raise
+                changes[name] = pending[name] = value
+                revised = await revise_request(plan, partial(ne, request.payload))
+                if revised is None:
+                    raise
+                request = revised
+                continue
             profile = wire.profile(model_id)
             image_error = learn_image_limit(
                 error,
@@ -410,7 +508,12 @@ async def execute_learning_from_rejections[T](
                 model_id,
             )
             request = revised
-    return await execute_attempt(request)
+        else:
+            if reduced_window and configured:
+                wire.remember_route(model_id, "load_window", reduced_window, setting=configured)
+            for name, value in pending.items():
+                wire.remember_route(model_id, name, value)
+            return
 
 
 async def stream_learning_from_rejections(
@@ -421,103 +524,87 @@ async def stream_learning_from_rejections(
     model_id: str,
     provider_label: str,
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Stream one request, learning from a rejection before its first delta.
+    """Forward transport liveness while negotiating a request until Model output.
 
-    ``open_stream`` opens one full stream exchange for the request rendered
-    from ``plan``. An error raised before the stream yields its first delta (an
-    HTTP rejection or an in-band error event) is learned and retried exactly
-    like :func:`execute_learning_from_rejections`; once a delta was yielded,
-    parameter errors propagate unchanged and the request is never sent again, so
-    its payload and body are released. A delta carrying reasoning records that
-    the Model returned reasoning; when the request turned reasoning off,
-    reasoning in a delta or inline in the answer (``split_inline_reasoning``)
-    records that the Model ignores reasoning off.
-
-    An image-count error after only heartbeats or Usage still reaches Chat as
-    ``ProviderImageLimitError``; after Model output it propagates unchanged.
+    Heartbeats and cumulative Usage pass through immediately. An attributable
+    rejection before Model output can rebuild the request. A successful rebuild
+    commits its route facts on semantic output or a valid finish. Any later
+    failure propagates without replay. Failed attempts retain separate billing.
     """
 
-    established: list[PreparedRequest] = []
     failure_usage: list[dict[str, Any]] = []
-    attempts = 0
-    last_attempt_usage: dict[str, Any] = {}
-
-    async def establish(
-        request: PreparedRequest,
-    ) -> tuple[AsyncGenerator[dict[str, Any]], dict[str, Any] | None]:
-        nonlocal attempts, last_attempt_usage
-        attempts += 1
-        last_attempt_usage = {}
-        stream = open_stream(request)
-        try:
-            first = await anext(stream)
-            while isinstance(first, FailureUsageDelta):
-                last_attempt_usage.update(
-                    {key: first[key] for key in (*_USAGE_TOTAL_FIELDS, "cost") if key in first}
-                )
-                first = await anext(stream)
-        except StopAsyncIteration:
-            first = None
-        except BaseException:
-            if last_attempt_usage:
-                failure_usage.append(last_attempt_usage)
-            await stream.aclose()
-            raise
-        established.append(request)
-        return stream, first
-
-    try:
-        stream, first = await execute_learning_from_rejections(
-            establish,
-            plan,
-            wire=wire,
-            model_id=model_id,
-            provider_label=provider_label,
-        )
-    except ProviderError:
-        combined = _failed_attempt_usage(failure_usage)
-        if combined is not None:
-            if attempts > 1:
-                combined["last_request_usage"] = last_attempt_usage
-            yield combined
-        raise
-    combined = _failed_attempt_usage(failure_usage)
-    request = established.pop()
-    profile = wire.profile(model_id)
-    image_count = _request_image_count(request.payload, profile.protocol)
-    off_watch = _OffWatch() if _requests_off(request.payload, profile) else None
-    request.release()
-    del request
-    returned_reasoning = False
-    emitted_output = False
-    async with aclosing(stream):
-        if combined is not None:
-            if attempts > 1:
-                combined["last_request_usage"] = {}
-            yield combined
-        if first is None:
-            return
-        delta = first
+    async with aclosing(
+        _wire_attempts(plan, wire=wire, model_id=model_id, provider_label=provider_label)
+    ) as retries:
+        request = await anext(retries)
+        repaired = False
         while True:
-            if delta.get("type") not in {"usage", "heartbeat"}:
-                emitted_output = True
-            if not returned_reasoning and _delta_returns_reasoning(delta):
-                returned_reasoning = True
-                wire.observe_reasoning_returned(model_id)
-            if off_watch is not None and off_watch.reasons(delta, returned_reasoning):
-                off_watch = None
-                wire.observe_off_ignored(model_id)
-            yield _include_failed_attempt_usage(delta, combined, repaired=attempts > 1)
+            last_usage: dict[str, Any] = {}
+            accepted = False
+            returned_reasoning = False
+            combined = _failed_attempt_usage(failure_usage)
+            profile = wire.profile(model_id)
+            off_watch = _OffWatch() if _requests_off(request.payload, profile) else None
             try:
-                delta = await anext(stream)
-            except StopAsyncIteration:
+                async with aclosing(open_stream(request)) as stream:
+                    async for delta in stream:
+                        kind = delta.get("type")
+                        if kind == "usage" and not accepted:
+                            last_usage.update(
+                                {
+                                    key: delta[key]
+                                    for key in (*_USAGE_TOTAL_FIELDS, "cost")
+                                    if key in delta
+                                }
+                            )
+                            if isinstance(delta, FailureUsageDelta):
+                                continue
+                        if not accepted and kind not in {"heartbeat", "usage"}:
+                            # A Tool fragment is already irreversible, even before it is complete.
+                            accepted = True
+                            if combined:
+                                yield {**combined, "last_request_usage": {}}
+                            if (
+                                (kind in {"content_delta", "reasoning_delta"} and delta.get("text"))
+                                or kind
+                                in {
+                                    "tool_call",
+                                    "tool_call_start",
+                                    "tool_call_delta",
+                                    "reasoning_meta",
+                                }
+                                or (
+                                    kind == "finish"
+                                    and delta.get("reason")
+                                    in {"stop", "tool_calls", "output_truncated", "length"}
+                                )
+                            ):
+                                await anext(retries, None)
+                            else:
+                                await retries.aclose()
+                            request.release()
+                        if not returned_reasoning and _delta_returns_reasoning(delta):
+                            returned_reasoning = True
+                            wire.observe_reasoning_returned(model_id)
+                        if off_watch is not None and off_watch.reasons(delta, returned_reasoning):
+                            off_watch = None
+                            wire.observe_off_ignored(model_id)
+                        yield _include_failed_attempt_usage(delta, combined, repaired=repaired)
                 return
             except ProviderError as error:
-                if not emitted_output:
-                    learned = learn_image_limit(error, image_count, wire=wire, model_id=model_id)
-                    if learned is not None:
-                        raise learned from error
-                raise
+                if accepted:
+                    raise
+                if last_usage:
+                    failure_usage.append(last_usage)
+                try:
+                    request = await retries.athrow(error)
+                except ProviderError:
+                    if usage := _failed_attempt_usage(failure_usage):
+                        if repaired:
+                            usage["last_request_usage"] = last_usage
+                        yield usage
+                    raise
+                repaired = True
 
 
 @dataclass(frozen=True, eq=False)
@@ -657,6 +744,8 @@ def _request_image_count(payload: Mapping[str, Any], protocol: str) -> int:
     for message in messages:
         if not isinstance(message, Mapping):
             continue
+        if protocol == "ollama_chat" and isinstance(message.get("images"), list):
+            count += len(message["images"])
         blocks = message.get("parts" if protocol == "gemini" else "content")
         pending = list(blocks) if isinstance(blocks, list) else []
         while pending:

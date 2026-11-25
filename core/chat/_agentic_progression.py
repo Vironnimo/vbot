@@ -69,6 +69,8 @@ from core.performance import measure, record_span, session_track
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_TOOL_CALLS,
+    ProviderAdapter,
+    request_body_recovery,
     request_input_budget,
 )
 from core.providers.errors import (
@@ -540,6 +542,7 @@ class AgenticProgression:
                 tool_round.start(tool_calls)
 
             assistant_step = None
+            recovered_body_limit = None
             while True:
                 run.raise_if_cancelled()
                 context_capacity = await self._requests.targets.resolve_context_capacity_async(
@@ -555,8 +558,18 @@ class AgenticProgression:
                     context_capacity,
                     context_usage=request_context_usage,
                 )
+                soft_limit = (
+                    target.adapter.wire.route_fact(target.model_id, "body_bytes")
+                    if isinstance(target.adapter, ProviderAdapter)
+                    else None
+                )
+                if type(soft_limit) is not int or not await _CHAT_TRANSFORM_WORKERS.run(
+                    context.image_budget.can_retire, messages_for_request
+                ):
+                    soft_limit = None
                 try:
                     with (
+                        request_body_recovery(target.model_id, soft_limit),
                         request_input_budget(
                             target.model_id, projected_request_input(request_context_usage)
                         ),
@@ -658,6 +671,13 @@ class AgenticProgression:
                         )
                     if smaller == messages_for_request:
                         raise
+                    if (
+                        isinstance(exc, ProviderRequestTooLargeError)
+                        and exc.status_code == 413
+                        and exc.size_bytes
+                        and exc.size_bytes > 1
+                    ):
+                        recovered_body_limit = exc.max_bytes or exc.size_bytes - 1
                     messages_for_request = smaller
                     request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
                         context.context_usage.prepare,
@@ -673,6 +693,14 @@ class AgenticProgression:
                             interruption_chain, output_scope=output_scope
                         )
                     raise
+                if (
+                    recovered_body_limit
+                    and isinstance(target.adapter, ProviderAdapter)
+                    and assistant_step.failure is None
+                ):
+                    target.adapter.wire.remember_route(
+                        target.model_id, "body_bytes", recovered_body_limit
+                    )
                 break
             if assistant_step is None:
                 continue
