@@ -120,6 +120,7 @@ from ._command_types import (
     StopReason,
 )
 from ._interpreter_host import InterpreterHost
+from ._powershell import PowerShellRequest
 from ._service_detection import SERVICE_POLL_SECONDS, ListeningReader, ServiceDetection
 from .process_tree import ProcessTreeTracker, listening_pids, track_process_tree
 
@@ -383,7 +384,7 @@ class CommandManager:
         permissions: PermissionBoundary,
         execution_owner: RunExecutionOwner | None = None,
         on_output: OutputCallback | None = None,
-        request: bytes | None = None,
+        request: bytes | PowerShellRequest | None = None,
         warm: bool = True,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
         consumed_once_secrets: bool = False,
@@ -396,7 +397,9 @@ class CommandManager:
         the command (``CommandLauncher.launch``): *env* is then its start
         environment, and the request carries the rest. *warm* False marks an
         *env* that holds values of this call: no shell started ahead serves it.
-        *not_run_codes* are exit codes by which the shell says that it ran
+        A PowerShellRequest supplies its own not-run codes and requires the
+        bootstrap to acknowledge receipt before processing the command.
+        For a raw request, *not_run_codes* are exit codes by which the shell says that it ran
         nothing of the command, and why: the report names the reason
         (``CommandReport.not_run``) once the shell exited with one of them.
         *consumed_once_secrets* records whether a retry requires fresh one-time Secrets.
@@ -439,7 +442,11 @@ class CommandManager:
                 on_output=on_output,
                 request=request,
                 warm=warm,
-                not_run_codes=dict(not_run_codes or {}),
+                not_run_codes=dict(
+                    request.not_run_codes
+                    if isinstance(request, PowerShellRequest)
+                    else not_run_codes or {}
+                ),
                 consumed_once_secrets=consumed_once_secrets,
             )
         )
@@ -818,7 +825,7 @@ class CommandManager:
         permissions: PermissionBoundary,
         execution_owner: RunExecutionOwner | None,
         on_output: OutputCallback | None,
-        request: bytes | None,
+        request: bytes | PowerShellRequest | None,
         warm: bool,
         not_run_codes: dict[int, NotRunReason],
         consumed_once_secrets: bool,

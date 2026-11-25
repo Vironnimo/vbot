@@ -237,7 +237,7 @@ class WatchCheckRunner:
                 workdir,
                 start.env,
                 self._tracker,
-                start.request.data if start.request is not None else None,
+                start.request,
                 warm=start.warm and withheld is None,
             )
         except OSError as error:

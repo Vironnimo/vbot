@@ -93,7 +93,7 @@ async def _report(
             origin_run_id="run-a",
             formatter=str,
             permissions=PermissionBoundary.UNRESTRICTED,
-            request=request.data if sent is None else sent(request.data),
+            request=request if sent is None else sent(request.data),
             not_run_codes=request.not_run_codes,
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
@@ -816,6 +816,22 @@ async def test_nested_prompt_uses_the_commands_scope_and_returns_at_eof(
 
 def _without_terminator(request: bytes) -> bytes:
     return request[: request.rindex(b".\n")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prefix", ["exit 0\n", "$null = @($input)\nexit 0\n"], ids=["before-read", "after-read"]
+)
+async def test_a_clean_shell_exit_without_receiving_the_command_is_not_success(
+    tmp_path: Path, prefix: str
+) -> None:
+    marker = tmp_path / "ran.txt"
+    command = f"Set-Content -LiteralPath {powershell_literal(str(marker))} -Value ran"
+    if prefix.startswith("exit"):
+        command += "\n#" + "x" * 131072  # Also exceeds the request pipe's capacity.
+    report = await _report(tmp_path, command, prefix=prefix)
+    assert report.not_run == "request_unreadable" and report.status == "failed"
+    assert report.transcript.total_lines == 0 and not marker.exists()
 
 
 def _cut_in_command(characters: int) -> Callable[[bytes], bytes]:

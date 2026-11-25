@@ -19,6 +19,7 @@ from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._interpreter_host import InterpreterHost
+from core.tools._powershell import PowerShellRequest
 from core.tools.command_manager import (
     CommandManager,
     CommandReport,
@@ -177,14 +178,14 @@ class FakeLauncher:
         cwd: Path,
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
-        request: bytes | None = None,
+        request: bytes | PowerShellRequest | None = None,
         *,
         warm: bool = True,
     ) -> FakeProcess:
         self.argv.append(list(argv))
         self.cwds.append(cwd)
         self.envs.append(dict(env))
-        self.requests.append(request)
+        self.requests.append(request.data if isinstance(request, PowerShellRequest) else request)
         self.warm.append(warm)
         if self.gate is not None:
             await self.gate.wait()

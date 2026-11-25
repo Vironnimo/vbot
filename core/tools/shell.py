@@ -637,9 +637,8 @@ class ShellTool:
                 permissions=context.permissions,
                 execution_owner=context.execution_owner,
                 on_output=progress,
-                request=start.request.data if start.request is not None else None,
+                request=start.request,
                 warm=start.warm,
-                not_run_codes=start.request.not_run_codes if start.request is not None else None,
                 consumed_once_secrets=spent,
             )
         except (OSError, CommandManagerError) as error:

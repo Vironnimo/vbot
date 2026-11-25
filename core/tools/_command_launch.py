@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -75,7 +76,8 @@ from core.utils.processes import (
     wait_for_exit,
 )
 
-from ._command_types import CommandProcess
+from ._command_types import CommandProcess, NotRunReason
+from ._powershell import PowerShellRequest
 from .process_tree import ProcessTree, ProcessTreeTracker
 
 _LOGGER = get_logger("tools.command_launch")
@@ -101,6 +103,8 @@ class PipeCommandProcess:
         self._tree = tree
         self._writer = writer
         self._child_exit = child_exit
+        self._receipt: int | None = None
+        self._not_run_codes: Mapping[int, NotRunReason] = {}
 
     @property
     def pid(self) -> int:
@@ -121,7 +125,23 @@ class PipeCommandProcess:
             code = await self._child_exit.wait()
             if code is not None:
                 return code
-        return await wait_for_exit(self._process)
+        code = await wait_for_exit(self._process)
+        # A successful pipe write can leave the entire request in the kernel
+        # buffer. Only the bootstrap can confirm it received the command.
+        if (
+            sys.platform == "win32"
+            and self._receipt is not None
+            and code not in self._not_run_codes
+        ):
+            import _winapi
+
+            if _winapi.WaitForSingleObject(self._receipt, 0) == _winapi.WAIT_TIMEOUT:
+                return next(
+                    code
+                    for code, reason in self._not_run_codes.items()
+                    if reason == "request_unreadable"
+                )
+        return code
 
     def interrupt(self) -> bool:
         if sys.platform == "win32":
@@ -148,6 +168,11 @@ class PipeCommandProcess:
 
     def close(self) -> None:
         self._close_writer()
+        if sys.platform == "win32" and self._receipt is not None:
+            import _winapi
+
+            _winapi.CloseHandle(self._receipt)
+            self._receipt = None
         if self._child_exit is not None:
             self._child_exit.close()
         transport = cast(Any, self._process)._transport
@@ -161,18 +186,29 @@ class PipeCommandProcess:
         """Whether the process has not exited, as far as the Event Loop has seen."""
         return self._process.returncode is None
 
-    def send(self, request: bytes) -> None:
+    def send(self, request: bytes | PowerShellRequest) -> None:
         """Write *request* to stdin and close it, on a thread of its own.
 
         The write waits while the pipe is full, until the shell reads or exits;
-        a shell that exited loses the request and reports its own exit.
+        a PowerShell bootstrap confirms receipt before it can run the command.
         """
         writer, self._writer = self._writer, None
         if writer is None:
             raise RuntimeError("This process takes no request")
         try:
+            if isinstance(request, PowerShellRequest):
+                if sys.platform != "win32":
+                    raise ValueError("PowerShell requests require Windows")
+                import _winapi
+
+                name = "Local\\vBot-shell-" + secrets.token_hex(16)
+                self._receipt = _winapi.CreateEventW(0, True, False, name)
+                self._not_run_codes = request.not_run_codes
+                data = request.with_receipt(name)
+            else:
+                data = request
             threading.Thread(
-                target=_write_and_close, args=(writer, request), name="command-request", daemon=True
+                target=_write_and_close, args=(writer, data), name="command-request", daemon=True
             ).start()
         except BaseException:
             # Nothing would write the request: end the shell and release its pipe and Job.
@@ -194,9 +230,7 @@ class PipeCommandProcess:
             self._tree.close()
         with contextlib.suppress(OSError, RuntimeError):
             # Kills the root where the tree cannot (POSIX) and closes the pipes.
-            transport = cast(Any, self._process)._transport
-            if transport is not None:
-                transport.close()
+            self.close()
 
     def _close_writer(self) -> None:
         writer, self._writer = self._writer, None
@@ -209,9 +243,12 @@ def _write_and_close(writer: int, request: bytes) -> None:
     try:
         view = memoryview(request)
         while view:
-            view = view[os.write(writer, view) :]
+            written = os.write(writer, view)
+            if not written:
+                raise OSError("The command request pipe stopped accepting bytes")
+            view = view[written:]
     except OSError:
-        pass
+        _LOGGER.debug("Writing a shell request failed", exc_info=True)
     finally:
         with contextlib.suppress(OSError):
             os.close(writer)
@@ -307,7 +344,7 @@ class ShellProcess(CommandProcess, Protocol):
 
     def running(self) -> bool: ...
 
-    def send(self, request: bytes) -> None: ...
+    def send(self, request: bytes | PowerShellRequest) -> None: ...
 
     def kill(self) -> None: ...
 
@@ -371,7 +408,7 @@ class PipeLauncher:
         cwd: Path,
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
-        request: bytes | None = None,
+        request: bytes | PowerShellRequest | None = None,
         *,
         warm: bool = True,
     ) -> ShellProcess:

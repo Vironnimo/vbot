@@ -301,7 +301,7 @@ class CommandRecord:
             ),
             not_run=(
                 self._not_run_codes.get(self._exit_code)
-                if self.ended and self._exit_code is not None
+                if self.ended and self._stop_reason is None and self._exit_code is not None
                 else None
             ),
             log_loss=log_loss,
@@ -715,7 +715,7 @@ class CommandRecord:
         """
         self._exit_code = exit_code
         reason = self._not_run_codes.get(exit_code)
-        if reason is not None:
+        if reason is not None and self._stop_reason is None:
             _LOGGER.warning(
                 "Command %s did not run: its shell reported %s",
                 self.command_id,

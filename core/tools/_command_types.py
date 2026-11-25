@@ -8,13 +8,16 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.utils.errors import VBotError
 
 from .process_tree import ProcessTree, ProcessTreeTracker, RunningProcess
+
+if TYPE_CHECKING:
+    from ._powershell import PowerShellRequest
 
 # At most this many commands run at once, server-wide; launches in progress count.
 COMMAND_MAX_LIVE = 64
@@ -292,7 +295,7 @@ class CommandLauncher(Protocol):
         cwd: Path,
         env: Mapping[str, str],
         tracker: ProcessTreeTracker,
-        request: bytes | None = None,
+        request: bytes | PowerShellRequest | None = None,
         *,
         warm: bool = True,
     ) -> CommandProcess:

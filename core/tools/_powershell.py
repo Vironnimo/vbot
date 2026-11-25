@@ -16,11 +16,13 @@ Request. ASCII lines: the request's not-run code (below) in nine decimal
 digits, then each field as Base64 of its UTF-8 text: the workdir, the command,
 the call's protected folders (one per line; Guards below),
 one line per environment change (the name, then a space and the value; the name
-alone removes the variable), and ``.`` as the last line, so a request that
-ended early is never taken for a complete one. PowerShell hands stdin to
+alone removes the variable), and a final terminator. The command launcher sends
+the name of a per-request Windows event as that terminator. After applying the
+complete request and before parsing the command, the bootstrap signals the event.
+Standalone input uses ``.`` without a receipt. PowerShell hands stdin to
 the command as ``$input`` lines, and its own reader holds the input: a direct
 read of the console input stream races with it, ``$input`` does not. A trailing
-empty line does not reach ``$input``, which the closing ``.`` makes harmless.
+empty line does not reach ``$input``, which the terminator makes harmless.
 
 Workdir. The bootstrap sets PowerShell's location and the process's current
 directory, which native programs and .NET methods use. A shell started in its
@@ -41,8 +43,9 @@ match is possible: the base is drawn from almost 900 million values. A fixed
 code was no proof: a command that
 ran, printed nothing and exited with it read as one that never ran (shell
 review 2026-10-13). A request too short to carry its code ends the shell with
-``REQUEST_UNREADABLE_EXIT_CODE``, reported as an exit code like any other: vBot
-writes every request whole, so only a shell whose input was cut meets it.
+``REQUEST_UNREADABLE_EXIT_CODE``. Without a receipt, only the request-specific
+codes can identify a refusal. With a receipt, an unsignalled event also proves
+the bootstrap never reached the command, even if PowerShell exited with zero.
 
 Console encodings. Native programs write and read bytes in the console's code
 pages, which default to a legacy OEM page that cannot represent most non-ASCII
@@ -576,7 +579,11 @@ $__vbotNotRun = {unreadable}
 try {
     if (-not [regex]::IsMatch($__vbotRequest[0], '^[0-9]{9}$')) { throw 'no not-run code' }
     $__vbotNotRun = [int]$__vbotRequest[0]
-    if ($__vbotRequest.Count -lt 5 -or $__vbotRequest[-1] -ne '.') { throw 'ended early' }
+    if ($__vbotRequest.Count -lt 5) { throw 'ended early' }
+    $__vbotReceipt = $null
+    if ($__vbotRequest[-1] -cmatch '^@Local\\vBot-shell-[0-9a-f]{32}$') {
+        $__vbotReceipt = $__vbotRequest[-1].Substring(1)
+    } elseif ($__vbotRequest[-1] -ne '.') { throw 'ended early' }
     $__vbotUtf8 = [System.Text.Encoding]::UTF8
     $__vbotWorkdir = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[1]))
     $__vbotCommand = $__vbotUtf8.GetString([Convert]::FromBase64String($__vbotRequest[2]))
@@ -604,6 +611,13 @@ if ($PWD.ProviderPath -ne $__vbotWorkdir) {
     } catch {
         exit ($__vbotNotRun + 1)
     }
+}
+if ($__vbotReceipt) {
+    try {
+        $__vbotEvent = [Threading.EventWaitHandle]::OpenExisting($__vbotReceipt)
+        try { if (-not $__vbotEvent.Set()) { throw 'receipt failed' } }
+        finally { $__vbotEvent.Dispose() }
+    } catch { exit $__vbotNotRun }
 }
 """
 REQUEST_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", REQUEST_STATEMENTS)
@@ -674,6 +688,12 @@ class PowerShellRequest:
     # The exit codes the bootstrap ends with, without output, when it runs nothing
     # of the command, and why (``CommandManager.launch``). Drawn for this request.
     not_run_codes: Mapping[int, NotRunReason]
+
+    def with_receipt(self, name: str) -> bytes:
+        """Require the bootstrap to signal *name* before processing the command."""
+        if not self.data.endswith(b"\n.\n"):
+            raise ValueError("PowerShell request lacks its terminator")
+        return self.data[:-2] + b"@" + name.encode("ascii") + b"\n"
 
 
 def powershell_request(

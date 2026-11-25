@@ -31,7 +31,7 @@ from core.tools._command_launch import (
     launch_pipe_process,
 )
 from core.tools._interpreter_host import InterpreterHost
-from core.tools._powershell import powershell_bootstrap, powershell_request
+from core.tools._powershell import PowerShellRequest, powershell_bootstrap, powershell_request
 from core.tools.command_manager import CommandManager
 from core.tools.process_tree import ProcessTree, ProcessTreeTracker, track_process_tree
 from core.tools.scratch_areas import ScratchFolder
@@ -138,8 +138,8 @@ class FakeShell(FakeProcess):
     def running(self) -> bool:
         return not self.killed and not self._exit.done()
 
-    def send(self, request: bytes) -> None:
-        self.requests.append(request)
+    def send(self, request: bytes | PowerShellRequest) -> None:
+        self.requests.append(request.data if isinstance(request, PowerShellRequest) else request)
 
     def kill(self) -> None:
         self.killed = True
@@ -508,7 +508,7 @@ async def test_a_claimed_warm_shell_runs_the_command_in_its_workdir_and_environm
             origin_run_id="run-a",
             formatter=format_report,
             permissions=PermissionBoundary.UNRESTRICTED,
-            request=powershell_request(text, str(cwd), request_changes).data,
+            request=powershell_request(text, str(cwd), request_changes),
         )
         assert await manager.wait(handle.command_id, seconds=60) == "ended"
         report = manager.report(handle.command_id)

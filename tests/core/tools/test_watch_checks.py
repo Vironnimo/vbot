@@ -43,8 +43,8 @@ class _Shell(FakeProcess):
         self.requests: list[bytes] = []
         self.killed = False
 
-    def send(self, request: bytes) -> None:
-        self.requests.append(request)
+    def send(self, request: bytes | PowerShellRequest) -> None:
+        self.requests.append(request.data if isinstance(request, PowerShellRequest) else request)
 
     def kill(self) -> None:
         self.killed = True

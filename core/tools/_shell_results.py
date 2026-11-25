@@ -287,8 +287,8 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     """Why the shell ran nothing of an ended command and what to do, and whether a
     retry can help; None when the command ran.
 
-    Only the shell's own report counts (``CommandReport.not_run``): an exit code
-    alone, such as a reserved one, can be the command's.
+    The request receipt and its refusal codes establish ``CommandReport.not_run``.
+    A fixed exit code alone can be the command's.
     """
     problem = _not_run_problem(report)
     if problem is None or not report.consumed_once_secrets:
