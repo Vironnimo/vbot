@@ -35,7 +35,7 @@
   const archived = $derived(model.factory?.state === 'archived');
   const activeMembers = $derived(
     (model.members || []).filter(
-      (item) => item.state === 'active' && item.profile_available !== false,
+      (item) => item.state === 'active' && Boolean(item.profile_available),
     ),
   );
   const agentName = (member) =>
@@ -100,7 +100,8 @@
       formError = t('factory.team.required');
       return;
     }
-    const result = await model.mutate('member.create', {
+    const operation = form.newAgent ? 'member.create' : 'member.add';
+    const result = await model.mutate(operation, {
       factory_id: model.factory.id,
       role: form.role,
       instructions: form.instructions,

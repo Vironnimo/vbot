@@ -151,7 +151,7 @@
         </section>
       {/if}
 
-      {#if run.group_id && run.participant_id}
+      {#if run.session_address && run.group_id && run.participant_id}
         <section class="factory-panel">
           <h3>{t('factory.run.session')}</h3>
           <div class="factory-session-slot">
@@ -162,6 +162,11 @@
               presentation="conversation"
             />
           </div>
+        </section>
+      {:else if run.state === 'queued'}
+        <section class="factory-panel">
+          <h3>{t('factory.run.session')}</h3>
+          <p class="factory-subtle">{t('factory.run.sessionPending')}</p>
         </section>
       {/if}
     </div>

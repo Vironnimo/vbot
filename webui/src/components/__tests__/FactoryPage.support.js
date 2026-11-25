@@ -222,6 +222,7 @@ export function createFactoryBridge({ established = true } = {}) {
   const operation = vi.fn(async (name, args = {}) => {
     if (name === 'catalog') {
       return {
+        triggers_available: true,
         catalog: {
           permission_profiles: ['full_access', 'restricted'],
           projects: [
@@ -318,17 +319,48 @@ export function createFactoryBridge({ established = true } = {}) {
       return { member: clone(findMember(args.id)) };
     }
 
+    if (name === 'member.add') {
+      if (!args.factory_id || !args.agent_id) {
+        throw Object.assign(new Error('invalid_request'), {
+          code: 'invalid_request',
+        });
+      }
+      const agentNames = { planner: 'Planner', reviewer: 'Reviewer' };
+      const created = {
+        id: `mem-${state.members.length + 1}`,
+        factory_id: args.factory_id,
+        agent_id: args.agent_id,
+        agent_name: agentNames[args.agent_id] || args.agent_id,
+        role: args.role || '',
+        instructions: args.instructions || '',
+        agent_proof: 'linked-stamp',
+        profile_available: true,
+        created_by_factory: false,
+        config: {},
+        capacity: 1,
+        state: 'active',
+        revision: 1,
+      };
+      state.members.push(created);
+      return { member: clone(created) };
+    }
+
     if (name === 'member.create') {
+      if (!args.factory_id || !args.name || !args.request_id) {
+        throw Object.assign(new Error('invalid_request'), {
+          code: 'invalid_request',
+        });
+      }
       const created = {
         id: `mem-${state.members.length + 1}`,
         factory_id: args.factory_id,
         agent_id: args.agent_id || `custom-${state.members.length + 1}`,
-        agent_name: args.name || args.agent_id || 'Specialist',
+        agent_name: args.name,
         role: args.role || '',
         instructions: args.instructions || '',
         agent_proof: 'spec-stamp',
         profile_available: true,
-        created_by_factory: !args.agent_id,
+        created_by_factory: true,
         config: {},
         capacity: 1,
         state: 'active',

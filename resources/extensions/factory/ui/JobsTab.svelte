@@ -35,7 +35,7 @@
   const archived = $derived(model.factory?.state === 'archived');
   const activeMembers = $derived(
     (model.members || []).filter(
-      (item) => item.state === 'active' && item.profile_available !== false,
+      (item) => item.state === 'active' && Boolean(item.profile_available),
     ),
   );
   const agentOptions = $derived([
@@ -302,14 +302,25 @@
           <header class="factory-triggers-header">
             <h3>{t('factory.jobs.triggers')}</h3>
             <div class="factory-triggers-add">
-              <Button variant="secondary" onClick={() => addTrigger('schedule')}
+              <Button
+                variant="secondary"
+                disabled={model.catalog.triggers_available === false}
+                onClick={() => addTrigger('schedule')}
                 >{t('factory.jobs.addSchedule')}</Button
               >
-              <Button variant="secondary" onClick={() => addTrigger('webhook')}
+              <Button
+                variant="secondary"
+                disabled={model.catalog.triggers_available === false}
+                onClick={() => addTrigger('webhook')}
                 >{t('factory.jobs.addWebhook')}</Button
               >
             </div>
           </header>
+          {#if model.catalog.triggers_available === false}
+            <Banner variant="warn"
+              >{t('factory.error.triggersUnavailable')}</Banner
+            >
+          {/if}
           {#each form.triggers as item, index (item.id)}
             <TriggerEditor
               bind:trigger={form.triggers[index]}

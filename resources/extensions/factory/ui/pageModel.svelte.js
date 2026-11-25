@@ -1,4 +1,4 @@
-import { onMount, untrack } from 'svelte';
+import { onMount } from 'svelte';
 import { init } from '@vbot/extension-sdk/lib/i18n.js';
 import { createExtensionPageClient } from '@vbot/extension-sdk/client';
 import { applyExtensionTheme } from '@vbot/extension-sdk/lib/extensionTheme.js';
@@ -76,7 +76,12 @@ export function createFactoryPageModel(bridgeClient) {
   async function loadCatalog() {
     const result = await call('catalog');
     if (disposed) return;
-    const nextCatalog = result.catalog ?? result ?? {};
+    const nextCatalog = {
+      ...(result.catalog ?? result ?? {}),
+      ...(result.triggers_available !== undefined
+        ? { triggers_available: result.triggers_available }
+        : {}),
+    };
     if (pickers) heldCatalog = nextCatalog;
     else catalog = nextCatalog;
   }
@@ -169,7 +174,7 @@ export function createFactoryPageModel(bridgeClient) {
     return refreshPromise;
   }
 
-  async function applyRoute(next, { load = true } = {}) {
+  async function applyRoute(next, { initial = false } = {}) {
     const valid =
       next === '' ||
       next === '/' ||
@@ -181,13 +186,11 @@ export function createFactoryPageModel(bridgeClient) {
       next = '';
     }
     const normalized = next === '/' ? '' : next;
-    if (route === normalized && connected) return;
+    if (!initial && route === normalized) return;
     route = normalized;
     error = '';
-    if (load) {
-      loading = true;
-      await refresh();
-    }
+    loading = true;
+    await refresh();
   }
 
   async function navigate(next) {
@@ -247,17 +250,6 @@ export function createFactoryPageModel(bridgeClient) {
     }
   }
 
-  let observedRoute = null;
-  $effect(() => {
-    const current = route;
-    untrack(() => {
-      if (connected && current !== observedRoute) {
-        observedRoute = current;
-        void refresh();
-      }
-    });
-  });
-
   onMount(() => {
     configureModelFavorites({
       read: () => client.readModelFavorites(),
@@ -270,8 +262,7 @@ export function createFactoryPageModel(bridgeClient) {
       void init({ locale: context.locale });
       const initialLoad = !connected;
       connected = true;
-      observedRoute = context.route === '/' ? '' : (context.route ?? '');
-      void applyRoute(context.route ?? '', { load: initialLoad });
+      void applyRoute(context.route ?? '', { initial: initialLoad });
       if (initialLoad) void loadModelFavorites().catch(() => {});
     });
     const offInvalidation = client.onInvalidation(({ change } = {}) => {

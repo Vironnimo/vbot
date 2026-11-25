@@ -132,6 +132,7 @@ export default {
   'factory.run.cancel': 'Cancel Run',
   'factory.run.openInChat': 'Open in Chat',
   'factory.run.session': 'Run Session',
+  'factory.run.sessionPending': 'Session will appear once the Job Run starts.',
   'factory.run.created': 'Created {time}',
   'factory.run.finished': 'Finished {time}',
 

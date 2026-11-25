@@ -188,11 +188,39 @@ describe('FactoryPage', () => {
     ).click();
     await settle();
 
-    expect(calls(operation, 'member.create')[0][1]).toMatchObject({
+    expect(calls(operation, 'member.add')[0][1]).toMatchObject({
       factory_id: 'fac-one',
       agent_id: 'reviewer',
       role: 'Code Reviewer',
     });
+    expect(calls(operation, 'member.create')).toHaveLength(0);
+
+    // Create a new Agent specialist
+    button(t('factory.team.addMember')).click();
+    await settle();
+    document
+      .querySelector(
+        `[role="dialog"] [aria-label="${t('factory.team.newAgent')}"]`,
+      )
+      .click();
+    await settle();
+    fill('member-new-name', 'Tester');
+    await choose('member-new-model', 'demo/worker');
+    fill('member-role', 'QA');
+    button(
+      t('factory.team.addMember'),
+      document.querySelector('[role="dialog"]'),
+    ).click();
+    await settle();
+
+    expect(calls(operation, 'member.create')[0][1]).toMatchObject({
+      factory_id: 'fac-one',
+      name: 'Tester',
+      model: 'demo/worker',
+      role: 'QA',
+      request_id: expect.any(String),
+    });
+    expect(document.body.textContent).toContain('Tester');
 
     // Settings tab & Archive
     button(t('factory.tabs.settings')).click();
@@ -205,5 +233,67 @@ describe('FactoryPage', () => {
     expect(calls(operation, 'factory.archive')[0][1]).toMatchObject({
       id: 'fac-one',
     });
+  });
+
+  it('reloads target data when navigating from Overview to a Job Run detail route', async () => {
+    const { bridge, operation } = createFactoryBridge();
+    await render(bridge, '/factory/fac-one');
+
+    expect(calls(operation, 'job_run.get')).toHaveLength(0);
+
+    button(t('factory.dashboard.inspect')).click();
+    await settle();
+
+    expect(calls(operation, 'job_run.get')).toHaveLength(1);
+    expect(calls(operation, 'job_run.get')[0][1]).toEqual({
+      run_id: 'jrun-attn',
+    });
+    expect(document.body.textContent).toContain(
+      'Should I proceed with migration?',
+    );
+  });
+
+  it('waits to mount SessionEmbed on queued Job Runs until session_address is set', async () => {
+    const { bridge, state } = createFactoryBridge();
+    state.runs.push({
+      id: 'jrun-queued',
+      factory_id: 'fac-one',
+      job_id: 'fjob-manual',
+      job_name: 'Release Notes',
+      member_id: 'mem-leader',
+      state: 'queued',
+      origin: 'manual',
+      group_id: 'fjob.jrun-queued',
+      participant_id: 'worker',
+      prompt: 'Draft release notes',
+      input_note: '',
+      question: '',
+      reason: '',
+      summary: '',
+      session_address: null,
+      revision: 1,
+      created_at: '2026-11-25T09:10:00Z',
+      updated_at: '2026-11-25T09:10:00Z',
+      finished_at: null,
+    });
+
+    await render(bridge, '/job-run/jrun-queued');
+
+    expect(bridge.mountSession).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(
+      t('factory.run.sessionPending'),
+    );
+
+    const run = state.runs.find((item) => item.id === 'jrun-queued');
+    run.state = 'running';
+    run.session_address = {
+      agent_id: 'planner',
+      project_id: 'project-a',
+      session_id: 'sess-queued',
+    };
+    bridge.invalidate({ resource: 'job_runs' });
+    await settle();
+
+    expect(bridge.mountSession).toHaveBeenCalled();
   });
 });
