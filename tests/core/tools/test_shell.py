@@ -378,6 +378,11 @@ async def test_agent_secrets_reach_only_the_command_environment(
                 {"BASH_ENV": "{{secret:GITHUB.password}}"},
                 {"Path": "{{secret:GITHUB.password}}"},
                 {"GIT_CONFIG_SYSTEM": "alternate.conf"},
+                *(
+                    [{"PathExt": ".EXE"}, {"ComSpec": "{{secret:GITHUB.password}}"}]
+                    if sys.platform == "win32"
+                    else []
+                ),
             ):
                 blocked = await shell.call({"command": "echo ok", "env": env})
                 assert blocked["error"]["code"] == "invalid_arguments"
