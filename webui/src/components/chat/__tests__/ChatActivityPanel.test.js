@@ -504,8 +504,14 @@ describe('ChatActivityPanel', () => {
   });
 
   it('shows calm empty states when the Session has no work or changes', () => {
-    openPanel({ timelineItems: [], reflectionTasks: [], sessionStats: null });
+    openPanel({
+      timelineItems: [],
+      reflectionTasks: [],
+      sessionStats: null,
+      usage: { total: { calls: 0, cost_usd: 0 }, subAgentCount: 0 },
+    });
 
+    expect(document.querySelector('[data-card="usage"]')).toBeNull();
     expect(cardSummary('tasks')).toBe(t('chat.activity.empty'));
     expect(cardSummary('changes')).toBe(t('chat.activity.overview.noChanges'));
     // Cards without details have nothing to unfold.
@@ -619,6 +625,7 @@ describe('ChatActivityPanel', () => {
           output_tokens: 3400,
           cache_read_tokens: 117360,
           cost_usd: 1.25,
+          allowance_usd: 0.08,
         },
         subAgentCount: 2,
       },
@@ -655,6 +662,7 @@ describe('ChatActivityPanel', () => {
       t('chat.activity.overview.tokens'),
       t('chat.activity.overview.cache'),
       t('chat.activity.overview.cost'),
+      t('statistics.cost.allowance'),
     ]);
     // Usage and changes cover the Session and its Sub-Agents.
     expect(
@@ -665,6 +673,7 @@ describe('ChatActivityPanel', () => {
     );
     expect(facts[t('chat.activity.overview.cache')].textContent).toBe('97.8%');
     expect(facts[t('chat.activity.overview.cost')].textContent).toBe('$1.25');
+    expect(facts[t('statistics.cost.allowance')].textContent).toBe('$0.08');
     // The changed files show in the card itself.
     expect(
       [

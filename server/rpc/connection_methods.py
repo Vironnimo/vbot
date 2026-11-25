@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS
 from core.providers.accounts import (
     CREDENTIAL_KEY_ACCOUNT_SEPARATOR,
     DEFAULT_ACCOUNT_ID,
@@ -107,6 +108,8 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
         elif enabled and getattr(connection, "auto_refresh", False):
             await runtime.maybe_refresh_local_catalogs(force=True)
             reachable = _connection_reachability(runtime, public_connection_id)
+        elif enabled and not was_enabled and provider_id in WORKSPACE_CATALOG_PROVIDERS:
+            runtime.start_account_catalog_refresh(provider_id)
         configured = await _CONNECTION_WORKERS.run(
             runtime.provider_credentials.has_credentials, provider_id, public_connection_id
         )
@@ -615,6 +618,8 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
             if success:
                 # Sockets opened with the account's previous token end here.
                 await state.runtime.close_connection_transports(provider_id, connection.id)
+                if provider_id in WORKSPACE_CATALOG_PROVIDERS:
+                    state.runtime.start_account_catalog_refresh(provider_id)
             _publish_provider_auth_completed_event(
                 state,
                 provider_id=provider_id,

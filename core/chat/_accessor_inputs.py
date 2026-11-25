@@ -12,6 +12,7 @@ from core.agents import app_chat_profile
 from core.chat._queued_input import QueuedChatInput
 from core.chat._run_state import _RunRequest
 from core.chat._secret_capture import capture_user_input
+from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.app_view import app_view_note
 from core.chat.content_blocks import ContentBlock, masked_content
 from core.chat.errors import ChatError
@@ -23,7 +24,7 @@ from core.chat.messages import (
     _display_content_preview,
     queue_content_is_editable,
 )
-from core.chat.model_resolution import _ensure_provider_exists, _resolve_agent_connection
+from core.chat.model_resolution import validate_run_model
 from core.projects import AgentOverrides
 from core.runs import QueuedRunItem, Run, RunAdmission, RunKind, RunNotFoundError
 from core.sessions import (
@@ -266,8 +267,7 @@ class AccessorInputs:
                 RunKind.SESSION_MESSAGE if sender and sender.kind == "session" else RunKind.USER
             )
             _reject_live_input(agent, run_kind)
-            provider_id, _ = _resolve_agent_connection(deps, agent)
-            _ensure_provider_exists(deps.providers, provider_id)
+            await _CHAT_TRANSFORM_WORKERS.run(validate_run_model, deps, agent)
             session_agent = agent
             if run_overrides is not None and not run_overrides.is_empty:
                 session_agent = await resolver.resolve_agent_async(

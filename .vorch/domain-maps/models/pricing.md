@@ -14,6 +14,9 @@ Google bills Lyria 3 Clip, Lyria 3 Pro and Lyria 3.5 per song. Their `google.ove
 
 Pricing selects Context tiers from the complete input of each request (including cache); explicit `tiers` take precedence over legacy `context_over_200k`. Cache reads/writes are removed from ordinary input before applying their rates. Reasoning is already in output and is split only when a distinct rate exists. Zero is a valid price, absent used bucket rates are unknown, and unsupported tier shapes are not silently treated as flat pricing. A finite Provider-reported amount wins over estimation. Prices value API usage; they do not establish actual subscription charges. Chat and Compaction snapshot this result in canonical Usage; historical aggregation and coverage belong to `statistics.md`.
 
+OpenCode Console reports balance charges (zero for included Go usage) and BYOK costs in the Provider amount. A Provider estimate carries `cost.estimated`. `cost.billing_source`, `cost.list_cost_usd`, and `cost.allowance_usd` describe the payer, list price, and Go allowance independently. An explicitly unknown charge stays unknown even if a list price is present. [Console cost contract](https://opencode.ai/docs/console/api/inference/#cost).
+
+
 ## Source and tests
 
 - `core/models/pricing.py`; `tests/core/models/test_pricing.py`

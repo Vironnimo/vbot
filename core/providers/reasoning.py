@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from core.models import REASONING_CONTROL_BUDGET, REASONING_CONTROL_ON_OFF
+from core.utils.errors import ProviderError
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.reasoning")
@@ -522,6 +523,34 @@ def remove_reasoning_kwargs(
 
     for parameter_name in parameter_names:
         kwargs.pop(parameter_name, None)
+
+
+_REQUIRES_REASONING = re.compile(
+    r"\b(?:reasoning|thinking)(?: mode)? (?:is (?:mandatory|required)|cannot be disabled|"
+    r"must be enabled)\b",
+    re.IGNORECASE,
+)
+
+
+def rejected_disabled_reasoning(error: ProviderError) -> bool:
+    """Allow the utility's default-effort retry on an explicit rejection of reasoning off."""
+    if (
+        error.retryable
+        or error.status_code not in (None, 400, 422)
+        or error.failure_class not in (None, "rejected")
+    ):
+        return False
+    detail = str(error).lower()
+    if _REQUIRES_REASONING.search(detail):
+        return True
+    # A parameter validation response can name both the effort and its rejected
+    # value separately (for example an OpenAI-style JSON error with a "param").
+    return (
+        error.status_code in (400, 422)
+        and any(field in detail for field in _BAD_EFFORT_DETAIL_SUBSTRINGS)
+        and re.search(r"\bnone\b", detail) is not None
+        and any(reason in detail for reason in ("unsupported", "not supported", "invalid value"))
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,10 @@ class ChatError(VBotError):
     """Base error for chat domain failures."""
 
 
+class ModelAccessError(ChatError):
+    """A workspace Model cannot run on the requested Provider Accounts."""
+
+
 class ChatMessageValidationError(ChatError):
     """Raised when a canonical chat message is invalid."""
 

@@ -41,6 +41,7 @@ from core.projects import AgentResolver, ProjectStore, RuntimeAgent
 from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
+from core.providers.account_catalogs import account_model_routes
 from core.providers.providers import ProviderRegistry
 from core.runs import (
     ChatRunManager,
@@ -1233,34 +1234,36 @@ class ExtensionHostFactory:
         }
 
     def _extension_catalog_models(self) -> list[dict[str, Any]]:
-        usable_connections_by_provider: dict[str, list[str]] = {}
+        usable_connections_by_provider: dict[str, dict[str, Callable[[str], str | None]]] = {}
 
-        def usable_connections(provider_id: str) -> list[str]:
+        def usable_connections(provider_id: str) -> dict[str, Callable[[str], str | None]]:
             cached = usable_connections_by_provider.get(provider_id)
             if cached is not None:
                 return cached
             try:
                 provider = self.providers.get(provider_id)
             except KeyError:
-                connection_ids: list[str] = []
+                connection_routes: dict[str, Callable[[str], str | None]] = {}
             else:
-                connection_ids = [
-                    connection.id
+                connection_routes = {
+                    connection.id: account_model_routes(
+                        self.provider_credentials, provider_id, f"{provider_id}:{connection.id}"
+                    )
                     for connection in provider.connections
                     if self.provider_credentials.is_usable(
                         provider_id, f"{provider_id}:{connection.id}"
                     )
-                ]
-            usable_connections_by_provider[provider_id] = connection_ids
-            return connection_ids
+                }
+            usable_connections_by_provider[provider_id] = connection_routes
+            return connection_routes
 
         models: list[dict[str, Any]] = []
         for provider_id, model in self.models.query(ModelQuery()):
             # An empty ``connections`` allowlist lets the Model run on every Connection.
             connections = [
                 connection_id
-                for connection_id in usable_connections(provider_id)
-                if model.allows_connection(connection_id)
+                for connection_id, route in usable_connections(provider_id).items()
+                if model.allows_connection(connection_id) and route(model.model_id) is not None
             ]
             if connections:
                 models.append(

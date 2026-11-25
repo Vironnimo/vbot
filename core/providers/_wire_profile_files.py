@@ -224,6 +224,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "message": _string(nullable=True),
     },
     "request": {
+        "input_token_limit": _positive_int(),
         "output_limit_field": _enum(OUTPUT_LIMIT_FIELDS, nullable=True),
         "output_limit_default": _positive_int(),
         "output_limit_cap": _positive_int(),

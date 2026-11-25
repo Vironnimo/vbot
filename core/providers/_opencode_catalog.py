@@ -16,6 +16,7 @@ from core.models.models import (
 from core.models.pricing import TokenPricing, nonnegative_amount
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.reasoning import normalize_thinking_effort
 
 
 def opencode_api_base(base_url: str, api: str) -> str:
@@ -79,24 +80,138 @@ def _text_pricing(raw: Mapping[str, Any], provider_id: str, model_id: str) -> To
     return TokenPricing.from_cost(rates, source=f"{provider_id}:{model_id}")
 
 
+_CHAT_PROTOCOLS = {
+    "chat-completions": "chat_completions",
+    "responses": "responses",
+    "messages": "messages",
+    "generate-content": "gemini",
+}
+_SAMPLING = ("temperature", "top_p", "top_k")
+
+
+def _chat_api(raw: Mapping[str, Any]) -> tuple[str | None, Mapping[str, Any]]:
+    api = _mapping(raw.get("api"))
+    selected = raw.get("recommended_api")
+    if isinstance(selected, str) and selected in _CHAT_PROTOCOLS and (not api or selected in api):
+        return _CHAT_PROTOCOLS[selected], _mapping(api.get(selected))
+    if selected == "interactions" and "generate-content" in api:
+        return "gemini", _mapping(api["generate-content"])
+    for name in api:
+        if name in _CHAT_PROTOCOLS:
+            return _CHAT_PROTOCOLS[name], _mapping(api[name])
+    if api or selected:
+        raise CatalogEntrySkipped("OpenCode chat Model has no supported native route")
+    return None, {}
+
+
+def _chat_modalities(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    result = []
+    for item in value:
+        if isinstance(item, str):
+            kind = "pdf" if item == "application/pdf" else item.partition("/")[0]
+            if kind in ("text", "image", "audio", "video", "pdf") and kind not in result:
+                result.append(kind)
+    return tuple(result)
+
+
+def _chat_reasoning(
+    raw: Mapping[str, Any], fallback: ReasoningCapabilities
+) -> ReasoningCapabilities:
+    supported = raw.get("supported")
+    if not isinstance(supported, bool):
+        return fallback
+    if supported:
+        efforts = raw.get("effort")
+        if isinstance(efforts, list):
+            levels = tuple(level for item in efforts if (level := normalize_thinking_effort(item)))
+            if levels:
+                return ReasoningCapabilities(True, control="levels", levels=levels)
+        budget = raw.get("budget")
+        if isinstance(budget, Mapping):
+            return ReasoningCapabilities(
+                True, control="budget", budget_max=_limit(budget.get("max"))
+            )
+        if raw.get("toggle") is True:
+            return ReasoningCapabilities(True, control="on_off")
+    return ReasoningCapabilities(supported)
+
+
+def _chat_model(
+    raw: Mapping[str, Any], defaults: Mapping[str, Any] | None, provider_id: str
+) -> Model:
+    model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
+    protocol, api = _chat_api(raw)
+    facts: dict[str, Any] = {}
+    if protocol:
+        facts["catalog_protocol"] = protocol
+    field = _mapping(api.get("compatibility")).get("reasoning_field")
+    if isinstance(field, str) and field:
+        facts["interleaved_field"] = field
+
+    limits = _mapping(raw.get("limit"))
+    if input_limit := _limit(limits.get("input")):
+        facts["max_input_tokens"] = input_limit
+    caps = _mapping(raw.get("capabilities"))
+    tools = _mapping(caps.get("tools")).get("supported")
+    if tools is False:
+        facts["tool_calls"] = False
+    structured = caps.get("structured_output")
+    sampling = {key: caps[key] for key in _SAMPLING if isinstance(caps.get(key), bool)}
+    if sampling:
+        facts["sampling"] = sampling
+    parameters = set(model.capabilities.supported_parameters)
+    for key, supported in {**sampling, "tools": tools, "response_format": structured}.items():
+        if supported is True:
+            parameters.add(key)
+        elif supported is False:
+            parameters.discard(key)
+    if isinstance(structured, bool):
+        facts["structured_output"] = structured
+    modalities = _mapping(raw.get("modalities"))
+    inputs = _chat_modalities(modalities.get("input"))
+    outputs = _chat_modalities(modalities.get("output"))
+    # Projection may widen a legacy endpoint's text-only default from models.dev.
+    # These published lists describe the gateway's actual inputs and outputs.
+    exact = {
+        f"{direction}_modalities": values
+        for direction in ("input", "output")
+        if isinstance(values := modalities.get(direction), list)
+        and all(isinstance(value, str) and value for value in values)
+    }
+    if exact:
+        facts["reported_modalities"] = exact
+    family = raw.get("family")
+    return replace(
+        model,
+        family=family if isinstance(family, str) and family else model.family,
+        metadata={provider_id.replace("-", "_"): facts} if facts else {},
+        context_window=_limit(limits.get("context")) or model.context_window,
+        max_output_tokens=_limit(limits.get("output")) or model.max_output_tokens,
+        capabilities=replace(
+            model.capabilities,
+            vision="image" in inputs if inputs else model.capabilities.vision,
+            input_modalities=inputs or model.capabilities.input_modalities,
+            output_modalities=outputs or model.capabilities.output_modalities,
+            supported_parameters=tuple(parameters),
+            task_types=(),
+            tools=tools if isinstance(tools, bool) else model.capabilities.tools,
+            json_mode=structured if isinstance(structured, bool) else model.capabilities.json_mode,
+            reasoning=_chat_reasoning(
+                _mapping(caps.get("reasoning")), model.capabilities.reasoning
+            ),
+        ),
+    )
+
+
 def catalog_model(
     raw: Mapping[str, Any], defaults: Mapping[str, Any] | None, provider_id: str
 ) -> Model:
     """Prefer the gateway's exact chat API and expose only executable task protocols."""
     kind = raw.get("type")
     if kind in (None, "chat"):
-        model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
-        protocol = {
-            "chat-completions": "chat_completions",
-            "responses": "responses",
-            "messages": "messages",
-            "interactions": "gemini",
-        }.get(str(raw.get("recommended_api")))
-        if not protocol:
-            return model
-        return replace(
-            model, metadata={provider_id.replace("-", "_"): {"catalog_protocol": protocol}}
-        )
+        return _chat_model(raw, defaults, provider_id)
     model_id = raw.get("id")
     if not isinstance(model_id, str) or not model_id.strip():
         raise CatalogEntrySkipped("OpenCode task Model has no id")

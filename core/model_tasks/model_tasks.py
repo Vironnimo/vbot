@@ -39,6 +39,7 @@ from core.model_tasks.options import (
     validate_text_embedding_options,
 )
 from core.models import ModelQuery
+from core.providers.account_catalogs import account_model_routes
 from core.providers.accounts import compose_connection_id, validate_account_id
 from core.providers.providers import model_is_local
 from core.providers.wire_profile import WireProfile
@@ -496,7 +497,9 @@ class TaskModelService:
             or not settings_values_equal(previous_options[name], value)
         }
 
-    def _validate_target(self, task_type: str, target: str) -> None:
+    def _validate_target(
+        self, task_type: str, target: str, *, require_usable: bool = False
+    ) -> TaskModelTargetRef:
         target_ref = parse_task_model_target_id(target)
         if target_ref.kind == "local":
             descriptor = self._resolve_local_target(target_ref.local_id)
@@ -504,7 +507,7 @@ class TaskModelService:
                 raise TaskModelValidationError(
                     f"Local target {target!r} does not support {task_type}"
                 )
-            return
+            return target_ref
 
         model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
         if model is None:
@@ -530,6 +533,25 @@ class TaskModelService:
             )
         if task_type == TASK_DECISION and not self.decision_profile(target_ref).supported:
             raise TaskModelValidationError(f"Model target {target!r} has no native Decision route")
+
+        if self._credentials.is_usable(target_ref.provider_id, target_ref.connection_id):
+            route = account_model_routes(
+                self._credentials, target_ref.provider_id, target_ref.connection_id
+            )(target_ref.model_id)
+            if route is None:
+                raise TaskModelValidationError(
+                    f"No Account on this Connection can use Model target {target!r}"
+                )
+            if route != target_ref.connection_id:
+                suffix = route.removeprefix(f"{target_ref.provider_id}:")
+                return parse_task_model_target_id(
+                    public_provider_target_id(target_ref.provider_id, target_ref.model_id, suffix)
+                )
+        elif require_usable:
+            raise TaskModelValidationError(
+                f"The configured {task_type} Connection is disabled or has no usable Account"
+            )
+        return target_ref
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         """Return the configured binding for *task_type*."""
@@ -573,8 +595,7 @@ class TaskModelService:
             return False
         for binding in (primary, *primary.fallbacks):
             try:
-                self.validate_execution_target(binding)
-                target_ref = parse_task_model_target_id(binding.target)
+                target_ref = self.validate_execution_target(binding)
                 if target_ref.kind == "local":
                     self.validate_binding(
                         task_type, {"target": binding.target, "options": dict(binding.options)}
@@ -586,7 +607,7 @@ class TaskModelService:
                 continue
         return False
 
-    def validate_execution_target(self, binding: TaskModelBinding) -> None:
+    def validate_execution_target(self, binding: TaskModelBinding) -> TaskModelTargetRef:
         """Validate the selected binding against live target and credential state.
 
         Save-time validation and target discovery cannot authorize a later
@@ -596,15 +617,7 @@ class TaskModelService:
         Local executors retain ownership of their availability/error details.
         """
 
-        self._validate_target(binding.task_type, binding.target)
-        target_ref = parse_task_model_target_id(binding.target)
-        if target_ref.kind == "provider" and not self._credentials.is_usable(
-            target_ref.provider_id, target_ref.connection_id
-        ):
-            raise TaskModelValidationError(
-                f"The configured {binding.task_type} Connection is disabled "
-                "or has no usable Account"
-            )
+        return self._validate_target(binding.task_type, binding.target, require_usable=True)
 
     def options(self, task_type: str, target: str) -> TaskModelOptionSchema:
         """Return the backend-owned option schema for a target.
@@ -776,46 +789,43 @@ class TaskModelService:
                 if task_type == TASK_IMAGE_UNDERSTANDING
                 else ModelQuery(provider_id=provider_id, tasks=(task_type,))
             )
-            models = [
-                (matched_provider_id, model)
-                for matched_provider_id, model in self._models.query(model_query)
-                if model_supports_task(model, task_type)
-                and any(model.allows_connection(connection.id) for connection in usable_connections)
-            ]
-            decision_profiles: dict[tuple[str, str], DecisionProfile] = {}
-            if task_type == TASK_DECISION:
-                for _, model in models:
-                    for connection in usable_connections:
-                        if not model.allows_connection(connection.id):
-                            continue
-                        profile = self.decision_profile(
+            routes = {
+                connection.id: account_model_routes(
+                    self._credentials, provider_id, f"{provider_id}:{connection.id}"
+                )
+                for connection in usable_connections
+            }
+            matches = []
+            for _, model in self._models.query(model_query):
+                if not model_supports_task(model, task_type):
+                    continue
+                connections = []
+                for connection in usable_connections:
+                    if (
+                        not model.allows_connection(connection.id)
+                        or routes[connection.id](model.model_id) is None
+                    ):
+                        continue
+                    decision = None
+                    if task_type == TASK_DECISION:
+                        decision = self.decision_profile(
                             parse_task_model_target_id(
                                 public_provider_target_id(
                                     provider_id, model.model_id, connection.id
                                 )
                             )
                         )
-                        if profile.supported:
-                            decision_profiles[model.model_id, connection.id] = profile
-                models = [
-                    (matched_provider_id, model)
-                    for matched_provider_id, model in models
-                    if any(
-                        (model.model_id, connection.id) in decision_profiles
-                        for connection in usable_connections
-                    )
-                ]
-            name_counts = Counter(model.name for _, model in models)
-            for matched_provider_id, model in models:
+                        if not decision.supported:
+                            continue
+                    connections.append((connection, decision))
+                if connections:
+                    matches.append((model, connections))
+            name_counts = Counter(model.name for model, _ in matches)
+            for model, connections in matches:
                 # Providers may give a pinned version and its moving alias the
                 # same name. Their wire ids distinguish the actual choices.
                 model_label = model.model_id if name_counts[model.name] > 1 else model.name
-                for connection in usable_connections:
-                    if not model.allows_connection(connection.id):
-                        continue
-                    decision = decision_profiles.get((model.model_id, connection.id))
-                    if task_type == TASK_DECISION and decision is None:
-                        continue
+                for connection, decision in connections:
                     connection_label = getattr(connection, "label", connection.id)
                     label = f"{provider.name} / {model_label}"
                     if multiple_connections:
@@ -823,12 +833,12 @@ class TaskModelService:
                     targets.append(
                         TaskModelTarget(
                             id=public_provider_target_id(
-                                matched_provider_id, model.model_id, connection.id
+                                provider_id, model.model_id, connection.id
                             ),
                             kind="provider",
-                            provider_id=matched_provider_id,
+                            provider_id=provider_id,
                             model_id=model.model_id,
-                            connection_id=f"{matched_provider_id}:{connection.id}",
+                            connection_id=f"{provider_id}:{connection.id}",
                             connection_label=connection_label,
                             label=label,
                             task_types=tuple(

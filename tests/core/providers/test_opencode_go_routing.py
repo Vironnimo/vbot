@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 import respx
 
+from core.models import Model
 from core.providers._responses_wire import estimate_responses_input_tokens
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic_compatible import ANTHROPIC_VERSION
@@ -37,6 +38,7 @@ from .opencode_go_test_support import (
     MESSAGES_URL,
     RESPONSES_COMPLETED,
     RESPONSES_URL,
+    bundled_go,
     catalog_lookup,
     go_adapter,
     go_config,
@@ -80,21 +82,105 @@ def test_request_context_is_an_opaque_prompt_cache_affinity() -> None:
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.parametrize("model_id", ["kimi-k3", "kimi-k3.1-pro"])
 @pytest.mark.asyncio
-async def test_k31_fixed_sampling_leaves_provider_defaults_without_changing_k3(
+async def test_kimi_catalog_fixed_sampling_is_omitted_on_the_wire(
     model_id: str, streaming: bool
 ) -> None:
-    adapter = go_adapter()
+    adapter, _, config = bundled_go()
     try:
         with respx.mock:
-            route = respx.post(CHAT_URL).mock(
-                return_value=success_response("chat", streaming=streaming)
+            url = adapter.openai_compatible_base_url(config.base_url) + "/chat/completions"
+            route = respx.post(url).mock(return_value=success_response("chat", streaming=streaming))
+            await go_request(
+                adapter, model_id, streaming=streaming, temperature=0.3, top_p=0.9, top_k=10
             )
-            await go_request(adapter, model_id, streaming=streaming, temperature=0.3, top_p=0.9)
         payload = json.loads(route.calls.last.request.content)
-        sampling = {key: payload[key] for key in ("temperature", "top_p") if key in payload}
-        assert sampling == (
-            {} if model_id == "kimi-k3.1-pro" else {"temperature": 0.3, "top_p": 0.9}
+        assert {"temperature", "top_p", "top_k"}.isdisjoint(payload)
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize(
+    ("api", "url", "wire"),
+    [
+        ("chat-completions", CHAT_URL, "chat"),
+        ("responses", RESPONSES_URL, "responses"),
+        ("messages", MESSAGES_URL, "messages"),
+        ("generate-content", f"{GATEWAY}/google/v1beta/models/new-model:generateContent", "gemini"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_catalog_parameters_reach_the_selected_native_wire(
+    api: str, url: str, wire: str
+) -> None:
+    routes: dict[str, dict[str, Any]] = {api: {}}
+    raw: dict[str, Any] = {
+        "id": "new-model",
+        "api": routes,
+        "limit": {"context": 512, "input": 64, "output": 128},
+        "capabilities": {
+            "tools": {"supported": False},
+            "structured_output": True,
+            "temperature": False,
+            "top_p": False,
+            "top_k": False,
+        },
+    }
+    if wire == "gemini":
+        raw["recommended_api"] = "interactions"
+        routes["interactions"] = {}
+    elif wire == "chat":
+        # The tools denial also applies on the default wire of a partial listing.
+        raw.pop("api")
+    model = OpenCodeGoAdapter.normalize_catalog_entry(raw)
+    adapter = go_adapter(lambda _: model)
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "additionalProperties": False,
+    }
+    descriptor = {"name": "result", "schema": schema, "strict": True}
+    response_format = {"type": "json_schema", "json_schema": descriptor}
+    tools = [{**CLOSED_TOOL, "description": "too large for the input cap " * 100}]
+    try:
+        tokens = adapter.estimate_request_input_tokens(HELLO, model_id="new-model")
+        assert adapter.input_token_limit("new-model") == 64
+        assert tokens < 64
+        assert (
+            adapter.estimate_request_input_tokens(HELLO, model_id="new-model", tools=tools)
+            == tokens
         )
+        with respx.mock:
+            streaming = wire == "chat"
+            route = respx.post(url).mock(return_value=success_response(wire, streaming=streaming))
+            await go_request(
+                adapter,
+                model_id="new-model",
+                streaming=streaming,
+                **{
+                    **adapter.request_context_kwargs(agent_id="agent", session_id="session"),
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "temperature": 0.8,
+                    "top_p": 0.9,
+                    "top_k": 10,
+                    "response_format": response_format,
+                },
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert "tool_stream" not in body
+        assert {"tools", "tool_choice", "toolConfig", "temperature", "top_p", "top_k"}.isdisjoint(
+            body
+        )
+        if wire == "gemini":
+            assert {"temperature", "topP", "topK"}.isdisjoint(body["generationConfig"])
+            assert body["generationConfig"]["responseJsonSchema"] == schema
+        elif wire == "messages":
+            assert body["output_config"]["format"] == {"type": "json_schema", "schema": schema}
+            assert "response_format" not in body
+        elif wire == "responses":
+            assert body["text"]["format"] == {"type": "json_schema", **descriptor}
+        else:
+            assert body["response_format"] == response_format
     finally:
         await adapter.aclose()
 
@@ -354,6 +440,25 @@ def test_wire_media_support_follows_the_routed_wire() -> None:
 
     assert adapter.wire_media_support("minimax-m2.7") == IMAGE_WIRE_MEDIA_TYPES
     assert adapter.wire_media_support(CHAT_MODEL) == chat_adapter.wire_media_support(CHAT_MODEL)
+
+    def listed_model(model_id: str) -> Model:
+        inputs = {
+            "messages": ["text", "image/jpeg", "image/png", "image/webp"],
+            "responses": ["text", "image/jpeg", "image/png", "application/pdf"],
+            "generate-content": ["text", "image", "video/mp4"],
+        }[model_id]
+        return OpenCodeGoAdapter.normalize_catalog_entry(
+            {"id": model_id, "api": {model_id: {}}, "modalities": {"input": inputs}}
+        )
+
+    listed = go_adapter(listed_model)
+    assert listed.wire_media_support("messages") == {"image/jpeg", "image/png", "image/webp"}
+    # The Responses codec only carries images on Go, even when the Model accepts PDFs.
+    assert listed.wire_media_support("responses") == {"image/jpeg", "image/png"}
+    gemini_images = {
+        mime for mime in adapter.wire_media_support(GEMINI_MODEL) if mime.startswith("image/")
+    }
+    assert listed.wire_media_support("generate-content") == gemini_images | {"video/mp4"}
 
 
 _CHAT_SHAPE = {"choices": [{"message": {"role": "assistant", "content": "chat wire"}}]}

@@ -13,6 +13,7 @@ from core.model_tasks import MusicOptionError, MusicService
 from core.model_tasks.constants import TASK_MUSIC_GENERATION
 from core.model_tasks.music import MusicConfigurationError
 from core.utils.errors import ConfigError
+from tests.core.model_tasks.model_tasks_test_support import configured_task_target
 
 
 class _ModelTasks:
@@ -22,8 +23,7 @@ class _ModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target=self._target, options={})
 
-    def validate_execution_target(self, _binding: object) -> None:
-        pass
+    validate_execution_target = staticmethod(configured_task_target)
 
     def options_with_defaults(self, _binding: object) -> dict[str, Any]:
         return {}

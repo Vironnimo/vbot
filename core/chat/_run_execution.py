@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -25,7 +24,7 @@ from core.chat._message_history import (
     _append_reply_surface_note,
 )
 from core.chat._request_history import _assign_session_image_references
-from core.chat._request_targets import _resolved_model_reference
+from core.chat._request_targets import _ChainRoute
 from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
@@ -63,11 +62,7 @@ from core.chat.messages import (
     ChatMessage,
     ModelFallback,
 )
-from core.chat.model_resolution import (
-    _resolve_fallback_chain,
-    _split_agent_model,
-    parse_bare_model,
-)
+from core.chat.model_resolution import parse_bare_model
 from core.chat.recovery import RouteHealth, RoutePatience
 from core.chat.streaming import model_fallback_scope
 from core.chat.usage import (
@@ -112,58 +107,6 @@ if TYPE_CHECKING:
     from core.compaction import CompactionService
 
 _LOGGER = get_logger("chat")
-
-
-@dataclass(frozen=True)
-class _ChainRoute:
-    """One route of a Run's Model fallback chain, the primary route first."""
-
-    binding: str
-    provider_id: str
-    connection_id: str
-    model_id: str
-    # Exact Provider/Model/Connection/account scope (``_ModelTarget.model_reference``).
-    reference: str
-
-    @property
-    def connection_scope(self) -> str:
-        """The Provider, Connection and account the route's credentials belong to."""
-        return f"{self.provider_id}::{self.reference.partition('::')[2]}"
-
-
-def _resolve_chain_routes(
-    dependencies: ChatLoopDependencies, agent: Any, primary_reference: str
-) -> list[_ChainRoute]:
-    """Resolve and deduplicate the Agent's exact fallback routes. Blocking."""
-    routes = []
-    seen = {primary_reference}
-    for binding, provider_id, connection_id in _resolve_fallback_chain(dependencies, agent):
-        _, model_id = _split_agent_model(binding)
-        try:
-            reference = _resolved_model_reference(
-                dependencies, provider_id, connection_id, model_id
-            )
-        except (ConfigError, VBotError, KeyError) as error:
-            _LOGGER.warning(
-                "Skipping unresolvable fallback model %r for agent %s (%s)",
-                binding,
-                getattr(agent, "id", "?"),
-                error,
-            )
-            continue
-        if reference in seen:
-            continue
-        seen.add(reference)
-        routes.append(
-            _ChainRoute(
-                binding=binding,
-                provider_id=provider_id,
-                connection_id=connection_id,
-                model_id=model_id,
-                reference=reference,
-            )
-        )
-    return routes
 
 
 class RunExecution:
@@ -287,7 +230,7 @@ class RunExecution:
         )
         internal = request.internal
         # The Runs domain logs the one terminal line; Chat supplies the route.
-        run.model = parse_bare_model(agent.model)
+        run.model = parse_bare_model(target.public_model)
         run.model_reference = target.model_reference
         run.run_overrides = request.run_overrides
         start_line_extras = ""
@@ -300,7 +243,7 @@ class RunExecution:
             run.id,
             run.agent_id,
             run.session_id,
-            agent.model,
+            target.public_model,
             target.connection_id,
             start_line_extras,
         )
@@ -876,15 +819,13 @@ class RunExecution:
         primary = context.primary_target
         health = self._route_health
         primary_route = _ChainRoute(
-            binding=agent.model,
+            binding=primary.public_model,
             provider_id=primary.provider_id,
             connection_id=primary.connection_id,
             model_id=primary.model_id,
             reference=primary.model_reference,
         )
-        chain = await _CHAT_TRANSFORM_WORKERS.run(
-            _resolve_chain_routes, self._dependencies, agent, primary.model_reference
-        )
+        chain = context.fallback_routes
         served: set[str] = set()
         excluded_scopes: set[str] = set()
         acquired: dict[str, _ModelTarget] = {}
@@ -913,21 +854,9 @@ class RunExecution:
                     return candidate, primary
                 if candidate.reference in acquired:
                     return candidate, acquired[candidate.reference]
-                try:
-                    target = await self._requests.targets.create(
-                        candidate.provider_id,
-                        candidate.connection_id,
-                        candidate.model_id,
-                        public_model=candidate.binding,
-                    )
-                except (ConfigError, VBotError, KeyError) as construction_exc:
+                target = await self._requests.targets.acquire_fallback(candidate, agent)
+                if target is None:
                     served.add(candidate.reference)
-                    _LOGGER.warning(
-                        "Skipping fallback candidate %s for agent %s (%s)",
-                        candidate.binding,
-                        getattr(agent, "id", "?"),
-                        construction_exc,
-                    )
                     continue
                 acquired[candidate.reference] = target
                 adapters.push_async_callback(close_candidate, candidate.reference)
@@ -955,12 +884,13 @@ class RunExecution:
                             failed_recently=health.failed_recently(route.reference),
                         ),
                     )
-                    if route is not primary_route or previous is not None:
+                    if previous is not None or route.binding != agent.model:
                         await self._switch_route(
                             context,
                             run,
                             session,
-                            from_route=previous or primary_route,
+                            from_route=previous
+                            or (primary_route if primary.public_model == agent.model else None),
                             to_route=route,
                             target=target,
                             failure=last_failure,
@@ -1005,13 +935,14 @@ class RunExecution:
         run: Run,
         session: ChatSession,
         *,
-        from_route: _ChainRoute,
+        from_route: _ChainRoute | None,
         to_route: _ChainRoute,
         target: _ModelTarget,
         failure: ProviderError | RunInterruptedError | None,
     ) -> None:
         """Record the switch to ``to_route`` and rebuild the request for ``target``."""
-        retry_at = self._route_health.retry_at(from_route.reference)
+        from_model = from_route.binding if from_route else context.agent.model
+        retry_at = self._route_health.retry_at(from_route.reference) if from_route else None
         retry_at_text = (
             format_canonical_timestamp(datetime.fromtimestamp(retry_at, UTC))
             if retry_at is not None
@@ -1019,12 +950,11 @@ class RunExecution:
         )
         run.model = parse_bare_model(to_route.binding)
         run.model_reference = target.model_reference
-        if failure is None:
-            # The route gave up in an earlier Run and still cools down.
+        if failure is None and retry_at is not None:
             _LOGGER.info(
                 "Model route cooling down; Run starts on fallback (run=%s from=%s to=%s until=%s)",
                 run.id,
-                from_route.binding,
+                from_model,
                 to_route.binding,
                 retry_at_text,
             )
@@ -1032,21 +962,21 @@ class RunExecution:
             _LOGGER.warning(
                 "Model fallback activated (run=%s from=%s to=%s)",
                 run.id,
-                from_route.binding,
+                from_model,
                 to_route.binding,
             )
         run.emit(
             MODEL_FALLBACK_ACTIVATED_EVENT,
             {
-                "from_model": from_route.binding,
+                "from_model": from_model,
                 "to_model": to_route.binding,
                 **({"retry_at": retry_at_text} if retry_at_text is not None else {}),
             },
         )
         await session.add_note_async(
-            f"Model {from_route.binding} unavailable. Switched to {to_route.binding} for this run.",
+            f"Model {from_model} unavailable. Switched to {to_route.binding} for this run.",
             model_fallback=ModelFallback(
-                from_model=from_route.binding,
+                from_model=from_model,
                 to_model=to_route.binding,
                 retry_at=retry_at_text,
             ),

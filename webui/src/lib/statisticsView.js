@@ -372,11 +372,24 @@ export function tokenTooltip(value, locale = 'en') {
   return formatTokensExact(value, locale);
 }
 
-/**
- * The parts of a cost: the Provider-reported and catalog-estimated amounts
- * with the calls they cover, the calls without a price, and the estimates
- * priced with today's catalog.
- */
+function providerBillingRows(cost, locale) {
+  const rows = [];
+  if (finite(cost.list_cost_usd) !== null) {
+    rows.push({
+      label: t('statistics.cost.listPrice'),
+      value: formatCostExact(cost.list_cost_usd, locale),
+    });
+  }
+  if (finite(cost.allowance_usd) !== null) {
+    rows.push({
+      label: t('statistics.cost.allowance'),
+      value: formatCostExact(cost.allowance_usd, locale),
+    });
+  }
+  return rows;
+}
+
+/** Cost coverage plus any list price and plan usage reported by the Provider. */
 export function costTooltip(totals, locale = 'en') {
   if (!totals) return '';
   const rows = [];
@@ -407,6 +420,7 @@ export function costTooltip(totals, locale = 'en') {
       value: callCount(totals.retrospective_calls),
     });
   }
+  rows.push(...providerBillingRows(totals, locale));
   if (rows.length === 0) return '';
   return { title: formatCostExact(totals.cost_usd, locale), rows };
 }
@@ -534,7 +548,10 @@ export function callCostTooltip(call, locale = 'en') {
   const rows = [];
   let title;
   if (cost.source === 'provider') {
-    title = t('statistics.cost.providerSource');
+    title =
+      cost.estimated === true
+        ? t('statistics.cost.providerEstimate')
+        : t('statistics.cost.providerSource');
   } else if (cost.source === 'catalog') {
     title = call?.retrospective
       ? t('statistics.cost.currentCatalog')
@@ -570,6 +587,13 @@ export function callCostTooltip(call, locale = 'en') {
     if (reason)
       rows.push({ label: t('statistics.cost.reason'), value: reason });
   }
+  if (cost.billing_source) {
+    rows.push({
+      label: t('statistics.cost.billingSource'),
+      value: cost.billing_source,
+    });
+  }
+  rows.push(...providerBillingRows(cost, locale));
   if (call?.estimated_tokens === true) {
     rows.push({
       label: t('statistics.col.tokens'),

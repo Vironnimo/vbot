@@ -30,6 +30,7 @@ from tests.core.model_tasks.model_tasks_test_support import (
     _Providers,
     _registry_model,
     _Storage,
+    configured_task_target,
     task_http_transport,
 )
 
@@ -59,6 +60,7 @@ def service(
     def validate_execution_target(binding):
         if not usable:
             raise TaskModelValidationError("Unavailable target")
+        return configured_task_target(binding)
 
     bindings = SimpleNamespace(
         binding_is_usable=lambda task: usable,
@@ -604,7 +606,7 @@ async def test_execution_keeps_the_binding_snapshot_it_validated(monkeypatch, re
                     max_input_tokens=1,
                 ),
             )
-        sent.append((resolved.target, resolved.profile, resolved.options))
+        sent.append((resolved.ref.target, resolved.profile, resolved.options))
         return {"answers": {}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)

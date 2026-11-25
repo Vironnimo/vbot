@@ -3,27 +3,29 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.chat._run_state import _ModelTarget
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
-from core.chat.errors import ChatError
+from core.chat.errors import ChatError, ModelAccessError
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
     _ensure_provider_exists,
-    _first_usable_connection_id,
-    _model_connection_allowlist,
     _model_family_for_target,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
+    _resolve_fallback_chain,
     _split_agent_model,
     parse_model_with_connection,
     resolve_agent_context_window,
+    resolve_model_target,
     resolve_route_context_window,
 )
 from core.chat.streaming import stream_stall_timeout
 from core.chat.usage import latest_session_context_usage
+from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS, account_model_routes
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.providers import context_capacity
 from core.runs import Run
@@ -68,6 +70,56 @@ def _resolve_request_image_limit(adapter: Any, model_id: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+@dataclass(frozen=True)
+class _ChainRoute:
+    """One route of a Run's Model fallback chain, the primary route first."""
+
+    binding: str
+    provider_id: str
+    connection_id: str
+    model_id: str
+    # Exact Provider/Model/Connection/account scope (``_ModelTarget.model_reference``).
+    reference: str
+
+    @property
+    def connection_scope(self) -> str:
+        """The Provider, Connection and account the route's credentials belong to."""
+        return f"{self.provider_id}::{self.reference.partition('::')[2]}"
+
+
+def _resolve_chain_routes(dependencies: ChatLoopDependencies, agent: Any) -> list[_ChainRoute]:
+    """Resolve and deduplicate the Agent's exact fallback routes. Blocking."""
+    routes = []
+    seen: set[str] = set()
+    for binding, provider_id, connection_id in _resolve_fallback_chain(dependencies, agent):
+        _, model_id = _split_agent_model(binding)
+        try:
+            reference = _resolved_model_reference(
+                dependencies, provider_id, connection_id, model_id
+            )
+        except (ConfigError, VBotError, KeyError) as error:
+            _LOGGER.warning(
+                "Skipping unresolvable fallback model %r for agent %s (%s)",
+                binding,
+                getattr(agent, "id", "?"),
+                error,
+            )
+            continue
+        if reference in seen:
+            continue
+        seen.add(reference)
+        routes.append(
+            _ChainRoute(
+                binding=binding,
+                provider_id=provider_id,
+                connection_id=connection_id,
+                model_id=model_id,
+                reference=reference,
+            )
+        )
+    return routes
+
+
 class RequestTargets:
     """Resolve a request route and own Adapter acquisition until handed to its caller."""
 
@@ -86,6 +138,33 @@ class RequestTargets:
 
         return await self._acquire(binding)
 
+    async def for_run_start(self, agent: Any) -> tuple[_ModelTarget, list[_ChainRoute]]:
+        """Start with the configured Model or the first accessible explicit fallback."""
+        if not getattr(agent, "fallback_models", None):
+            return await self.for_agent(agent), []
+        chain = await _CHAT_TRANSFORM_WORKERS.run(_resolve_chain_routes, self._dependencies, agent)
+        try:
+            primary = await self.for_agent(agent)
+        except ModelAccessError:
+            for index, route in enumerate(chain):
+                target = await self.acquire_fallback(route, agent)
+                if target is not None:
+                    return target, chain[index + 1 :]
+            raise
+        return primary, [route for route in chain if route.reference != primary.model_reference]
+
+    async def acquire_fallback(self, route: _ChainRoute, agent: Any) -> _ModelTarget | None:
+        """Skip a configured fallback whose Adapter or Account is no longer available."""
+        try:
+            return await self.create(
+                route.provider_id, route.connection_id, route.model_id, public_model=route.binding
+            )
+        except (ConfigError, VBotError, KeyError) as exc:
+            _LOGGER.warning(
+                "Skipping fallback candidate %s for agent %s (%s)", route.binding, agent.id, exc
+            )
+            return None
+
     async def create(
         self,
         provider_id: str,
@@ -95,7 +174,20 @@ class RequestTargets:
         public_model: str,
     ) -> _ModelTarget:
         """Acquire an already chosen route without losing an Adapter on cancellation."""
-        return await self._acquire(lambda: (provider_id, connection_id, model_id, public_model))
+
+        def binding() -> tuple[str, str, str, str]:
+            route = connection_id
+            if provider_id in WORKSPACE_CATALOG_PROVIDERS:
+                resolver = self._dependencies.provider_credentials
+                allowed = account_model_routes(resolver, provider_id, connection_id)(model_id)
+                if allowed is None or not resolver.is_usable(provider_id, allowed):
+                    raise ModelAccessError(
+                        f"Model {model_id!r} is unavailable on Connection {connection_id!r}"
+                    )
+                route = allowed
+            return provider_id, route, model_id, public_model
+
+        return await self._acquire(binding)
 
     async def _acquire(self, binding: Callable[[], tuple[str, str, str, str]]) -> _ModelTarget:
         adapter: Any | None = None
@@ -303,14 +395,7 @@ class RequestTargets:
                 )
             ):
                 return adapter, model_id, active_provider_id
-            if connection_suffix:
-                connection_id = f"{provider_id}:{connection_suffix}"
-            else:
-                connection_id = _first_usable_connection_id(
-                    self._dependencies,
-                    provider_id,
-                    _model_connection_allowlist(self._dependencies, provider_id, summary_model_id),
-                )
+            _, _, connection_id = resolve_model_target(self._dependencies, summary_model)
             summary_adapter = self._dependencies.get_adapter(
                 ConnectionRef(provider_id, connection_id)
             )

@@ -370,12 +370,15 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the selected GitHub Copilot wire's rendered request footprint."""
 
-        protocol = self.wire_profile(model_id).protocol
-        if protocol == "responses":
+        profile = self.wire_profile(model_id)
+        if profile.protocol == "responses":
             return estimate_responses_input_tokens(
-                [dict(message) for message in messages], model_id=model_id, tools=tools
+                [dict(message) for message in messages],
+                model_id=model_id,
+                tools=tools,
+                policy=profile_responses_policy(profile, self._catalog_model(model_id)),
             )
-        if protocol == "messages":
+        if profile.protocol == "messages":
             return estimate_copilot_messages_input_tokens(messages, model_id=model_id, tools=tools)
         return super().estimate_request_input_tokens(
             messages,

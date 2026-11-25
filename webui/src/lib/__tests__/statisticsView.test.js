@@ -438,6 +438,23 @@ describe('statisticsView labels and tooltips', () => {
     });
     expect(Object.keys(byLabel(cost))).toHaveLength(3);
     expect(costTooltip({ cost_usd: 0 })).toBe('');
+    const go = { list_cost_usd: 0.015, allowance_usd: 0 };
+    const totals = costTooltip({ cost_usd: 0, ...go });
+    expect(totals.title).toBe('$0.00');
+    expect(byLabel(totals)['Reported list price'].value).toBe('$0.015');
+    expect(byLabel(totals)['Go allowance used'].value).toBe('$0.00');
+    const estimated = callCostTooltip({
+      cost: {
+        source: 'provider',
+        billing_source: 'byok',
+        estimated: true,
+        list_cost_usd: 0.015,
+      },
+    });
+    expect(estimated.title).toBe('Provider estimate');
+    expect(byLabel(estimated)['Billing source'].value).toBe('byok');
+    expect(byLabel(estimated)['Reported list price'].value).toBe('$0.015');
+    expect(byLabel(estimated)['Go allowance used']).toBeUndefined();
 
     // Each basis has its own evidence; stream rates remain approximate.
     const speed = outputSpeedTooltip(

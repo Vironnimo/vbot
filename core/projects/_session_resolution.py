@@ -516,7 +516,12 @@ class SessionResolution:
         return result
 
     def _apply_overrides(
-        self, agent: RuntimeAgent, overrides: AgentOverrides, *, require_model: bool = True
+        self,
+        agent: RuntimeAgent,
+        overrides: AgentOverrides,
+        *,
+        require_model: bool = True,
+        stored_model: bool = False,
     ) -> RuntimeAgent:
         """Return an immutable runtime view with only the overridden fields replaced."""
         if overrides.is_empty:
@@ -527,7 +532,9 @@ class SessionResolution:
         if overrides.changes_permission_rules and getattr(agent, "builtin", None) is None:
             changes["permission_rules"] = overrides.rules_over(agent.permission_rules)
         if require_model and overrides.model is not None:
-            self._owner._model_checker.require_configured(overrides.model)
+            self._owner._model_checker.require_configured(
+                overrides.model, defer_workspace_access=stored_model and bool(agent.fallback_models)
+            )
         if isinstance(agent, ConfigAgent):
             return replace(agent, **changes)
         from core.agents.agents import Agent

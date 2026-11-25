@@ -384,11 +384,15 @@ export default Object.freeze({
   'statistics.compactions.stepsHint':
     'Average saved Chat responses between consecutive checkpoints in the same Session. The first checkpoint has no interval.',
   'statistics.compactions.stepsShort': 'Steps since previous',
+  'statistics.cost.allowance': 'Go allowance used',
+  'statistics.cost.billingSource': 'Billing source',
   'statistics.cost.callCount': '{count} calls',
   'statistics.cost.currentCatalog': 'Current catalog estimate',
   'statistics.cost.estimated': 'Estimated API value',
   'statistics.cost.explanation':
-    'Provider amounts and catalog estimates cover different calls and are shown separately. Estimates account for cache pricing and context tiers. Subscription usage is valued at API prices; this is not your subscription bill.',
+    'The total includes Provider-reported costs and estimates for calls with a known price. Catalog estimates account for cache pricing and context tiers.',
+  'statistics.cost.listPrice': 'Reported list price',
+  'statistics.cost.providerEstimate': 'Provider estimate',
   'statistics.cost.providerSource': 'Provider',
   'statistics.cost.reason.bucket': 'A used token category has no price',
   'statistics.cost.reason.cache': 'Inconsistent cache counters',
@@ -408,7 +412,7 @@ export default Object.freeze({
   'statistics.cost.withoutSession': 'Outside a Session',
   'statistics.cost.source': 'Price source',
   'statistics.cost.subscriptionHint':
-    'Catalog prices applied to usage. For subscriptions this is an API-equivalent value, not an additional charge or subscription bill.',
+    'Catalog estimates show the API value of subscription usage. A call covered by OpenCode Go can show $0.00 in cost and still use some of the plan allowance.',
   'statistics.cost.unknown': 'Unpriced',
   'statistics.cost.unpriced': 'Calls without a price',
   'statistics.limits.activityLoadError': 'vBot activity could not be loaded.',
@@ -557,7 +561,7 @@ export default Object.freeze({
   'statistics.chart.metric.cost': 'Cost',
   'statistics.chart.metric.runs': 'Runs',
   'statistics.chart.metric.tokens': 'Tokens',
-  'statistics.chart.segment.estimated': 'Catalog estimate',
+  'statistics.chart.segment.estimated': 'Estimated cost',
   'statistics.chart.segment.failed': 'Failed',
   'statistics.chart.segment.finished': 'Finished',
   'statistics.chart.segment.input': 'Input',
@@ -726,7 +730,7 @@ export default Object.freeze({
   'statistics.overview.costDetail':
     '{reported} reported · {estimated} estimated',
   'statistics.overview.costHint':
-    'Provider-reported cost plus catalog estimates for calls without one. Subscription usage is valued at API prices; this is not your bill.',
+    'Includes Provider-reported amounts and estimates. Cost details show the list price and Go allowance used when the Provider supplied them.',
   'statistics.overview.failureRate': '{rate} failed',
   'statistics.overview.insightLink': 'Open {tab}',
   'statistics.overview.insights': 'Worth a look',

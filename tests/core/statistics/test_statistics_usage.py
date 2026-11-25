@@ -479,6 +479,62 @@ def test_suspected_cache_breaks_flag_prefix_collapse_and_skip_explained_misses(
 # -- Costs --------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_billing_preserves_provider_estimates_list_prices_and_allowance(
+    manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
+) -> None:
+    session = manager.create("main")
+    _admit(manager, session.address, "run")
+    go = {
+        "amount_usd": 0,
+        "source": "provider",
+        "billing_source": "go",
+        "list_cost_usd": 0.4,
+        "allowance_usd": 0.3,
+    }
+    byok = {
+        "amount_usd": 0.025,
+        "source": "provider",
+        "billing_source": "byok",
+        "estimated": True,
+        "list_cost_usd": 0.5,
+    }
+    for model, cost in (("go/m", go), ("byok/m", byok)):
+        await _call(
+            ledger,
+            {"input_tokens": 10, "output_tokens": 2, "cost": cost},
+            model=model,
+            address=session.address,
+            run_id="run",
+        )
+    await _call(ledger, {"cost": {"source": "unknown", "list_cost_usd": 0}}, model="partial/m")
+    service = statistics(usage_recorder=ledger, clock=_clock)
+
+    usage = _usage(service)
+    session_usage = await service.session_tree_usage_async(session.address, [])
+    for row in (
+        usage["totals"],
+        usage["top_sessions"][0],
+        usage["top_runs"][0],
+        session_usage["session"],
+    ):
+        assert row["cost_usd"] == 0.025
+        assert row["reported_cost_usd"] == 0
+        assert row["estimated_cost_usd"] == 0.025
+        assert row["list_cost_usd"] == 0.9
+        assert row["allowance_usd"] == 0.3
+    models = _rows(usage, "model")
+    assert (models["byok/m"]["reported_calls"], models["byok/m"]["estimated_calls"]) == (0, 1)
+    assert models["byok/m"]["uncached_cost_usd"] == 0
+    assert models["byok/m"]["allowance_usd"] is None
+    partial = models["partial/m"]
+    assert partial["cost_usd"] is None and partial["list_cost_usd"] == 0
+    assert partial["allowance_usd"] is None
+    costs = {row["model"]: row["cost"] for row in usage["recent_calls"]}
+    assert costs["go/m"] == go
+    assert costs["byok/m"] == byok
+
+
 def test_costs_preserve_saved_prices_and_reprice_retrospective_calls(
     manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
 ) -> None:

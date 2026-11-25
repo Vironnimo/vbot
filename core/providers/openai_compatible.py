@@ -462,7 +462,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         profile = self.wire_profile(model_id)
         wire = self._format_messages(messages, model_id, profile)
         tokens, _ = estimate_structured_tokens(wire, model_id=model_id)
-        if tools:
+        if tools and profile.request.forwards_tools:
             tool_tokens, _ = estimate_structured_tokens(
                 render_tool_definitions(list(tools), profile=profile.request.tool_schema),
                 model_id=model_id,
@@ -484,6 +484,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         profile = self.wire_profile(model_id)
         rules = profile.request
+        if not rules.forwards_tools:
+            request_kwargs.pop("tools", None)
         id_profile = WIRE_TOOL_CALL_ID_PROFILES.get(rules.tool_call_ids)
         if id_profile is not None:
             messages = normalize_tool_call_ids(messages, id_profile)
@@ -838,6 +840,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         ):
             kwargs = {"tool_stream": True, **kwargs}
         payload = self._build_payload(messages, model_id, **kwargs)
+        if not payload.get("tools"):
+            payload.pop("tool_stream", None)
         self._prepare_stream_payload(payload)
         return payload
 

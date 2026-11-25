@@ -339,6 +339,7 @@ class RequestRules:
     and the smallest positive value wins.
     """
 
+    input_token_limit: int | None = None
     output_limit_field: OutputLimitField | None = "max_tokens"
     output_limit_default: int | None = None
     output_limit_cap: int | None = None
@@ -355,6 +356,12 @@ class RequestRules:
     fast_mode: bool = False
     prompt_cache: PromptCacheStyle = "none"
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
+
+    @property
+    def forwards_tools(self) -> bool:
+        """Whether Tool definitions can reach the wire and count toward the input budget."""
+        rule = self.parameters.get("tools")
+        return rule is None or rule.mode != "drop"
 
     def apply_body(self, payload: dict[str, Any]) -> None:
         """Add ``body_defaults`` and ``extra_body`` to a built request body.
@@ -694,7 +701,44 @@ class WireProfile:
     media: MediaRules = field(default_factory=MediaRules)
     decision: DecisionWire = field(default_factory=DecisionWire)
     known_model: bool = True
+    catalog_sampling: Mapping[str, bool] = field(default_factory=lambda: _EMPTY)
     provenance: Mapping[str, str] = field(default_factory=lambda: _EMPTY)
+
+    def effective_parameters(self, advertised: Collection[str]) -> tuple[str, ...]:
+        """Reconcile published sampling support with this Connection's actual request wire."""
+        if not self.catalog_sampling:
+            return tuple(advertised)
+        parameters = set(advertised).difference(self.catalog_sampling)
+        for key, supported in self.catalog_sampling.items():
+            if not supported:
+                continue
+            if self.protocol == "responses" and (
+                key not in ("temperature", "top_p")
+                or (
+                    self.request.allowed_parameters is not None
+                    and key not in self.request.allowed_parameters
+                )
+            ):
+                continue
+            rule = self.request.parameters.get(key)
+            if rule is None or rule.mode not in ("drop", "reject"):
+                parameters.add(key)
+        return tuple(sorted(parameters))
+
+    def effective_input_modalities(self, advertised: Collection[str]) -> tuple[str, ...]:
+        """The advertised chat inputs this OpenCode Connection can actually transport."""
+        if self.provider_id not in ("opencode-go", "opencode-zen"):
+            return tuple(advertised)
+        media = self.media.types
+        available = {mime.partition("/")[0] for mime in media}
+        if "application/pdf" in media:
+            available.add("pdf")
+        if any(mime.startswith("application/") and mime != "application/pdf" for mime in media):
+            available.add("file")
+        media_modalities = {"image", "audio", "video", "pdf", "file"}
+        return tuple(
+            kind for kind in advertised if kind not in media_modalities or kind in available
+        )
 
     def source_of(self, path: str) -> str | None:
         """Return the layer that set ``path`` (for example ``"reasoning.dialect"``)."""

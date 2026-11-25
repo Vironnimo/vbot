@@ -5,6 +5,7 @@ The ``model.refresh_db`` OAuth credential tests live in ``test_model_methods_ref
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -103,12 +104,29 @@ async def test_provider_connect_starts_the_account_device_flow(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("account", "success"), [(None, True), ("work", False)])
+@pytest.mark.parametrize(
+    ("provider", "account", "success"),
+    [
+        ("github-copilot", None, True),
+        ("opencode-zen", "work", True),
+        ("opencode-zen", "work", False),
+    ],
+)
 async def test_provider_connect_completion_publishes_the_auth_outcome(
-    tmp_path: Path, account: str | None, success: bool
+    tmp_path: Path, provider: str, account: str | None, success: bool
 ) -> None:
-    state = _oauth_state(tmp_path)
-    await rpc_result(state, "provider.connect", **_account_params(account))
+    state = oauth_provider_state(
+        tmp_path, replace(copilot_provider(oauth_connection()), id=provider)
+    )
+    state.device_flow_engine = StubDeviceFlowEngine()
+    catalog_refreshes: list[str] = []
+    state.runtime.start_account_catalog_refresh = catalog_refreshes.append
+    connection_id = f"{provider}:oauth"
+    params = {"provider_id": provider, "connection_id": connection_id}
+    if account:
+        params["account"] = account
+    await rpc_result(state, "provider.connect", **params)
+    assert catalog_refreshes == []
     [on_complete] = state.device_flow_engine.completions
 
     await on_complete(success=success)
@@ -120,8 +138,8 @@ async def test_provider_connect_completion_publishes_the_auth_outcome(
     ]
     assert auth_events == [
         {
-            "provider_id": "github-copilot",
-            "connection_id": "github-copilot:oauth",
+            "provider_id": provider,
+            "connection_id": connection_id,
             "account": account or "default",
             "success": success,
         }
@@ -129,7 +147,9 @@ async def test_provider_connect_completion_publishes_the_auth_outcome(
     # Only a successful login changes which Models are selectable, and ends the
     # transports opened with the previous token.
     assert resource_changes(state) == ([{"kind": "providers"}] if success else [])
-    assert state.runtime.closed_transports == ([("github-copilot", "oauth")] if success else [])
+    assert state.runtime.closed_transports == ([(provider, "oauth")] if success else [])
+
+    assert catalog_refreshes == ([provider] if provider == "opencode-zen" and success else [])
 
 
 @pytest.mark.asyncio

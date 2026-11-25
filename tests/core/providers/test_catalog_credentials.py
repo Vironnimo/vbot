@@ -6,11 +6,15 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
+import respx
 
 import core.providers._catalog_refresh as catalog_refresh
 from core.models.models import ModelRegistry
+from core.providers.account_catalogs import AccountCatalogs, account_model_routes
 from core.providers.accounts import Account
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderRegistry
 from core.providers.runtime import ProviderRuntime
 from core.providers.token_store import TokenStore
@@ -88,3 +92,80 @@ async def test_oauth_credential_honors_explicit_account_suffix(
     assert [getter.account for getter in _RecordingTokenGetter.instances] == [
         Account("openai", "subscription", expected_account)
     ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_private_catalog_selects_per_account_and_survives_an_offline_restart(
+    tmp_path: Path,
+) -> None:
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ProviderRegistry.load(resources)
+    keys = {"OPENCODE_API_KEY": "personal", "OPENCODE_API_KEY__WORK": "business"}
+    store = tmp_path / "private-catalogs"
+
+    def resolver() -> ProviderCredentialResolver:
+        return ProviderCredentialResolver(
+            registry, process_env=keys, account_catalogs=AccountCatalogs(store)
+        )
+
+    credentials = resolver()
+    storage = StorageManager(tmp_path)
+    runtime = ProviderRuntime(
+        providers=registry,
+        models=ModelRegistry({}),
+        credentials=credentials,
+        token_store=TokenStore(storage.secrets),
+        storage=storage,
+        resources_path=resources,
+        logger=logging.getLogger("vbot.providers.runtime"),
+    )
+    provider = "opencode-zen"
+    route = "opencode-zen:api-key"
+    memberships = {"Bearer personal": ["one"], "Bearer business": ["two"]}
+
+    def models(request: httpx.Request) -> httpx.Response:
+        ids = memberships[request.headers["Authorization"]]
+        return httpx.Response(200, json={"data": [{"id": model} for model in ids]})
+
+    endpoint = respx.get("https://opencode.ai/inference/v1/models").mock(side_effect=models)
+    assert await catalog_refresh.refresh_account_catalogs(runtime, provider_id=provider) == []
+    assert endpoint.call_count == 2
+    choices = account_model_routes(credentials, provider, route)
+    assert choices("one") == route + ":default"
+    assert choices("two") == route + ":work"
+    assert choices("missing") is None
+    assert account_model_routes(credentials, provider, route + ":default")("two") is None
+
+    memberships["Bearer personal"] = ["three"]
+    assert (
+        await catalog_refresh.refresh_account_catalogs(runtime, provider_id=provider, force=True)
+        == []
+    )
+    restarted = resolver()
+    assert account_model_routes(restarted, provider, route)("one") is None
+    assert account_model_routes(restarted, provider, route)("three") == route + ":default"
+    memberships["Bearer personal"] = [" "]
+    errors = await catalog_refresh.refresh_account_catalogs(
+        runtime, provider_id=provider, force=True
+    )
+    assert [error["connection_id"] for error in errors] == [route + ":default"]
+    assert account_model_routes(credentials, provider, route)("three") == route + ":default"
+    memberships["Bearer personal"] = []
+    assert (
+        await catalog_refresh.refresh_account_catalogs(runtime, provider_id=provider, force=True)
+        == []
+    )
+    assert account_model_routes(credentials, provider, route)("three") is None
+    # A replaced slot does not inherit the previous workspace. A confirmed sibling still wins.
+    keys["OPENCODE_API_KEY"] = "new"
+    assert account_model_routes(restarted, provider, route)("two") == route + ":work"
+    assert account_model_routes(restarted, provider, route)("unknown") == route + ":default"
+    del keys["OPENCODE_API_KEY"]
+    previously_chosen = account_model_routes(restarted, provider, route)("two")
+    keys["OPENCODE_API_KEY"] = "personal"
+    assert previously_chosen == route + ":work"
+    assert restarted.get_credentials(provider, previously_chosen) == "business"
+    assert all("business" not in path.read_text() for path in store.rglob("*.json"))
+    await runtime.aclose_transports()
+    runtime.close_wire_observations()

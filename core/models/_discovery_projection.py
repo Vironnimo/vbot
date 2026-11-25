@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ from core.models.assembly import REASONING_CONTROL_FIELDS
 from core.models.models import (
     Model,
     ReasoningCapabilities,
+    narrow_chat_input_tasks,
 )
 from core.models.models_dev import (
     ModelsDevCatalog,
@@ -21,7 +22,7 @@ from core.models.models_dev import (
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.adapter_types import adapter_type_for_config
 from core.providers.providers import ConnectionConfig, ProviderConfig
-from core.providers.wire_profiles import standalone_wire_binding
+from core.providers.wire_profiles import WireBinding, standalone_wire_binding
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("models.discovery")
@@ -34,6 +35,7 @@ def _project_provider_models(
     previous_models: Mapping[str, Mapping[str, Any]],
     *,
     previous_canonical: Mapping[str, Mapping[str, Any]],
+    identity_only: Collection[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """Serialize provider models to data and enrich each from models.dev.
 
@@ -53,6 +55,26 @@ def _project_provider_models(
     models_dev_id = provider_config.effective_models_dev_id()
     for wire_id, model in normalized_models.items():
         data = _model_to_data(model)
+        if provider_config.adapter in ("opencode_go", "opencode_zen") and wire_id in identity_only:
+            # OpenCode falls back to OpenAI identity fields during an upstream
+            # catalog outage. The id still confirms availability, even for an
+            # embedding or image Model; it conveys no change of route or ability.
+            previous = previous_models.get(wire_id)
+            if previous:
+                data = {
+                    key: copy.deepcopy(value)
+                    for key, value in previous.items()
+                    if key not in ("connections", "connection_context_windows")
+                }
+                if catalog is not None:
+                    facts = catalog.model(models_dev_id, wire_id)
+                    if facts.present:
+                        _enrich_provider_model(data, provider_config.id, facts)
+                projected[wire_id] = data
+                continue
+            if catalog is not None:
+                facts = catalog.model(models_dev_id, wire_id)
+                data["capabilities"].update(facts.chat_flags)
         if wire_id in previous_models and (
             catalog is None or not catalog.model(models_dev_id, wire_id).present
         ):
@@ -130,9 +152,14 @@ def _carry_forward_enrichment(
     previous_capabilities = previous.get("capabilities")
     if not isinstance(capabilities, dict) or not isinstance(previous_capabilities, Mapping):
         return
+    reported = _reported_modalities(data, provider_id)
     for direction in ("input_modalities", "output_modalities"):
         earlier = previous_capabilities.get(direction)
-        if isinstance(earlier, list) and set(capabilities.get(direction) or []) < set(earlier):
+        if (
+            direction not in reported
+            and isinstance(earlier, list)
+            and set(capabilities.get(direction) or []) < set(earlier)
+        ):
             capabilities[direction] = list(earlier)
             if direction == "input_modalities":
                 capabilities["vision"] = "image" in earlier
@@ -203,17 +230,52 @@ def _admitted_models(
             metadata=data.get("metadata") or model.metadata,
         )
 
-    binding = standalone_wire_binding(
-        provider_id=provider_config.id,
-        connection_id=connection.id if connection is not None else "",
-        protocols=adapter_class.WIRE_PROTOCOLS,
-        model_lookup=projected_model,
-        files=wire_files,
-    )
+    protocols = adapter_class.WIRE_PROTOCOLS
+
+    def binding_for(connection_id: str) -> WireBinding:
+        return standalone_wire_binding(
+            provider_id=provider_config.id,
+            connection_id=connection_id,
+            protocols=protocols,
+            model_lookup=projected_model,
+            files=wire_files,
+        )
+
+    connection_id = connection.id if connection is not None else ""
+    binding = binding_for(connection_id)
+    opencode = provider_config.adapter in ("opencode_go", "opencode_zen")
+    peers = [
+        binding_for(peer.id)
+        for peer in provider_config.connections
+        if opencode and peer.id != connection_id
+    ]
     admitted: dict[str, dict[str, Any]] = {}
     for model_id, data in projected.items():
-        admission = binding.profile(model_id).admission
+        profile = binding.profile(model_id)
+        admission = profile.admission
         if admission.state == "available":
+            capabilities = data["capabilities"]
+            capabilities["supported_parameters"] = list(
+                profile.effective_parameters(capabilities.get("supported_parameters", ()))
+            )
+            if opencode and "chat" in capabilities.get("task_types", ()):
+                advertised = capabilities["input_modalities"]
+                available = set(profile.effective_input_modalities(advertised))
+                for peer in peers:
+                    other = peer.profile(model_id)
+                    if other.admission.state == "available":
+                        available.update(other.effective_input_modalities(advertised))
+                inputs = [kind for kind in advertised if kind in available]
+                capabilities["task_types"] = list(
+                    narrow_chat_input_tasks(
+                        capabilities["task_types"],
+                        advertised,
+                        inputs,
+                        capabilities["output_modalities"],
+                    )
+                )
+                capabilities["vision"] = "image" in inputs
+                capabilities["input_modalities"] = inputs
             admitted[model_id] = data
             continue
         _LOGGER.debug(
@@ -233,6 +295,12 @@ def _provider_metadata_key(provider_id: str) -> str:
     """
 
     return provider_id.replace("-", "_")
+
+
+def _reported_modalities(data: Mapping[str, Any], provider_id: str) -> Collection[str]:
+    metadata = data.get("metadata", {}).get(_provider_metadata_key(provider_id), {})
+    reported = metadata.get("reported_modalities")
+    return tuple(reported) if isinstance(reported, (Mapping, list, tuple)) else ()
 
 
 def _enrich_provider_model(
@@ -300,10 +368,19 @@ def _enrich_provider_model(
     capabilities = data.get("capabilities")
     if modalities is not None and isinstance(capabilities, dict):
         md_input, md_output = modalities
-        if md_input and set(capabilities.get("input_modalities") or []) < set(md_input):
+        reported = _reported_modalities(data, provider_id)
+        if (
+            "input_modalities" not in reported
+            and md_input
+            and set(capabilities.get("input_modalities") or []) < set(md_input)
+        ):
             capabilities["input_modalities"] = md_input
             capabilities["vision"] = "image" in md_input
-        if md_output and set(capabilities.get("output_modalities") or []) < set(md_output):
+        if (
+            "output_modalities" not in reported
+            and md_output
+            and set(capabilities.get("output_modalities") or []) < set(md_output)
+        ):
             capabilities["output_modalities"] = md_output
 
     response_field = facts.interleaved_field
@@ -312,7 +389,7 @@ def _enrich_provider_model(
         if isinstance(metadata, dict):
             provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
             if isinstance(provider_metadata, dict):
-                provider_metadata["interleaved_field"] = response_field
+                provider_metadata.setdefault("interleaved_field", response_field)
 
     npm = facts.npm
     if npm is not None:

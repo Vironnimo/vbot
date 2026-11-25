@@ -25,6 +25,7 @@ from core.model_tasks.model_tasks import (
     TaskModelTargetRef,
     parse_task_model_target_id,
 )
+from core.providers._opencode_usage import opencode_usage
 from core.providers.errors import NetworkError, ProviderError, ProviderRateLimitError
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, FailureClass, TaskError
@@ -283,6 +284,7 @@ def task_usage(usage: Any) -> JsonObject:
         result["reported_cost_usd"] = usage["cost"]
     if isinstance(usage.get("cost"), Mapping):
         result["cost"] = dict(usage["cost"])
+    result.update(opencode_usage(usage))
     return result
 
 
@@ -384,9 +386,9 @@ class TaskBindingResolver:
         self, binding: TaskModelBinding
     ) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
         try:
-            self._model_tasks.validate_execution_target(binding)
+            target = self._model_tasks.validate_execution_target(binding)
             options = self._model_tasks.options_with_defaults(binding)
-            return binding, options, self.parse_target(binding.target)
+            return binding, options, target
         except TaskModelError as exc:
             raise self._configuration_error(str(exc)) from exc
 

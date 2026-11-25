@@ -97,6 +97,32 @@ class PassthroughModelFilter:
         return True
 
 
+async def fetch_account_model_ids(
+    provider: ProviderConfig, connection: ConnectionConfig, credential: str | TokenGetter
+) -> tuple[str, frozenset[str]]:
+    """Read private membership without projecting it into the shared Model DB."""
+    request = await build_discovery_request(provider, connection)
+    getter = StaticTokenGetter(credential) if isinstance(credential, str) else credential
+    last_token = ""
+
+    async def headers() -> dict[str, str]:
+        nonlocal last_token
+        last_token = await getter()
+        if not last_token:
+            raise ModelDiscoveryError("Account catalog requires a credential")
+        return request.headers(last_token)
+
+    recovery = OAuthRequestRecovery(getter, connection.auth) if connection.type == "oauth" else None
+    rows = await _fetch_raw_models(request.url, headers, auth_recovery=recovery)
+    ids: set[str] = set()
+    for row in rows:
+        model_id = row.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ModelDiscoveryError("Account catalog contains a Model without an id")
+        ids.add(model_id)
+    return last_token, frozenset(ids)
+
+
 async def refresh_models(
     provider_config: ProviderConfig,
     credential_value: str | TokenGetter,
@@ -369,6 +395,11 @@ def _persist_projection(
             existing_models,
             credential_connection.id if credential_connection is not None else None,
         ),
+        identity_only={
+            model_id
+            for model_id, sparse in sparse_models.items()
+            if normalized_models.get(model_id) is sparse
+        },
         previous_canonical=(
             load_canonical_layer(models_dir / "models.json", models_dir / "models.overrides.json")
             if catalog is None
@@ -391,7 +422,10 @@ def _persist_projection(
         capability_defaults={
             model_id: _model_to_data(model)["capabilities"]
             for model_id, model in sparse_models.items()
-            if normalized_models.get(model_id) is model
+            # OpenCode's identity-only fallback was restored before projecting
+            # its wire capabilities. Reapplying stale fields here could undo that.
+            if provider_config.adapter not in ("opencode_go", "opencode_zen")
+            and normalized_models.get(model_id) is model
         },
     )
     output_data = {

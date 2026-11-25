@@ -61,7 +61,7 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("deepseek-v4-flash", "high", None, "high", ("effort", "high")),
         ("kimi-k99", "none", None, "none", ("off", "none")),
         ("kimi-k99", "max", None, "max", ("effort", "max")),
-        ("kimi-k3", "none", None, "low", ("effort", "low")),
+        ("kimi-k3", "none", None, "max", ("effort", "max")),
         ("kimi-k3.1-pro", "none", None, "none", ("off", "none")),
         ("kimi-k3.1-pro", "max", None, "max", ("effort", "max")),
         ("glm-99", "medium", None, "low", ("effort", "low")),

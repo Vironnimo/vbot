@@ -8,6 +8,7 @@
       "id": "api-key",
       "type": "api_key",
       "label": "API Key",
+      "catalog_requires_credentials": false,
       "auth": {
         "header": "Authorization",
         "prefix": "Bearer ",

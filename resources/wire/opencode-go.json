@@ -270,7 +270,12 @@
       "note": "Kimi K2.7 Code always thinks: the request always enables thinking and sends no effort."
     },
     {
-      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny", "step-5-preview-free", "cat-jam-free"]},
+      "when": {"ids": ["kimi-k3"]},
+      "set": {"reasoning": {"off": "lowest"}},
+      "note": "K3 always reasons. Use the lowest effort its current catalog advertises, including a max-only ladder."
+    },
+    {
+      "when": {"ids": ["grok-4.6", "grok-4.7", "space-bunny", "step-5-preview-free", "cat-jam-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung (low) instead of the higher default."
     },

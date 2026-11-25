@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
 from core.models.models import Model
 from core.providers._opencode_catalog import catalog_model, opencode_api_base
+from core.providers._opencode_session import (
+    OPENCODE_SESSION_HEADER,
+    OPENCODE_SESSION_ID_KWARG,
+    OpenCodeSessionRouting,
+)
 from core.providers._responses_profile import (
     RESPONSES_REASONING_FIELDS,
     profile_responses_policy,
@@ -56,9 +60,14 @@ if TYPE_CHECKING:
     from core.providers.http import ProviderHTTPTransportScope
 
 
+__all__ = [
+    "OPENCODE_GO_RESPONSES_ENDPOINT",
+    "OPENCODE_SESSION_HEADER",
+    "OPENCODE_SESSION_ID_KWARG",
+    "OpenCodeGoAdapter",
+]
+
 OPENCODE_GO_RESPONSES_ENDPOINT = "/responses"
-OPENCODE_SESSION_HEADER = "x-opencode-session"
-OPENCODE_SESSION_ID_KWARG = "_opencode_session_id"
 
 # OpenCode returns account/subscription exhaustion through the same HTTP 429
 # status as transient throttling. These stable error identifiers and phrases
@@ -146,14 +155,7 @@ def _raise_if_upstream_failure(
     raise upstream_error
 
 
-def _opencode_request_headers(request_kwargs: dict[str, Any]) -> dict[str, str]:
-    session_id = request_kwargs.pop(OPENCODE_SESSION_ID_KWARG, None)
-    if not isinstance(session_id, str) or not session_id:
-        return {}
-    return {OPENCODE_SESSION_HEADER: session_id}
-
-
-class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
+class _OpenCodeGoMessagesAdapter(OpenCodeSessionRouting, AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
 
     @staticmethod
@@ -162,13 +164,6 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         # Gateway classification needs the structured code as well as the type
         # and message. Preserve the complete body on this wire too.
         return format_http_error_detail(status_code, response_body)
-
-    @override
-    def _request_headers_from_kwargs(
-        self,
-        request_kwargs: dict[str, Any],
-    ) -> dict[str, str]:
-        return _opencode_request_headers(request_kwargs)
 
     @override
     def _classify_http_status(
@@ -187,12 +182,8 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         )
 
 
-class _OpenCodeGoGeminiAdapter(GeminiCompatibleAdapter):
+class _OpenCodeGoGeminiAdapter(OpenCodeSessionRouting, GeminiCompatibleAdapter):
     """Go's Gemini route carries its Session affinity and subscription policy."""
-
-    @override
-    def _request_headers_from_kwargs(self, request_kwargs: dict[str, Any]) -> dict[str, str]:
-        return _opencode_request_headers(request_kwargs)
 
     @override
     def _classify_http_status(
@@ -203,7 +194,7 @@ class _OpenCodeGoGeminiAdapter(GeminiCompatibleAdapter):
         super()._classify_http_status(status_code, detail=detail, response_headers=response_headers)
 
 
-class OpenCodeGoAdapter(OpenAICompatibleAdapter):
+class OpenCodeGoAdapter(OpenCodeSessionRouting, OpenAICompatibleAdapter):
     """Adapter for the OpenCode Go gateway's four wires.
 
     The wire profile (``resources/wire/opencode-go.json``) routes each Model to
@@ -319,38 +310,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await super().aclose()
 
     @override
-    def request_context_kwargs(
-        self,
-        *,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        prompt_cache_affinity_id: str | None = None,
-        session_generation_id: str | None = None,
-        request_kind: Literal["chat", "compaction", "utility"] = "chat",
-    ) -> dict[str, Any]:
-        """Pin every wire request to one opaque prompt-cache lineage."""
-
-        del session_generation_id, request_kind
-        if prompt_cache_affinity_id is not None:
-            routing_id = prompt_cache_affinity_id
-        else:
-            address = json.dumps(
-                [project_id, agent_id, session_id],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            routing_id = hashlib.sha256(address).hexdigest()[:32]
-        return {OPENCODE_SESSION_ID_KWARG: f"vbot-{routing_id}"}
-
-    @override
-    def _request_headers_from_kwargs(
-        self,
-        request_kwargs: dict[str, Any],
-    ) -> dict[str, str]:
-        return _opencode_request_headers(request_kwargs)
-
-    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -370,6 +329,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 [dict(message) for message in messages],
                 model_id=model_id,
                 tools=tools,
+                policy=profile_responses_policy(
+                    self.wire_profile(model_id), self._catalog_model(model_id)
+                ),
             )
         if protocol == "messages":
             return self._messages.estimate_request_input_tokens(

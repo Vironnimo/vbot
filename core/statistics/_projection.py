@@ -44,7 +44,8 @@ CALL_COLUMNS = (
     "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
     "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
     "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
-    "cost_usd, cost_source, cost_json, purpose, speed_tokens, speed_window_ms, "
+    "cost_usd, cost_source, cost_json, list_cost_usd, allowance_usd, "
+    "purpose, speed_tokens, speed_window_ms, "
     "speed_estimated, first_token_ms, speed_basis"
 )
 # The column definitions of every call table (Session calls and ledger calls),
@@ -77,6 +78,8 @@ CALL_TABLE_DEFINITION = """(
     cost_usd REAL,
     cost_source INTEGER NOT NULL,
     cost_json TEXT,
+    list_cost_usd REAL,
+    allowance_usd REAL,
     purpose TEXT NOT NULL,
     speed_tokens INTEGER,
     speed_window_ms INTEGER,
@@ -89,6 +92,7 @@ CALL_TABLE_DEFINITION = """(
 COST_UNPRICED = 0
 COST_PROVIDER = 1
 COST_CATALOG = 2
+COST_PROVIDER_ESTIMATE = 3
 UNKNOWN_COST: JsonObject = {"amount_usd": None, "source": "unknown"}
 
 
@@ -123,7 +127,9 @@ def cost_source_class(cost: JsonObject) -> tuple[int, float | None]:
     source = cost.get("source")
     if amount is None or source not in {"provider", "catalog"}:
         return COST_UNPRICED, None
-    return (COST_PROVIDER if source == "provider" else COST_CATALOG), amount
+    if source == "catalog":
+        return COST_CATALOG, amount
+    return (COST_PROVIDER_ESTIMATE if cost.get("estimated") is True else COST_PROVIDER), amount
 
 
 @dataclass(frozen=True)
@@ -349,6 +355,8 @@ class ProjectedRows:
                 cost_amount,
                 cost_class,
                 serialized_cost,
+                cost.get("list_cost_usd") if cost is not None else None,
+                cost.get("allowance_usd") if cost is not None else None,
                 purpose or ("compaction" if kind == CALL_KIND_COMPACTION else "chat"),
                 speed_tokens,
                 speed_window_ms,

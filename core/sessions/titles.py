@@ -23,6 +23,7 @@ from core.debug import DebugContext
 from core.models.pricing import TokenPricing
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
+from core.providers.reasoning import rejected_disabled_reasoning
 from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
@@ -496,10 +497,9 @@ class SessionTitleService:
                     request_context=request_context,
                     usage_context=usage_context,
                 )
-            except ProviderError:
-                # Some reasoning-mandatory endpoints reject an explicit disable
-                # outright. Retry once at the provider-default effort before
-                # giving up on the generated title.
+            except ProviderError as exc:
+                if not rejected_disabled_reasoning(exc):
+                    raise
                 response = await self._send_title_request(
                     adapter,
                     model_id,

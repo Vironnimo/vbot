@@ -17,7 +17,7 @@ from core.model_tasks.decision_types import (
 from core.model_tasks.model_tasks import (
     TaskModelBinding,
     TaskModelService,
-    parse_task_model_target_id,
+    TaskModelTargetRef,
 )
 from core.model_tasks.task_execution import (
     TaskAttempt,
@@ -83,7 +83,7 @@ class DecisionService:
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured") from exc
         if not profile.supported:
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
-        return _Target(binding.target, profile.max_input_tokens, profile, options)
+        return _Target(ref, profile.max_input_tokens, profile, options)
 
     def _targets(
         self, questions: list[dict[str, Any]]
@@ -148,7 +148,7 @@ class DecisionService:
             try:
 
                 async def execute(attempt: TaskAttempt) -> dict[str, Any]:
-                    target = targets[attempt.binding.target]
+                    target = targets[attempt.binding.target]._replace(ref=attempt.target)
                     try:
                         await _DECISION_SETUP_WORKERS.run(_check_size, state, questions, target)
                     except DecisionError as exc:
@@ -182,7 +182,7 @@ class DecisionService:
         secret_masker: Callable[[], SecretMasker],
         require_exact: bool,
     ) -> dict[str, Any]:
-        ref = parse_task_model_target_id(target.target)
+        ref = target.ref
         try:
             try:
                 client = await ProviderDecisionClient.from_runtime_async(
@@ -293,7 +293,7 @@ def _rejected_as_too_large(limit: int | None) -> DecisionError:
 class _Target(NamedTuple):
     """The configured target and the context window its catalog reports, if any."""
 
-    target: str
+    ref: TaskModelTargetRef
     context_window: int | None
     profile: DecisionProfile
     options: dict[str, Any]
@@ -305,8 +305,9 @@ def _check_size(state: Any, questions: list[dict[str, Any]], target: _Target) ->
     Scoring Usage can count shared evidence once per question; it is not the
     Context footprint and must never calibrate this estimate.
     """
-    ref = parse_task_model_target_id(target.target)
-    body, _ = decision_payload(ref.model_id, state, questions, target.profile, target.options)
+    body, _ = decision_payload(
+        target.ref.model_id, state, questions, target.profile, target.options
+    )
     encoded = json.dumps(body, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
         "utf-8"
     )

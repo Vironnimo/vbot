@@ -20,7 +20,14 @@ from core.providers._claude_agent_usage import ClaudeAgentUsage
 from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
 from core.providers._usage_types import UsageWindow
 from core.providers._wire_profile_files import WireProfileFile
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
+from core.providers.account_catalogs import WORKSPACE_CATALOG_PROVIDERS
+from core.providers.accounts import (
+    DEFAULT_ACCOUNT_ID,
+    Account,
+    ConnectionRef,
+    account_id_from_credential_key,
+    split_connection_id,
+)
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
 from core.providers.adapter_types import ADAPTER_TYPES as ADAPTER_TYPES
 from core.providers.adapter_types import adapter_type_for_config
@@ -98,6 +105,9 @@ class ProviderRuntime:
         self._catalog_refresh_closed = False
         self._external_catalog_task: asyncio.Task[None] | None = None
         self._external_refresh_at: dict[str, float] = {}
+        self._account_catalog_lock = asyncio.Lock()
+        self._auto_catalog_task: asyncio.Task[None] | None = None
+        self._account_catalog_at: dict[Account, tuple[str, float]] = {}
         self._external_refresh_lock = asyncio.Lock()
         self._configuration_publication_lock = threading.Lock()
         self._async_configuration_publication_lock = asyncio.Lock()
@@ -151,6 +161,7 @@ class ProviderRuntime:
             self._claude_sessions = self._new_claude_sessions()
             self._external_status.clear()
             self._external_refresh_at.clear()
+            self._account_catalog_at.clear()
             self._forget_claude_usage()
             self.retire_http_transports()
             self._wire_observations.close()
@@ -649,10 +660,53 @@ class ProviderRuntime:
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         await _catalog_refresh.maybe_refresh_local_catalogs(self, force=force)
 
-    def start_local_catalog_refresh(self) -> asyncio.Task[None]:
-        task = asyncio.create_task(
-            self.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
-        )
+    def start_account_catalog_refresh(
+        self, provider_id: str | None = None, *, changed_keys: set[str] | None = None
+    ) -> asyncio.Task[None] | None:
+        """Recheck account visibility after enrollment, without delaying the mutation."""
+        if self._catalog_refresh_closed or (
+            provider_id and provider_id not in WORKSPACE_CATALOG_PROVIDERS
+        ):
+            return None
+        if changed_keys is not None and not any(
+            account_id_from_credential_key(connection.auth.credential_key, key) is not None
+            for candidate in self._providers.list_ids()
+            if candidate in WORKSPACE_CATALOG_PROVIDERS
+            for connection in self._providers.get(candidate).connections
+            for key in changed_keys
+        ):
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # A synchronous/offline credential update is picked up by the next serving sweep.
+            return None
+
+        async def refresh() -> None:
+            try:
+                await _catalog_refresh.refresh_account_catalogs(
+                    self, provider_id=provider_id, force=provider_id is not None
+                )
+            except Exception:
+                self._logger.exception("Account Model catalog refresh failed")
+
+        task = loop.create_task(refresh(), name="account-catalog-refresh")
+        self._track_catalog_refresh(task)
+        return task
+
+    def start_auto_catalog_refresh(self) -> asyncio.Task[None]:
+        """Share the startup and picker sweep. Explicit local refreshes only probe local hosts."""
+        if self._auto_catalog_task is not None and not self._auto_catalog_task.done():
+            return self._auto_catalog_task
+
+        async def refresh() -> None:
+            account_task = self.start_account_catalog_refresh()
+            await self.maybe_refresh_local_catalogs()
+            if account_task is not None:
+                await account_task
+
+        task = asyncio.create_task(refresh(), name="auto-catalog-refresh")
+        self._auto_catalog_task = task
         self._track_catalog_refresh(task)
         return task
 

@@ -112,6 +112,12 @@ def provider_sql(column: str) -> str:
 # Integer measures of usage cube rows, in ``totals_sql`` order.
 TOTALS_FIELDS = USAGE_MEASURES
 _FIELD = {name: position for position, name in enumerate(TOTALS_FIELDS)}
+_COST_FIELDS = (
+    ("reported_cost_usd", "reported_nusd", "reported_calls"),
+    ("estimated_cost_usd", "estimated_nusd", "estimated_calls"),
+    ("list_cost_usd", "list_nusd", "list_calls"),
+    ("allowance_usd", "allowance_nusd", "allowance_calls"),
+)
 
 
 # A failed attempt: a finished ledger request that did not complete.
@@ -186,9 +192,11 @@ class Totals:
             "cache_write_tokens": self["cache_write_tokens"],
             "unreported_calls": self["unreported_calls"],
             "cost_usd": self.cost_usd,
-            "reported_cost_usd": (usd(self["reported_nusd"]) if self["reported_calls"] else None),
+            **{
+                field: usd(self[amount]) if self[count] else None
+                for field, amount, count in _COST_FIELDS
+            },
             "reported_calls": self["reported_calls"],
-            "estimated_cost_usd": usd(self["estimated_nusd"]) if estimated_calls else None,
             "estimated_calls": estimated_calls,
             "unpriced_calls": self["unpriced_calls"],
             "retrospective_calls": self["retrospective_calls"],
@@ -402,6 +410,10 @@ class ReportContext:
             "started_at": instant_timestamp(row[4]),
             "duration_ms": row[5],
             "cost_usd": run_cost_usd(row[7], row[8], row[6]),
+            **{
+                field: usd(amount) if amount is not None else None
+                for (field, _, _), amount in zip(_COST_FIELDS, row[16:], strict=True)
+            },
             "input_tokens": row[9],
             "output_tokens": row[10],
             "calls": row[7],
@@ -429,7 +441,8 @@ class ReportContext:
 RUN_ROW_SQL = (
     "r.session_key, r.run_id, r.origin, r.status, r.start_instant, r.duration_ms, "
     "r.reported_nusd + r.estimated_nusd, r.calls, r.unpriced_calls, r.input_tokens, "
-    "r.output_tokens, r.model_steps, r.tool_calls, r.iterations, r.primary_model, r.models"
+    "r.output_tokens, r.model_steps, r.tool_calls, r.iterations, r.primary_model, r.models, "
+    + ", ".join(f"CASE WHEN r.{count} > 0 THEN r.{amount} END" for _, amount, count in _COST_FIELDS)
 )
 # Highest known Run cost first; a Run whose every request is unpriced sorts last.
 RUN_COST_ORDER = (

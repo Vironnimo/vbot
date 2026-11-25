@@ -16,6 +16,7 @@ from core.providers._chat_completions_constants import (
     OPENAI_TOOL_FINISH_REASONS,
     OPENAI_TRUNCATED_FINISH_REASONS,
 )
+from core.providers._opencode_usage import opencode_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
     TERMINAL_OUTCOME_ERROR,
@@ -465,9 +466,9 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, Any] | None:
         return None
     prompt_tokens = _optional_non_negative_usage_int(usage.get("prompt_tokens"))
     completion_tokens = _optional_non_negative_usage_int(usage.get("completion_tokens"))
-    if prompt_tokens is None and completion_tokens is None:
+    normalized = opencode_usage(usage)
+    if prompt_tokens is None and completion_tokens is None and not normalized:
         return None
-    normalized: dict[str, Any] = {}
     if prompt_tokens is not None:
         normalized["input_tokens"] = prompt_tokens
     if completion_tokens is not None:

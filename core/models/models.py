@@ -55,6 +55,9 @@ from core.models._model_record import (
     derive_model_task_types as derive_model_task_types,
 )
 from core.models._model_record import (
+    narrow_chat_input_tasks as narrow_chat_input_tasks,
+)
+from core.models._model_record import (
     text_embedding_capabilities as text_embedding_capabilities,
 )
 from core.models.assembly import (

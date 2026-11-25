@@ -12,6 +12,7 @@ import pytest
 
 from core.chat.errors import ChatError
 from core.chat.model_resolution import _resolve_agent_connection
+from core.providers.account_catalogs import account_model_routes
 from core.providers.accounts import ConnectionRef
 from core.runtime.runtime import Runtime
 from core.secrets import CREDENTIALS, SecretStore
@@ -116,7 +117,7 @@ def test_environment_credentials_prefer_the_process_and_reload_into_live_resolve
         assert runtime.provider_credentials is injected_resolver
         assert _resolve_agent_connection(dependencies, agent) == (
             "opencode-go",
-            "opencode-go:api-key",
+            "opencode-go:api-key:default",
         )
         runtime.agent_resolver.require_model_configured(model)
     finally:
@@ -164,6 +165,51 @@ async def test_environment_credential_names_join_every_owner_and_each_resolved_n
         assert "openai_api_key__work" in runtime.environment_credential_names()
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_account_catalog_refresh_follows_key_changes_without_blocking_local_settings(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = "OPENCODE_API_KEY__WORK"
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.setenv(key, "initial")
+    pending = asyncio.Event()
+    release = asyncio.Event()
+    requests: list[tuple[str, str]] = []
+
+    async def fetch(provider, _connection, credential):
+        requests.append((provider.id, credential))
+        if len(requests) == 2:
+            pending.set()
+        await release.wait()
+        return credential, frozenset({credential})
+
+    monkeypatch.setattr("core.models.discovery.fetch_account_model_ids", fetch)
+    await runtime.maybe_refresh_local_catalogs(force=True)
+    assert requests == []
+    monkeypatch.delenv(key)
+
+    runtime.storage.set_data_dir_credential(key, "first")
+    await runtime.reload_environment_credentials_async()
+    try:
+        await pending.wait()
+        # Neither an unrelated write nor replacing the key waits for the old HTTP requests.
+        runtime.storage.set_data_dir_credential("OTHER_SERVICE", "new")
+        await runtime.reload_environment_credentials_async()
+        runtime.storage.set_data_dir_credential(key, "replacement")
+        await runtime.reload_environment_credentials_async()
+    finally:
+        release.set()
+    await runtime.start_auto_catalog_refresh()
+    expected_providers = {"opencode-zen", "opencode-go"}
+    assert sorted(requests) == sorted(
+        (provider, token) for provider in expected_providers for token in ("first", "replacement")
+    )
+    for provider in expected_providers:
+        routes = account_model_routes(runtime.provider_credentials, provider, f"{provider}:api-key")
+        assert routes("first") is None
+        assert routes("replacement") == f"{provider}:api-key:work"
 
 
 @pytest.mark.asyncio

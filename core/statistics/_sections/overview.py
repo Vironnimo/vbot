@@ -231,6 +231,8 @@ _SERIES_FIELDS = (
     "cost_usd",
     "reported_cost_usd",
     "estimated_cost_usd",
+    "list_cost_usd",
+    "allowance_usd",
     "cache_read_tokens",
 )
 

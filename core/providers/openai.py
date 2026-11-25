@@ -428,6 +428,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             document_media_types=self._responses_document_types(model_id),
             model_id=model_id,
             tools=tools,
+            policy=profile_responses_policy(
+                self.wire_profile(model_id), self._catalog_model(model_id)
+            ),
         )
 
     @override

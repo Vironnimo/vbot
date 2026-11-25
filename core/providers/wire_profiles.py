@@ -467,6 +467,7 @@ class _Resolution:
         if entry is not None:
             self._apply(entry.values, LAYER_MODEL)
             self._apply(entry.connections.get(self.connection_id, _EMPTY), LAYER_MODEL_CONNECTION)
+        self._bound_media_types()
         if self.observed is not None and self.observed.max_output_tokens is not None:
             self._bound_output_limit(self.observed.max_output_tokens)
         if self.observed is not None and self.observed.request_max_images is not None:
@@ -477,6 +478,7 @@ class _Resolution:
                 self.provenance["media.request_max_images"] = LAYER_OBSERVED
 
         status, verification = self._status(entry, rules)
+        sampling = _catalog_hint(self.provider_id, self.model, "sampling")
         return WireProfile(
             provider_id=self.provider_id,
             connection_id=self.connection_id,
@@ -492,6 +494,7 @@ class _Resolution:
             media=_build_media(self.values.get("media", {})),
             decision=_build_decision(self.values.get("decision", {})),
             known_model=self.model is not None,
+            catalog_sampling=_frozen(sampling) if isinstance(sampling, Mapping) else _EMPTY,
             provenance=MappingProxyType(dict(self.provenance)),
         )
 
@@ -540,6 +543,25 @@ class _Resolution:
                 f"({', '.join(self.protocols)}), ignoring it"
             )
         return self.protocols[0], LAYER_PROTOCOL
+
+    def _bound_media_types(self) -> None:
+        """Only offer formats the selected wire can carry and the Model can read."""
+        reported = _catalog_hint(self.provider_id, self.model, "reported_modalities")
+        inputs = reported.get("input_modalities") if isinstance(reported, Mapping) else None
+        if not isinstance(inputs, (list, tuple)):
+            return
+        accepted = {item for item in inputs if isinstance(item, str)}
+        if "pdf" in accepted:
+            accepted.add("application/pdf")
+        media = self.values.get("media", {})
+        types = media.get("types", ())
+        families = accepted & {"audio", "image", "video"}
+        allowed = tuple(
+            mime for mime in types if mime in accepted or mime.partition("/")[0] in families
+        )
+        if len(allowed) < len(types):
+            media["types"] = allowed
+            self.provenance["media.types"] = LAYER_CATALOG
 
     def _hinted_protocol(self) -> Protocol | None:
         """The catalog's declared wire, with the per-Model SDK package as fallback.
@@ -633,6 +655,34 @@ class _Resolution:
             reasoning_values["mandatory"] = reasoning.mandatory
         if reasoning_values:
             partial["reasoning"] = reasoning_values
+
+        request: dict[str, Any] = {}
+        input_limit = _catalog_hint(self.provider_id, model, "max_input_tokens")
+        if type(input_limit) is int and input_limit > 0:
+            request["input_token_limit"] = input_limit
+        structured = _catalog_hint(self.provider_id, model, "structured_output")
+        dropped = []
+        if isinstance(structured, bool):
+            request["options"] = {"structured_outputs": structured}
+            if not structured:
+                dropped.append("response_format")
+        if not model.capabilities.tools and (
+            _catalog_hint(self.provider_id, model, "catalog_protocol")
+            or _catalog_hint(self.provider_id, model, "tool_calls") is False
+        ):
+            dropped.extend(("tools", "tool_choice", "parallel_tool_calls"))
+        sampling = _catalog_hint(self.provider_id, model, "sampling")
+        if isinstance(sampling, Mapping):
+            dropped.extend(key for key, supported in sampling.items() if supported is False)
+            allowed = self.values.get("request", {}).get("allowed_parameters")
+            if protocol == "responses" and allowed is not None:
+                # Only parameters the Responses codec can actually render.
+                extra = [key for key in ("temperature", "top_p") if sampling.get(key) is True]
+                request["allowed_parameters"] = tuple(dict.fromkeys([*allowed, *extra]))
+        if dropped:
+            request["parameters"] = {key: {"mode": "drop"} for key in dropped}
+        if request:
+            partial["request"] = request
 
         current_fields = tuple(self.values.get("response", {}).get("reasoning_fields", ()))
         # models.dev ``interleaved.field`` (an OpenAI-compatible Chat setting):
@@ -837,6 +887,7 @@ def _build_request(values: Mapping[str, Any]) -> RequestRules:
     kwargs: dict[str, Any] = {
         key: values[key]
         for key in (
+            "input_token_limit",
             "output_limit_field",
             "output_limit_default",
             "output_limit_cap",

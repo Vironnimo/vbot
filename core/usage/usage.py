@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
 from core.database import Database, open_database
-from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
+from core.models.pricing import (
+    TokenPricing,
+    billing_details,
+    nonnegative_amount,
+    price_usage,
+    project_cost,
+    provider_cost_evidence,
+)
 from core.sessions import SessionAddress
 from core.usage import _execution_totals
 from core.usage._calibration import InputEstimateCalibration, LearnedSample
@@ -148,6 +155,24 @@ def _cost_snapshot(value: Any) -> dict[str, Any] | None:
     return cost
 
 
+def _keep_billing_evidence(usage: dict[str, Any], previous_cost: Any) -> None:
+    """Fill absent fields only from evidence for the same amount and payer."""
+    cost = usage.get("cost")
+    if not isinstance(cost, dict) or not isinstance(previous_cost, Mapping):
+        return
+    if (
+        cost["source"] != previous_cost["source"]
+        or cost["amount_usd"] != previous_cost["amount_usd"]
+    ):
+        return
+    payer = cost.get("billing_source")
+    previous_payer = previous_cost.get("billing_source")
+    if payer is not None and previous_payer is not None and payer != previous_payer:
+        return
+    for key, value in billing_details(previous_cost).items():
+        cost.setdefault(key, value)
+
+
 def _price_with_snapshot(usage: Mapping[str, Any], pricing: TokenPricing) -> dict[str, Any]:
     cost = price_usage(usage, pricing)
     # Unknown amounts can be temporary when cumulative counter fields arrive
@@ -246,6 +271,10 @@ def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[st
         merged["cost"] = price_usage(incoming, None)
     elif new_cost is not None and new_cost["source"] == "provider":
         merged["cost"] = new_cost
+    elif provider_cost_evidence(old_cost):
+        merged["cost"] = old_cost
+    elif provider_cost_evidence(new_cost):
+        merged["cost"] = new_cost
     else:
         evidence = (*_COUNTERS, *_FLAGS[:2])
         unchanged = all(merged.get(key) == previous.get(key) for key in evidence)
@@ -259,6 +288,8 @@ def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[st
             merged["cost"] = new_cost
         elif old_cost is not None and not unchanged:
             merged["cost"] = price_usage(merged, None)
+    _keep_billing_evidence(merged, old_cost)
+    _keep_billing_evidence(merged, new_cost)
     return merged
 
 
@@ -515,14 +546,21 @@ class UsageRecorder:
                 merged["estimated"] = True
             else:
                 merged.pop("estimated", None)
-            incoming_cost_source = incoming.get("cost", {}).get("source")
-            if incoming_cost_source == "provider" and "reported_cost_usd" not in incoming:
+            provider_cost = provider_cost_evidence(incoming.get("cost"))
+            if (
+                "reported_cost_usd" in incoming
+                and "cost" not in incoming
+                and previous_cost
+                and previous_cost.get("amount_usd") != incoming["reported_cost_usd"]
+            ):
+                merged.pop("cost", None)
+            if provider_cost and "reported_cost_usd" not in incoming:
                 # A fresh provider cost supersedes the previous scalar report.
                 merged.pop("reported_cost_usd", None)
             if "reported_cost_usd" in merged:
                 merged["cost"] = price_usage(merged, None)
-            elif incoming_cost_source != "provider":
-                if previous_cost is not None and previous_cost["source"] == "provider":
+            elif not provider_cost:
+                if provider_cost_evidence(previous_cost):
                     merged["cost"] = previous_cost
                 elif incoming and (
                     pricing := TokenPricing.from_dict((previous_cost or {}).get("pricing"))
@@ -531,6 +569,7 @@ class UsageRecorder:
                 elif "cost" not in incoming and (incoming or "cost" not in merged):
                     pricing = self._pricing_lookup(row["model"]) if self._pricing_lookup else None
                     merged["cost"] = price_usage(merged, pricing)
+            _keep_billing_evidence(merged, previous_cost)
             encoded = json.dumps(merged, ensure_ascii=False, allow_nan=False)
             new_status = status or row["status"]
             stored = (row["duration_ms"], row["failure_class"], row["http_status"])

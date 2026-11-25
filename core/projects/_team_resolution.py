@@ -191,14 +191,16 @@ class TeamResolution:
             and not self._owner._model_checker.is_configured(mapped)
         ):
             reports = [entry for entry in reports if entry.setting != "model"]
-            reports.append(
-                Translation(
-                    "model",
-                    "not_supported",
-                    f"Model wish '{scanned.model}' is unmapped or unusable; "
-                    "the Project or global default is used.",
-                )
+            keeps_pin = "::" in mapped and self._owner._model_checker.is_configured(
+                mapped, defer_workspace_access=True
             )
+            reason = (
+                f"The workspace currently excludes pinned Model '{mapped}'."
+                if keeps_pin
+                else f"Model wish '{scanned.model}' is unmapped or unusable; "
+                "the Project or global default is used."
+            )
+            reports.append(Translation("model", "not_supported", reason))
         for setting in project.overrides.get(scanned.agent_id, {}):
             reports = [
                 replace(

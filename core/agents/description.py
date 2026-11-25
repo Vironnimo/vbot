@@ -13,6 +13,7 @@ from core.chat.streaming import stream_model_response
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
+from core.providers.reasoning import rejected_disabled_reasoning
 from core.secrets.agent_secrets import SecretMasker
 from core.utils.logging import get_logger
 
@@ -112,8 +113,9 @@ async def suggest_agent_description(
             response = await _request(
                 usage_recorder, adapter, model_id, secret_masker().mask(user_message), "none", usage
             )
-        except ProviderError:
-            # Some reasoning-mandatory endpoints reject an explicit disable.
+        except ProviderError as exc:
+            if not rejected_disabled_reasoning(exc):
+                raise
             response = await _request(
                 usage_recorder, adapter, model_id, secret_masker().mask(user_message), "", usage
             )

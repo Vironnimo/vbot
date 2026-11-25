@@ -232,7 +232,10 @@
     const total = usage?.total;
     const input = nonNegative(total?.input_tokens);
     const output = nonNegative(total?.output_tokens);
-    if (input <= 0 && output <= 0) {
+    const hasTokens = input > 0 || output > 0;
+    const hasCost = Number.isFinite(total?.cost_usd);
+    const hasAllowance = Number.isFinite(total?.allowance_usd);
+    if (total?.calls === 0 || (!hasTokens && !hasCost && !hasAllowance)) {
       return null;
     }
     const locale = activeLocaleTag();
@@ -266,14 +269,15 @@
       totalTokens: t('chat.activity.usage.tokensTotal', {
         count: formatTokens(input + output, locale),
       }),
-      tokens: tokens(total),
+      tokens: hasTokens ? tokens(total) : '',
       tokensSplit: split(tokens),
       cache:
         input > 0 && cacheRead > 0
           ? formatPercent(Math.min(1, cacheRead / input), locale)
           : '',
-      cost: Number.isFinite(total?.cost_usd) ? cost(total) : '',
+      cost: hasCost ? cost(total) : '',
       costSplit: split(cost),
+      allowance: hasAllowance ? formatCost(total.allowance_usd, locale) : '',
     };
   });
 
@@ -351,15 +355,18 @@
 {/snippet}
 
 {#snippet usageSummary()}
-  {usageFacts.cost || usageFacts.totalTokens}
+  {usageFacts.cost ||
+    (usageFacts.tokens ? usageFacts.totalTokens : usageFacts.allowance)}
 {/snippet}
 
 {#snippet usageBody()}
   <dl class="chat-activity__facts">
-    <div class="chat-activity__fact">
-      <dt>{t('chat.activity.overview.tokens')}</dt>
-      <dd use:tooltip={usageFacts.tokensSplit}>{usageFacts.tokens}</dd>
-    </div>
+    {#if usageFacts.tokens}
+      <div class="chat-activity__fact">
+        <dt>{t('chat.activity.overview.tokens')}</dt>
+        <dd use:tooltip={usageFacts.tokensSplit}>{usageFacts.tokens}</dd>
+      </div>
+    {/if}
     {#if usageFacts.cache}
       <div class="chat-activity__fact">
         <dt>{t('chat.activity.overview.cache')}</dt>
@@ -370,6 +377,12 @@
       <div class="chat-activity__fact">
         <dt>{t('chat.activity.overview.cost')}</dt>
         <dd use:tooltip={usageFacts.costSplit}>{usageFacts.cost}</dd>
+      </div>
+    {/if}
+    {#if usageFacts.allowance}
+      <div class="chat-activity__fact">
+        <dt>{t('statistics.cost.allowance')}</dt>
+        <dd>{usageFacts.allowance}</dd>
       </div>
     {/if}
   </dl>
