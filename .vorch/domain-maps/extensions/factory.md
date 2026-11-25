@@ -70,6 +70,7 @@ A Job's `schedule` or `webhook` that queues Job Runs automatically; Cron owns sc
   - Factories: `list_factories`, `get_factory`, `create_factory`, `update_factory`, `archive_factory`
   - Specialists (Members): `list_members`, `create_member`, `update_member`, `retire_member`
   - Jobs & Runs: `list_jobs`, `get_job`, `create_job`, `update_job`, `delete_job`, `trigger_job`, `list_runs`
+- Each trigger in `create_job` or `update_job` takes a `type` (`schedule` or `webhook`) and optional `id`, `title`, `schedule`, and `enabled` fields. The Factory generates omitted trigger IDs.
 - Read, member, job, update, and archive actions resolve the target Factory from either `factory_id` or `project_id`. `trigger_job` queues a run with `origin: "public_tool"`.
 
 ## Attention and WebUI

@@ -142,6 +142,8 @@ PUBLIC_PARAMETERS: Json = {
                     "schedule": {"type": "string"},
                     "enabled": {"type": "boolean"},
                 },
+                "required": ["type"],
+                "additionalProperties": False,
             },
             "description": (
                 "For create_job or update_job: schedule (cron expression) or webhook triggers. "
