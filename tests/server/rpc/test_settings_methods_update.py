@@ -433,14 +433,20 @@ async def test_settings_patch_applies_searxng_configuration_atomically(tmp_path:
         "settings.patch",
         **_patch(
             _set("web_search.provider", "searxng"),
+            _set("web_search.fallback_provider", "brave"),
             _set("web_search.searxng.base_url", "https://search.example/"),
         ),
     )
 
-    assert result["changed"] == ["web_search.provider", "web_search.searxng.base_url"]
+    assert result["changed"] == [
+        "web_search.provider",
+        "web_search.fallback_provider",
+        "web_search.searxng.base_url",
+    ]
     assert result["restart_required"] is False
     assert state.runtime.storage.load_web_search_settings() == {
         "provider": "searxng",
+        "fallback_provider": "brave",
         "default_count": 12,
         "searxng": {"base_url": "https://search.example/"},
     }

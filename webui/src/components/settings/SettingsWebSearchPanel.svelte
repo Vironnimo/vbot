@@ -56,6 +56,15 @@
   let service = $derived(
     services.find((item) => item.id === webSearchSettings.provider) ?? null,
   );
+  let fallbackService = $derived(
+    services.find((item) => item.id === webSearchSettings.fallback_provider),
+  );
+  let fallbackOptions = $derived([
+    { value: 'none', label: t('settings.webSearch.noFallback') },
+    ...webSearchProviderOptions.filter(
+      (option) => option.value !== webSearchSettings.provider,
+    ),
+  ]);
   let saveDisabled = $derived(saving || !webSearchDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const webSearchAutosave = createDebouncedAutosave({
@@ -93,6 +102,7 @@
 
     return (
       normalizedLeft.provider === normalizedRight.provider &&
+      normalizedLeft.fallback_provider === normalizedRight.fallback_provider &&
       normalizedLeft.default_count === normalizedRight.default_count &&
       normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
     );
@@ -112,6 +122,10 @@
     webSearchSettings = {
       ...webSearchSettings,
       provider,
+      fallback_provider:
+        provider === webSearchSettings.fallback_provider
+          ? 'none'
+          : webSearchSettings.fallback_provider,
     };
     onError('');
   }
@@ -177,7 +191,38 @@
       {onError}
     />
   {/if}
-  {#if webSearchSettings.provider === 'searxng'}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.webSearch.fallbackProvider')}
+        <InfoHint text={t('settings.webSearch.fallbackHelp')} />
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--web-search">
+      <Dropdown
+        id="settings-web-search-fallback"
+        value={webSearchSettings.fallback_provider}
+        options={fallbackOptions}
+        ariaLabel={t('settings.webSearch.fallbackProvider')}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={(value) => {
+          webSearchSettings.fallback_provider = value;
+          onError('');
+        }}
+      />
+    </div>
+  </div>
+  {#if fallbackService}
+    <ServiceApiKey
+      id="settings-web-search-fallback-key"
+      service={fallbackService}
+      {onCommit}
+      {onToast}
+      {onError}
+    />
+  {/if}
+  {#if [webSearchSettings.provider, webSearchSettings.fallback_provider].includes('searxng')}
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">

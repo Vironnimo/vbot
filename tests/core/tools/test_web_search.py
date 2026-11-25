@@ -23,6 +23,7 @@ from core.tools.web_search import (
 from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.web_search_test_support import (
     BRAVE_ENDPOINT,
+    DUCKDUCKGO_ENDPOINT,
     EXA_ENDPOINT,
     FIRECRAWL_ENDPOINT,
     PERPLEXITY_ENDPOINT,
@@ -36,6 +37,44 @@ from tests.core.tools.web_search_test_support import (
     web_search_registry,
     without_result_notice,
 )
+
+
+@pytest.mark.asyncio
+async def test_configured_fallback_preserves_filters_and_pauses_the_refusing_account(
+    tmp_path, monkeypatch
+):
+    now = [10.0]
+    monkeypatch.setattr("core.tools.web_search._clock", lambda: now[0])
+    settings = {"provider": "brave", "fallback_provider": "tavily"}
+    tool = web_search_registry(settings)
+    context = make_context(tmp_path)
+    query = {"query": "birds", "domains": ["example.org"], "recency": "week"}
+    with respx.mock as routes:
+        primary = routes.get(BRAVE_ENDPOINT).mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "90"}),
+                httpx.Response(200, json={"web": {"results": []}}),
+                httpx.Response(401, json={}),
+            ]
+        )
+        backup = routes.post(TAVILY_ENDPOINT).respond(200, json={"results": []})
+        for _ in range(2):
+            assert_success_envelope(await tool.dispatch(context, query))
+        assert primary.call_count == 1 and backup.call_count == 2
+        for call in backup.calls:
+            assert request_json(call.request)["include_domains"] == ["example.org"]
+            assert request_json(call.request)["time_range"] == "week"
+        settings["fallback_provider"] = "duckduckgo"
+        # This provider cannot satisfy a time window. No request goes to it.
+        duck = routes.get(DUCKDUCKGO_ENDPOINT)
+        assert_failure_envelope(await tool.dispatch(context, query), "provider_request_failed")
+        assert not duck.called
+        now[0] += 91
+        assert_success_envelope(await tool.dispatch(context, query))
+        settings["fallback_provider"] = "tavily"
+        assert_failure_envelope(await tool.dispatch(context, query), "provider_request_failed")
+        assert backup.call_count == 2
+
 
 WEEK_NOTE = (
     "Results are limited to the past week, the shortest available window that covers the "

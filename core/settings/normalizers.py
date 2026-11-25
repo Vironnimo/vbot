@@ -23,6 +23,7 @@ from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
+    fallback_provider_error,
 )
 from core.settings._compaction_settings import (
     COMPACTION_SETTING_DEFAULTS,
@@ -83,6 +84,7 @@ DEFAULT_RECALL_SETTINGS = {"backend": "sqlite_fts"}
 
 
 DEFAULT_WEB_SEARCH_SETTINGS = {
+    "fallback_provider": "none",
     "provider": DEFAULT_WEB_SEARCH_PROVIDER,
     "default_count": DEFAULT_WEB_SEARCH_COUNT,
     "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
@@ -592,6 +594,10 @@ def normalize_web_search_settings(web_search: Any) -> dict[str, Any]:
         allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
         raise StorageError(f"Web search provider must be one of: {allowed}")
 
+    fallback = section.get("fallback_provider", "none")
+    if problem := fallback_provider_error(fallback):
+        raise StorageError(f"Web search fallback provider {problem}")
+
     searxng = section.get("searxng", {})
     if searxng is None:
         searxng = {}
@@ -619,6 +625,7 @@ def normalize_web_search_settings(web_search: Any) -> dict[str, Any]:
 
     return {
         "provider": provider,
+        "fallback_provider": "none" if fallback == provider else fallback,
         "default_count": default_count,
         "searxng": {"base_url": base_url.strip()},
     }

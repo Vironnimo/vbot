@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from core.search_config import (
     WEB_SEARCH_PROVIDER_SEARXNG,
     WEB_SEARCH_PROVIDER_SERPER,
     WEB_SEARCH_PROVIDER_TAVILY,
+    fallback_provider_error,
 )
 from core.tools._web_search_arguments import (
     RECENCY_VALUES,
@@ -49,6 +51,7 @@ from core.tools._web_search_providers import (
     _search_tavily,
 )
 from core.tools._web_search_transport import (
+    FALLBACK_AVAILABLE,
     _ResponseTooLargeError,
 )
 from core.tools.arguments import optional_int
@@ -65,7 +68,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
-from core.utils.http_status import HttpRequestFailure
+from core.utils.http_status import MAX_HTTP_COOLDOWN_SECONDS, HttpRequestFailure
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.web_search")
@@ -151,6 +154,7 @@ _WINDOW_DAYS = (("day", 1.0), ("week", 7.0), ("month", 31.0), ("year", 366.0))
 _EXACT_DAYS = {"day": (1.0, 1.0), "week": (7.0, 7.0), "month": (28.0, 31.0), "year": (360.0, 366.0)}
 _MAX_DESCRIPTION_CHARS = 400
 _MAX_LISTED_ENGINES = 6
+_clock = time.monotonic
 _ISO_DATE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
 
 
@@ -253,6 +257,9 @@ def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | 
         allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
         return None, f"web_search provider must be one of: {allowed}"
 
+    fallback = raw_settings.get("fallback_provider", "none")
+    if problem := fallback_provider_error(fallback):
+        return None, f"web_search.fallback_provider {problem}"
     searxng = raw_settings.get("searxng", {})
     if searxng is None:
         searxng = {}
@@ -276,6 +283,7 @@ def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | 
 
     return {
         "provider": provider,
+        "fallback_provider": "none" if fallback == provider else fallback,
         "default_count": default_count,
         "searxng": {"base_url": base_url.strip()},
     }, None
@@ -466,11 +474,18 @@ def _model_view(
     return data
 
 
+@dataclass
+class _SearchCooldown:
+    route: tuple[str, str, int] | None = None
+    until: float = 0.0
+
+
 async def web_search_handler(
     context: ToolContext,
     arguments: JsonObject,
     credential_resolver: Callable[[str], str],
     settings_resolver: Callable[[], Mapping[str, Any]] | None = None,
+    cooldown: _SearchCooldown | None = None,
 ) -> JsonObject:
     """Handle a web_search tool call in the stable vBot envelope."""
     query = _normalize_text(arguments.get("query"))
@@ -480,16 +495,6 @@ async def web_search_handler(
     settings, settings_error = _resolve_web_search_settings(settings_resolver)
     if settings_error is not None or settings is None:
         return _configuration_failure(settings_error or "they could not be resolved")
-
-    provider = _PROVIDERS[settings["provider"]]
-    query, domains, exclude, path_clauses, sites_error = WebSearchRequest.resolve_sites(
-        query,
-        arguments.get("domains"),
-        arguments.get("exclude_domains"),
-        supports_site_expressions=provider.supports_site_expressions,
-    )
-    if sites_error is not None:
-        return _invalid(sites_error)
 
     count = optional_int(
         arguments.get("count"),
@@ -509,48 +514,122 @@ async def web_search_handler(
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
         return _invalid(age_error)
-    notes = [age_note] if age_note else []
-    if path_clauses:
-        notes.append("URL filter: " + " ".join(clause.operator() for clause in path_clauses))
 
-    api_key = ""
-    if provider.credential_key is not None:
-        api_key = _normalize_text(credential_resolver(provider.credential_key))
-        if not api_key:
-            return _missing_key(provider)
-    search = provider.search(api_key, settings)
-    request = WebSearchRequest(query, domains, exclude, count, page, recency, tuple(path_clauses))
+    def request_for(provider: _Provider) -> tuple[WebSearchRequest, str | None]:
+        words, domains, exclude, paths, problem = WebSearchRequest.resolve_sites(
+            query,
+            arguments.get("domains"),
+            arguments.get("exclude_domains"),
+            supports_site_expressions=provider.supports_site_expressions,
+        )
+        return WebSearchRequest(
+            words, domains, exclude, count, page, recency, tuple(paths)
+        ), problem
+
+    def key_for(provider: _Provider) -> str:
+        return (
+            _normalize_text(credential_resolver(provider.credential_key))
+            if provider.credential_key
+            else ""
+        )
+
+    primary = _PROVIDERS[settings["provider"]]
+    request, problem = request_for(primary)
+    if problem:
+        return _invalid(problem)
+    key = key_for(primary)
+    if primary.credential_key and not key:
+        return _missing_key(primary)
+    # Page numbers belong to one ranking. DuckDuckGo cannot limit by age;
+    # SearXNG explicitly warns that its engines may disregard the time window.
+    fallback_id = settings["fallback_provider"]
+    fallback = _PROVIDERS.get(fallback_id) if page == 1 else None
+    alternative = None
+    if fallback and not (recency and fallback_id in {"duckduckgo", "searxng"}):
+        fallback_request, problem = request_for(fallback)
+        fallback_key = key_for(fallback)
+        if not problem and (fallback_key or not fallback.credential_key):
+            alternative = (fallback, fallback_request, fallback_key)
+    route = (
+        settings["provider"],
+        settings["searxng"]["base_url"] if settings["provider"] == "searxng" else "",
+        hash(key),
+    )
+    paused = (
+        fallback_id != "none"
+        and cooldown is not None
+        and cooldown.route == route
+        and _clock() < cooldown.until
+    )
+
+    async def run(
+        provider: _Provider, candidate: WebSearchRequest, credential: str
+    ) -> SearchResult:
+        assert settings is not None
+        payload, failure = await provider.search(credential, settings)(candidate)
+        if (
+            payload
+            and not payload.get("results")
+            and (unanswered := payload.get("unresponsive_engines"))
+        ):
+            return None, HttpRequestFailure(
+                _engines_did_not_answer(
+                    unanswered, provider.label, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME)
+                ),
+                retryable=True,
+            )
+        return payload, failure
+
     try:
-        payload, failure = await search(request)
+        if paused:
+            if alternative is None:
+                return tool_failure(
+                    "provider_request_failed",
+                    f"{primary.label} is temporarily unavailable. Try again later.",
+                    retryable=True,
+                )
+        else:
+            token = FALLBACK_AVAILABLE.set(alternative is not None)
+            try:
+                payload, failure = await run(primary, request, key)
+            finally:
+                FALLBACK_AVAILABLE.reset(token)
+            if alternative is not None and failure is not None and failure.retryable:
+                if cooldown is not None:
+                    deadline = _clock() + min(
+                        MAX_HTTP_COOLDOWN_SECONDS, max(30.0, failure.retry_after or 0.0)
+                    )
+                    cooldown.until = (
+                        max(deadline, cooldown.until) if cooldown.route == route else deadline
+                    )
+                    cooldown.route = route
+            else:
+                alternative = None
+        if alternative is not None:
+            provider, request, key = alternative
+            payload, failure = await run(provider, request, key)
     except _ResponseTooLargeError as error:
         return tool_failure("response_too_large", str(error), retryable=False)
-
     if failure is not None or payload is None:
-        failure = failure or HttpRequestFailure(f"{provider.label} returned no search results.")
+        failure = failure or HttpRequestFailure(f"{primary.label} returned no search results.")
         return tool_failure(
             "provider_request_failed",
             failure.message,
             retryable=failure.retryable,
             attempts_made=failure.attempts_made,
         )
-    results = payload.get("results")
-    results = results if isinstance(results, list) else []
-    unanswered = payload.get("unresponsive_engines")
-    if not results and unanswered:
-        # Engines that did not answer are why nothing came back: an empty
-        # success would send the Agent rephrasing a query that cannot help.
-        return tool_failure(
-            "provider_request_failed",
-            _engines_did_not_answer(
-                unanswered, provider.label, can_fetch=context.can_call(WEB_FETCH_TOOL_NAME)
-            ),
-            retryable=True,
+    raw_results = payload.get("results")
+    results = raw_results if isinstance(raw_results, list) else []
+    notes = [age_note] if age_note else []
+    if request.path_clauses:
+        notes.append(
+            "URL filter: " + " ".join(clause.operator() for clause in request.path_clauses)
         )
     context.add_display_count(len(results), "results")
     data = _model_view(
         payload,
-        domains=domains,
-        exclude=exclude,
+        domains=request.domains,
+        exclude=request.exclude,
         page=page,
         notes=notes,
     )
@@ -634,12 +713,15 @@ def register_web_search_tool(
 ) -> None:
     """Register the configurable web_search tool with a vBot tool registry."""
 
+    cooldown = _SearchCooldown()
+
     async def _handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return await web_search_handler(
             context,
             arguments,
             credential_resolver,
             settings_resolver,
+            cooldown,
         )
 
     registry.register(

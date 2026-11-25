@@ -23,6 +23,7 @@ from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
+    fallback_provider_error,
 )
 from core.settings._json_settings import normalize_json_object
 from core.settings._raw_schema import (
@@ -511,6 +512,8 @@ def _validate_web_search(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
         _error(diagnostics, "$.web_search.provider", f"must be one of: {allowed}")
 
+    if problem := fallback_provider_error(value.get("fallback_provider", "none")):
+        _error(diagnostics, "$.web_search.fallback_provider", problem)
     default_count = value.get("default_count")
     if default_count is not None and (
         isinstance(default_count, bool)

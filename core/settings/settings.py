@@ -10,6 +10,7 @@ from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
+    fallback_provider_error,
 )
 from core.settings._json_settings import normalize_json_object
 from core.settings._rules import (
@@ -334,6 +335,11 @@ def _parse_web_search_update(web_search: Any) -> JsonObject:
         raise SettingsValidationError(f"params.web_search.provider must be one of: {allowed}")
 
     parsed: JsonObject = {"provider": provider}
+    if "fallback_provider" in web_search:
+        fallback = web_search["fallback_provider"]
+        if problem := fallback_provider_error(fallback):
+            raise SettingsValidationError(f"params.web_search.fallback_provider {problem}")
+        parsed["fallback_provider"] = fallback
     if "default_count" in web_search:
         default_count = web_search["default_count"]
         if (

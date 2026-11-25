@@ -69,6 +69,8 @@ def test_is_retryable_status(
         (httpx.Headers({"Retry-After": "soon-ish"}), None),
         # A negative delay is meaningless.
         (httpx.Headers({"Retry-After": "-3"}), None),
+        (httpx.Headers({"Retry-After": "inf"}), None),
+        (httpx.Headers({"retry-after-ms": "inf", "Retry-After": "5"}), 5.0),
     ],
 )
 def test_parse_retry_after_reads_a_delay_in_seconds(

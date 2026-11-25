@@ -131,18 +131,29 @@ describe('Web Search settings', () => {
     await vi.advanceTimersByTimeAsync(850);
     expect(rpcMock).not.toHaveBeenCalled();
 
-    // A saved change sends only the editable fields.
+    // Both routes and their own keys are editable. The primary is excluded.
     choose(TAVILY());
+    document.getElementById('settings-web-search-fallback').click();
+    flushSync();
+    const alternatives = [...document.querySelectorAll('[role="option"]')];
+    expect(
+      alternatives.some((item) => item.textContent.includes(TAVILY())),
+    ).toBe(false);
+    optionFor(alternatives, BRAVE()).click();
+    flushSync();
+    expect(document.querySelectorAll('[data-api-key]')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(850);
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       web_search: {
         provider: 'tavily',
+        fallback_provider: 'brave',
         default_count: 12,
         searxng: { base_url: 'http://localhost:8888' },
       },
       base: {
         web_search: {
           provider: 'brave',
+          fallback_provider: 'none',
           default_count: 12,
           searxng: { base_url: 'http://localhost:8888' },
         },
