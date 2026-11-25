@@ -398,7 +398,10 @@ async def test_group_access_migration_merges_groups_and_removes_old_scope(
     await store.set_member_tools("tg", {"mode": "selected", "allowed": ["read"]}, "-100")
     await store.set_member_tools("tg", {"mode": "selected", "allowed": ["web_fetch"]}, "-200")
 
-    store.save_run_button_binding("tg", _binding("old-button", thread_id="7"))
+    # Earlier releases persisted the caller's raw spelling.
+    store.save_run_button_binding(
+        "tg", replace(_binding("old-button", thread_id="07"), platform_target="-0100")
+    )
     store.reset("other", "telegram")
     store.save_run_button_binding("other", _binding("old-button", thread_id="7"))
     store.migrate_group_access("tg", "-100", "-200")
@@ -497,7 +500,7 @@ def test_run_button_claims_are_atomic_and_consumed_rows_block_replays(
 def test_run_button_claims_check_target_and_thread_and_can_be_restored(
     store: ChannelStateStore,
 ) -> None:
-    store.save_run_button_binding("tg", _binding(thread_id="7"))
+    store.save_run_button_binding("tg", replace(_binding(thread_id="07"), platform_target="-0100"))
 
     def claim(target: str, thread_id: str | None) -> str:
         return store.claim_run_button_binding(
@@ -522,6 +525,19 @@ def test_run_button_claims_check_target_and_thread_and_can_be_restored(
     store.discard_run_button_binding("tg", "binding")
     assert claim("-100", "7") == "missing"
     assert store.restore_run_button_binding("tg", "binding") is False
+
+    # SQLite's permissive numeric casts and other platforms' textual IDs
+    # must never authorize a callback for a different stored destination.
+    store.save_run_button_binding("tg", _binding(thread_id="7suffix"))
+    assert claim("-100", "7") == "target_mismatch"
+    store.reset("opaque", "other")
+    store.save_run_button_binding("opaque", _binding(thread_id="07"))
+    assert (
+        store.claim_run_button_binding(
+            "opaque", "binding", platform_target="-100", thread_id="7"
+        ).status
+        == "target_mismatch"
+    )
 
 
 def test_run_button_retention_keeps_unused_and_unfinished_bindings(

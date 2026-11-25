@@ -300,6 +300,16 @@ async def test_run_button_delivery_tracks_the_confirmed_group_before_the_keyboar
 
     async def send(**payload: Any) -> None:
         if payload["chat_id"] == -500:
+            # Creation must store the wire IDs before the first refusal or tap
+            # has any opportunity to repair a binding from an older release.
+            with service.database.read() as connection:
+                assert tuple(
+                    connection.execute(
+                        "SELECT platform_target, thread_id FROM channel_run_buttons "
+                        "WHERE channel_id = ?",
+                        (config.id,),
+                    ).fetchone()
+                ) == ("-500", "7")
             raise ChatMigrated(-100500)
         assert (payload["chat_id"], payload["message_thread_id"]) == (-100500, 7)
         parsed = parse_bound_run_callback_data(
@@ -327,8 +337,8 @@ async def test_run_button_delivery_tracks_the_confirmed_group_before_the_keyboar
             await service.send(
                 config.id,
                 message,
-                "-500",
-                thread_id="7",
+                "-0500",
+                thread_id="07",
                 buttons=[[InteractionButton("Done", "run:done")]],
                 run_origin=_ORIGIN,
             )

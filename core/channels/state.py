@@ -45,6 +45,7 @@ from core.channels._access_state import (
 from core.channels._email_state import EmailMailState
 from core.channels._member_tools import DEFAULT_MEMBER_TOOLS, normalize_member_tools
 from core.channels._state_schema import DATABASE_NAME, channel_database_spec
+from core.channels._telegram_messages import telegram_binding_target
 from core.channels.adapter import (
     TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
     PendingReply,
@@ -443,6 +444,7 @@ class ChannelStateStore:
             return
 
         def migrate(connection: sqlite3.Connection) -> _AccessRoles | None:
+            _normalize_legacy_telegram_bindings(connection, normalized_id, old_target=old_scope_id)
             connection.execute(
                 "UPDATE channel_run_buttons SET platform_target = ? "
                 "WHERE channel_id = ? AND platform_target = ?",
@@ -640,6 +642,7 @@ class ChannelStateStore:
         """Move the exact keyboard about to be posted via an account-verified group alias."""
 
         def retarget(connection: sqlite3.Connection) -> None:
+            _normalize_legacy_telegram_bindings(connection, channel_id, binding_ids=binding_ids)
             connection.executemany(
                 "UPDATE channel_run_buttons SET platform_target = ? "
                 "WHERE channel_id = ? AND binding_id = ? AND platform_target = ? "
@@ -677,6 +680,7 @@ class ChannelStateStore:
         normalized_id = _normalize_channel_id(channel_id)
 
         def claim(connection: sqlite3.Connection) -> RunButtonClaim:
+            _normalize_legacy_telegram_bindings(connection, normalized_id, binding_ids={binding_id})
             binding = _run_button_binding(connection, normalized_id, binding_id)
             if binding is None:
                 return RunButtonClaim(status="missing")
@@ -1077,6 +1081,39 @@ def _bind_platform(connection: sqlite3.Connection, channel_id: str, platform: st
         [(channel_id, *row) for row in kept],
     )
     return True
+
+
+def _normalize_legacy_telegram_bindings(
+    connection: sqlite3.Connection,
+    channel_id: str,
+    *,
+    binding_ids: set[str] | None = None,
+    old_target: str | None = None,
+) -> None:
+    """Repair old decimal spellings only where a Telegram binding is about to be used."""
+    query = (
+        "SELECT binding_id, platform_target, thread_id FROM channel_run_buttons "
+        "JOIN channels USING (channel_id) WHERE channel_id = ? AND platform = 'telegram' "
+        "AND (platform_target != CAST(CAST(platform_target AS INTEGER) AS TEXT) "
+        "OR thread_id != CAST(CAST(thread_id AS INTEGER) AS TEXT))"
+    )
+    # CAST only screens candidates. The platform parser decides identity;
+    # SQLite alone would accept malformed values such as '7not-a-topic'.
+    args = [channel_id]
+    if binding_ids is not None:
+        query += " AND binding_id IN (SELECT value FROM json_each(?))"
+        args.append(json.dumps(sorted(binding_ids)))
+    for row_id, raw_chat, raw_topic in connection.execute(query, args).fetchall():
+        try:
+            chat, topic = telegram_binding_target(raw_chat, raw_topic)
+        except ChannelConfigError:
+            continue
+        if (old_target is None or chat == old_target) and (chat, topic) != (raw_chat, raw_topic):
+            connection.execute(
+                "UPDATE channel_run_buttons SET platform_target = ?, thread_id = ? "
+                "WHERE channel_id = ? AND binding_id = ?",
+                (chat, topic, channel_id, row_id),
+            )
 
 
 def _run_button_binding(
