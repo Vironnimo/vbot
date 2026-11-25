@@ -36,7 +36,11 @@ from core.model_tasks.embeddings_local import (
     LocalEmbeddingSetup,
     LocalEmbeddingUnavailableError,
 )
-from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
+from core.model_tasks.embeddings_providers import (
+    EmbeddingEncodingPreference,
+    EmbeddingUsage,
+    ProviderEmbeddingClient,
+)
 from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_target_id
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
@@ -134,6 +138,7 @@ class _EmbeddingAvailability:
     """Transport outage of the active remote binding, shared by indexing and searches."""
 
     space: str
+    encoding: EmbeddingEncodingPreference = field(default_factory=EmbeddingEncodingPreference)
     failures: int = 0
     revision: int = 0
     retry_at: float = 0
@@ -261,6 +266,7 @@ class EmbeddingService:
                 request.inputs,
                 options=options,
                 input_type=request.input_type,
+                encoding_preference=availability.encoding,
             )
         except EmbeddingError:
             raise

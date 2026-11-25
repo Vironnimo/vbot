@@ -85,7 +85,12 @@ class _FakeProviderClient:
         self.embed_calls: list[tuple[list[str], dict[str, Any], str | None]] = []
 
     async def embed(
-        self, inputs: list[str], options: dict[str, Any], input_type: str | None = None
+        self,
+        inputs: list[str],
+        options: dict[str, Any],
+        input_type: str | None = None,
+        *,
+        encoding_preference: Any = None,
     ) -> ProviderEmbeddingResponse:
         self.embed_calls.append((list(inputs), dict(options), input_type))
         if self._embed_exception is not None:
@@ -268,14 +273,14 @@ async def test_search_and_indexing_share_only_the_current_targets_transport_outa
     entered, finish = asyncio.Event(), asyncio.Event()
     embed = client.embed
 
-    async def overlapping(inputs, options, input_type=None):
+    async def overlapping(inputs, options, input_type=None, *, encoding_preference=None):
         if not entered.is_set():
             entered.set()
             await finish.wait()
             return ProviderEmbeddingResponse(
                 vectors=([1.0],), model_id=None, usage=EmbeddingUsage(requests=1)
             )
-        return await embed(inputs, options, input_type)
+        return await embed(inputs, options, input_type, encoding_preference=encoding_preference)
 
     monkeypatch.setattr(client, "embed", overlapping)
     earlier = asyncio.create_task(service.embed(["already accepted"], purpose="query"))

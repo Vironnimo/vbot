@@ -212,7 +212,7 @@ class _SpaceMovedError(Exception):
 @dataclass
 class _BatchOutcome:
     embedded: int = 0
-    succeeded: bool = False
+    largest_request: int = 0
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
     rejected: dict[str, str] = field(default_factory=dict)
     first_rejection: _Classified | None = None
@@ -276,6 +276,7 @@ class SemanticIndexer:
         self._run_debounce_s = run_debounce_s
         self._sweep_interval_s = sweep_interval_s
         self._batch_size = batch_size
+        self._batch_hint: tuple[VectorHeader, int, float] | None = None
         self._enabled = False
         self._pass_revision = 0
         self._rebuild_lock = asyncio.Lock()
@@ -329,6 +330,7 @@ class SemanticIndexer:
 
     def settings_changed(self) -> None:
         """The embedding binding changed: retry at once, without the backoff."""
+        self._batch_hint = None
         self._pass_revision += 1
         self._schedule(0.0, force=True)
 
@@ -624,7 +626,11 @@ class SemanticIndexer:
         started = False
         header = await self._enter_space(binding, totals.revision)
         while self._enabled and not self._closed:
-            batch = await self._index.pending_texts(limit=batch_size)
+            hint = self._batch_hint
+            limit = batch_size
+            if hint and hint[0] == binding and hint[2] > self._monotonic():
+                limit = min(limit, hint[1])
+            batch = await self._index.pending_texts(limit=limit)
             self._require_current_pass(totals.revision)
             if not batch:
                 break
@@ -645,7 +651,7 @@ class SemanticIndexer:
                 header = await self._embed(binding, header, batch, outcome, totals)
                 self._require_current_pass(totals.revision)
                 if outcome.rejected:
-                    if not outcome.succeeded and len(batch) > 1 and outcome.first_rejection:
+                    if not outcome.embedded and len(batch) > 1 and outcome.first_rejection:
                         # Every text failed alone: the provider rejects this
                         # request shape, not individual texts.
                         rejection = outcome.first_rejection
@@ -657,6 +663,9 @@ class SemanticIndexer:
                         ):
                             raise _SpaceMovedError()
                     totals.skipped += len(outcome.rejected)
+                elif not totals.local and outcome.largest_request < len(batch):
+                    # All texts from the rejected batch succeeded in smaller requests.
+                    self._batch_hint = (binding, outcome.largest_request, self._monotonic() + 86400)
             except _SpaceMovedError:
                 totals.moved_space()
                 header = await self._pinned(binding)
@@ -790,7 +799,7 @@ class SemanticIndexer:
                 header, vectors, usage=result.usage, characters=characters
             ):
                 raise _SpaceMovedError()
-        outcome.succeeded = True
+        outcome.largest_request = max(outcome.largest_request, len(items))
         outcome.embedded += len(items)
         return header
 
