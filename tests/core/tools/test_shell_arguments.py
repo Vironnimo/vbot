@@ -30,7 +30,7 @@ NOT_RUN = f"{SHELL_MODEL_NAME} was not run: "
         ({"commands": ["cd src", "", "ls"]}, {"command": "cd src\nls"}),
         ({"command": ["ls"]}, {"command": "ls"}),
         ({"command": "ls", "timeout_ms": 5000}, {"command": "ls", "timeout_ms": 5000}),
-        ({"command": "ls", "timeout_seconds": 5}, {"command": "ls", "timeout": 5}),
+        ({"command": "ls", "timeout_secs": 5}, {"command": "ls", "timeout_seconds": 5}),
         ({"command": "ls", "mode": "auto"}, {"command": "ls", "run_in_background": False}),
         ({"command": "ls", "mode": "bg"}, {"command": "ls", "run_in_background": True}),
         ({"command": "ls", "mode": ""}, {"command": "ls"}),

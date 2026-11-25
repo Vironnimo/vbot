@@ -68,6 +68,7 @@ _NO_EFFECT_KINDS = ("terminal", "input", "wait")
 # Accepted and validated, never advertised: other harnesses' spellings.
 SHELL_UNADVERTISED_PARAMETERS: JsonObject = {
     "timeout_ms": TIMEOUT_MS_PARAMETER,
+    "timeout_seconds": {"type": "number", "minimum": 0},
     "env": ENV_PARAMETER,
     "mode": {"type": "string"},
     NO_EFFECT_FIELDS: {
@@ -83,7 +84,7 @@ _FIELD_ALIASES = SpellingAliases(
     {
         "command": ("cmd", "cmdline", "command_line", "script", "shell_command", "argv"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
-        "timeout": ("timeout_seconds", "timeout_secs", "timeout_sec", "timeout_s"),
+        "timeout_seconds": ("timeout_secs", "timeout_sec", "timeout_s"),
         "timeout_ms": ("timeout_millis", "timeout_milliseconds"),
     }
 )
@@ -425,12 +426,22 @@ def no_effect_notes(fields: Mapping[str, str], *, terminal: bool) -> list[str]:
 
 
 def resolve_timeout(
-    timeout: float | None, timeout_ms: float | None, *, tool_name: str = SHELL_MODEL_NAME
+    timeout: float | None,
+    timeout_ms: float | None,
+    *,
+    timeout_seconds: float | None = None,
+    tool_name: str = SHELL_MODEL_NAME,
 ) -> tuple[float | None, str | None]:
     """Return the timeout in seconds and a note when a value was read as milliseconds.
 
     Raises ``ToolContractError`` when the two values disagree.
     """
+    if timeout_seconds is not None:
+        if timeout is not None and timeout != timeout_seconds:
+            raise ToolContractError(
+                f"{tool_name} was not run: timeout and timeout_seconds disagree. Send one duration."
+            )
+        timeout = timeout_seconds
     if timeout_ms is not None:
         seconds = timeout_ms / 1000
         if timeout is not None and timeout != seconds:
@@ -439,7 +450,12 @@ def resolve_timeout(
                 f"({timeout_ms:g} ms) disagree; send one of them."
             )
         return seconds, None
-    if timeout is not None and timeout >= MILLISECOND_TIMEOUT_THRESHOLD and timeout % 1000 == 0:
+    if (
+        timeout_seconds is None
+        and timeout is not None
+        and timeout >= MILLISECOND_TIMEOUT_THRESHOLD
+        and timeout % 1000 == 0
+    ):
         seconds = timeout / 1000
         return seconds, (
             f"timeout {timeout:g} was read as milliseconds ({seconds:g} s); timeout takes seconds."
@@ -679,9 +695,12 @@ def _parse_call(
     timeout, note = resolve_timeout(
         optional_number(arguments.get("timeout"), field_name="timeout"),
         optional_number(arguments.get("timeout_ms"), field_name="timeout_ms"),
+        timeout_seconds=optional_number(
+            arguments.get("timeout_seconds"), field_name="timeout_seconds"
+        ),
     )
     if note is not None:
-        notes.append(note)
+        notes.append(f"{note} Set timeout to {SHELL_MAX_WAIT_SECONDS:g} for the maximum wait.")
     if timeout is not None and timeout < 0:
         raise _call_error("timeout must be 0 or more seconds.")
     wait_seconds, timeout_given = SHELL_DEFAULT_WAIT_SECONDS, False

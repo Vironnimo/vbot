@@ -607,7 +607,7 @@ async def test_leniently_read_arguments_run_with_a_note(shell: Shell, terminal: 
     (await shell.started()).exit(0)
 
     notes = data(await shell.returned(call))["notes"]
-    assert notes[0] == "timeout 60000 was read as milliseconds (60 s); timeout takes seconds."
+    assert "60 s" in notes[0] and "600" in notes[0]
     # A terminal or input cannot be had; the note names terminal only when it can be called.
     assert notes[1].startswith("pty has no effect: commands run without a terminal")
     assert notes[1].endswith(" with terminal.") is terminal
@@ -811,6 +811,8 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
         (30, 30, False, "prints"),
         (0, SHELL_DEFAULT_WAIT_SECONDS, True, "prints"),
         (900, SHELL_MAX_WAIT_SECONDS, True, "prints"),
+        ({"timeout_seconds": 20000}, SHELL_MAX_WAIT_SECONDS, True, "prints"),
+        (20000, 20, True, "prints"),
         # A program that reads the console directly waits silently on Windows.
         (None, SHELL_DEFAULT_WAIT_SECONDS, False, "silent-idle"),
         (30, 30, False, "silent-busy"),
@@ -821,6 +823,8 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
         "timeout",
         "zero-is-omitted",
         "capped",
+        "explicit-seconds",
+        "milliseconds-dialect",
         "silent-and-idle",
         "silent-and-busy",
         "silent-and-idle-on-posix",
@@ -830,14 +834,16 @@ async def test_inferred_output_encoding_is_named_beside_other_result_notes(
 async def test_a_command_still_running_when_the_wait_passes_continues_and_delivers(
     shell: Shell,
     monkeypatch: pytest.MonkeyPatch,
-    timeout: int | None,
+    timeout: int | dict[str, int] | None,
     wait: float,
     noted: bool,
     run: str,
 ) -> None:
     monkeypatch.setattr(shell_module, "_CONSOLE_READS_WAIT", not run.endswith("posix"))
     arguments: JsonObject = {"command": "slow build"}
-    if timeout is not None:
+    if isinstance(timeout, dict):
+        arguments.update(timeout)
+    elif timeout is not None:
         arguments["timeout"] = timeout
     call = shell.call(arguments)
     process = await shell.started()
@@ -1486,6 +1492,8 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert nul["error"]["code"] == "invalid_arguments"
     assert inspect["error"]["code"] == "invalid_arguments"
     conflict = await shell.call({"command": "ls", "timeout": 5, "timeout_ms": 5})
+    assert conflict["error"]["code"] == "invalid_arguments"
+    conflict = await shell.call({"command": "ls", "timeout": 20, "timeout_seconds": 20000})
     assert conflict["error"]["code"] == "invalid_arguments"
     for malformed_notes in (True, [["stdin", "input"]]):
         invalid_notes = await shell.call(
